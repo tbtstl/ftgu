@@ -58,9 +58,21 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
           <h1 className="tt">{meta ? titleCase(meta.title) : id}</h1>
           {children}
           <nav className="pg" aria-label="Lessons">
-            {prev ? <a href={lessonHref(prev.id)}>← {prev.id} {capitalize(prev.title)}</a> : <a href="#/">← Introduction</a>}
+            {prev ? (
+              <a href={lessonHref(prev.id)} title={`${prev.id} ${capitalize(prev.title)}`}>
+                ← {prev.id} {capitalize(prev.title)}
+              </a>
+            ) : (
+              <a href="#/">← Introduction</a>
+            )}
             <a href="#/contents">Contents</a>
-            {next ? <a href={lessonHref(next.id)}>{next.id} {capitalize(next.title)} →</a> : <span>End of the course</span>}
+            {next ? (
+              <a href={lessonHref(next.id)} title={`${next.id} ${capitalize(next.title)}`}>
+                {next.id} {capitalize(next.title)} →
+              </a>
+            ) : (
+              <span>End of the course</span>
+            )}
           </nav>
         </TwoUpLayout>
       </main>

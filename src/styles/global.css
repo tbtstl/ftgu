@@ -258,10 +258,14 @@ button { font-family: inherit; }
 .card { background: var(--card); border-radius: 10px; box-shadow: 0 0 0 3px var(--ring); padding: 14px 18px; }
 
 /* Pagination & footer */
+/* Previous · Contents · Next on one line; long titles trim to an ellipsis rather than wrap. */
 .pg {
-  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px;
-  margin-top: 2.5em; padding-top: 1.2em; border-top: 1px solid #e2e2e2; font-size: 16px; color: var(--muted);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 20px;
+  margin-top: 2.5em; padding-top: .6em; border-top: 1px solid #e2e2e2; font-size: 16px; color: var(--muted);
 }
+.pg > * { min-width: 0; padding: 10px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg > :nth-child(2) { text-align: center; }
+.pg > :last-child { text-align: right; }
 .pg a { color: var(--t-gray); text-decoration: none; }
 .pg a:hover { color: var(--link); text-decoration: underline; }
 .ft { padding: 2.5em 0 3em; text-align: center; color: var(--muted); font-size: 14px; }
