@@ -33,7 +33,8 @@ import {
   useScenario,
 } from '../../framework';
 import { MIX_FUELS, MIX_TECH, STANDARD_MIX, evaluateMix, screeningCost, type Mix, type MixFuel, type MixResult } from '../../engines/ops/genmix';
-import { FUEL_LABEL } from '../../model/fleet';
+import { FUEL_LABEL, STANDARD_FLEET } from '../../model/fleet';
+import { RegionMap, plantRole } from '../shared/RegionMap';
 import { SOLAR_CF, SYSTEM_DEMAND, WIND_CF } from '../../model/profiles';
 
 const WEATHER = { demand: SYSTEM_DEMAND, wind: WIND_CF, solar: SOLAR_CF };
@@ -84,6 +85,8 @@ export default function Lesson() {
   const mix = s1.state;
   const r = useMemo(() => evaluateMix(mix, WEATHER), [mix]);
   const [cursor, setCursor] = useState(19);
+  const [plant, setPlant] = useState<string | null>(null);
+  const picked = STANDARD_FLEET.find((g) => g.id === plant);
 
   const stack = [
     ...MIX_FUELS.map((f) => ({ values: r.hours.map((h) => h.output[f] ?? 0), color: FUEL[f] })),
@@ -146,8 +149,33 @@ export default function Lesson() {
         On the coast at Harbor sits <b>Harbor Point</b>, a 400 MW nuclear plant. Out to the West is <b>Ironwood</b>, a 300 MW coal plant. Two gas-fired combined-cycle
         plants do much of the flexible work: <b>Lakeside</b> (400 MW) at Central, and the smaller, less efficient <b>Mill Creek</b> (250 MW) in Metro, the region’s city.
         Behind them stand the 200 MW <b>Eastgate</b> gas peaker in the East and <b>Old Quay</b>, an 80 MW oil plant in Metro. The hills of the North have the{' '}
-        <b>Falls</b> hydro plant (150 MW) and the <b>Ridge</b> wind farm (350 MW), and the East has the <b>Valley</b> solar farm (400 MW).
+        <b>Falls</b> hydro plant (150 MW) and the <b>Ridge</b> wind farm (350 MW), and the East has the <b>Valley</b> solar farm (400 MW). Here is the region, with
+        each plant at its site. Select one to see how it runs:
       </P>
+
+      <Figure name="Region map" onReset={() => setPlant(null)}>
+        <Legend
+          items={(['nuclear', 'coal', 'gasCC', 'gasCT', 'oil', 'hydro', 'wind', 'solar'] as const).map((f) => ({ label: FUEL_LABEL[f], color: FUEL[f] }))}
+        />
+        <RegionMap selected={plant} onSelect={setPlant} />
+        {picked ? (
+          <>
+            <Readouts
+              items={[
+                { label: 'capacity', value: mw(picked.capacity) },
+                { label: 'cost to run, per MWh', value: usd(picked.marginalCost), tone: 'green' },
+                { label: 'output change per hour', value: picked.variable ? 'weather' : mw(picked.rampRate) },
+                { label: 'CO₂ per MWh', value: `${fmt(picked.emissions, 2)} t` },
+              ]}
+            />
+            <Caption>
+              <b>{picked.name}.</b> {plantRole(picked.id)}
+            </Caption>
+          </>
+        ) : (
+          <Caption>Select a plant on the map to see its size, its running cost and how quickly it can change its output.</Caption>
+        )}
+      </Figure>
       <P>
         Add them up and the region has 2,530 MW of generating capacity. On the reference day we’ll use throughout the course, demand peaks at 1,440 MW at 7 p.m. Why build
         three-quarters more capacity than the region ever uses at once? To find out, let’s pretend we can build the region’s fleet from scratch. The builder in the next demonstration starts
