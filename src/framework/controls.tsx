@@ -14,34 +14,38 @@ export interface SliderProps {
   disabled?: boolean;
 }
 
-/** The course's slider: a 40px round knob on a thin track, labelled above. */
+/**
+ * The course's slider: one compact row — label, track with a small round knob, value — so a
+ * figure's sliders stack tightly with their tracks lined up. In narrow spots the track wraps
+ * under the label.
+ */
 export function Slider({ label, value, min, max, step = 1, onChange, display, tone = 'gray', disabled }: SliderProps) {
   const id = useId();
   const f = max > min ? Math.max(0, Math.min(1, (value - min) / (max - min))) : 0;
   const color = tone === 'gray' || tone === 'ink' ? undefined : TEXT[tone];
   const knob = tone === 'ink' ? 'gray' : tone;
   return (
-    <div className={'ctl' + (disabled ? ' dim' : '')}>
-      <div className="ctl-row">
-        <label htmlFor={id} style={{ color }}>
+    <div className={'ctl slide' + (disabled ? ' dim' : '')}>
+      <div className="ctl-in">
+        <label htmlFor={id} className="ctl-l" style={{ color }}>
           {label}
         </label>
+        <div className={`sl ${knob}`}>
+          <div className="sl-fill" style={{ width: `calc((100% - 14px) * ${f})` }} />
+          <input
+            id={id}
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            disabled={disabled}
+            onChange={(e) => onChange(Number(e.target.value))}
+          />
+        </div>
         <span className="ctl-val" style={{ color }}>
           {display ?? value}
         </span>
-      </div>
-      <div className={`sl ${knob}`}>
-        <div className="sl-fill" style={{ width: `calc((100% - 40px) * ${f})` }} />
-        <input
-          id={id}
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
       </div>
     </div>
   );

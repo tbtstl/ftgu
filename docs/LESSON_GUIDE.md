@@ -57,7 +57,7 @@ readout and the figure's mark the same way. Generation technologies use `FUEL` c
 - Prose: `P`, `H2`, `List`, `K` (key term), `Tn` (colored text), `Eq` + `Op` + `Frac` + `Sub` + `Sup`.
 - Figure shell: `Figure` (`name`, `scenario` → Save / saved list / Reset, `play`, `actions`);
   `FigRef` to point back at an earlier figure by name.
-- Controls: `Slider` (`tone`, `display`), `Segmented`, `Checkbox`, `Button`, `Controls` (2 columns).
+- Controls: `Slider` (a compact row: `tone`, `display`), `Segmented`, `Checkbox`, `Button`, `Controls`.
 - Output: `Readouts` (big numbers), `Caption` (live sentence), `Legend`, `DataTable`, `Swatch`.
 - Charts: `TimeChart` (hourly stacked areas, lines, steps, bars, scrubbing), `SupplyStackChart`,
   `NetworkView` (nodes, lines, animated flow dots, loading colors), `GridY`/`AxisX`, `scale`,
@@ -92,9 +92,9 @@ follow a few rules so the right figure is on show and the prose reads correctly 
   past it brings that figure back into the panel, and clicking it shows (or scrolls to) it.
 - **Challenges played on an earlier figure** take `figure="<name>"`, so reaching the challenge
   shows the right demonstration.
-- **Keep figures compact.** In the panel, consecutive sliders pair up two per row, so put sliders
-  next to each other rather than between charts. Aim for figures under ~850 px tall at 640 px
-  wide; taller ones scroll inside the panel.
+- **Keep figures compact.** Sliders are single compact rows (label, track, value), so a figure's
+  sliders stack tightly with their tracks lined up; keep them together rather than spread between
+  charts. Aim for figures under ~850 px tall at 640 px wide; taller ones scroll inside the panel.
 - **Animations** started with `useAnimationFrame` inside a figure pause while it's hidden.
 
 ## The engines and the shared model

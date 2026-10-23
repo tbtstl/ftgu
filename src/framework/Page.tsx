@@ -19,7 +19,7 @@ export function Banner({ home = false, wide = false }: { home?: boolean; wide?: 
         </div>
         <nav className="bn-nav" aria-label="Site">
           <a href="#/contents">Contents</a>
-          <a href="#/engines">Simulation engines</a>
+          <a href="#/engines">How it fits together</a>
           {home && <a href={lessonHref('1.1')}>Start the course</a>}
         </nav>
       </div>
