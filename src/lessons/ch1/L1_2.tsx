@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Challenge, Eq, Figure, Frac, H2, K, Legend, LessonPage, Op, P, PHASE, Readouts, Segmented, Slider, Sub, linePath, useAnimationFrame, usePlay, useScenario } from '../../framework';
+import { Challenge, Eq, FigRef, Figure, Frac, H2, K, Legend, LessonPage, Op, P, PHASE, Readouts, Segmented, Slider, Sub, linePath, useAnimationFrame, usePlay, useScenario } from '../../framework';
 import { phasorSumMagnitude, rmsFromPeak } from '../../engines/physics/ac';
 
 const SLOW = 120; // the animation runs 120× slower than real time
@@ -82,7 +82,7 @@ export default function Lesson() {
         a wall socket behaves very differently. It swings smoothly from positive to negative and back again, tracing a sine wave. This is alternating current, or AC.
       </P>
       <P>
-        The easiest way to picture a sine wave is as the shadow of something turning. In the demonstration below, the arrow on the left rotates at a steady rate, and
+        The easiest way to picture a sine wave is as the shadow of something turning. In the next demonstration, the arrow on the left rotates at a steady rate, and
         its height at each moment is the voltage, drawn as a trace that scrolls off to the right. Everything here is slowed down 120 times — the real grid completes 60
         turns every second in North America, and 50 in most of the rest of the world:
       </P>
@@ -198,13 +198,13 @@ export default function Lesson() {
         <Op>=</Op>
         <K c="voltage">{rms} V</K>
       </Eq>
-      <P>The “120 volts” of an American wall socket is an RMS value. The actual peak is about 170 volts — which is where the demonstration above starts.</P>
+      <P>The “120 volts” of an American wall socket is an RMS value. The actual peak is about 170 volts — which is where <FigRef to="Waveform Explorer">the waveform demonstration</FigRef> starts.</P>
 
       <H2>Three phases</H2>
       <P>
         A single alternating voltage has an awkward property: the <K c="power">power</K> it delivers pulses. Twice every cycle the voltage passes through zero, and for an
         instant no power flows at all. Power plants avoid this by generating three alternating voltages at once, each a third of a turn — 120° — behind the one before.
-        The demonstration below compares the power delivered to a simple resistive load by one phase and by three:
+        The next demonstration compares the power delivered to a simple resistive load by one phase and by three:
       </P>
 
       <Figure name="Waveform Explorer · power" play={play}>
@@ -259,12 +259,13 @@ export default function Lesson() {
         smooth, constant push instead of a vibrating one, and the generator at the other end feels a constant load on its shaft.
       </P>
       <P>
-        Three phases have a second trick. Switch the first demonstration to three-phase and look at the dashed line, the sum of all three voltages: at every instant,
+        Three phases have a second trick. Switch <FigRef to="Waveform Explorer">the first demonstration</FigRef> to three-phase and look at the dashed line, the sum of all three voltages: at every instant,
         it’s zero. In a balanced three-phase system the currents cancel in the same way, so the return wires a single-phase circuit needs can be left out — three
         conductors do the work of six. Now drag the <K c="phase">spacing between the phases</K> away from 120° and watch the cancellation fall apart.
       </P>
       <Challenge
         id="a"
+        figure="Waveform Explorer"
         question="In three-phase mode, find a spacing at which the sum of the three phases peaks at exactly the same voltage as each phase on its own."
         solved={three && amp > 0 && sumPeak === amp}
         status={three ? `At ${spacing}°, the sum peaks at ${sumPeak} V against ${amp} V for each phase.` : 'Switch the first demonstration to three-phase.'}

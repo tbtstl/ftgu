@@ -75,7 +75,7 @@ export default function Lesson() {
       <P>
         A battery maintains a difference in electric potential between its two terminals. That difference is the <K c="voltage">voltage</K>, measured in volts. Connect
         the terminals with a conductor and charge begins to flow around the loop. The rate at which charge passes any point is the <K c="current">current</K>, measured
-        in amperes, and it’s shown by the moving dots below. How much current flows depends on how strongly the circuit opposes it — its{' '}
+        in amperes, and it’s shown by the moving dots in the next demonstration. How much current flows depends on how strongly the circuit opposes it — its{' '}
         <K c="resistance">resistance</K>, measured in ohms. Use the sliders to change the battery’s voltage and the resistor’s resistance:
       </P>
 
@@ -149,7 +149,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Set the circuit in the demonstration above so that the resistor carries exactly 3 amperes while turning 72 watts into heat."
+        question="Set the circuit in this demonstration so that the resistor carries exactly 3 amperes while turning 72 watts into heat."
         solved={solved}
         status={`Right now the resistor carries ${I.toFixed(2)} A and turns ${watts(Pw)} into heat.`}
         success="Solved. 24 V across 8 Ω drives 3 A, and 24 V × 3 A = 72 W."
@@ -159,7 +159,7 @@ export default function Lesson() {
       <P>
         Real circuits rarely contain a single resistor. When two lamps are connected one after the other — in series — the same current must pass through both, and the
         battery’s voltage is split between them. When they’re connected side by side — in parallel — each lamp gets the battery’s full voltage, and the current divides
-        between the two paths. The two lamps below are identical, with a resistance of 6 ohms each:
+        between the two paths. The two lamps in the next demonstration are identical, with a resistance of 6 ohms each:
       </P>
 
       <Figure name="Circuit Builder · two loads" scenario={c2}>

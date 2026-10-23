@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react';
-import { Button, Caption, Challenge, DataTable, FUEL, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, TimeChart, Tn, fmt, hour, mw, mwh, pct, signed, usd } from '../../framework';
+import { Button, Caption, Challenge, DataTable, FUEL, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, TimeChart, Tn, fmt, hour, mw, mwh, pct, signed, usd } from '../../framework';
 import { defaultDesign, updateCapstone, useCapstone, type CapstoneDesign, type Transition, type WeatherId } from './capstone';
 import { HOURS, STORAGE_SLICES, WEATHER, WEATHER_IDS, argmax, availability, checkSystem, emissions, outputByFuel, runMarket, siteName, systemOf, type MarketRun } from './system';
 import { EmptyNote, FUEL_NAME, FUEL_ORDER, NodePicker, ResetGridButton } from './ui';
@@ -127,7 +127,7 @@ export default function Lesson() {
         Wind and solar enter the market engine of the last lesson as plants that offer slightly below zero, with output each hour limited by the weather of your chosen day
         (Lesson 8.2). A battery enters as a schedule: it charges in cheap hours and discharges in dear ones at its own node. The starting plan adds {fmt(start.windMW)} MW of
         wind at {siteName(start.windNode)}, {fmt(start.solarMW)} MW of solar at {siteName(start.solarNode)} and a {fmt(start.storageMW)} MW, {start.storageHours}-hour
-        battery at {siteName(start.storageNode)}. Edit any of them below; the table compares your grid before and after on the same day:
+        battery at {siteName(start.storageNode)}. Edit any of them in the next demonstration; its table compares your grid before and after on the same day:
       </P>
 
       <Figure
@@ -224,7 +224,7 @@ export default function Lesson() {
           ? `There is a catch for the owners. Your new ${capture.map((c, i) => `${c.label} is paid an average of ${usd(c.price, 2)}${i === 0 ? ' per MWh' : ''}`).join(' and your new ')}, against a load-weighted average of ${usd(ma.avg, 2)}. `
           : ''}
         Wind and solar sell most when other wind and solar are selling too, which is when prices are lowest — and the more of one technology a region builds, the lower
-        the price it captures. Battery owners face a related problem, as we’ll see below: they earn from price gaps, which they themselves close.
+        the price it captures. Battery owners face a related problem, as we’ll see later in this lesson: they earn from price gaps, which they themselves close.
       </P>
 
       <H2>Where it goes matters</H2>
@@ -239,7 +239,12 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Using the demonstration above, cut your grid’s emissions on the chosen day by at least half, without adding hours of congestion or leaving any demand unserved."
+        question={
+          <>
+            Using <FigRef to="Energy Transition Simulator">the first demonstration</FigRef>, cut your grid’s emissions on the chosen day by at least half, without adding
+            hours of congestion or leaving any demand unserved.
+          </>
+        }
         solved={solved}
         status={`Emissions are ${pct(Math.max(0, cut))} lower than before (${fmt(ma.co2)} against ${fmt(mb.co2)} tonnes), with ${ma.congested} congested hours against ${mb.congested} before.`}
         success={`Solved: emissions down ${pct(cut)}, with ${ma.congested} congested hours against ${mb.congested}. New power connected where it competes directly with the coal plant displaces coal; the same megawatts behind a congested line mostly get turned away.`}
@@ -294,7 +299,9 @@ export default function Lesson() {
             </Caption>
           </>
         ) : (
-          <EmptyNote>Your plan has no battery. Add one with the storage controls above.</EmptyNote>
+          <EmptyNote>
+            Your plan has no battery. Add one with the storage controls in <FigRef to="Energy Transition Simulator">the first demonstration</FigRef>.
+          </EmptyNote>
         )}
       </Figure>
 

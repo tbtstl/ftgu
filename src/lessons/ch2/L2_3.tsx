@@ -245,7 +245,7 @@ export default function Lesson() {
         <K tone={chk.n1Secure ? 'ink' : 'red'}>{Number.isFinite(chk.n1Utilization) ? pct(chk.n1Utilization) : '—'}</K>
       </Eq>
       <P>
-        Now a developer asks to connect a 20 MW data center — modest, as data centers go, since the largest draw hundreds of megawatts. The demonstration below shows the
+        Now a developer asks to connect a 20 MW data center — modest, as data centers go, since the largest draw hundreds of megawatts. The next demonstration shows the
         whole substation, from the 138 kV bus at the top to the feeders at the bottom, with the data center added. Switch a transformer out to test the N-1 rule:
       </P>
 

@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react';
-import { Caption, Challenge, DataTable, Figure, H2, K, Legend, LessonPage, P, Readouts, Slider, TimeChart, Tn, fmt, hour, mw, pct, tint, usd } from '../../framework';
+import { Caption, Challenge, DataTable, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Slider, TimeChart, Tn, fmt, hour, mw, pct, tint, usd } from '../../framework';
 import { BATTERY_CAPEX, updateCapstone, useCapstone, type CapstoneDesign } from './capstone';
 import { HOURS, argmax, listNames, runMarket, siteName, systemOf } from './system';
 import { EmptyNote, GridMap, ResetGridButton } from './ui';
@@ -216,7 +216,7 @@ export default function Lesson() {
 
       <H2>What the grid gets</H2>
       <P>
-        The revenue above treats the VPP as too small to move energy prices. To check that, we put its energy share into the market engine as {sites.length} batteries,
+        The revenue in <FigRef to="VPP Operator">the first demonstration</FigRef> treats the VPP as too small to move energy prices. To check that, we put its energy share into the market engine as {sites.length} batteries,
         one per substation, scheduled in slices as in Lesson 8.4, and clear the day again. Here is {siteName(target)}, the node with the highest price on your grid’s day
         before the VPP:
       </P>

@@ -206,7 +206,7 @@ export default function Lesson() {
       <H2>Out of merit order</H2>
       <P>
         The single-zone market of Chapter 4 would clear the same hour by stacking every offer from cheapest to dearest and stopping at demand. The network breaks that
-        order. Below is the hour’s supply stack: solid blocks are what the nodal dispatch actually runs, and blocks marked with an arrow run more (↑) or less (↓) than the
+        order. Here is the hour’s supply stack: solid blocks are what the nodal dispatch actually runs, and blocks marked with an arrow run more (↑) or less (↓) than the
         merit order alone would have them run:
       </P>
 

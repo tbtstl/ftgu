@@ -107,7 +107,7 @@ export default function Lesson() {
       <P>
         Holding capacity back isn’t free, even if it costs the plant nothing directly. A megawatt Lakeside keeps in reserve is a megawatt it isn’t selling as energy, so
         someone more expensive has to produce it instead. Modern markets therefore clear energy and reserves together in one optimization, called{' '}
-        <b>co-optimization</b>, and price each by what one more megawatt of it costs the system. Below is the evening peak on the reference day. Each bar is a plant’s
+        <b>co-optimization</b>, and price each by what one more megawatt of it costs the system. Here is the evening peak on the reference day. Each bar is a plant’s
         capacity, divided between energy, regulation and reserve. Raise the reserve requirement until it covers Harbor Point:
       </P>
 
@@ -245,7 +245,7 @@ export default function Lesson() {
         curve: it pays a capped price when capacity falls well short of the target, less as capacity approaches and passes it, and nothing once there’s 10% to
         spare. Each plant offers the
         capacity it can be counted on for at the peak, at the price it needs to stay available beyond what it expects to earn from energy. The existing plants, long since
-        built, need little, and their offers below are illustrative; your new peaker, a 250 MW plant with Eastgate’s costs, counts as 230 MW because it’s available 92% of the time, and needs $72.83:
+        built, need little, and their offers in the next demonstration are illustrative; your new peaker, a 250 MW plant with Eastgate’s costs, counts as 230 MW because it’s available 92% of the time, and needs $72.83:
       </P>
 
       <Figure name="Grid Services Auction · capacity" scenario={s2}>

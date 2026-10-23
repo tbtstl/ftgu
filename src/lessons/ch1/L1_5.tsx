@@ -99,7 +99,7 @@ export default function Lesson() {
         voltage. This lesson measures what that’s worth.
       </P>
       <P>
-        Below, a power plant sends power to a city over a three-phase transmission line. Each of the line’s three conductors has <K c="resistance">resistance</K>, so each
+        In the next demonstration, a power plant sends power to a city over a three-phase transmission line. Each of the line’s three conductors has <K c="resistance">resistance</K>, so each
         turns <K c="current">I</K>²<K c="resistance">R</K> into heat, and the line as a whole loses three times as much. The chart underneath follows the{' '}
         <K c="power">power</K> still traveling along the line, kilometer by kilometer. Adjust the line:
       </P>
@@ -292,7 +292,7 @@ export default function Lesson() {
       <H2>Choosing a voltage</H2>
       <P>
         Lowering the resistance works too, but only by using thicker conductors: more aluminum, heavier wires and stronger towers. In practice the two go together —
-        higher-voltage lines are usually built with larger conductors, often bundled two or more to a phase — and the voltage does most of the work. The chart below
+        higher-voltage lines are usually built with larger conductors, often bundled two or more to a phase — and the voltage does most of the work. The next chart
         compares common North American line voltages for a single job, each with a typical conductor for its voltage:
       </P>
 

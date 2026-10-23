@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Challenge,
   Eq,
+  FigRef,
   Figure,
   Frac,
   H2,
@@ -223,7 +224,7 @@ export default function Lesson() {
         magnet pushed in quickly produces a bigger voltage, for a shorter time, than one pushed in slowly.
       </P>
       <P>
-        A generator puts this law to work without pause. In the demonstration below, a magnet on a shaft — the <b>rotor</b> — turns inside a stationary iron frame called
+        A generator puts this law to work without pause. In the next demonstration, a magnet on a shaft — the <b>rotor</b> — turns inside a stationary iron frame called
         the <b>stator</b>. A coil is wound around the two iron teeth on either side of the rotor, so the magnet’s flux passes straight through it whenever the magnet points
         sideways. On the right, the solid line traces the <K c="voltage">voltage</K> across the coil, and the dashed line the flux through it. As in the previous lesson,
         everything is slowed down 120 times. Change the strength of the magnet, how fast it turns, and the number of turns in the coil:
@@ -322,7 +323,7 @@ export default function Lesson() {
       <H2>Three coils, three phases</H2>
       <P>
         So far the stator has carried a single coil, and most of its iron has done nothing. Wind two more coils around it, each a third of a turn — 120° — further round the
-        stator than the last, and the passing magnet reaches each one in turn. Below, the three coils are labeled A, B and C and colored like the phases in Lesson 1.2, and
+        stator than the last, and the passing magnet reaches each one in turn. In the next demonstration, the three coils are labeled A, B and C and colored like the phases in Lesson 1.2, and
         the rotor turns at whatever speed makes 60 Hz. Leave it on two poles for now:
       </P>
 
@@ -398,12 +399,12 @@ export default function Lesson() {
 
       <H2>Why generators turn at fixed speeds</H2>
       <P>
-        In the first demonstration, frequency and speed were locked together, and that has a striking consequence for power plants. The frequency of the grid is fixed —
+        In <FigRef to="Generator Simulator">the first demonstration</FigRef>, frequency and speed were locked together, and that has a striking consequence for power plants. The frequency of the grid is fixed —
         60 Hz in North America — so every generator connected to it must turn at exactly the speed that produces 60 Hz, and the plant must hold it there. Chapter 3 shows
         what happens when it can’t.
       </P>
       <P>
-        The speed needed depends on the rotor’s poles. Switch the demonstration above to four poles. The rotor now has two north poles and two south poles, so a north pole
+        The speed needed depends on the rotor’s poles. Switch <FigRef to="Generator Simulator · three phases">the three-phase demonstration</FigRef> to four poles. The rotor now has two north poles and two south poles, so a north pole
         passes each coil twice every turn, and the rotor only has to turn half as fast — 1,800 rpm — to keep producing 60 Hz. The stator gets twice as many coils to match,
         but the three waveforms don’t change at all. The equation under the demonstration gives the speed for any number of poles.
       </P>

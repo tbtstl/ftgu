@@ -391,7 +391,7 @@ export default function Lesson() {
         line than its limit, so it can’t be owed more than the rent.
       </P>
       <P>
-        Below, the operator has sold rights from A to C and from B to C against a model of the grid with A–C at {AUCTION_LIMIT} MW. Demand at C is {ADEQ_DEMAND} MW. The
+        In the next demonstration, the operator has sold rights from A to C and from B to C against a model of the grid with A–C at {AUCTION_LIMIT} MW. Demand at C is {ADEQ_DEMAND} MW. The
         white region contains the sets of rights the grid can actually carry on the day. Change the rights, then change the line’s actual limit on the day:
       </P>
 

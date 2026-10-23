@@ -178,8 +178,8 @@ export function TimeChart({
       </g>
       <line className="base" x1={X0} x2={X1} y1={bottom} y2={bottom} />
       {ticks.map((h) => (
-        <text key={h} className="ax ax-m" x={xHour(h)} y={height - 6}>
-          {fmtHour(h)}
+        <text key={h} className={h === startHour + hours ? 'ax ax-e' : 'ax ax-m'} x={h === startHour + hours ? xHour(h) + 2 : xHour(h)} y={height - 6}>
+          {h === startHour + hours && h % 24 === 0 ? '24:00' : fmtHour(h)}
         </text>
       ))}
       {cursor !== undefined && cursor >= 0 && cursor < n && <line className="cur" x1={xc(cursor)} x2={xc(cursor)} y1={top - 4} y2={bottom} />}

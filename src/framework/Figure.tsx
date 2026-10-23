@@ -1,5 +1,7 @@
-import type { ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Scenario } from './hooks';
+import { FigureActiveContext, useTwoUp } from './twoUp';
 
 export interface FigureProps<T extends object> {
   /** The sandbox's name, shown under the figure ("Circuit Builder"). */
@@ -15,11 +17,47 @@ export interface FigureProps<T extends object> {
   actions?: ReactNode;
 }
 
-/** A demonstration: the figure, its controls, and a footer naming the sandbox. */
+/**
+ * A demonstration: the figure, its controls, and a footer naming the sandbox.
+ *
+ * The figure renders into its own container node. On narrow screens that node sits where the
+ * figure appears in the prose; in the two-up layout it moves into the side panel and the prose
+ * keeps a marker in its place. Moving the node (rather than re-rendering) keeps the figure's
+ * state when the window crosses the breakpoint.
+ */
 export function Figure<T extends object>({ name, children, scenario, onReset, play, actions }: FigureProps<T>) {
   const reset = scenario?.reset ?? onReset;
-  return (
-    <figure className="fig" style={{ marginLeft: 0, marginRight: 0 }}>
+  const tu = useTwoUp();
+  const id = useId();
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const [slot] = useState(() => (typeof document === 'undefined' ? null : document.createElement('div')));
+  const inPanel = !!tu?.wide && !!tu.panel;
+  const active = !inPanel || tu?.active === id;
+  const register = tu?.register;
+  const index = tu ? tu.figures.findIndex((f) => f.id === id) : -1;
+
+  useLayoutEffect(() => {
+    if (!register) return;
+    return register({ id, name, anchor: anchorRef.current });
+  }, [register, id, name]);
+
+  useLayoutEffect(() => {
+    if (!slot) return;
+    const host = inPanel ? tu?.panel : anchorRef.current;
+    if (host && slot.parentNode !== host) host.appendChild(slot);
+  }, [slot, inPanel, tu?.panel]);
+
+  useLayoutEffect(() => {
+    if (!slot) return;
+    slot.className = inPanel ? 'tu-slot in-panel' : 'tu-slot';
+    slot.hidden = !active;
+  }, [slot, inPanel, active]);
+
+  useLayoutEffect(() => () => slot?.remove(), [slot]);
+
+  const figure = (
+    <FigureActiveContext.Provider value={active}>
+    <figure className="fig" style={{ marginLeft: 0, marginRight: 0 }} tabIndex={inPanel ? -1 : undefined} aria-label={name}>
       {children}
       <div className="fig-ft">
         <div className="fig-ft-l">
@@ -74,5 +112,30 @@ export function Figure<T extends object>({ name, children, scenario, onReset, pl
         </div>
       </div>
     </figure>
+    </FigureActiveContext.Provider>
+  );
+
+  return (
+    <div ref={anchorRef} className="fig-anchor" data-fig-anchor={tu ? id : undefined}>
+      {inPanel && (
+        <button
+          type="button"
+          className={'fig-mark' + (active ? ' on' : '')}
+          aria-current={active ? 'true' : undefined}
+          onClick={(e) => {
+            tu?.activate(id, { pin: true });
+            // From the keyboard, follow the figure into the panel.
+            if (e.detail === 0) requestAnimationFrame(() => slot?.querySelector<HTMLElement>('figure')?.focus({ preventScroll: true }));
+          }}
+        >
+          <span className="fig-mark-n">{index >= 0 ? `Demonstration ${index + 1}` : 'Demonstration'}</span>
+          <span className="fig-mark-t">{name}</span>
+          <span className="fig-mark-a" aria-hidden="true">
+            {active ? 'shown beside' : 'show'} →
+          </span>
+        </button>
+      )}
+      {slot ? createPortal(figure, slot) : figure}
+    </div>
   );
 }

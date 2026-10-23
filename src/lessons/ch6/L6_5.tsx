@@ -214,7 +214,7 @@ export default function Lesson() {
 
       <H2>A distribution of days</H2>
       <P>
-        One day is an anecdote. To judge a hedge, we need every day at once. The figure below runs the portfolio across all 120 days and shows how its daily margin is
+        One day is an anecdote. To judge a hedge, we need every day at once. The next demonstration runs the portfolio across all 120 days and shows how its daily margin is
         distributed, with the unhedged retailer as a dashed outline. It adds a third instrument: a contract for differences on the evening hours, 17:00 to 22:00, with a
         strike of <K tone="violet">$52.64</K> — again the average day-ahead price in those hours plus $2. Bought by the retailer, it pays the day-ahead price minus the
         strike in each of those hours, so it’s a forward shaped to the peak. Try different mixes of the three:

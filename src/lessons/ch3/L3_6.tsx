@@ -502,13 +502,13 @@ export default function Lesson() {
 
       <H2>Seeing the grid</H2>
       <P>
-        Everything above depends on the operator’s picture being right, and raw telemetry never quite is. Meters drift, a communication link drops out, a breaker reports the
+        Everything so far depends on the operator’s picture being right, and raw telemetry never quite is. Meters drift, a communication link drops out, a breaker reports the
         wrong position. So before anything else runs, the EMS performs <b>state estimation</b>: it finds the single state of the grid — in our DC model, the voltage angle at
         every substation — that best fits all of the measurements at once. Because there are more meters than unknowns, each measurement can be checked against what all the
         others imply.
       </P>
       <P>
-        Below is a snapshot of the region at 19:00 with fourteen meters, one on every line and one at every substation, each reading the true value plus a few megawatts of
+        Here is a snapshot of the region at 19:00 with fourteen meters, one on every line and one at every substation, each reading the true value plus a few megawatts of
         noise. One meter has a gross error. Move it, switch which meter is faulty, and turn on bad-data detection:
       </P>
 

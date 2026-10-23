@@ -150,7 +150,7 @@ export default function Lesson() {
       </P>
       <P>
         Add them up and the region has 2,530 MW of generating capacity. On the reference day we’ll use throughout the course, demand peaks at 1,440 MW at 7 p.m. Why build
-        three-quarters more capacity than the region ever uses at once? To find out, let’s pretend we can build the region’s fleet from scratch. The builder below starts
+        three-quarters more capacity than the region ever uses at once? To find out, let’s pretend we can build the region’s fleet from scratch. The builder in the next demonstration starts
         with the region’s actual mix of technologies. Each slider sets how many megawatts of one technology to build, and the chart shows them dispatched hour by hour
         against the reference day’s demand — cheapest to run first, as we’ll see markets do in <a href={lessonHref('4.3')}>Lesson 4.3</a>. Try removing the coal
         plant, or doubling the solar farm:
@@ -286,7 +286,7 @@ export default function Lesson() {
         <span>running cost</span>
       </Eq>
       <P>
-        Plotting this against the hours run gives a <b>screening curve</b> for each technology, a classic tool of power-system planning. The chart below draws one for each
+        Plotting this against the hours run gives a <b>screening curve</b> for each technology, a classic tool of power-system planning. The next chart draws one for each
         technology that doesn’t depend on the weather; each line ends at the most hours a year that technology is available. The carbon price adds a charge for each tonne of CO₂
         emitted, as an emissions tax or a cap-and-trade market would:
       </P>

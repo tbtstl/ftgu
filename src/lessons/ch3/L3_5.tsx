@@ -332,7 +332,7 @@ export default function Lesson() {
         usually because someone pays it to. Shifting doesn’t reduce how much <K c="energy">energy</K> anyone uses. It only changes when.
       </P>
       <P>
-        Below, the reference day’s demand is split in two. Most of it is inflexible: lighting, cooking, offices and the rest. Four loads are flexible, and each is shown as a block
+        In the next demonstration, the reference day’s demand is split in two. Most of it is inflexible: lighting, cooking, offices and the rest. Four loads are flexible, and each is shown as a block
         of fixed <K c="power">power</K> and duration — so a fixed energy — inside a shaded window of hours when it’s allowed to run. They start out at the times they usually run,
         and together they add {mw(usualPeak - BASE_PEAK)} to the peak. Drag them to new times:
       </P>

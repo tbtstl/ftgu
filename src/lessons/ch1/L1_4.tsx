@@ -184,7 +184,7 @@ export default function Lesson() {
         lesson, the changing flux induces a voltage there. The two coils never touch: power crosses from one to the other entirely through the magnetic field.
       </P>
       <P>
-        The demonstration below connects a 240-volt AC supply to the primary and a 12-ohm load, drawn as a lamp, to the secondary. The gray arrows in the core show the
+        The next demonstration connects a 240-volt AC supply to the primary and a 12-ohm load, drawn as a lamp, to the secondary. The gray arrows in the core show the
         flux, and the dots show the <K c="current">current</K> in each circuit, swinging back and forth the way alternating current does. As before, everything is slowed
         down 120 times. Change the number of turns on each coil:
       </P>
@@ -433,7 +433,7 @@ export default function Lesson() {
       <H2>From power plant to wall socket</H2>
       <P>
         The grid uses a transformer at every change of scale. A step-up transformer at the power plant raises the generator’s voltage for transmission, substations step
-        it back down in stages, and a last, small transformer near each group of homes brings it down to the voltage of the wall socket. The demonstration below follows a
+        it back down in stages, and a last, small transformer near each group of homes brings it down to the voltage of the wall socket. The next demonstration follows a
         typical North American chain and shows the current each stage needs to carry the same power. Choose how much power to send, and the voltage of the transmission
         line:
       </P>

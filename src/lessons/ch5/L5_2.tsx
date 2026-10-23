@@ -292,7 +292,7 @@ export default function Lesson() {
 
       <H2>The cost of congestion</H2>
       <P>
-        The <K c="price">cost of congestion</K> is the cost of the cheapest dispatch with the limit, minus the cost of the cheapest dispatch without it. The chart below
+        The <K c="price">cost of congestion</K> is the cost of the cheapest dispatch with the limit, minus the cost of the cheapest dispatch without it. The next chart
         repeats the optimization for every limit from {mw(RATED)} down to {mw(MIN_LIMIT)}:
       </P>
 

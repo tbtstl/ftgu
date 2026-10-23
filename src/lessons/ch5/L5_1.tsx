@@ -459,7 +459,7 @@ export default function Lesson() {
         dimensions, its many-sided generalization, a polytope.
       </P>
       <P>
-        Five sliders make a five-dimensional problem, which we can’t draw. But we can draw a two-dimensional slice of it. Below, every plant except Ironwood and Mill
+        Five sliders make a five-dimensional problem, which we can’t draw. But we can draw a two-dimensional slice of it. In the next demonstration, every plant except Ironwood and Mill
         Creek is held where the optimizer put it, and Lakeside still makes up the difference. Each point in the plot is a dispatch. Points in the white region overload
         nothing; points in the red one overload at least one line or ask Lakeside for an output it can’t produce. Drag the two sliders to move the orange point:
       </P>

@@ -161,7 +161,7 @@ export default function Lesson() {
         the utility’s meter, that arrive after the fact and decide what the aggregator is paid.
       </P>
       <P>
-        Below, a fleet of 5 kW batteries follows a ten-minute dispatch scenario from the market operator: holds and ramps between 25% and 65% of the fleet’s rating. Every
+        In the next demonstration, a fleet of 5 kW batteries follows a ten-minute dispatch scenario from the market operator: holds and ramps between 25% and 65% of the fleet’s rating. Every
         4 seconds the platform sends each device an equal share of the target. Each command takes the <K>latency</K> to arrive (give or take 25%), each device ramps toward
         its new setpoint at 1 kW per second, and devices drop out of contact at random for about a minute and a half at a time. The gray band is a tolerance of ±10%
         around the target. Time runs {SPEED} times faster than real time:
@@ -240,7 +240,7 @@ export default function Lesson() {
       <H2>Closing the loop</H2>
       <P>
         Over-dispatching is open-loop control: the platform never checks the result. The alternative is to watch the telemetry and correct. If the fleet seems to be
-        delivering too little, ask for a little more; too much, ask for less. The figure below does that with <K>integral control</K>: every second, the platform adds a
+        delivering too little, ask for a little more; too much, ask for less. The next demonstration does that with <K>integral control</K>: every second, the platform adds a
         fraction of the error it sees to its request — the correction gain — and keeps the running total. There is no over-dispatch margin, and 20% of devices are
         unreachable. The catch is that the platform sees the fleet through telemetry that is one latency old, and its corrections take another latency to arrive:
       </P>

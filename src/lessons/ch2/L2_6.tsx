@@ -167,7 +167,7 @@ export default function Lesson() {
         leave something overloaded.
       </P>
       <P>
-        Below is the region at the 7 p.m. peak, dispatched in merit order as in the previous lesson. The table runs the contingency analysis: for each line still in
+        Here is the region at the 7 p.m. peak, dispatched in merit order as in the previous lesson. The table runs the contingency analysis: for each line still in
         service, what would happen if it tripped next. Click lines on the map to take them out, trip a power plant, or change how the operator dispatches:
       </P>
 
@@ -297,7 +297,7 @@ export default function Lesson() {
         left about 50 million people in the northeastern and midwestern United States and Ontario without power.
       </P>
       <P>
-        The simulator below uses a deliberately simple model of a cascade: any line loaded beyond 120% of its rating trips; the flows are recalculated, islands balance as
+        The next demonstration uses a deliberately simple model of a cascade: any line loaded beyond 120% of its rating trips; the flows are recalculated, islands balance as
         best they can, and the process repeats until nothing more trips. A storm has taken out both 230 kV lines into Metro, East–Metro and West–Metro. Drag the stage
         slider to watch what follows:
       </P>

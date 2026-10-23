@@ -19,12 +19,13 @@ no hype. Each lesson:
 
 1. Opens with 1–3 paragraphs that connect to the previous lesson and pose the question.
 2. Introduces **one** idea at a time, each through a demonstration the reader manipulates, with
-   prose before ("Drag the slider to…:" ending in a colon) and after (what to notice, why).
+   prose before ("In the next demonstration, drag the slider to…:" ending in a colon) and after (what to notice, why).
 3. Has 2 demonstrations (occasionally 1 or 3), each a `<Figure name="<Sandbox name>">`. The first
    figure's name is exactly the lesson's sandbox name from the registry; later ones add a suffix
    (`"Circuit Builder · two loads"`).
 4. Has at least one `<Challenge>` the reader solves with a demonstration's controls; `solved` is
-   computed live from that demonstration's state.
+   computed live from that demonstration's state (add `figure="<name>"` when it isn't the
+   demonstration just before it).
 5. Uses `H2` section headings for the second half.
 6. Ends with a paragraph that hands off to the next lesson.
 
@@ -54,7 +55,8 @@ readout and the figure's mark the same way. Generation technologies use `FUEL` c
 ## The framework (`src/framework`, import from `'../../framework'`)
 
 - Prose: `P`, `H2`, `List`, `K` (key term), `Tn` (colored text), `Eq` + `Op` + `Frac` + `Sub` + `Sup`.
-- Figure shell: `Figure` (`name`, `scenario` → Save / saved list / Reset, `play`, `actions`).
+- Figure shell: `Figure` (`name`, `scenario` → Save / saved list / Reset, `play`, `actions`);
+  `FigRef` to point back at an earlier figure by name.
 - Controls: `Slider` (`tone`, `display`), `Segmented`, `Checkbox`, `Button`, `Controls` (2 columns).
 - Output: `Readouts` (big numbers), `Caption` (live sentence), `Legend`, `DataTable`, `Swatch`.
 - Charts: `TimeChart` (hourly stacked areas, lines, steps, bars, scrubbing), `SupplyStackChart`,
@@ -72,6 +74,28 @@ Custom SVG is welcome when a figure needs it: give the `<svg>` `className="diagr
 current values. Use the `.ax`, `.lab`, `.gl`, `.base`, `.cur` classes for axis text and lines, and
 `className="flow-dots"` on a path for moving dots (set `animationDuration` to `18 / speed` s).
 Interactive SVG elements need keyboard access (`tabIndex`, `role="button"`, Enter/Space).
+
+## Two-up layout: writing for figures that move
+
+On windows at least 1,320 px wide (`TWO_UP_MIN_WIDTH`), lessons switch to two columns: the
+prose scrolls on the left while the current demonstration stays fixed in a panel on the right.
+Below that width, figures sit inline as usual. The framework does the work; lessons only need to
+follow a few rules so the right figure is on show and the prose reads correctly either way.
+
+- **Which figure is shown.** Each `<Figure>` leaves a marker where it sits in the prose. As the
+  reader scrolls, the figure of the last marker above the reading line takes the panel.
+- **Never say "above" or "below" about a figure.** In the two-up layout figures are beside the
+  text. Introduce a figure as "the next demonstration" / "In the next demonstration, …" /
+  "Here is …:", and refer to the current one as "this demonstration".
+- **Point back with `FigRef`.** To refer to an earlier figure, wrap the words in
+  `<FigRef to="Circuit Builder">the first demonstration</FigRef>` (the figure's `name`). Reading
+  past it brings that figure back into the panel, and clicking it shows (or scrolls to) it.
+- **Challenges played on an earlier figure** take `figure="<name>"`, so reaching the challenge
+  shows the right demonstration.
+- **Keep figures compact.** In the panel, consecutive sliders pair up two per row, so put sliders
+  next to each other rather than between charts. Aim for figures under ~850 px tall at 640 px
+  wide; taller ones scroll inside the panel.
+- **Animations** started with `useAnimationFrame` inside a figure pause while it's hidden.
 
 ## The engines and the shared model
 

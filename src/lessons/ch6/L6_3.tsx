@@ -261,7 +261,7 @@ export default function Lesson() {
         transaction.
       </P>
       <P>
-        Below, both positions are 10 MW in the congestion direction, from hub to Metro or from North to hub. The FTR covers a block of hours on every day. The spread
+        In the next demonstration, both positions are 10 MW in the congestion direction, from hub to Metro or from North to hub. The FTR covers a block of hours on every day. The spread
         position trades the same block, only on days that meet a condition — every day, days whose demand forecast peaks at 1,500 MW or more, days whose wind
         forecast averages 150 MW or more, or days with an outage — and pays $0.50 per MWh on each of its two legs:
       </P>

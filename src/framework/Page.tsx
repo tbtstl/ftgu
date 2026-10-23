@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { getChapter, getLesson, neighbors } from '../course/registry';
 import { lessonHref } from '../course/router';
+import { TwoUpLayout, useWideViewport } from './twoUp';
 
 export const LessonContext = createContext<string>('');
 
@@ -9,10 +10,10 @@ export function useLessonId(): string {
   return useContext(LessonContext);
 }
 
-export function Banner({ home = false }: { home?: boolean }) {
+export function Banner({ home = false, wide = false }: { home?: boolean; wide?: boolean }) {
   return (
     <header className="bn">
-      <div className="wrap">
+      <div className={wide ? 'wrap wide' : 'wrap'}>
         <div className="bn-t">
           <a href="#/">Electricity Grids &amp; Energy Markets</a>
         </div>
@@ -32,9 +33,12 @@ export function Footer() {
 
 /**
  * Wraps a lesson: banner, chapter line, title, the lesson body, and previous/next links.
- * Every lesson component's root is <LessonPage id="x.y">.
+ * Every lesson component's root is <LessonPage id="x.y">. On wide screens the body is laid
+ * out two-up: prose on the left, the current demonstration fixed on the right.
  */
-export function LessonPage({ id, children }: { id: string; children: ReactNode }) {
+export function LessonPage({ id, children, twoUp = true }: { id: string; children: ReactNode; twoUp?: boolean }) {
+  const wideViewport = useWideViewport();
+  const wide = twoUp && wideViewport;
   const meta = getLesson(id);
   const chapter = meta ? getChapter(meta.chapter) : undefined;
   const { prev, next } = neighbors(id);
@@ -45,9 +49,9 @@ export function LessonPage({ id, children }: { id: string; children: ReactNode }
 
   return (
     <LessonContext.Provider value={id}>
-      <Banner />
+      <Banner wide={wide} />
       <main className="art">
-        <div className="wrap">
+        <TwoUpLayout wide={wide}>
           <div className="meta">
             Chapter {chapter?.n} · {chapter?.title} · Lesson {id}
           </div>
@@ -58,7 +62,7 @@ export function LessonPage({ id, children }: { id: string; children: ReactNode }
             <a href="#/contents">Contents</a>
             {next ? <a href={lessonHref(next.id)}>{next.id} {capitalize(next.title)} →</a> : <span>End of the course</span>}
           </nav>
-        </div>
+        </TwoUpLayout>
       </main>
       <Footer />
     </LessonContext.Provider>

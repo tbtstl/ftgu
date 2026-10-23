@@ -290,7 +290,7 @@ export default function Lesson() {
         plant’s output. If that pushes another line past its limit, it may trip too, and cascades of that kind have turned local faults into regional blackouts. So
         the operator dispatches ahead of time, in a way that leaves every single outage survivable.
       </P>
-      <P>The demonstration below shows your grid at its peak hour, the instant after a line trips. Choose a dispatch, then click any line to trip it instead:</P>
+      <P>The next demonstration shows your grid at its peak hour, the instant after a line trips. Choose a dispatch, then click any line to trip it instead:</P>
 
       <Figure name="Grid Builder · contingencies" actions={<ResetGridButton />}>
         <Segmented

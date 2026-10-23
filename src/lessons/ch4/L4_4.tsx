@@ -173,6 +173,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
+        figure="Market Clearing Simulator"
         question="Find the lowest demand at which the gas peaker sets the price."
         solved={solved}
         status={`Right now the price is set by ${marg1 ? marg1.name.toLowerCase() : 'no one'} at $${c1.price} per MWh.`}
@@ -182,7 +183,7 @@ export default function Lesson() {
       <H2>Why not pay what they offer?</H2>
       <P>
         Paying every generator the same price can look wasteful. Why pay the nuclear plant $46 for energy it offered at $8? The answer lies in how offers would change if
-        the rules did. Below, you own the second combined-cycle gas plant: 100 MW that costs you <b>$38</b> to produce each megawatt-hour. Try offering more than your
+        the rules did. In the next demonstration, you own the second combined-cycle gas plant: 100 MW that costs you <b>$38</b> to produce each megawatt-hour. Try offering more than your
         cost, and see what happens to your profit:
       </P>
 

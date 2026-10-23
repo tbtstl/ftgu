@@ -290,7 +290,7 @@ export default function Lesson() {
         look is what it has been.
       </P>
       <P>
-        The simulated history has 120 days of 24 hours each, so 2,880 spreads. The demonstration below arranges them by hour of the day. Each box spans the middle half
+        The simulated history has 120 days of 24 hours each, so 2,880 spreads. The next demonstration arranges them by hour of the day. Each box spans the middle half
         of that hour’s 120 values, the line through it is the median, and the whisker runs from the 5th to the 95th percentile. The green diamond is the mean. Click an
         hour, or use the slider, to see all of its days at once:
       </P>
@@ -395,7 +395,7 @@ export default function Lesson() {
       </P>
       <P>
         The <b>threshold</b> is how the rule pays for its costs. With a threshold of zero, it trades almost every hour, and most of those hours are the noise we saw
-        above: on average they earn nothing and pay the transaction cost every time. Raising the threshold confines the rule to hours where the forecast is large enough
+        earlier: on average they earn nothing and pay the transaction cost every time. Raising the threshold confines the rule to hours where the forecast is large enough
         to be worth the cost.
       </P>
 

@@ -3,6 +3,7 @@ import {
   Caption,
   Challenge,
   DataTable,
+  FigRef,
   Figure,
   GRAPHIC,
   H2,
@@ -137,7 +138,7 @@ export default function Lesson() {
         300 MW.
       </P>
       <P>
-        Below, the region’s plants are dispatched in merit order, cheapest first, exactly as if the whole region shared one price and the network didn’t exist — the
+        In the next demonstration, the region’s plants are dispatched in merit order, cheapest first, exactly as if the whole region shared one price and the network didn’t exist — the
         simplest market, which we’ll meet in Chapter 4. The power flows are then whatever physics makes them. Each line is shaded by how close it is to its rating: gray
         below 80%, orange approaching it, red at or over it. Each node shows its generation minus its demand. Click a line to take it out of service:
       </P>
@@ -246,8 +247,10 @@ export default function Lesson() {
       <H2>Congestion through the day</H2>
       <P>
         A line that is fine at 7 p.m. may not be fine at noon, because the dispatch changes hour by hour: solar output peaks in the middle of the day, gas plants come on in
-        the evening. The chart below runs the same calculation for every hour of the reference day, with the outages, ratings and extra demand you set above, and plots the
-        loading of the three most heavily loaded lines. Drag across it to move the first figure to that hour:
+        the evening. The next chart runs the same calculation for every hour of the reference day, with the outages, ratings and extra demand you set in{' '}
+        <FigRef to="Congestion Playground">the first demonstration</FigRef>, and plots the
+        loading of the three most heavily loaded lines. Drag across it to pick an hour; the first demonstration follows along, so you can open it again to see that
+        hour’s flows:
       </P>
 
       <Figure name="Congestion Playground · through the day" scenario={sc}>

@@ -220,7 +220,7 @@ export default function Lesson() {
         amount back in real time; it never touches a megawatt-hour, but its bets nudge the two prices toward each other.
       </P>
       <P>
-        So how do the two prices compare over time? Below are the daily averages for all 120 days of history, along with what your retailer pays per MWh under a strategy
+        So how do the two prices compare over time? Here are the daily averages for all 120 days of history, along with what your retailer pays per MWh under a strategy
         you choose, applied mechanically to every day. Choose how much of the forecast to buy day-ahead, and whether to follow the forecast hour by hour or buy one flat
         block:
       </P>

@@ -381,7 +381,7 @@ export default function Lesson() {
         flat out, with nothing held back for governor response. Every megawatt of wind or solar that displaces a synchronous plant takes that plant’s inertia and governor with it.
       </P>
       <P>
-        Below, the interconnection loses {fmt(TRIP2)} MW — about the size of a large nuclear unit — while a growing share of its generation comes from wind and solar. The
+        In the next demonstration, the interconnection loses {fmt(TRIP2)} MW — about the size of a large nuclear unit — while a growing share of its generation comes from wind and solar. The
         synchronous plants that remain keep the same inertia constant and droop, but there are fewer of them:
       </P>
 

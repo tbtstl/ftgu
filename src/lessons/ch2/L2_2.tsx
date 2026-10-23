@@ -216,7 +216,7 @@ export default function Lesson() {
         of each customer, steps it down once more to the 240 volts, split into two 120-volt halves, that enter a North American home.
       </P>
       <P>
-        Below is one path through our region. Lakeside sends 300 MW over the 100 km line from Central to Metro. One of Metro’s distribution feeders carries 5 MW about 3 km
+        Here is one path through our region. Lakeside sends 300 MW over the 100 km line from Central to Metro. One of Metro’s distribution feeders carries 5 MW about 3 km
         out into a neighborhood, and a service transformer feeds ten homes, each drawing 2.4 kW at the evening peak, over 40 m of low-voltage cable. Each stage keeps its own
         conductor whatever voltage you choose, so only the voltage changes. Pick a voltage for the transmission line and for the feeder:
       </P>
@@ -411,7 +411,7 @@ export default function Lesson() {
       <P>
         Distribution is almost always <b>radial</b>. Each feeder leaves its substation through a circuit breaker and branches outward like a tree, with exactly one path
         from the substation to each customer. Radial feeders are cheap to build and simple to protect, and most homes and businesses sit somewhere along one. The
-        price is fragility. Below, the Metro substation feeds two feeders of four sections each, serving 4,000 customers between them. Switches between the sections
+        price is fragility. In the next demonstration, the Metro substation feeds two feeders of four sections each, serving 4,000 customers between them. Switches between the sections
         normally stay closed; a <b>tie switch</b> between the far ends of the two feeders normally stays open. Click a transmission line to take it out of service, a
         section to place or clear a fault, and a switch to open or close it:
       </P>

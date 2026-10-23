@@ -6,6 +6,7 @@ export { Slider, Segmented, Checkbox, Button, Controls, Readouts, Caption, Legen
 export type { Column, LegendItem, ReadoutItem } from './controls';
 export { Figure } from './Figure';
 export { Challenge } from './Challenge';
+export { FigRef, useFigureActive, useTwoUp, useWideViewport, TWO_UP_MIN_WIDTH } from './twoUp';
 export { useAnimationFrame, usePlay, useSimulation, useScenario } from './hooks';
 export type { Scenario } from './hooks';
 export { TimeChart, timeChartX } from './charts/TimeChart';

@@ -132,8 +132,8 @@ export default function Lesson() {
       <P>
         Then come the constraints. Customers keep a <K c="energy">backup reserve</K> that the aggregator may not touch. Not every home is reachable on a given day. And each
         feeder can only export so much at once before its voltages or its transformer’s rating become a problem. How much a feeder can accept is its{' '}
-        <K c="power">hosting capacity</K>, which many utilities now publish on maps. The table below adds the constraints one at a time, in this order, and shows what
-        each one costs:
+        <K c="power">hosting capacity</K>, which many utilities now publish on maps. The table in the next demonstration adds the constraints one at a time, in this
+        order, and shows what each one costs:
       </P>
 
       <Figure name="Fleet Scheduling Simulator" scenario={s}>

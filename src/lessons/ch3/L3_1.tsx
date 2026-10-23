@@ -6,6 +6,7 @@ import {
   Checkbox,
   Controls,
   Eq,
+  FigRef,
   Figure,
   Frac,
   FUEL,
@@ -395,7 +396,7 @@ export default function Lesson() {
         frequency is a live readout of the balance, visible everywhere on the grid at once — and keeping it steady is the first job of everyone who operates one.
       </P>
       <P>
-        Let’s try that job. For this lesson we’ll pretend the course region is an electrical island, with no neighbors to lean on. Below is a day in the region compressed into
+        Let’s try that job. For this lesson we’ll pretend the course region is an electrical island, with no neighbors to lean on. Here is a day in the region compressed into
         about two and a half minutes. Harbor Point nuclear runs at a steady 400 MW, Ironwood coal at 250 MW and Falls hydro at 75 MW. You control the three gas plants. Each slider
         sets a plant’s <b>setpoint</b> — the output you ask for — and the plant moves toward it no faster than its ramp rate: 200 MW per hour for Lakeside and Eastgate, 150 for
         Mill Creek. Demand wanders around the dashed forecast. Press play, and keep the frequency inside the shaded band, within 0.1 Hz of 60:
@@ -465,7 +466,7 @@ export default function Lesson() {
       </P>
       <P>
         Switch each layer off in turn to see what it does. Without governors the frequency keeps sliding for half a minute and ends far below anything a real grid would tolerate;
-        without AGC it sits low until the next dispatch run. Then scroll back to the game and tick <b>Falls hydro on AGC</b>: the minute-to-minute wobbles mostly disappear, and
+        without AGC it sits low until the next dispatch run. Then go back to <FigRef to="Grid Balancing Game">the game</FigRef> and tick <b>Falls hydro on AGC</b>: the minute-to-minute wobbles mostly disappear, and
         what’s left for you is the work of the hours — following the shape of the day.
       </P>
       <P>

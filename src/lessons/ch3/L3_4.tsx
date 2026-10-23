@@ -209,7 +209,7 @@ export default function Lesson() {
         bit of both at different times.
       </P>
       <P>
-        Below is the region’s net load on the reference day — demand minus Ridge wind and Valley solar — with a battery connected to the grid. The battery starts the day empty.
+        Here is the region’s net load on the reference day — demand minus Ridge wind and Valley solar — with a battery connected to the grid. The battery starts the day empty.
         Drag the bars in the middle chart up to discharge in an hour, or down to charge. The dashed outlines are what you ask for; the solid bars are what the battery can
         actually do, given how full it is:
       </P>

@@ -4,6 +4,7 @@ import {
   Challenge,
   DataTable,
   FUEL,
+  FigRef,
   Figure,
   H2,
   K,
@@ -126,7 +127,7 @@ export default function Lesson() {
       <P>
         Over the last five lessons we built a virtual power plant: home batteries, aggregated into a fleet, controlled through a platform, placed where the grid needs
         them and scheduled against prices. All of that assumed the fleet could sell into the wholesale market. Whether it can is decided by the market’s rules — and those
-        rules are being written right now. This lesson compares three grid operators that are writing them differently. Every rule below is labeled with its status, as
+        rules are being written right now. This lesson compares three grid operators that are writing them differently. Every rule in this lesson is labeled with its status, as
         we verified it on October 22, 2026, mostly from the operators’ own published documents.
       </P>
       <P>
@@ -262,7 +263,9 @@ export default function Lesson() {
       </P>
 
       <H2>The same fleet, six ways</H2>
-      <P>Here is the fleet you set up above, run through all six rule sets at once:</P>
+      <P>
+        Here is the fleet you set up in <FigRef to="Market Access Simulator">the first demonstration</FigRef>, run through all six rule sets at once:
+      </P>
 
       <Figure name="Market Access Simulator · side by side" scenario={s}>
         <DataTable

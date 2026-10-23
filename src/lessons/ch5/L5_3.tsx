@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   Challenge,
   Eq,
+  FigRef,
   Figure,
   GridY,
   H2,
@@ -97,8 +98,8 @@ export default function Lesson() {
             flow: r.flows[l.id],
             limit: l.id === 'AC' ? limit : undefined,
             label: l.id === 'AC' ? `A–C · ${Math.round(Math.abs(r.flows.AC))} of ${limit} MW` : `${l.from}–${l.to} · ${Math.round(Math.abs(r.flows[l.id]))} MW`,
-            labelDx: l.id === 'AC' ? -70 : l.id === 'BC' ? 70 : 0,
-            labelDy: l.id === 'AB' ? -14 : 6,
+            labelDx: l.id === 'AC' ? -95 : l.id === 'BC' ? 70 : 0,
+            labelDy: l.id === 'AB' ? -14 : l.id === 'AC' ? 40 : 6,
           }))}
         >
           <text x={24} y={172} style={{ fontSize: 13, fontWeight: 500, fill: '#333' }}>
@@ -171,14 +172,20 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Using the sliders in the first demonstration, make the price at node C exactly $100."
+        figure="Nodal Price Explorer"
+        question={
+          <>
+            Using the sliders in <FigRef to="Nodal Price Explorer">the first demonstration</FigRef>, make the price at node C exactly $100.
+          </>
+        }
         solved={solved}
         status={`Right now, the price at C is $${lmp('C')}.${congested ? '' : ' Line A–C isn’t full yet.'}`}
         success="Solved. With line A–C full, C’s price is 2 × $60 − $20 = $100."
       />
 
       <P>
-        The chart below plots all three prices as the demand at C rises, using the line limit and B’s offer you set above. The shaded region is where line A–C is full:
+        The next chart plots all three prices as the demand at C rises, using the line limit and B’s offer you set in{' '}
+        <FigRef to="Nodal Price Explorer">the first demonstration</FigRef>. The shaded region is where line A–C is full:
       </P>
 
       <Figure name="Nodal Price Explorer · prices vs. demand">

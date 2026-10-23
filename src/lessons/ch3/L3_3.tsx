@@ -305,7 +305,7 @@ export default function Lesson() {
       </P>
       <P>
         Because wind and solar produce whenever they can, the sensible way to think about them is as demand running in reverse. What the dispatchable plants must cover is the{' '}
-        <b>net load</b>: demand, minus whatever wind and solar happen to be producing. Below, every plant in the region is scheduled hour by hour for the cheapest dispatch that
+        <b>net load</b>: demand, minus whatever wind and solar happen to be producing. In the next demonstration, every plant in the region is scheduled hour by hour for the cheapest dispatch that
         respects each one’s ramp rate. Wind and solar sit on top of the stack, so the top of the dispatchable plants traces the net load, the dashed line. Try other days, and
         resize the region’s wind and solar plants:
       </P>
@@ -345,14 +345,14 @@ export default function Lesson() {
 
       <H2>Committing plants</H2>
       <P>
-        The scheduler above let every thermal plant glide down to zero and back up like a dimmer switch. Real ones can’t. A combined-cycle plant that’s running has a{' '}
+        This scheduler lets every thermal plant glide down to zero and back up like a dimmer switch. Real ones can’t. A combined-cycle plant that’s running has a{' '}
         <b>minimum stable output</b> — we’ll assume {pct(MIN_STABLE_SHARE)} of capacity, a typical figure — and to go lower it has to shut down. Shutting down and restarting
         takes hours and costs money, so a large part of scheduling is deciding, well ahead of time, which plants will be online in each hour. Operators call this{' '}
         <b>unit commitment</b>, and every day they solve it as a large optimization problem covering every plant for the day ahead. Here you’ll solve a small piece of it by
         hand.
       </P>
       <P>
-        Below is the calm, sunny day with {fmt(COMMIT_SOLAR)} MW of solar, four times today’s. Ironwood coal stays online all day, never below its {plant('coal').minOutput} MW
+        Here is the calm, sunny day with {fmt(COMMIT_SOLAR)} MW of solar, four times today’s. Ironwood coal stays online all day, never below its {plant('coal').minOutput} MW
         minimum; the Eastgate and Old Quay peakers can start within the hour. You decide when Lakeside and Mill Creek are online — press or drag across the cells. A plant
         brought online starts at its minimum and can climb no faster than its ramp rate:
       </P>

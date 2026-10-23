@@ -12,9 +12,15 @@ export function Challenge({
   solved,
   status,
   success,
+  figure,
 }: {
   /** Unique within the lesson, e.g. "a". */
   id: string;
+  /**
+   * Name of the demonstration this challenge is played on, when it isn't the one just before it.
+   * In the two-up layout, reaching the challenge brings that demonstration back into view.
+   */
+  figure?: string;
   question: ReactNode;
   solved: boolean;
   /** Shown while unsolved: a hint about the current state. */
@@ -28,7 +34,7 @@ export function Challenge({
   }, [solved, lessonId, id]);
 
   return (
-    <div className="chal">
+    <div className="chal" data-fig-focus={figure}>
       <div className="chal-h">Challenge</div>
       <p className="chal-q">{question}</p>
       {solved ? (

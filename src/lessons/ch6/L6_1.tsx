@@ -6,6 +6,7 @@ import {
   DataTable,
   Eq,
   FUEL,
+  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -340,8 +341,8 @@ export default function Lesson() {
         <i>convergence bid</i>. The traders are paid, when they’re right, for making the day-ahead price a better forecast.
       </P>
       <P>
-        Below, the book from the first demonstration is held in one hour of every day of the simulated history, with Lakeside’s cost moving with each day’s gas price.
-        Change the book above, or the hour here:
+        In the next demonstration, the book from <FigRef to="Trading Desk Simulator">the first demonstration</FigRef> is held in one hour of every day of the simulated
+        history, with Lakeside’s cost moving with each day’s gas price. Change the book there, or the hour here:
       </P>
 
       <Figure name="Trading Desk Simulator · 120 days" scenario={s}>

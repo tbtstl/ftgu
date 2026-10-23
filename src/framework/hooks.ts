@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useLessonId } from './Page';
+import { useFigureActive } from './twoUp';
 
 /**
  * Calls `cb(dt, elapsed)` every animation frame while `running`.
  * dt is in seconds and capped at 0.05 so a backgrounded tab doesn't jump.
+ * Used inside a figure that's hidden in the two-up side panel, it pauses.
  */
 export function useAnimationFrame(cb: (dt: number, elapsed: number) => void, running = true) {
+  const visible = useFigureActive();
+  running = running && visible;
   const ref = useRef(cb);
   ref.current = cb;
   useEffect(() => {

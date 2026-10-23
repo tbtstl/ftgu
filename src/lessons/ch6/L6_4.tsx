@@ -4,6 +4,7 @@ import {
   Challenge,
   DataTable,
   Eq,
+  FigRef,
   Figure,
   Frac,
   GRAPHIC,
@@ -155,7 +156,7 @@ export default function Lesson() {
         selling the same thing at different prices.
       </P>
       <P>
-        The battery below starts at 100 MW and four hours, so it stores 400 MWh. Its round-trip <K c="energy">efficiency</K> is 85%: of every megawatt-hour bought, 0.85
+        The battery in the next demonstration starts at 100 MW and four hours, so it stores 400 MWh. Its round-trip <K c="energy">efficiency</K> is 85%: of every megawatt-hour bought, 0.85
         comes back out. And every megawatt-hour it discharges costs $5 of <b>degradation</b> — the wear that slowly uses up a battery’s life, which an owner has to
         treat as a cost of cycling. We’ll give the battery perfect foresight of one day’s day-ahead prices and ask the optimizer from the shared engines for its most
         profitable schedule. Choose a day and a battery:
@@ -281,9 +282,10 @@ export default function Lesson() {
 
       <H2>The value of foresight</H2>
       <P>
-        Perfect foresight of day-ahead prices isn’t quite available. A battery has to bid before the day-ahead market clears, so the schedule above is an upper bound
+        Perfect foresight of day-ahead prices isn’t quite available. A battery has to bid before the day-ahead market clears, so this schedule is an upper bound
         on what it could earn there. But once the day-ahead prices are published, the operator does know them a day in advance. It can plan on them, run the plan
-        in real time, and be paid real-time prices. Below, the battery from the first demonstration runs four ways across all 120 days:
+        in real time, and be paid real-time prices. In the next demonstration, the battery from{' '}
+        <FigRef to="Battery Trading Optimizer">the first demonstration</FigRef> runs four ways across all 120 days:
       </P>
 
       <Figure name="Battery Trading Optimizer · 120 days" scenario={s}>
@@ -317,6 +319,8 @@ export default function Lesson() {
             { label: 'days real-time paid less than day-ahead', value: `${worseInRt} of ${DAYS.length}` },
           ]}
         />
+        <Slider label="Duration" tone="gold" value={hours} min={1} max={8} onChange={(v) => s.set({ hours: v })} display={`${hours} h`} />
+        <Slider label="Degradation cost" tone="red" value={wear} min={0} max={40} onChange={(v) => s.set({ wear: v })} display={`$${wear} per MWh`} />
       </Figure>
 
       <P>

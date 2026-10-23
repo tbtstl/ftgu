@@ -140,7 +140,7 @@ export default function Lesson() {
         the combined result to the market as if it were one resource.
       </P>
       <P>
-        Below is such a fleet. Each square is a home with a battery, drawn at one hour of one simulated day. The homes differ the way real ones do: battery sizes from 10 to
+        The next demonstration shows such a fleet. Each square is a home with a battery, drawn at one hour of one simulated day. The homes differ the way real ones do: battery sizes from 10 to
         27 kWh, different amounts of rooftop solar and household use, and owners who keep anywhere from 10% to all of their battery in reserve for outages. On any given
         day, some homes are also unreachable — the internet is down, the battery is being serviced, the owner opted out. The chart sums what the reachable homes could
         deliver to the grid for a full hour, starting at each hour of the day:
@@ -256,7 +256,7 @@ export default function Lesson() {
       <P>
         That steadiness is what an aggregator sells. A grid operator doesn’t want to know what the fleet delivers on average; it wants to know what the fleet will deliver
         when called. One way to put a number on that is the fleet’s <K c="power">dependable capacity</K>: the amount it can deliver on all but the worst few percent of
-        days. The figure below simulates {fmt(DAYS)} evenings at 18:00 and plots, for each, what the fleet could deliver per home:
+        days. The next demonstration simulates {fmt(DAYS)} evenings at 18:00 and plots, for each, what the fleet could deliver per home:
       </P>
 
       <Figure name="DER Aggregator · diversity" scenario={b}>

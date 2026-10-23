@@ -5,6 +5,7 @@ import {
   DataTable,
   Eq,
   FUEL,
+  FigRef,
   Figure,
   Frac,
   H2,
@@ -225,10 +226,11 @@ export default function Lesson() {
       </P>
       <P>
         So a kilowatt-hour exported at noon is worth little to the grid, while one supplied at 19:00 is worth a lot. Whether the household feels that difference depends
-        entirely on how its tariff pays for exports. Below, the same house is billed under different (illustrative) tariffs. <b>Net metering</b> credits each exported
+        entirely on how its tariff pays for exports. In the next demonstration, the same house is billed under different (illustrative) tariffs. <b>Net metering</b> credits each exported
         kilowatt-hour at the same retail price as an imported one. An <b>export rate</b> pays a fixed {cents(EXPORT_RATE)} per exported kWh instead. The import price is
         either flat, at {cents(FLAT)} per kWh, or <K c="price">time-of-use</K>: {cents(OFF_PEAK)} most of the day and {cents(PEAK)} from 16:00 to 21:00. The house
-        keeps the panels and battery you gave it above (to follow the numbers below, use 6 kW of panels and a 13.5 kWh battery):
+        keeps the panels and battery you gave it in <FigRef to="Home Energy Simulator">the first demonstration</FigRef> (to follow the numbers in the next few paragraphs,
+        use 6 kW of panels and a 13.5 kWh battery):
       </P>
 
       <Figure name="Home Energy Simulator · the bill" scenario={s}>

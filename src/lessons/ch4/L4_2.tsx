@@ -360,7 +360,7 @@ export default function Lesson() {
         electricity markets — who sets prices, who profits from a heat wave, who pays for the wires — clears up once you know who’s who.
       </P>
       <P>
-        Below is one day in the region’s market, taken from the simulated history we’ll use for the rest of the course. The diagram shows how energy (gold) and money (green)
+        Here is one day in the region’s market, taken from the simulated history we’ll use for the rest of the course. The diagram shows how energy (gold) and money (green)
         move between the participants. Pick a role to see the day from its side, and pick a day:
       </P>
 
@@ -467,7 +467,7 @@ export default function Lesson() {
 
       <H2>The retailer’s gamble</H2>
       <P>
-        A retailer has to pick its rate before it knows what wholesale prices will do. Below is our retailer’s margin on each of the 120 days of history at a single
+        A retailer has to pick its rate before it knows what wholesale prices will do. The next chart shows our retailer’s margin on each of the 120 days of history at a single
         fixed rate. Find a rate that pays for itself over the whole period:
       </P>
 

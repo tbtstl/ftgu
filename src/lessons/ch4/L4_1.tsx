@@ -152,7 +152,7 @@ export default function Lesson() {
       </P>
       <P>
         There are two broad ways to organize the decision. A <b>central planner</b> collects the best estimates it can of each plant’s cost and dispatches on those. A{' '}
-        <b>market</b> asks each owner to state the price at which it’s willing to run — its <K c="price">offer</K> — and accepts the cheapest offers. Below, both schedule the region on
+        <b>market</b> asks each owner to state the price at which it’s willing to run — its <K c="price">offer</K> — and accepts the cheapest offers. In the next demonstration, both schedule the region on
         the reference day. The planner’s estimates are off by a random amount whose typical size you can set, and each press of New estimates draws a fresh set of
         errors; the owners offer their true costs. Drag through the hours and change the size of the planner’s errors:
       </P>

@@ -134,7 +134,7 @@ export default function Lesson() {
         <K c="price">carbon price</K>
       </Eq>
       <P>
-        Below is the region’s fleet, each plant offering exactly that. At the starting prices — $5.00 per MMBtu for gas, $2.20 for coal, no carbon price — the offers are
+        Here is the region’s fleet, each plant offering exactly that. At the starting prices — $5.00 per MMBtu for gas, $2.20 for coal, no carbon price — the offers are
         the running costs we’ve used since Chapter 2. Drag the price of gas, and then add a price on carbon:
       </P>
 

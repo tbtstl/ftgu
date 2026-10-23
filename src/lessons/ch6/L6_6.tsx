@@ -1,6 +1,7 @@
 import { useDeferredValue, useId, useMemo } from 'react';
 import {
   Challenge,
+  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -306,9 +307,9 @@ export default function Lesson() {
       <P>
         You probably found settings that work by trying several. That’s exactly how backtests deceive. Try enough variations of a strategy on the same history and
         the best of them will look good partly because it happened to fit that history’s accidents. That’s <b>overfitting</b>, and the defense is to choose on one
-        period and judge on another. Below, the strategy above is run with every lookback window from 5 to 60 days. The dashed line is each window’s average daily
-        profit in the first half of the history, the <b>in-sample</b> period where we choose; the solid line is the same window in the second half, which we pretend
-        not to have seen until we’ve chosen:
+        period and judge on another. In the next demonstration, this strategy is run with every lookback window from 5 to 60 days. The dashed line is each
+        window’s average daily profit in the first half of the history, the <b>in-sample</b> period where we choose; the solid line is the same window in the second
+        half, which we pretend not to have seen until we’ve chosen:
       </P>
 
       <Figure name="Strategy Laboratory · in sample and out of sample" scenario={s}>
@@ -336,8 +337,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Switch the strategy above to Metro basis. With the starting $2 threshold and $0.50 cost, the window that looks best in sample is the shortest, 5 days, at
-        $104 a day. Out of sample it loses $75 a day — the worst of all twelve windows, while the median window earns $187. Nothing about a 5-day window is special. It
+        Switch the strategy in <FigRef to="Strategy Laboratory">the first demonstration</FigRef> to Metro basis, then look again at{' '}
+        <FigRef to="Strategy Laboratory · in sample and out of sample">the second</FigRef>. With the starting $2 threshold and $0.50 cost, the window that looks
+        best in sample is the shortest, 5 days, at $104 a day. Out of sample it loses $75 a day — the worst of all twelve windows, while the median window earns $187. Nothing about a 5-day window is special. It
         happened to fit the first half’s particular sequence of outages and noise, and the second half’s came differently.
       </P>
       <P>

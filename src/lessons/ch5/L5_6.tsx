@@ -274,7 +274,7 @@ export default function Lesson() {
       <H2>The challenge</H2>
       <P>
         Now do the optimizer’s job yourself. The emergency rating is 110%, and the grid must survive the loss of any one of its eight lines. Ridge wind, Harbor Point
-        and Falls hydro are fixed, Old Quay is off, and Lakeside makes up the difference. Each bar below is the most heavily loaded line in one situation, as a share of
+        and Falls hydro are fixed, Old Quay is off, and Lakeside makes up the difference. Each bar in the next chart is the most heavily loaded line in one situation, as a share of
         the limit that applies — the normal limit if nothing trips, the emergency limit after an outage. Every bar has to stay left of the line:
       </P>
 

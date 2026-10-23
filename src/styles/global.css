@@ -305,3 +305,82 @@ a.ls-t:hover { color: var(--link); text-decoration: underline; }
 
 /* Keyboard focus on chart scrubbers */
 svg.chart rect[role='slider']:focus-visible { stroke: var(--link); stroke-width: 2; }
+
+/* ------------------------------------------------------------------------------------------
+   Two-up layout (wide screens): prose on the left, the current demonstration fixed on the right.
+   ------------------------------------------------------------------------------------------ */
+.wrap.wide { max-width: 88rem; }
+.tu {
+  display: grid; grid-template-columns: minmax(0, 38rem) minmax(0, 1fr); column-gap: 3.5rem;
+  max-width: 88rem; margin: 0 auto; padding: 0 3rem;
+}
+.tu-text { min-width: 0; }
+.tu-panel {
+  position: sticky; top: 0; align-self: start; min-width: 0;
+  display: flex; flex-direction: column; height: 100vh; overflow-y: auto; padding: 14px 6px 24px 2px;
+  scrollbar-width: thin; scrollbar-color: #d4d4d4 transparent;
+}
+/* Short figures sit at eye level; tall ones start at the top and scroll within the panel. */
+.tu-slots { margin: auto 0; }
+.tu-slot.in-panel > .fig { margin: 0; }
+.tu-slot.in-panel:not([hidden]) { animation: tu-in .28s ease both; }
+@keyframes tu-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tu-slot.in-panel:not([hidden]) { animation: none; } }
+
+/* Figure numbers at the top of the panel */
+.tu-pager { display: flex; gap: 6px; margin: 0 0 10px; }
+.tu-pager button {
+  min-width: 32px; height: 32px; padding: 0 8px; border: 0; border-radius: 16px;
+  background: rgba(0, 0, 0, .05); font: 500 14px/1 var(--sans); color: #555; cursor: pointer;
+}
+.tu-pager button:hover { background: rgba(0, 0, 0, .09); }
+.tu-pager button.on { background: #444; color: #fff; }
+.tu-pager button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* Where a figure sits in the prose while it's shown in the panel */
+.fig-mark {
+  display: flex; align-items: baseline; gap: 10px; width: 100%; min-height: 44px; margin: 1.1em 0;
+  padding: 11px 2px; border: 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  background: none; font: 14px/1.35 var(--sans); color: var(--muted); text-align: left; cursor: pointer;
+}
+.fig-mark-n { font-weight: 500; white-space: nowrap; }
+.fig-mark-t { min-width: 0; }
+.fig-mark-a { margin-left: auto; white-space: nowrap; }
+.fig-mark:hover { color: #333; }
+.fig-mark.on { color: #333; border-color: #c9c9c9; }
+.fig-mark.on .fig-mark-n { color: var(--link); }
+.fig-mark:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* A reference to a demonstration by name, inside prose */
+.figref {
+  appearance: none; border: 0; padding: 0; background: none; font: inherit; color: inherit;
+  text-decoration: underline dotted; text-underline-offset: .18em; text-decoration-thickness: .08em; cursor: pointer;
+}
+.figref:hover { color: var(--link); }
+.figref:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; border-radius: 2px; }
+
+/* Compact figures in the panel: paired sliders, tighter readouts, so more fits on screen */
+.tu-panel .fig { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 22px; }
+.tu-panel .fig > * { grid-column: 1 / -1; }
+.tu-panel .fig > .ctl { grid-column: auto; }
+.tu-panel .ctls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 22px; }
+.tu-panel .ctls > :not(.ctl) { grid-column: 1 / -1; }
+.tu-panel .ctl { max-width: none; margin: 0; padding: 4px 0 0; }
+.tu-panel .ctl-row { font-size: 14.5px; }
+.tu-panel .big { gap: 4px 28px; padding: 6px 0 2px; }
+.tu-panel .big .n { font-size: 21px; }
+.tu-panel .eq { font-size: 19px; padding: 8px 0 10px; }
+.tu-panel .cap { font-size: 15px; }
+.tu-panel .seg { justify-self: center; width: min(100%, 460px); margin: 0 0 8px; }
+.tu-panel .seg button { min-height: 40px; font-size: 16px; }
+.tu-panel .tb { font-size: 14px; }
+.tu-panel .tb th, .tu-panel .tb td { padding: 5px 6px; }
+.tu-panel .fig-ft { padding-top: 4px; }
+/* A slider with no partner (alone, or last of an odd run) spans the row, centered at its usual width. */
+.tu-panel :is(.fig, .ctls) > :is(:not(.ctl) + .ctl, .ctl:first-child):not(:has(+ .ctl)),
+.tu-panel :is(.fig, .ctls) > :is(:not(.ctl) + .ctl, .ctl:first-child) + .ctl + .ctl:not(:has(+ .ctl)),
+.tu-panel :is(.fig, .ctls) > :is(:not(.ctl) + .ctl, .ctl:first-child) + .ctl + .ctl + .ctl + .ctl:not(:has(+ .ctl)) {
+  grid-column: 1 / -1; justify-self: center; width: min(100%, 420px);
+}
+.tu-panel figure:focus { outline: none; }
+.tu-panel figure:focus-visible { outline: 2px solid var(--link); outline-offset: 6px; border-radius: 4px; }
