@@ -43,7 +43,7 @@ const chapters: ChapterMeta[] = [
     ['Cross-market strategies', 'Weather-Energy Trading Lab'],
     ['Backtesting and hedge effectiveness', 'Weather Strategy Backtester'],
   ]),
-  ch(6, 'Capstone: build a weather trading system', 'From a model atmosphere to a priced, tested book of weather contracts.', 'ink', [
+  ch(6, 'Capstone: build a weather trading system', 'Can a probabilistic forecast of a region you build be turned into hedges and trades that hold up on history?', 'ink', [
     ['Construct a regional weather model', 'Weather World Builder'],
     ['Forecast future conditions', 'Forecasting Competition'],
     ['Translate forecasts into economic outcomes', 'Weather Exposure Engine'],
@@ -57,6 +57,6 @@ export const WEATHER: CourseOutline = {
   title: 'Atmospheric Physics & Weather Derivatives',
   short: 'Weather derivatives',
   lede:
-    'A cold January costs a utility money and earns a gas producer some. This course builds the atmosphere from energy balance up, learns to forecast it with honest uncertainty, and prices contracts that pay on what it does.',
+    'A mild winter costs a gas utility the gas it never sells; a cold snap costs anyone caught buying energy at short notice. This course builds the atmosphere from energy balance up, learns to forecast it with honest uncertainty, and prices contracts that pay on what it does.',
   chapters,
 };
