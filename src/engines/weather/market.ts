@@ -22,8 +22,9 @@ import {
   normCdf,
   tempF,
   type WorldKnobs,
+  climateFor,
 } from '../../model/weather/archive';
-import { ENSO_MONTH_WEIGHT, anomalySd, stationClimate } from '../../model/weather/region';
+import { ENSO_MONTH_WEIGHT, anomalySd } from '../../model/weather/region';
 import { BASE_F, degreeDays, type DegreeKind } from './degreeDays';
 import { contractSpan, payoff, type ContractSpec } from './pricing';
 
@@ -57,7 +58,7 @@ export interface ForecasterView {
 export function expectedIndex(spec: ContractSpec, year: number, valuationDay: number, view: ForecasterView = {}): number {
   const a = archive();
   const knobs = view.knobs ?? {};
-  const cl = stationClimate('calder');
+  const cl = climateFor('calder', knobs);
   const H = LEAD_MAX;
   const { start, end } = contractSpan(spec, year);
   const t = valuationDay;

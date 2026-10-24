@@ -226,6 +226,16 @@ export interface WorldKnobs {
   variability?: number;
   /** Warming per year, °F (default TREND_F_PER_YEAR). */
   trend?: number;
+  /**
+   * A different climate for the station: the same days of weather, reshaped by another place's
+   * normals and variability (the capstone's region). Its ensoF applies unless `ensoF` is set.
+   */
+  climate?: Climate;
+}
+
+/** The climate a station has under a set of knobs. */
+export function climateFor(id: StationId, knobs: WorldKnobs = {}): Climate {
+  return knobs.climate ?? stationClimate(id);
 }
 
 /** The Niño-3.4 index on a day, interpolated between mid-month values, °C. */
@@ -270,13 +280,13 @@ function yearsFromMiddle(d: number) {
 
 /** The normal temperature on a day, including the trend to that year, °F. */
 export function expectedTemp(id: StationId, d: number, knobs: WorldKnobs = {}): number {
-  const cl = stationClimate(id);
+  const cl = climateFor(id, knobs);
   return normalTemp(cl, dayInfo(d).doy) + (knobs.trend ?? TREND_F_PER_YEAR) * yearsFromMiddle(d);
 }
 
 /** What the station recorded: its daily mean temperature, °F. */
 export function tempF(id: StationId, d: number, knobs: WorldKnobs = {}): number {
-  const cl = stationClimate(id);
+  const cl = climateFor(id, knobs);
   const { doy, month } = dayInfo(d);
   const enso = (knobs.ensoF ?? cl.ensoF) * ENSO_MONTH_WEIGHT[month] * ninoAt(d);
   return expectedTemp(id, d, knobs) + anomalySd(cl, doy) * (knobs.variability ?? 1) * stationZ(id, d) + enso;
@@ -295,7 +305,7 @@ export interface Forecast {
  */
 export function forecastTemp(id: StationId, d: number, lead: number, knobs: WorldKnobs = {}): Forecast {
   const a = archive();
-  const cl = stationClimate(id);
+  const cl = climateFor(id, knobs);
   const { doy, month } = dayInfo(d);
   const sdDay = anomalySd(cl, doy) * (knobs.variability ?? 1);
   if (lead <= 0) return { mean: tempF(id, d, knobs), sd: 0 };

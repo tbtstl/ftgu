@@ -10,8 +10,10 @@
 // same day concern neighboring days alike (as the archive is built), plus the oscillator's
 // still-unknown ENSO kicks.
 
-import { LEAD_MAX, SAME_DAY_CORRELATION, dayInfo, normCdf, revealedShare, tempF, type WorldKnobs } from '../../model/weather/archive';
-import { ENSO_MONTH_WEIGHT, anomalySd, stationClimate } from '../../model/weather/region';
+import { LEAD_MAX, SAME_DAY_CORRELATION, dayInfo, normCdf, revealedShare, tempF, type WorldKnobs,
+  climateFor,
+} from '../../model/weather/archive';
+import { ENSO_MONTH_WEIGHT, anomalySd } from '../../model/weather/region';
 import { ENSO_DEFAULTS } from './enso';
 import { degreeDays } from './degreeDays';
 import { contractSpan, type ContractSpec } from './pricing';
@@ -26,7 +28,7 @@ const V = Array.from({ length: LEAD_MAX + 1 }, (_, k) => revealedShare(k));
  */
 export function indexSd(spec: ContractSpec, year: number, valuationDay: number, view: { infoDelay?: number; knobs?: WorldKnobs } = {}): number {
   const knobs = view.knobs ?? {};
-  const cl = stationClimate('calder');
+  const cl = climateFor('calder', knobs);
   const H = LEAD_MAX;
   const rho = SAME_DAY_CORRELATION;
   const { start, end } = contractSpan(spec, year);

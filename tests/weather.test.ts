@@ -45,6 +45,15 @@ import { regress, utilityWinters, windYear } from '../src/engines/weather/exposu
 import { contractSpan, indexDistribution, indexValue, monthContract, payoff, probAbove, settledIndex } from '../src/engines/weather/pricing';
 import { MARKET, expectedIndex, replay, tradeStats } from '../src/engines/weather/market';
 import { DRIVER_DEFAULTS, crossMarketIdeas } from '../src/engines/weather/crossMarket';
+import { scoreSeason } from '../src/engines/weather/competition';
+import { replayBook } from '../src/engines/weather/portfolio';
+import { DESK_DEFAULTS, REGION_DEFAULTS, isCalder, regionKnobs, sanitize } from '../src/lessons/weather/shared/capstone';
+import { ensoShareSolved, riskierSolved } from '../src/lessons/weather/ch6/L6_1';
+import { CHALLENGE_MONTH, beatModelSolved, skillLeadSolved } from '../src/lessons/weather/ch6/L6_2';
+import { stripsSolved } from '../src/lessons/weather/ch6/L6_3';
+import { hedgeSolved as deskHedgeSolved, vanishSolved as deskVanishSolved, viewDefaults } from '../src/lessons/weather/ch6/L6_4';
+import { REF_BUSINESS, REF_DESK, WORLD_DEFAULTS, physicsGoneSolved, steadyBookSolved } from '../src/lessons/weather/ch6/L6_5';
+import { exposureSeries } from '../src/engines/weather/exposureFit';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
@@ -546,6 +555,50 @@ describe('fronts and storms', () => {
     expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 0, lookAhead: 1 })).toBe(false);
     expect(hedgeSolved({ contracts: 2800, variability: 1, ensoF: 1 })).toBe(true);
     expect(hedgeSolved({ contracts: 2700, variability: 1, ensoF: 1 })).toBe(false);
+  });
+  it('runs the capstone in any region (chapter 6 engines)', () => {
+    const knobs = regionKnobs(REGION_DEFAULTS);
+    const d = monthDays(20, 0).start + 5;
+    expect(tempF('calder', d, knobs)).toBeCloseTo(tempF('calder', d), 9);
+    expect(isCalder(REGION_DEFAULTS)).toBe(true);
+    expect(sanitize({ region: { latitude: 99 } }).region.latitude).toBe(60);
+    // The calibrated model beats climate and persistence, and an overconfident one does worse.
+    const yrs = Array.from({ length: 20 }, (_, i) => i + 2);
+    const s = scoreSeason(yrs, [0], 3, knobs, { blend: 1, spread: 1, bias: 0 });
+    expect(s.model).toBeLessThan(s.climate);
+    expect(s.model).toBeLessThan(s.persistence);
+    expect(s.model).toBeLessThan(s.raw);
+    // The book: a minimum-variance hedge removes most of the utility's risk; the trading edge needs ENSO.
+    const book = { business: 'utility' as const, scale: 1, hedgeStrips: 2800, months: [11, 0, 1], lead: 60, threshold: 5, size: 10 };
+    const r = replayBook(book, knobs);
+    expect(r.effectiveness).toBeGreaterThan(0.9);
+    expect(r.tradingTotal).toBeGreaterThan(0);
+    expect(replayBook(book, { ...knobs, ensoF: 0 }).trades).toBe(0);
+    // A colder, more continental region has a riskier utility.
+    const north = replayBook(book, regionKnobs({ ...REGION_DEFAULTS, latitude: 47, continentality: 1, elevation: 300 }));
+    expect(north.businessSd).toBeGreaterThan(r.businessSd);
+  });
+  it('chapter 6 challenges', () => {
+    const R = REGION_DEFAULTS;
+    expect(riskierSolved({ ...R, variability: 1.7 })).toBe(true);
+    expect(riskierSolved(R)).toBe(false);
+    expect(ensoShareSolved({ ...R, ensoF: 2.1 })).toBe(true);
+    expect(ensoShareSolved(R)).toBe(false);
+    expect(beatModelSolved(CHALLENGE_MONTH, { blend: 1, spread: 1, bias: 2 })).toBe(true);
+    expect(beatModelSolved(CHALLENGE_MONTH, { blend: 1, spread: 1, bias: 0 })).toBe(false);
+    expect(skillLeadSolved('jan', 6)).toBe(true);
+    expect(skillLeadSolved('jan', 7)).toBe(false);
+    const series = exposureSeries('utility', 1, regionKnobs(R), 'calder');
+    expect(stripsSolved('utility', 2800, series)).toBe(true);
+    expect(stripsSolved('utility', 2700, series)).toBe(false);
+    expect(deskVanishSolved(R, { ...viewDefaults(R), ensoF: 0, lag: 0 })).toBe(true);
+    expect(deskVanishSolved(R, viewDefaults(R))).toBe(false);
+    expect(deskHedgeSolved(R, viewDefaults(R), { ...DESK_DEFAULTS, hedgeStrips: 2700 }, 'utility', 1)).toBe(true);
+    expect(deskHedgeSolved(R, viewDefaults(R), { ...DESK_DEFAULTS, hedgeStrips: 2800 }, 'utility', 1)).toBe(false);
+    expect(steadyBookSolved(R, REF_BUSINESS, REF_DESK, WORLD_DEFAULTS)).toBe(true);
+    expect(steadyBookSolved(R, REF_BUSINESS, { ...REF_DESK, hedgeStrips: 2700 }, WORLD_DEFAULTS)).toBe(false);
+    expect(physicsGoneSolved(R, REF_BUSINESS, REF_DESK, { ...WORLD_DEFAULTS, pull: 0 })).toBe(true);
+    expect(physicsGoneSolved(R, REF_BUSINESS, REF_DESK, WORLD_DEFAULTS)).toBe(false);
   });
   it('places the Hadley cell’s edge with the rotation rate', () => {
     expect(circulation(1, 1 / 3).cells.length).toBe(3);

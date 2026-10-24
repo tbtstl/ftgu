@@ -24,9 +24,10 @@ import {
   revealedShare,
   tempF,
   type WorldKnobs,
+  climateFor,
 } from '../../model/weather/archive';
 import { ENSO_DEFAULTS } from './enso';
-import { ENSO_MONTH_WEIGHT, MONTH_DAYS, anomalySd, stationClimate, type StationId } from '../../model/weather/region';
+import { ENSO_MONTH_WEIGHT, MONTH_DAYS, anomalySd, type StationId } from '../../model/weather/region';
 import { BASE_F, degreeDays, type DegreeKind } from './degreeDays';
 
 /** The CME's US degree-day futures pay $20 per index point. */
@@ -155,7 +156,7 @@ export function indexDistribution(spec: ContractSpec, year: number, valuationDay
   const issue = t - delay;
   const H = LEAD_MAX;
   const rho = SAME_DAY_CORRELATION;
-  const cl = stationClimate('calder');
+  const cl = climateFor('calder', knobs);
   const variability = knobs.variability ?? 1;
   const ensoF = knobs.ensoF ?? cl.ensoF;
   const base = spec.base;

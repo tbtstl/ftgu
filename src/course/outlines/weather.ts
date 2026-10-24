@@ -43,7 +43,7 @@ const chapters: ChapterMeta[] = [
     ['Cross-market strategies', 'Weather-Energy Trading Lab'],
     ['Backtesting and hedge effectiveness', 'Weather Strategy Backtester'],
   ]),
-  ch(6, 'Capstone: build a weather trading system', 'From a model atmosphere to a priced, tested book of weather contracts.', 'ink', [
+  ch(6, 'Capstone: build a weather trading system', 'Can a probabilistic forecast of a region you build be turned into hedges and trades that hold up on history?', 'ink', [
     ['Construct a regional weather model', 'Weather World Builder'],
     ['Forecast future conditions', 'Forecasting Competition'],
     ['Translate forecasts into economic outcomes', 'Weather Exposure Engine'],
