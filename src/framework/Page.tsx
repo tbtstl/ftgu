@@ -16,7 +16,7 @@ export interface Crumb {
   href?: string;
 }
 
-/** "Ground Up / Electricity / 4.4": the last crumb is the current page. */
+/** "From The Ground Up / Electricity / 4.4": the last crumb is the current page. */
 export function Crumbs({ items }: { items: Crumb[] }) {
   return (
     <nav aria-label="Breadcrumb">
@@ -40,7 +40,7 @@ export function Crumbs({ items }: { items: Crumb[] }) {
 export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean }) {
   return (
     <header className={wide ? 'sh wide' : 'sh'}>
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Electricity', href: courseHref() }, { label: id }]} />
+      <Crumbs items={[{ label: 'From The Ground Up', href: '#/' }, { label: 'Electricity', href: courseHref() }, { label: id }]} />
       <a className="sh-link" href={courseHref()}>
         Contents
       </a>
@@ -61,7 +61,7 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
   const { prev, next } = neighbors(id);
 
   useEffect(() => {
-    document.title = meta ? `${meta.id} ${meta.title} · Ground Up` : 'Ground Up';
+    document.title = meta ? `${meta.id} ${meta.title} · FTGU` : 'From The Ground Up';
     if (meta) markVisited(meta.id);
   }, [meta]);
 

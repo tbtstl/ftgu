@@ -1,4 +1,4 @@
-# Ground Up
+# From The Ground Up (FTGU)
 
 Interactive courses in how markets work, from the ground up. Each course starts with the
 physical thing being traded and builds the market on top of it, one simulation at a time.

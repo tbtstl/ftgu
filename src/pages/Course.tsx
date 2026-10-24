@@ -16,12 +16,12 @@ export function Course() {
   const resume = current ?? LESSONS[0];
 
   useEffect(() => {
-    document.title = 'Electricity & Energy Markets · Ground Up';
+    document.title = 'Electricity & Energy Markets · FTGU';
   }, []);
 
   return (
     <main className="col page">
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Electricity' }]} />
+      <Crumbs items={[{ label: 'From The Ground Up', href: '#/' }, { label: 'Electricity' }]} />
 
       <header className="hdr">
         <h1 className="name">Electricity &amp; Energy Markets</h1>

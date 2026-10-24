@@ -10,13 +10,13 @@ export function Home() {
   const lesson = (last && getLesson(last)) || LESSONS[0];
 
   useEffect(() => {
-    document.title = 'Ground Up';
+    document.title = 'From The Ground Up';
   }, []);
 
   return (
     <main className="col page">
       <header>
-        <h1 className="name">Ground Up</h1>
+        <h1 className="name">From The Ground Up</h1>
         <p className="dek">Understand markets from first principles.</p>
       </header>
 
