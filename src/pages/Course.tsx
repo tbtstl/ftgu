@@ -3,6 +3,7 @@ import { CHAPTERS, getLesson, hasLesson, LESSONS } from '../course/registry';
 import { lessonHref } from '../course/router';
 import { useLastLesson, useProgress } from '../course/progress';
 import { Crumbs } from '../framework/Page';
+import { RunnerMark } from '../framework/RunnerMark';
 import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
@@ -21,7 +22,7 @@ export function Course() {
 
   return (
     <main className="col page">
-      <Crumbs items={[{ label: 'From The Ground Up', href: '#/' }, { label: 'Electricity' }]} />
+      <Crumbs items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: 'Electricity' }]} />
 
       <header className="hdr">
         <h1 className="name">Electricity &amp; Energy Markets</h1>
