@@ -56,6 +56,27 @@ import { CURVE0, curveOf, stopsPayingSolved, storedReturn, worstStorageYear } fr
 import { BASIS0, FROSTED_DISCOUNT, charterProfit, charterSolved, cliffSolved, partsOf } from '../src/lessons/agriculture/ch5/L5_3';
 import { backtest, rightButLost, shareSolved, trade } from '../src/lessons/agriculture/ch5/L5_4';
 import { LAB0, costliestYear, leastVariableSolved } from '../src/lessons/agriculture/ch5/L5_5';
+import {
+  CEDAR_DESIGN,
+  NEW_SEASONS,
+  deskYear,
+  farmClimatology,
+  farmFits,
+  farmForecast,
+  farmRecord,
+  merchantYear,
+  reportTrade,
+  storagePerBushel,
+  type MerchantPlan,
+} from '../src/engines/agriculture/capstone';
+import { bestBins, resilientSolved, summaryOf } from '../src/lessons/agriculture/ch6/L6_1';
+import { bestCalibrated, calibration, worstAugustMiss } from '../src/lessons/agriculture/ch6/L6_2';
+import { CHALLENGE_SEASONS, beatClimatology, bestHalfWidth, climatologyScore, crps, modelScore } from '../src/lessons/agriculture/ch6/L6_3';
+import { bestMinCarry, bestSpread, largestSafeCharter } from '../src/lessons/agriculture/ch6/L6_4';
+import { stats, steadiestPosition } from '../src/lessons/agriculture/ch6/L6_5';
+import { DEFAULT_MERCHANT } from '../src/lessons/agriculture/shared/capstone';
+import { checkpointForecast, valleyCorn } from '../src/engines/agriculture/market';
+import { observe } from '../src/engines/agriculture/forecast';
 import { bumperSolved } from '../src/lessons/agriculture/ch1/L1_5';
 
 const P = DISTRICT.prairie;
@@ -791,5 +812,126 @@ describe('chapter 5: the strategy lab (5.5)', () => {
     expect(Math.round(summarize(walkForward('futures', 5).revenues).sd)).toBe(121);
     expect(Math.round(summarize(walkForward('puts', 20).revenues).sd)).toBe(83);
     expect(costliestYear()).toBe(46);
+  });
+});
+
+const K = (x: number) => Math.round(x / 1000);
+const SIXTY = Array.from({ length: 60 }, (_, i) => i + 1);
+
+describe('chapter 6: the farm (6.1)', () => {
+  it('runs Cedar Bend and its variants as the prose says', () => {
+    const cedar = summaryOf(CEDAR_DESIGN);
+    expect([K(cedar.mean), K(cedar.p10), cedar.losses]).toEqual([25, -125, 26]);
+    const c800 = summaryOf({ ...CEDAR_DESIGN, cornAcres: 800 });
+    expect([K(c800.mean), K(c800.p10)]).toEqual([54, -76]);
+    expect(K(summaryOf({ ...CEDAR_DESIGN, hybrid: 'late' }).worst)).toBe(-213);
+    expect(K(cedar.worst)).toBe(-160);
+    const irr = farmRecord({ ...CEDAR_DESIGN, irrigated: true }, SIXTY);
+    const dry = farmRecord(CEDAR_DESIGN, SIXTY);
+    const yieldGain = irr.reduce((a, r) => a + r.cornYield, 0) / 60 - dry.reduce((a, r) => a + r.cornYield, 0) / 60;
+    expect(Math.round(yieldGain)).toBe(18);
+    expect(summaryOf({ ...CEDAR_DESIGN, irrigated: true }).mean).toBeLessThan(cedar.mean);
+    const plains = farmRecord({ ...CEDAR_DESIGN, district: 'plains' }, SIXTY);
+    expect(Math.round(plains.reduce((a, r) => a + r.cornYield, 0) / 60)).toBe(70);
+    expect(K(summaryOf({ ...CEDAR_DESIGN, district: 'plains' }).mean)).toBe(-283);
+    expect(summaryOf({ ...CEDAR_DESIGN, district: 'plains', irrigated: true }).mean).toBeLessThan(0);
+    const means = (['north', 'plains', 'prairie', 'ridge', 'bottoms'] as const).map((d) => summaryOf({ ...CEDAR_DESIGN, district: d }).mean);
+    expect(means.indexOf(Math.max(...means))).toBe(4);
+    const bottoms = summaryOf({ ...CEDAR_DESIGN, district: 'bottoms' });
+    expect(K(bottoms.worst)).toBe(-350);
+    expect(bottoms.worst / cedar.worst).toBeGreaterThan(2);
+    expect(resilientSolved({ ...CEDAR_DESIGN, cornAcres: 800 })).toBe(true);
+    expect(resilientSolved(CEDAR_DESIGN)).toBe(false);
+    expect(summaryOf({ ...CEDAR_DESIGN, owned: 0 }).mean).toBeLessThan(0);
+  });
+  it('sizes the bins as the prose says', () => {
+    expect(bestBins(CEDAR_DESIGN)).toBe(150000);
+    const per = SIXTY.map((y) => storagePerBushel(y, 'fairview'));
+    expect(Math.round((per.reduce((a, b) => a + b, 0) / 60) * 100)).toBe(29);
+    const corn = farmRecord(CEDAR_DESIGN, SIXTY).map((r) => r.cornBushels);
+    expect([K(Math.min(...corn)), K(Math.max(...corn))]).toEqual([73, 211]);
+  });
+});
+
+describe('chapter 6: the season (6.2)', () => {
+  it('forecasts the farm as the prose says', () => {
+    const clim = farmClimatology(CEDAR_DESIGN);
+    expect(Math.round(clim.mean)).toBe(174);
+    expect(Math.round(clim.sd)).toBe(27);
+    const sds = farmFits(CEDAR_DESIGN).map((f) => f.fit.rmseTest);
+    expect(sds[3] / sds[0]).toBeLessThan(0.55);
+    const s82 = [dayOf(6, 1), dayOf(7, 1), dayOf(8, 1), dayOf(9, 1)].map((d) => Math.round(farmForecast(CEDAR_DESIGN, 82, d).mean));
+    expect(s82).toEqual([172, 161, 150, 125]);
+    expect(Math.round(farmForecast(CEDAR_DESIGN, 82, dayOf(11, 9)).mean)).toBe(117);
+    const cal = calibration(CEDAR_DESIGN);
+    expect(cal.map((c) => c.inside)).toEqual([35, 32, 33, 34]);
+    expect([Math.round(cal[0].mae), Math.round(cal[3].mae)]).toEqual([21, 10]);
+    expect(bestCalibrated(CEDAR_DESIGN)).toBe(dayOf(7, 1));
+    expect(NEW_SEASONS).toContain(worstAugustMiss(CEDAR_DESIGN));
+  });
+});
+
+describe('chapter 6: forecasting the valley (6.3)', () => {
+  it('scores forecasts as the prose says', () => {
+    expect(crps(500, 1e-12, 540)).toBeCloseTo(40, 6);
+    expect(crps(500, 50, 500)).toBeGreaterThan(0);
+    expect(bestHalfWidth(40)).toBe(60);
+    expect(crps(0, 60 / 1.2816, 40)).toBeLessThan(40);
+    const clim = CHALLENGE_SEASONS.reduce((a, y) => a + climatologyScore(y), 0) / 5;
+    const model = CHALLENGE_SEASONS.reduce((a, y) => a + modelScore(y), 0) / 5;
+    expect(model).toBeLessThan(clim / 2);
+    const asModel = Object.fromEntries(CHALLENGE_SEASONS.map((y) => {
+      const f = checkpointForecast(y, dayOf(8, 1), 'full');
+      return [y, { mean: f.mean, half: f.sd * 1.2816, locked: true }];
+    }));
+    expect(beatClimatology(asModel)).toBe(true);
+    const asClim = Object.fromEntries(CHALLENGE_SEASONS.map((y) => [y, { mean: 506, half: 64 * 1.2816, locked: true }]));
+    expect(beatClimatology(asClim)).toBe(false);
+    const past = SIXTY.map((y) => ({ o: observe(y, dayOf(8, 1)), h: valleyCorn(y) }));
+    const hot = past.filter((p) => p.o.temp > 1.5);
+    expect(hot.length).toBe(4);
+    expect(Math.round(Math.max(...hot.map((p) => p.h)))).toBe(415);
+    expect(observe(65, dayOf(8, 1)).temp).toBeGreaterThan(Math.max(...past.map((p) => p.o.temp)));
+    const dry = past.filter((p) => p.o.rain < -4);
+    expect([dry.length, dry.filter((p) => p.h < 506).length]).toEqual([14, 13]);
+  });
+});
+
+describe('chapter 6: the merchant (6.4)', () => {
+  it('runs the elevator as the prose says', () => {
+    const r40 = merchantYear(DEFAULT_MERCHANT, 40);
+    expect([Math.round(r40.bought / 1e5) / 10, Math.round(r40.buying / 1e4) / 100]).toEqual([6.2, 1.68]);
+    expect(Math.round(merchantYear(DEFAULT_MERCHANT, 19).turnedAway / 1e4) * 1e4).toBe(450000);
+    const r46 = merchantYear(DEFAULT_MERCHANT, 46);
+    expect([Math.round(r46.bought / 1e5) / 10, Math.round(r46.buying / 1e4) / 100]).toEqual([3.2, 0.86]);
+    expect(bestSpread()).toBe(38);
+    expect(bestMinCarry(38)).toBe(0.5);
+    const storage = (p: MerchantPlan) => SIXTY.reduce((a, y) => a + merchantYear(p, y).storage, 0) / 60;
+    expect(K(storage({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0, charterMillions: 0 }))).toBe(182);
+    expect(K(storage({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.5, charterMillions: 0 }))).toBe(197);
+    const charter = SIXTY.map((y) => merchantYear({ ...DEFAULT_MERCHANT, charterMillions: 1 }, y).charter);
+    expect(K(charter.reduce((a, b) => a + b, 0) / 60)).toBe(280);
+    expect(K(Math.min(...charter))).toBe(-150);
+    expect(largestSafeCharter({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.5, charterMillions: 0 })).toBe(5);
+    const avg = (ys: number[]) => ys.reduce((a, y) => a + merchantYear(DEFAULT_MERCHANT, y).total, 0) / ys.length;
+    expect(avg(NEW_SEASONS)).toBeGreaterThan(avg(SIXTY));
+  });
+});
+
+describe('chapter 6: the desk (6.5)', () => {
+  it('steadies the business as the prose says', () => {
+    const run = (p: number, years: number[]) => stats(years.map((y) => deskYear(CEDAR_DESIGN, DEFAULT_MERCHANT, { hedgePct: p, hedgeWith: 'futures', forecastContracts: 0 }, y).total));
+    const m = SIXTY.reduce((a, y) => a + merchantYear(DEFAULT_MERCHANT, y).total, 0) / 60;
+    expect(Math.round(m / 1e4) / 100).toBe(1.56);
+    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, SIXTY)).toBe(-40);
+    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, NEW_SEASONS)).toBe(-20);
+    expect(Math.round(run(0, SIXTY).worst / 1e4) / 100).toBe(0.81);
+    expect(Math.round(run(-40, SIXTY).worst / 1e4) / 100).toBe(1.04);
+    expect(run(-40, SIXTY).sd).toBeLessThan(run(0, SIXTY).sd);
+    expect(run(40, SIXTY).sd).toBeGreaterThan(run(0, SIXTY).sd);
+    const avg = (ys: number[]) => ys.reduce((a, y) => a + reportTrade(y), 0) / ys.length;
+    expect(Math.round(avg(SIXTY) * 1000)).toBe(71);
+    expect(Math.round(avg(NEW_SEASONS) * 1000)).toBe(70);
+    expect(NEW_SEASONS.filter((y) => reportTrade(y) > 0).length).toBe(29);
   });
 });

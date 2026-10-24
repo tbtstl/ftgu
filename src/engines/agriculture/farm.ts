@@ -30,12 +30,14 @@ export interface FieldSpec {
   pestLoss?: number;
   /** Override the district’s soil. */
   pawIn?: number;
+  /** Corn: override the district’s usual hybrid maturity, growing degree days to black layer. */
+  maturityGdd?: number;
 }
 
 const cache = new Map<string, SeasonResult>();
 
 function key(year: number, s: FieldSpec): string {
-  return JSON.stringify([year, s.district, s.crop, s.plantDay, s.population, s.nutrient, s.irrigation, s.disease, s.fallStand, s.pawIn, s.pestLoss]);
+  return JSON.stringify([year, s.district, s.crop, s.plantDay, s.population, s.nutrient, s.irrigation, s.disease, s.fallStand, s.pawIn, s.pestLoss, s.maturityGdd]);
 }
 
 /** One season for a field, cached. */
@@ -47,7 +49,7 @@ export function fieldSeason(year: number, s: FieldSpec): SeasonResult {
     r = simulateSeason(simulatedYear(year, s.district), {
       crop: s.crop,
       plantDay: s.plantDay ?? dayOf(5, 1),
-      maturityGdd: s.crop === 'corn' ? d.hybridGdd : undefined,
+      maturityGdd: s.crop === 'corn' ? (s.maturityGdd ?? d.hybridGdd) : undefined,
       population: s.population,
       pawIn: s.pawIn ?? d.pawIn,
       startWater: s.irrigation ? Math.max(d.springWater, 0.8) : d.springWater,
