@@ -82,7 +82,28 @@ import { BALANCE_DEFAULTS, flatBoost, flatGroup, flatProductsSolved, flatStocksS
 import { EXPLORER_DEFAULTS, breakdown, cheapestNorthfieldSolved, historyFor, historyForMode, smallestExpansion, smallestExpansionSolved, spreadStats, widestAfterOpening } from '../src/lessons/oil/ch5/L5_2';
 import { MARKET_DEFAULTS, distillateFloorSolved, frontier, marketFor, moreDieselSolved, outputAt } from '../src/lessons/oil/ch5/L5_3';
 import { CURVE_STATE_DEFAULTS, TANK_DEFAULTS, frontSpread, impliedDayRate, tankTops, tankTopsSolved, turnSolved } from '../src/lessons/oil/ch5/L5_4';
+import {
+  CRACK_RATIOS,
+  RULE_DEFAULTS,
+  backtest,
+  basisRule,
+  calendarRule,
+  calderMargin,
+  cashAndCarry,
+  combine,
+  correlation as pnlCorrelation,
+  crackRule,
+  expansionWeek,
+  hedgeRefinery,
+  qualityRule,
+  walkForwardRule,
+} from '../src/engines/oil/trading';
 import { OUTAGE_DEFAULTS, SHOCK_STATE_DEFAULTS, crackRise, crudeBackedUp, gasolineSolved as crackRiseSolved, lowestPrice, peakPrice, releaseSolved, runShock } from '../src/lessons/oil/ch5/L5_5';
+import { CARRY_STATE_DEFAULTS, TRADER_DEFAULTS, largestCarryHub, largestHubSolved, runCarry, runTrader, smallestHubSolved, smallestProfitableHub } from '../src/lessons/oil/ch6/L6_1';
+import { BASIS_DEFAULTS, QUALITY_DEFAULTS, idleGrowth, idleGrowthSolved, losingShiftSolved, runBasis, runQuality, smallestLosingShift } from '../src/lessons/oil/ch6/L6_2';
+import { CRACK_STATE_DEFAULTS, calendarWinsSolved, runCrack, splitFor, stillTradesSolved } from '../src/lessons/oil/ch6/L6_3';
+import { HEDGE_DEFAULTS, QUARTER_DEFAULTS, bestHedge, fastestWtiGrowth, hedgeFor, quartersFor, standardCrackSolved, summarizeQuarters, wtiGrowthSolved } from '../src/lessons/oil/ch6/L6_4';
+import { LAB_DEFAULTS, TUNED_BOOK, calendarBeforeCosts, crackShift, crackSolved, runLab, sizingSolved } from '../src/lessons/oil/ch6/L6_5';
 
 const finite = (x: number) => Number.isFinite(x);
 
@@ -996,5 +1017,149 @@ describe('chapter 5 lessons', () => {
     expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 2.8 })).toBe(false);
     expect(crackRise(OUTAGE_DEFAULTS).gasoline).toBeCloseTo(3.567, 2);
     expect(crudeBackedUp(OUTAGE_DEFAULTS)).toBeCloseTo(121.6, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 6 engines.
+
+describe('trading strategies', () => {
+  const h = oilHistory();
+  it('backtests without looking ahead', () => {
+    // A rule that peeks at next week's move would earn on every week; ours only sees the past.
+    const peek = backtest(h, 'crack', (t) => (h[t + 1].crack321 > h[t].crack321 ? 1 : -1), { units: 1, costPerBbl: 0 });
+    const fair = backtest(h, 'crack', crackRule(h, RULE_DEFAULTS.crack), { units: 1, costPerBbl: 0 });
+    expect(peek.stats.winRate).toBe(1);
+    expect(fair.stats.winRate).toBeLessThan(0.7);
+    const flat = backtest(h, 'basis', () => 0);
+    expect(flat.stats.total).toBe(0);
+    expect(flat.costs).toBe(0);
+  });
+  it('earns on the physical drivers and loses them when the drivers go', () => {
+    const cal = (p = {}) => {
+      const hh = oilHistory(p);
+      return backtest(hh, 'calendar', calendarRule(hh, RULE_DEFAULTS.calendar), { units: 10 }).stats;
+    };
+    expect(cal().total).toBeGreaterThan(0);
+    expect(cal().sharpe).toBeGreaterThan(1);
+    expect(cal({ kesslerCapacity: 4 }).total).toBeLessThan(0);
+    const bas = (p = {}) => {
+      const hh = oilHistory(p);
+      return backtest(hh, 'basis', basisRule(hh, RULE_DEFAULTS.basis, expansionWeek(hh)), { units: 10 }).stats;
+    };
+    expect(bas().total).toBeGreaterThan(300000);
+    expect(bas({ basinGrowth: 0 }).total).toBe(0);
+    const cr = (p = {}) => {
+      const hh = oilHistory(p);
+      return backtest(hh, 'crack', crackRule(hh, RULE_DEFAULTS.crack), { units: 10 }).stats;
+    };
+    expect(cr().total).toBeGreaterThan(cr({ seasonality: 0 }).total * 4);
+  });
+  it('trades the heavy discount back toward normal, and loses when the fuel-oil discount shifts for good', () => {
+    const q = (p = {}) => {
+      const hh = oilHistory(p);
+      return backtest(hh, 'quality', qualityRule(hh, RULE_DEFAULTS.quality), { units: 10 }).stats;
+    };
+    expect(q().total).toBeGreaterThan(80000);
+    expect(q().sharpe).toBeGreaterThan(0.9);
+    expect(q({ fuelOilShock: { year: 2, size: 15 } }).total).toBeLessThan(q().total / 10);
+    const shocked = oilHistory({ fuelOilShock: { year: 2, size: 15 } });
+    const disc = (hh: typeof h, from: number, to: number) => hh.slice(from, to).reduce((s, w) => s + w.brent - w.hsfo, 0) / (to - from);
+    expect(disc(shocked, 182, 260) - disc(h, 182, 260)).toBeGreaterThan(12);
+  });
+  it('stores only when contango beats full carry', () => {
+    expect(cashAndCarry(h).trades).toBe(0);
+    const small = cashAndCarry(oilHistory({ kesslerCapacity: 4 }));
+    expect(small.trades).toBeGreaterThan(0);
+    expect(small.profit).toBeGreaterThan(0);
+  });
+  it('hedges Calder best with a crack that matches its yields, against Brent', () => {
+    expect(calderMargin(h[0]) / 1e6).toBeCloseTo(2.6, 1);
+    const matched = hedgeRefinery(h, 0.8, 'brent', CRACK_RATIOS.calder);
+    const gasHeavy = hedgeRefinery(h, 0.8, 'brent', CRACK_RATIOS['3:2:1']);
+    const wti = hedgeRefinery(h, 0.8, 'wti', CRACK_RATIOS.calder);
+    expect(matched.effectiveness).toBeGreaterThan(0.65);
+    expect(gasHeavy.effectiveness).toBeLessThan(0);
+    expect(wti.effectiveness).toBeLessThan(matched.effectiveness);
+    expect(hedgeRefinery(oilHistory({ seasonality: 0 }), 0.8, 'brent', CRACK_RATIOS['3:2:1']).effectiveness).toBeGreaterThan(0.5);
+    expect(hedgeRefinery(h, 0, 'brent', CRACK_RATIOS.calder).bestRatio).toBeCloseTo(0.883, 2);
+  });
+  it('combines and walks forward', () => {
+    expect(pnlCorrelation([1, 2, 3], [2, 4, 6])).toBeCloseTo(1, 9);
+    expect(combine([[1, 2], [3, 4]], [1, 2])).toEqual([7, 10]);
+    const wf = walkForwardRule(h, 'calendar', [1, 2, 4, 8].map((lookback) => ({ lookback, threshold: 0.01 })), (p) => calendarRule(h, p), { window: 52, step: 13, units: 10 });
+    expect(wf.pnl.length).toBe(h.length - 1 - 52);
+    expect(wf.chosen.length).toBe(wf.pnl.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 6 lessons.
+
+describe('chapter 6 lessons', () => {
+  it('6.1: the calendar rule needs a slow hub; cash and carry needs a full one', () => {
+    expect(runTrader(TRADER_DEFAULTS).stats.total).toBeCloseTo(25821, -2);
+    expect(runTrader({ ...TRADER_DEFAULTS, capacity: 4 }).stats.total).toBeLessThan(0);
+    expect(smallestProfitableHub()).toBe(7);
+    expect(smallestHubSolved(TRADER_DEFAULTS)).toBe(false);
+    expect(smallestHubSolved({ ...TRADER_DEFAULTS, capacity: 7 })).toBe(true);
+    expect(smallestHubSolved({ ...TRADER_DEFAULTS, capacity: 8 })).toBe(false);
+    expect(runCarry(CARRY_STATE_DEFAULTS).trades).toBe(0);
+    expect(runCarry({ ...CARRY_STATE_DEFAULTS, capacity: 4 }).trades).toBe(4);
+    expect(largestCarryHub(2)).toBe(14);
+    expect(largestHubSolved({ ...CARRY_STATE_DEFAULTS, capacity: 14 })).toBe(true);
+    expect(largestHubSolved({ ...CARRY_STATE_DEFAULTS, capacity: 13 })).toBe(false);
+    expect(largestHubSolved(CARRY_STATE_DEFAULTS)).toBe(false);
+  });
+  it('6.2: the basis trade follows the pipeline; the quality trade breaks on a lasting shift', () => {
+    expect(runBasis(BASIS_DEFAULTS).result.stats.total).toBeCloseTo(393649, -2);
+    expect(idleGrowth()).toBe(20);
+    expect(idleGrowthSolved(BASIS_DEFAULTS)).toBe(false);
+    expect(idleGrowthSolved({ ...BASIS_DEFAULTS, growth: 20 })).toBe(true);
+    expect(idleGrowthSolved({ ...BASIS_DEFAULTS, growth: 15 })).toBe(false);
+    expect(runQuality(QUALITY_DEFAULTS).result.stats.total).toBeCloseTo(85323, -2);
+    expect(smallestLosingShift()).toBe(16);
+    expect(losingShiftSolved(QUALITY_DEFAULTS)).toBe(false);
+    expect(losingShiftSolved({ ...QUALITY_DEFAULTS, shift: 16 })).toBe(true);
+    expect(losingShiftSolved({ ...QUALITY_DEFAULTS, shift: 17 })).toBe(false);
+  });
+  it('6.3: most of the crack rule’s profit is the calendar', () => {
+    const st = { ...CRACK_STATE_DEFAULTS };
+    expect(runCrack(st).stats.total).toBeCloseTo(933600, -3);
+    expect(runCrack({ ...st, seasonality: 0, outages: 0 }).turnover).toBe(0);
+    const split = splitFor(st);
+    expect(split.calendar + split.basis + split.surprise - split.costs).toBeCloseTo(runCrack(st).stats.total, 0);
+    expect(split.calendar).toBeGreaterThan(10 * split.surprise);
+    expect(stillTradesSolved(st)).toBe(false);
+    expect(stillTradesSolved({ ...st, outages: 0, seasonality: 0.6 })).toBe(true);
+    expect(stillTradesSolved({ ...st, outages: 0, seasonality: 0.5 })).toBe(false);
+    expect(calendarWinsSolved(st)).toBe(false);
+    expect(calendarWinsSolved({ ...st, seasonality: 0.7 })).toBe(true);
+  });
+  it('6.4: a hedge that matches the refinery works; the textbook crack does not', () => {
+    const best = bestHedge({ ...HEDGE_DEFAULTS, mix: 'calder' });
+    expect(best.ratio).toBeCloseTo(0.883, 2);
+    expect(best.effectiveness).toBeGreaterThan(0.7);
+    expect(hedgeFor(HEDGE_DEFAULTS).effectiveness).toBeLessThan(-0.9);
+    expect(standardCrackSolved(HEDGE_DEFAULTS)).toBe(false);
+    expect(standardCrackSolved({ ...HEDGE_DEFAULTS, seasonality: 0 })).toBe(true);
+    expect(fastestWtiGrowth()).toBe(30);
+    expect(wtiGrowthSolved(HEDGE_DEFAULTS)).toBe(false);
+    expect(wtiGrowthSolved({ ...HEDGE_DEFAULTS, mix: 'calder', bench: 'wti', growth: 30 })).toBe(true);
+    const q = summarizeQuarters(quartersFor(QUARTER_DEFAULTS));
+    expect(q.rmsHedged).toBeLessThan(q.rmsUnhedged / 1.5);
+  });
+  it('6.5: the book diversifies, each driver breaks its own strategy, and the calendar edge is thin', () => {
+    const base = runLab(LAB_DEFAULTS);
+    expect(base.stats.total).toBeCloseTo(1438357, -3);
+    expect(runLab({ ...LAB_DEFAULTS, kessler: 4 }).totals.basis).toBeCloseTo(base.totals.basis, 6);
+    expect(sizingSolved(LAB_DEFAULTS)).toBe(false);
+    expect(sizingSolved(TUNED_BOOK)).toBe(true);
+    expect(crackSolved(LAB_DEFAULTS)).toBe(false);
+    expect(crackSolved({ ...LAB_DEFAULTS, expansion: 'none' })).toBe(true);
+    expect(crackShift({ ...LAB_DEFAULTS, rail: 125 }).shift).toBeCloseTo(0, 9);
+    const cal = calendarBeforeCosts();
+    expect(cal.minGrossAll).toBeGreaterThan(0);
+    expect(cal.othersNet).toBeLessThan(cal.othersGross / 5);
   });
 });

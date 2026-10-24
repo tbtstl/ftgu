@@ -45,9 +45,11 @@ export interface HistoryParams {
   groupStabilizes?: boolean;
   /** Scale on the seasonal swings in demand. */
   seasonality?: number;
+  /** A lasting change in fuel oil's discount to crude (like the 2020 marine-fuel sulfur cap): the year it starts and the $/bbl added to the discount. */
+  fuelOilShock?: { year: number; size: number } | null;
 }
 
-export const HISTORY_DEFAULTS: Required<Omit<HistoryParams, 'expansion'>> & { expansion: { year: number; add: number } | null } = {
+export const HISTORY_DEFAULTS: Required<Omit<HistoryParams, 'expansion' | 'fuelOilShock'>> & { expansion: { year: number; add: number } | null; fuelOilShock: { year: number; size: number } | null } = {
   years: 5,
   seed: 2024,
   basinStart: 380,
@@ -60,6 +62,7 @@ export const HISTORY_DEFAULTS: Required<Omit<HistoryParams, 'expansion'>> & { ex
   supplyShocks: 0.6,
   groupStabilizes: true,
   seasonality: 1,
+  fuelOilShock: null,
 };
 
 export interface HistoryWeek {
@@ -91,6 +94,10 @@ export interface HistoryWeek {
   dieselCrack: number;
   /** The 3:2:1 crack against WTI: (2 gasoline + 1 diesel − 3 crude) / 3, $/bbl. */
   crack321: number;
+  /** The same crack against Brent, $/bbl. */
+  crack321Brent: number;
+  /** Light crude delivered to Port Calder, $/bbl (the coast's own price; Lesson 4.4). */
+  calderCrude: number;
   hsfo: number;
   /** Physical crude prices: Northfield Sour at Kessler, Coldwater Heavy delivered to Port Calder. */
   northfield: number;
@@ -214,9 +221,11 @@ export function oilHistory(params: HistoryParams = {}): HistoryWeek[] {
     const gasoline = brent + gCrack;
     const diesel = brent + dCrack;
     const crack321 = (2 * gasoline + diesel) / 3 - wti;
+    const crack321Brent = (2 * gasoline + diesel) / 3 - brent;
 
     // Quality and freight.
-    hsfoDisc = 0.95 * hsfoDisc + 0.05 * 17 + 1.0 * gaussian(r);
+    const discMean = 17 + (p.fuelOilShock && t >= p.fuelOilShock.year ? p.fuelOilShock.size : 0);
+    hsfoDisc = 0.95 * hsfoDisc + 0.05 * discMean + 1.0 * gaussian(r);
     const hsfo = brent - hsfoDisc;
     const northfield = wti - 5.0 + DIFF_SLOPE.northfield * (hsfo - 62 * (brent / P0));
     const coldwater = hub.calder - 16.2 + DIFF_SLOPE.coldwater * (hsfo - 62 * (brent / P0));
@@ -245,6 +254,8 @@ export function oilHistory(params: HistoryParams = {}): HistoryWeek[] {
       gasolineCrack: gCrack,
       dieselCrack: dCrack,
       crack321,
+      crack321Brent,
+      calderCrude: hub.calder,
       hsfo,
       northfield,
       coldwater,
