@@ -123,7 +123,7 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/1.1">
       <P>
-        Nobody burns crude oil. What comes out of the ground is a mixture of many thousands of different molecules, and before any of it can fuel a car, a truck or an
+        Almost no one burns crude oil as it is. What comes out of the ground is a mixture of many thousands of different molecules, and before any of it can fuel a car, a truck or an
         aircraft, a refinery has to sort those molecules, break some of them apart and rebuild others. Every market in this course — for crude, for gasoline and diesel,
         for the spreads between them — rests on what those molecules are and how they behave. So we’ll start with the molecules.
       </P>

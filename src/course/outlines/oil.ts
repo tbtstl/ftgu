@@ -64,6 +64,6 @@ export const OIL: CourseOutline = {
   title: 'Oil & Petroleum: From Hydrocarbons to Crack Spreads',
   short: 'Oil & petroleum',
   lede:
-    'Nobody burns crude oil. A refinery splits each barrel into gasoline, diesel, jet fuel and more, each with its own market. This course starts with the molecules and ends with the spreads that tie those markets together.',
+    'Almost no one burns crude oil as it is. A refinery splits each barrel into gasoline, diesel, jet fuel and more, each with its own market. This course starts with the molecules and ends with the spreads that tie those markets together, and a business that lives on them.',
   chapters,
 };
