@@ -36,6 +36,8 @@ export interface TrainConfig {
   seqLen: number;
   /** Tokens to train on in all. */
   tokens: number;
+  /** Share of each GPU's network bandwidth the job gets between servers (1 = all of it; less on an oversubscribed or busy fabric). */
+  networkShare?: number;
 }
 
 export interface TrainResult {
@@ -118,13 +120,15 @@ export function trainingRun(c: TrainConfig): TrainResult {
 
   // Tensor parallelism: four all-reduces per layer per microbatch (two forward, two backward), over
   // GPU links inside a server or the network beyond it.
-  const tpLink = c.tp <= GPUS_PER_SERVER ? scaleUpLink(c.gpu) : scaleOutLink(c.gpu);
+  const net = scaleOutLink(c.gpu);
+  const netLink = { ...net, gbs: net.gbs * Math.max(0.01, c.networkShare ?? 1) };
+  const tpLink = c.tp <= GPUS_PER_SERVER ? scaleUpLink(c.gpu) : netLink;
   const perAllReduce = c.tp > 1 ? ringAllReduce(c.seqLen * m.d * 2, c.tp, tpLink).seconds : 0;
   const tpCommS = 4 * layersHere * microbatches * perAllReduce * (1 - TP_OVERLAP);
 
   // Data parallelism: all-reduce each GPU's share of the BF16 gradients across the copies, over the network.
   const gradBytes = (2 * P) / (c.tp * c.pp);
-  const dpRaw = dp > 1 ? ringAllReduce(gradBytes, dp, scaleOutLink(c.gpu)).seconds : 0;
+  const dpRaw = dp > 1 ? ringAllReduce(gradBytes, dp, netLink).seconds : 0;
   const dpCommS = Math.max(0, dpRaw - DP_OVERLAP * computeS * (2 / 3));
 
   const stepS = computeS + bubbleS + tpCommS + dpCommS;

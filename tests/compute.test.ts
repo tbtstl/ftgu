@@ -12,6 +12,10 @@ import {
 } from '../src/engines/compute/chipPower';
 import { busBandwidth, flatRingAllReduce, hierarchicalAllReduce, ringAllReduce, scaleOutLink, scaleUpLink } from '../src/engines/compute/collectives';
 import { checkAssignment, feasibleAssignments, workloadFit } from '../src/engines/compute/compatibility';
+import { airflowM3s, annualPue, chipCooling, waterFlowLs, chillerCop, junctionC } from '../src/engines/compute/cooling';
+import { fabric, jobNetworkShare, maxTwoTierGpus } from '../src/engines/compute/dcNetwork';
+import { breakEvenUtilization, capitalRecovery, gpuHourCost } from '../src/engines/compute/facilityCost';
+import { POWER_DEFAULTS, powerChain, upsEfficiency, upsPlan } from '../src/engines/compute/facilityPower';
 import { issueUtilization, occupancy, warpTimeline, warpsToHide, waves } from '../src/engines/compute/gpuExec';
 import { decodeStep, maxBatch, memoryPlan, prefillS, servingPoint } from '../src/engines/compute/inference';
 import { builtInPotential, depletionWidthUm } from '../src/engines/compute/junction';
@@ -41,6 +45,7 @@ import {
   relativeError,
 } from '../src/engines/compute/memory';
 import { CPU, GPU, amdahl, crossoverItems, peakTflops, runTask } from '../src/engines/compute/parallel';
+import { clusterLayout, rackConfig, rackLimits, serverUnits } from '../src/engines/compute/rack';
 import { attainableTflops, cachedKernel, kernelTime, machineOf } from '../src/engines/compute/roofline';
 import { simulateServing } from '../src/engines/compute/scheduling';
 import {
@@ -227,8 +232,75 @@ import {
   ratio,
   splitRows,
 } from '../src/lessons/compute/ch3/L3_5';
-import { ACCELERATORS, serverPowerW, ridgePoint, SM_LIMITS, GPU_SERIAL_GOPS, HOST_CPU } from '../src/model/compute/hardware';
+import {
+  HALL_DEFAULTS,
+  NUMBERS as L4_1_NUMBERS,
+  RACK_DEFAULTS,
+  bindingLimits,
+  hallSolved,
+  nextBlockers,
+  rackSolved,
+  rackState,
+  serverBreakdown,
+  spaceLimit,
+} from '../src/lessons/compute/ch4/L4_1';
+import {
+  CHAIN_DEFAULTS,
+  LESSON_NUMBERS as L4_2_LESSON_NUMBERS,
+  PEAK_COOLING,
+  SITE_DEFAULTS,
+  chainOf,
+  gpusForIt,
+  gridSolved,
+  largestItFor,
+  lossSolved,
+  roundTo,
+  siteRun,
+} from '../src/lessons/compute/ch4/L4_2';
+import {
+  BUILDING_DEFAULTS,
+  CHIP_DEFAULTS,
+  HALL_MW,
+  RACK_KW,
+  bayportSolved,
+  dailyPue,
+  fullSpeed,
+  sitePue,
+  warmestFullSpeed,
+  warmestSolved,
+} from '../src/lessons/compute/ch4/L4_3';
+import {
+  BASE,
+  CHEAPEST,
+  CLUSTER_GPUS,
+  DP,
+  GRAD_BYTES,
+  HIDE_SHARE,
+  HIDE_WINDOW,
+  LESSON_NUMBERS as L4_4_LESSON_NUMBERS,
+  RUN_DEFAULTS,
+  SERVER_PER_GPU,
+  cheapestSolved as L4_4_cheapestSolved,
+  clusterFabric,
+  exchangeS,
+  runAt,
+  runShare,
+} from '../src/lessons/compute/ch4/L4_4';
+import {
+  LESSON_NUMBERS as N,
+  PLANNER_DEFAULTS,
+  PRICE_DEFAULTS,
+  PUE,
+  about,
+  breakEven,
+  breakEvenSolved,
+  costOf,
+  underTargetSolved,
+  usedHourCost,
+} from '../src/lessons/compute/ch4/L4_5';
+import { ACCELERATORS, serverPowerW, ridgePoint, SM_LIMITS, GPU_SERIAL_GOPS, HOST_CPU, GPU_IDS } from '../src/model/compute/hardware';
 import { MODELS, kvBytesPerToken, paramCount, kvDim, matmulParams } from '../src/model/compute/models';
+import { SITES, outdoorTempC } from '../src/model/compute/sites';
 import { WORKLOAD_IDS, WORKLOADS, type ServingWorkload } from '../src/model/compute/workloads';
 
 describe('compute world', () => {
@@ -373,6 +445,7 @@ describe('chip power', () => {
 });
 
 // Lesson 1.1
+
 {
   describe('lesson compute/1.1', () => {
     it('formats powers of ten', () => {
@@ -439,6 +512,7 @@ describe('chip power', () => {
 }
 
 // Lesson 1.2
+
 {
   describe('lesson compute/1.2', () => {
     it('quotes the transistor’s on and off currents', () => {
@@ -492,6 +566,7 @@ describe('chip power', () => {
 }
 
 // Lesson 1.3
+
 {
   const GATES: GateType[] = ['NOT', 'NAND', 'NOR', 'AND', 'OR', 'XOR'];
 
@@ -570,6 +645,7 @@ describe('chip power', () => {
 }
 
 // Lesson 1.4
+
 {
   describe('compute 1.4 memory cell lab', () => {
     it('solves the refresh challenge only at 95 °C and 50 ms', () => {
@@ -638,6 +714,7 @@ describe('chip power', () => {
 }
 
 // Lesson 1.5
+
 {
   const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -737,6 +814,7 @@ describe('chip power', () => {
 }
 
 // Chapter 2 engines
+
 {
   const GPU_A = ACCELERATORS.A;
 
@@ -813,6 +891,7 @@ describe('chip power', () => {
 }
 
 // Lesson 2.1
+
 {
   const base = { flopsPerItem: 2000, serialShare: 0, bytesPerItem: 0 };
   const both = (t: Parameters<typeof runTask>[1]) => ({ c: runTask(CPU, t), g: runTask(GPU, t) });
@@ -904,6 +983,7 @@ describe('chip power', () => {
 }
 
 // Lesson 2.2
+
 {
   describe('lesson 2.2: GPU execution model', () => {
     it('quotes the default kernel correctly', () => {
@@ -956,6 +1036,7 @@ describe('chip power', () => {
 }
 
 // Lesson 2.3
+
 {
   describe('lesson 2.3: matrix operations', () => {
     it('times the naive, tiled and shared multiplies the prose quotes', () => {
@@ -1025,6 +1106,7 @@ describe('chip power', () => {
 }
 
 // Lesson 2.4
+
 {
   const A = ACCELERATORS.A;
   const run = (p: Partial<MemState>) => runMem({ ...MEM_DEFAULTS, ...p });
@@ -1099,6 +1181,7 @@ describe('chip power', () => {
 }
 
 // Lesson 2.5
+
 {
   describe('lesson 2.5: multi-GPU interconnects', () => {
     it('sizes the gradients', () => {
@@ -1159,6 +1242,7 @@ describe('chip power', () => {
 }
 
 // Chapter 3 engines
+
 {
   describe('transformer', () => {
     it('puts nearly all arithmetic in matrix multiplies and decode on memory', () => {
@@ -1247,6 +1331,7 @@ describe('chip power', () => {
 }
 
 // Lesson 3.1
+
 {
   const M8 = MODELS['8B'];
   const GPU = ACCELERATORS.A;
@@ -1348,6 +1433,7 @@ describe('chip power', () => {
 }
 
 // Lesson 3.2
+
 {
   const c = configOf(SERVE_DEFAULTS);
   const r1 = (x: number, d = 1) => Math.round(x * 10 ** d) / 10 ** d;
@@ -1467,6 +1553,7 @@ describe('chip power', () => {
 }
 
 // Lesson 3.3
+
 {
   describe('lesson 3.3 training', () => {
     it('quotes the cost of the 70B run', () => {
@@ -1555,6 +1642,7 @@ describe('chip power', () => {
 }
 
 // Lesson 3.4
+
 {
   const r1 = (x: number) => Math.round(x * 10) / 10;
   const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -1652,6 +1740,7 @@ describe('chip power', () => {
 }
 
 // Lesson 3.5
+
 {
   describe('lesson 3.5', () => {
     it('has exactly one solution to the fleet challenge', () => {
@@ -1716,6 +1805,499 @@ describe('chip power', () => {
       expect(binding('batch8', 'A')).toBe('memory');
       expect(binding('chat70', 'A')).toBe('memory');
       expect(binding('train70', 'B')).toBe('deadline');
+    });
+  });
+}
+
+// Chapter 4 engines
+{
+  describe('racks', () => {
+    it('fills a rack until space, power or cooling runs out', () => {
+      const a = rackConfig({ gpu: 'A', cooling: 'air', servers: 5, feedKW: 40 });
+      expect(a.maxServers).toBe(4);
+      expect(a.violations).toContain('cooling');
+      const b = rackConfig({ gpu: 'B', cooling: 'liquid', servers: 10, feedKW: 140 });
+      expect(b.violations).toEqual([]);
+      expect(b.binding).toBe('space');
+      expect(b.rackKW).toBeCloseTo(113.9, 1);
+      expect(clusterLayout('A', 'air', 40, 1024).racks).toBe(32);
+      expect(clusterLayout('B', 'liquid', 140, 1024).racks).toBe(13);
+    });
+  });
+
+  describe('facility power', () => {
+    it('loses about 5% between grid and racks, and more inside the servers', () => {
+      const c = powerChain(POWER_DEFAULTS);
+      expect(c.electricalPue).toBeCloseTo(1.0492, 3);
+      expect(c.chipMW).toBeCloseTo(16.92, 2);
+      expect(powerChain({ ...POWER_DEFAULTS, upsMode: 'eco' }).electricalPue).toBeLessThan(1.02);
+      expect(upsPlan(20, 2.5, '2N')).toEqual({ modules: 16, installedMW: 40, loadFraction: 0.5 });
+      expect(upsEfficiency(0.1, 'double conversion')).toBeLessThan(upsEfficiency(0.5, 'double conversion'));
+    });
+  });
+
+  describe('cooling', () => {
+    it('carries heat far more compactly in water than in air', () => {
+      expect(airflowM3s(40, 15)).toBeCloseTo(2.21, 2);
+      expect(waterFlowLs(40, 10)).toBeCloseTo(0.956, 3);
+    });
+
+    it('throttles hot chips and makes PUE depend on climate', () => {
+      expect(chipCooling('B', 30, 'air').throttled).toBe(false);
+      expect(chipCooling('B', 35, 'air').speed).toBeCloseTo(0.954, 3);
+      expect(chipCooling('B', 35, 'liquid').throttled).toBe(false);
+      expect(annualPue(SITES.bayport, { cooling: 'air', supplyC: 24 }).pue).toBeCloseTo(1.305, 3);
+      expect(annualPue(SITES.techpark, { cooling: 'air', supplyC: 24 }).pue).toBeCloseTo(1.271, 3);
+      expect(annualPue(SITES.northfield, { cooling: 'liquid', supplyC: 35 }).pue).toBeCloseTo(1.113, 3);
+      expect(outdoorTempC(SITES.techpark, 205 * 24 + 15)).toBeCloseTo(29, 2);
+    });
+  });
+
+  describe('data-center network', () => {
+    it('trades cost for bandwidth with oversubscription', () => {
+      const full = fabric({ gpus: 1024, downPorts: 32 });
+      const over = fabric({ gpus: 1024, downPorts: 48 });
+      expect(full.crossShare).toBe(1);
+      expect(over.oversubscription).toBe(3);
+      expect(Math.round(full.costPerGpu)).toBe(4175);
+      expect(Math.round(over.costPerGpu)).toBe(2475);
+      expect(jobNetworkShare(over, 32, 'packed', 0.5)).toBe(1);
+      expect(jobNetworkShare(over, 1024, 'scattered', 0.5)).toBeCloseTo(1 / 6, 6);
+    });
+
+    it('slows training only once the gradient exchange can no longer hide', () => {
+      const base = { model: '70B', gpu: 'A', gpus: 1024, tp: 8, pp: 1, batchTokens: 4 * 1024 * 1024, seqLen: 4096, tokens: 2e12 } as const;
+      expect(trainingRun({ ...base, networkShare: 0.5 }).days).toBeCloseTo(trainingRun(base).days, 6);
+      expect(trainingRun({ ...base, networkShare: 1 / 3 }).days).toBeCloseTo(20.9, 1);
+    });
+  });
+
+  describe('facility economics', () => {
+    it('prices a GPU-hour mostly by its capital', () => {
+      expect(capitalRecovery(0.1, 5)).toBeCloseTo(0.2638, 4);
+      const tp = SITES.techpark;
+      const c = gpuHourCost({ gpu: 'A', cooling: 'air', site: tp, pue: 1.271, utilization: 0.7, serverLifeYears: 5, facilityLifeYears: 15, rate: 0.1 });
+      expect(c.perHour).toBeCloseTo(1.55, 2);
+      expect(c.perUsedHour).toBeCloseTo(2.22, 2);
+      expect(c.powerShare).toBeLessThan(0.05);
+      expect(breakEvenUtilization({ gpu: 'A', cooling: 'air', site: tp, pue: 1.271, serverLifeYears: 5, facilityLifeYears: 15, rate: 0.1 }, 2.4)).toBeCloseTo(0.645, 2);
+    });
+  });
+}
+
+// Lesson 4.1
+{
+  describe('lesson 4.1: rack builder', () => {
+    it('breaks every server’s power into parts that add up', () => {
+      for (const g of GPU_IDS)
+        for (const c of ['air', 'liquid'] as const) {
+          const sum = serverBreakdown(g, c).reduce((s, p) => s + p.kw, 0);
+          expect(sum).toBeCloseTo(serverPowerW(g, c) / 1000, 9);
+        }
+    });
+
+    it('clamps the servers to the space and names tied limits', () => {
+      expect(spaceLimit('A', 'air')).toBe(5);
+      expect(spaceLimit('B', 'liquid')).toBe(10);
+      expect(rackState({ gpu: 'B', cooling: 'air', feed: 40, servers: 12 }).servers).toBe(4);
+      expect(bindingLimits({ gpu: 'A', cooling: 'air', feed: 40 })).toEqual(['power feed', 'cooling']);
+      expect(nextBlockers({ gpu: 'A', cooling: 'air', feed: 40, servers: 4 })).toEqual(['power feed', 'cooling']);
+    });
+
+    it('solves challenge a only with liquid cooling and a big feed', () => {
+      expect(rackSolved(RACK_DEFAULTS)).toBe(false);
+      expect(rackSolved({ gpu: 'B', cooling: 'liquid', feed: 100, servers: 8 })).toBe(true);
+      expect(rackSolved({ gpu: 'B', cooling: 'liquid', feed: 140, servers: 10 })).toBe(true);
+      expect(rackSolved({ gpu: 'B', cooling: 'liquid', feed: 60, servers: 8 })).toBe(false);
+      expect(rackSolved({ gpu: 'B', cooling: 'air', feed: 140, servers: 4 })).toBe(false);
+      expect(rackSolved({ gpu: 'B', cooling: 'liquid', feed: 140, servers: 7 })).toBe(false);
+      expect(rackConfig({ gpu: 'B', cooling: 'liquid', servers: 8, feedKW: 100 }).rackKW).toBeCloseTo(91.3, 1);
+    });
+
+    it('solves challenge b only with liquid cooling on a 60 kW feed or more', () => {
+      expect(hallSolved(HALL_DEFAULTS)).toBe(false);
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 60, gpus: 1024 })).toBe(true);
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 100, gpus: 1024 })).toBe(true);
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 40, gpus: 1024 })).toBe(false);
+      for (const feed of [40, 60, 100, 140]) expect(hallSolved({ gpu: 'A', cooling: 'air', feed, gpus: 1024 })).toBe(false);
+      expect(hallSolved({ gpu: 'B', cooling: 'liquid', feed: 140, gpus: 1024 })).toBe(false);
+    });
+
+    it('quotes the engine’s numbers', () => {
+      const N = L4_1_NUMBERS;
+      expect(N.aAirKW).toBeCloseTo(9.3, 2);
+      expect(N.aGpusKW).toBe(5.6);
+      expect(Math.round(N.aGpuShare * 100)).toBe(60);
+      expect([N.fullAir.gpus, N.fullAir.unitsUsed]).toEqual([32, 34]);
+      expect(N.fullAir.rackKW).toBeCloseTo(38.2, 1);
+      expect(N.fifthAir.rackKW).toBeCloseTo(47.5, 1);
+      expect(N.oldHall.maxServers).toBe(1);
+      expect(N.oldHall.gpus).toBe(8);
+      expect(Math.round(N.homes)).toBe(32);
+      expect(N.aNet).toBeCloseTo(0.9, 2);
+      expect(N.aPsuLoss).toBeCloseTo(0.56, 2);
+      expect(N.aFansAir).toBeCloseTo(1.14, 2);
+      expect(N.aFansLiquid).toBeCloseTo(0.23, 2);
+      expect(N.aLiquidKW).toBeCloseTo(8.33, 2);
+      expect([serverUnits('A', 'air'), serverUnits('A', 'liquid'), serverUnits('B', 'air')]).toEqual([8, 4, 10]);
+      expect([N.aLiquid100.servers, N.aLiquid100.gpus, N.aLiquid100.binding]).toEqual([10, 80, 'space']);
+      expect(N.aLiquid100.rackKW).toBeCloseTo(84.3, 1);
+      expect(serverPowerW('B', 'air') / 1000).toBeCloseTo(12.6, 1);
+      expect([N.bAir40.servers, N.bAir40.gpus]).toEqual([3, 24]);
+      expect(rackLimits('L', 'air', 40)['power feed']).toBe(8);
+      expect(rackLimits('L', 'air', 40).cooling).toBe(8);
+      expect([N.bLiquid140.servers, N.bLiquid140.gpus]).toEqual([10, 80]);
+      expect(N.bLiquid140.rackKW).toBeCloseTo(113.9, 1);
+      expect([N.hallAirA.racks, N.hallAirA.floorM2]).toEqual([32, 96]);
+      expect(N.hallAirA.itMW).toBeCloseTo(1.22, 2);
+      expect(N.hallAirA.densityKWm2).toBeCloseTo(12.7, 1);
+      expect([N.hallLiquidA.racks, N.hallLiquidA.floorM2]).toEqual([13, 39]);
+      expect(N.hallLiquidA.itMW).toBeCloseTo(1.08, 2);
+      expect(N.hallLiquidA.densityKWm2).toBeCloseTo(27.7, 1);
+      expect(N.hallLiquidB.densityKWm2).toBeCloseTo(37.4, 1);
+      expect(N.hallLiquidA60.racks).toBe(19);
+      expect(clusterLayout('A', 'liquid', 60, 1024).gpusPerRack).toBe(56);
+    });
+  });
+}
+
+// Lesson 4.2
+{
+  describe('lesson 4.2 challenges', () => {
+    it('cuts losses before the racks only with eco mode and a spare', () => {
+      expect(lossSolved(CHAIN_DEFAULTS)).toBe(false);
+      expect(lossSolved({ ...CHAIN_DEFAULTS, upsMode: 'eco' })).toBe(true);
+      expect(lossSolved({ ...CHAIN_DEFAULTS, upsMode: 'eco', redundancy: '2N' })).toBe(true);
+      expect(lossSolved({ ...CHAIN_DEFAULTS, upsMode: 'eco', redundancy: 'N' })).toBe(false);
+      expect(lossSolved({ ...CHAIN_DEFAULTS, upsMode: 'eco', itMW: 19.5 })).toBe(false);
+      for (const redundancy of ['N', 'N+1', '2N'] as const) for (let psu = 90; psu <= 97; psu += 0.5) expect(lossSolved({ ...CHAIN_DEFAULTS, redundancy, psu })).toBe(false);
+    });
+
+    it('finds the largest IT load Bayport can connect', () => {
+      expect(gridSolved(SITE_DEFAULTS)).toBe(false);
+      expect(gridSolved({ site: 'bayport', itMW: 14.5, redundancy: 'N+1' })).toBe(true);
+      expect(gridSolved({ site: 'bayport', itMW: 14, redundancy: 'N+1' })).toBe(false);
+      expect(gridSolved({ site: 'bayport', itMW: 15, redundancy: 'N+1' })).toBe(false);
+      expect(gridSolved({ site: 'bayport', itMW: 14.5, redundancy: '2N' })).toBe(false);
+      expect(siteRun({ site: 'bayport', itMW: 15, redundancy: 'N+1' }).over).toBe(true);
+    });
+  });
+
+  describe('lesson 4.2 numbers', () => {
+    const n = L4_2_LESSON_NUMBERS;
+    it('quotes the 20 MW hall', () => {
+      expect(n.hallGpus).toBe(16752);
+      expect(n.hallRacks).toBe(524);
+      expect(clusterLayout('A', 'air', 40, n.hallGpus).itMW).toBeLessThanOrEqual(20);
+      expect(n.rackKW).toBeCloseTo(38.2, 1);
+      expect(n.grid).toBeCloseTo(20.98, 2);
+      expect(n.facilityLoss).toBeCloseTo(0.98, 2);
+      expect(n.upsLoss).toBeCloseTo(0.81, 2);
+      expect(n.chip).toBeCloseTo(16.92, 2);
+      expect(n.chip / n.grid).toBeCloseTo(0.81, 2);
+      expect(n.psu97Chip).toBeCloseTo(17.46, 2);
+      expect(n.psu97Chip - n.chip).toBeCloseTo(0.54, 2);
+      expect(chainOf({ ...CHAIN_DEFAULTS, psu: 97 }).electricalPue).toBeCloseTo(chainOf(CHAIN_DEFAULTS).electricalPue, 12);
+      expect(chainOf(CHAIN_DEFAULTS).electricalPue).toBeCloseTo(1.049, 3);
+      expect(roundTo(n.facilityLoss * 8760 * 55, 1000)).toBe(474000);
+      expect(roundTo((n.facilityLoss - n.ecoLoss) * 8760 * 55, 1000)).toBe(293000);
+      expect(n.ecoLoss).toBeCloseTo(0.38, 2);
+      expect(n.twoNLoss).toBeCloseTo(1.07, 2);
+      expect(700 / 0.8).toBe(875);
+    });
+
+    it('quotes redundancy and part-load efficiency', () => {
+      expect(chainOf({ ...CHAIN_DEFAULTS, redundancy: 'N' }).ups.modules).toBe(8);
+      expect(chainOf(CHAIN_DEFAULTS).ups.modules).toBe(9);
+      expect(Math.round(chainOf(CHAIN_DEFAULTS).ups.loadFraction * 100)).toBe(89);
+      expect(chainOf({ ...CHAIN_DEFAULTS, redundancy: '2N' }).ups).toEqual({ modules: 16, installedMW: 40, loadFraction: 0.5 });
+      expect(upsEfficiency(1, 'double conversion') * 100).toBeCloseTo(96.2, 1);
+      expect(upsEfficiency(0.5, 'double conversion') * 100).toBeCloseTo(95.7, 1);
+      expect(upsEfficiency(0.25, 'double conversion') * 100).toBeCloseTo(94.1, 1);
+      expect(upsEfficiency(0.1, 'double conversion') * 100).toBeCloseTo(89.2, 1);
+      expect(chainOf(CHAIN_DEFAULTS).stages[1].efficiency * 100).toBeCloseTo(96.1, 1);
+    });
+
+    it('quotes the sites and their grid connections', () => {
+      expect(PEAK_COOLING.techpark).toBeGreaterThan(0.3);
+      expect(PEAK_COOLING.techpark).toBeLessThan(0.36);
+      expect(n.tpPeak).toBeCloseTo(27.3, 1);
+      expect(siteRun(SITE_DEFAULTS).coolingMW).toBeCloseTo(6.35, 2);
+      expect(n.tpGenerators).toEqual({ units: 11, installedMW: 33 });
+      expect(siteRun({ ...SITE_DEFAULTS, site: 'bayport' }).peakMW).toBeCloseTo(27.5, 1);
+      expect(n.bayMax).toBe(14.5);
+      expect(n.tpMax).toBe(43.5);
+      expect(n.nfMax).toBe(153);
+      expect(largestItFor('bayport', 'N+1')).toBe(14.5);
+      expect(roundTo(n.bayGpus, 100)).toBe(12100);
+      expect(roundTo(n.tpGpus, 100)).toBe(36400);
+      expect(roundTo(n.nfGpus, 100)).toBe(128200);
+    });
+
+    it('counts GPUs that fit an IT load', () => {
+      const g = gpusForIt(14.5);
+      expect(clusterLayout('A', 'air', 40, g).itMW).toBeLessThanOrEqual(14.5);
+      expect(clusterLayout('A', 'air', 40, g + 8).itMW).toBeGreaterThan(14.5);
+    });
+  });
+}
+
+// Lesson 4.3
+{
+  describe('lesson 4.3: the chip', () => {
+    it('finds the warmest coolant for a full-speed B-class', () => {
+      expect(warmestFullSpeed('B')).toEqual({ cooling: 'liquid', coolantC: 40 });
+      expect(warmestSolved(CHIP_DEFAULTS)).toBe(false);
+      expect(warmestSolved({ gpu: 'B', cooling: 'liquid', coolant: 40 })).toBe(true);
+      expect(warmestSolved({ gpu: 'B', cooling: 'liquid', coolant: 39 })).toBe(false);
+      expect(warmestSolved({ gpu: 'B', cooling: 'liquid', coolant: 41 })).toBe(false);
+      expect(warmestSolved({ gpu: 'B', cooling: 'air', coolant: 30 })).toBe(false);
+      expect(fullSpeed('B', 30, 'air')).toBe(true);
+      expect(fullSpeed('B', 31, 'air')).toBe(false);
+    });
+
+    it('quotes true junction temperatures and throttling', () => {
+      expect(junctionC(700, 24, 'air')).toBeCloseTo(66, 9);
+      expect(junctionC(1000, 24, 'air')).toBeCloseTo(84, 9);
+      const hot = chipCooling('B', 35, 'air');
+      expect(Math.round(hot.chipW)).toBe(917);
+      expect(Math.round(hot.speed * 100)).toBe(95);
+      expect(chipCooling('B', 35, 'liquid').junctionC).toBeCloseTo(85, 9);
+      expect(chipCooling('B', 35, 'liquid').throttled).toBe(false);
+    });
+
+    it('compares air and water flows', () => {
+      expect(RACK_KW / 1.5).toBeCloseTo(26.7, 1);
+      expect(airflowM3s(40, 15)).toBeCloseTo(2.21, 2);
+      expect(waterFlowLs(40, 10)).toBeCloseTo(0.96, 2);
+      expect(Math.round((airflowM3s(40, 15) * 1000) / waterFlowLs(40, 10) / 100) * 100).toBe(2300);
+      expect(Math.cbrt(airflowM3s(40, 15))).toBeCloseTo(1.3, 2);
+      expect(serverPowerW('A', 'air') / 1000).toBeCloseTo(9.3, 2);
+      expect(serverPowerW('A', 'liquid') / 1000).toBeCloseTo(8.33, 2);
+    });
+  });
+
+  describe('lesson 4.3: the building', () => {
+    const air24 = { cooling: 'air', supplyC: 24 } as const;
+    const liq = (t: number) => ({ cooling: 'liquid' as const, supplyC: t });
+
+    it('quotes true PUEs', () => {
+      const tp = sitePue('techpark', air24);
+      expect(tp.pue).toBeCloseTo(1.271, 3);
+      expect(Math.round((tp.pue - 1) * 1000)).toBe(271);
+      expect(Math.round(tp.freeShare * 100)).toBe(10);
+      expect(tp.peakPue).toBeCloseTo(1.37, 2);
+      expect((tp.coolingPerKW * HALL_MW * 8760) / 1000).toBeCloseTo(37.2, 1);
+      expect((tp.coolingPerKW * HALL_MW * 8760 * SITES.techpark.powerPrice) / 1e6).toBeCloseTo(2.0, 1);
+      expect(tp.electricalPerKW * 100).toBeCloseTo(4.9, 1);
+      expect(tp.miscPerKW).toBe(0.01);
+      const tpl = sitePue('techpark', liq(35));
+      expect(tpl.pue).toBeCloseTo(1.143, 3);
+      expect(Math.round(tpl.freeShare * 100)).toBe(67);
+      expect((tpl.coolingPerKW * HALL_MW * 8760) / 1000).toBeCloseTo(14.7, 1);
+      expect(sitePue('bayport', air24).pue).toBeCloseTo(1.305, 3);
+      expect(sitePue('bayport', air24).freeShare).toBe(0);
+      expect(sitePue('northfield', air24).pue).toBeCloseTo(1.205, 3);
+      expect(Math.round(sitePue('northfield', air24).freeShare * 100)).toBe(49);
+      expect(sitePue('bayport', liq(35)).pue).toBeCloseTo(1.173, 3);
+      expect(sitePue('northfield', liq(35)).pue).toBeCloseTo(1.113, 3);
+      expect(sitePue('bayport', liq(40)).pue).toBeCloseTo(1.147, 3);
+      expect(sitePue('bayport', liq(39)).pue).toBeCloseTo(1.151, 3);
+      expect(sitePue('bayport', liq(45)).pue).toBeCloseTo(1.134, 3);
+      expect(SITES.bayport.gridMW / sitePue('bayport', air24).peakPue).toBeCloseTo(14.5, 1);
+      expect(SITES.bayport.gridMW / sitePue('bayport', liq(40)).peakPue).toBeCloseTo(16.2, 1);
+    });
+
+    it('solves the Bayport challenge only with 40 °C water', () => {
+      expect(bayportSolved(BUILDING_DEFAULTS)).toBe(false);
+      expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'liquid', waterC: 40 })).toBe(true);
+      for (const w of [25, 30, 35, 39, 41, 45]) expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'liquid', waterC: w })).toBe(false);
+      for (const a of [18, 24, 27]) expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'air', airC: a })).toBe(false);
+      expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'techpark', cooling: 'liquid', waterC: 40 })).toBe(false);
+    });
+
+    it('keeps chillers between three and nine units of heat per unit of electricity at these sites', () => {
+      let lo = Infinity;
+      let hi = 0;
+      for (const s of Object.values(SITES))
+        for (let h = 0; h < 8760; h += 7) {
+          const t = outdoorTempC(s, h);
+          for (const water of [10, 19, 25, 45]) {
+            const cop = chillerCop(water, t);
+            lo = Math.min(lo, cop);
+            hi = Math.max(hi, cop);
+          }
+        }
+      expect(lo).toBeGreaterThanOrEqual(3 - 1e-9);
+      expect(hi).toBeLessThanOrEqual(9);
+    });
+
+    it('averages its daily series to the annual PUE', () => {
+      const y = sitePue('techpark', air24);
+      const d = dailyPue(SITES.techpark, air24, y.electricalPerKW, y.miscPerKW);
+      expect(d.length).toBe(365);
+      const mean = d.reduce((s, x) => s + x.pue, 0) / 365;
+      expect(mean).toBeCloseTo(y.pue, 2);
+    });
+  });
+}
+
+// Lesson 4.4
+{
+  describe('lesson 4.4: the fabric', () => {
+    const N = L4_4_LESSON_NUMBERS;
+    it('prices a non-blocking fabric for 1,024 GPUs', () => {
+      expect([N.f32.leaves, N.f32.spines, N.f32.switches, N.f32.optics]).toEqual([32, 16, 48, 2048]);
+      expect(N.f32.costTotal).toBe(4_275_200);
+      expect(Math.round(N.f32.costPerGpu)).toBe(4175);
+      expect(SERVER_PER_GPU).toBe(35_000);
+      expect(Math.round(N.serverShare * 100)).toBe(12);
+      expect(N.f32.bisectionTbps).toBeCloseTo(204.8, 6);
+      expect(maxTwoTierGpus(32)).toBe(2048);
+    });
+
+    it('makes a 3 : 1 fabric 41% cheaper and a third as wide', () => {
+      expect([N.f48.leaves, N.f48.spines]).toEqual([22, 6]);
+      expect(Math.round(N.f48.costPerGpu)).toBe(2475);
+      expect(Math.round(N.cheaper48 * 100)).toBe(41);
+      expect(N.f48.crossShare).toBeCloseTo(1 / 3, 9);
+      expect(Math.round(400 / 3)).toBe(133);
+      expect(N.f48.bisectionTbps).toBeCloseTo(70.4, 6);
+      // About a third as many links between the tiers.
+      expect(N.f48.optics / N.f32.optics).toBeCloseTo(0.344, 2);
+    });
+
+    it('lets a job under one leaf keep its whole card', () => {
+      expect(N.tuneGpus).toBe(10);
+      expect(N.tuneShare).toBe(1);
+    });
+  });
+
+  describe('lesson 4.4: the training run', () => {
+    const N = L4_4_LESSON_NUMBERS;
+    it('hides the gradient exchange until the share falls below about 45%', () => {
+      expect(BASE.days).toBeCloseTo(18.0, 1);
+      expect(DP).toBe(128);
+      expect(GRAD_BYTES / 1e9).toBeCloseTo(17.4, 1);
+      expect(exchangeS(1)).toBeCloseTo(0.69, 2);
+      expect(HIDE_WINDOW).toBeCloseTo(1.54, 2);
+      expect(Math.round(HIDE_SHARE * 100)).toBe(45);
+      expect(runAt(0.46).days).toBeCloseTo(BASE.days, 9);
+      expect(runAt(0.44).days).toBeGreaterThan(BASE.days);
+    });
+
+    it('stretches the run at 3 : 1 on the 2,048-GPU cluster', () => {
+      expect(CLUSTER_GPUS).toBe(2048);
+      expect(N.exchange48).toBeCloseTo(2.07, 2);
+      expect(N.run48.days).toBeCloseTo(20.9, 1);
+      expect(Math.round((N.run48.days / N.base.days - 1) * 100)).toBe(16);
+      expect(Math.round(N.saving48)).toBe(1750);
+      expect(Math.round((N.saving48 / SERVER_PER_GPU) * 100)).toBe(5);
+      expect(Math.round(N.extraGpuHours / 100) * 100).toBe(71_600);
+    });
+
+    it('suffers from scattered placement', () => {
+      expect(N.scat32.days).toBeCloseTo(18.0, 1);
+      expect(N.pack40.days).toBeCloseTo(18.0, 1);
+      expect(N.scat40.days).toBeCloseTo(22.2, 1);
+      expect(jobNetworkShare(clusterFabric(32), 1024, 'scattered', 0.5)).toBe(0.5);
+    });
+  });
+
+  describe('lesson 4.4: the challenge', () => {
+    it('has a unique cheapest fabric within 5%', () => {
+      expect(CHEAPEST.down).toBe(45);
+      expect(Math.round(CHEAPEST.cost)).toBe(2669);
+      expect(CHEAPEST.days).toBeCloseTo(18.52, 2);
+      // Costs fall steadily from 32 to 45 ports down, so nothing cheaper qualifies.
+      for (let d = 33; d <= 45; d++) expect(clusterFabric(d).costPerGpu).toBeLessThan(clusterFabric(d - 1).costPerGpu);
+      expect(runAt(runShare({ down: 46, placement: 'packed', others: 0 })).days).toBeGreaterThan(BASE.days * 1.05);
+    });
+
+    it('is solved only at 45 ports down with the run kept whole', () => {
+      expect(L4_4_cheapestSolved(RUN_DEFAULTS)).toBe(false);
+      expect(L4_4_cheapestSolved({ down: 45, placement: 'packed', others: 50 })).toBe(true);
+      expect(L4_4_cheapestSolved({ down: 45, placement: 'scattered', others: 0 })).toBe(true);
+      expect(L4_4_cheapestSolved({ down: 45, placement: 'scattered', others: 20 })).toBe(false);
+      expect(L4_4_cheapestSolved({ down: 44, placement: 'packed', others: 0 })).toBe(false);
+      expect(L4_4_cheapestSolved({ down: 46, placement: 'packed', others: 0 })).toBe(false);
+      for (let d = 32; d <= 56; d++) expect(L4_4_cheapestSolved({ down: d, placement: 'packed', others: 0 })).toBe(d === 45);
+    });
+
+    it('agrees with the engine for the 1,024-GPU fabric', () => {
+      expect(fabric({ gpus: 1024, downPorts: 48 }).oversubscription).toBe(3);
+    });
+  });
+}
+
+// Lesson 4.5
+{
+  const cents = (x: number) => Math.round(x * 100) / 100;
+
+  describe('lesson 4.5: the facility planner', () => {
+    it('starts from the Tech Park A-class', () => {
+      expect(PUE.techpark.air).toBeCloseTo(1.271, 3);
+      expect(Math.round(N.baseYear)).toBe(13607);
+      expect(cents(N.basePerHour)).toBe(1.55);
+      expect(cents(N.basePerUsed)).toBe(2.22);
+      expect(Math.round(N.baseCapex)).toBe(50822);
+      expect(Math.round(N.facilityCapex)).toBe(11622);
+      expect(Math.round(N.serverYear)).toBe(9233);
+      expect(capitalRecovery(0.1, 5)).toBeCloseTo(0.2638, 4);
+      expect(cents(N.serverYear / (8760 * 0.7))).toBe(1.51);
+      expect(Math.round(N.powerShare * 1000) / 10).toBe(4.1);
+      expect(Math.round(N.fabricPerGpu)).toBe(4175);
+    });
+
+    it('quotes the sites, electricity and accelerators correctly', () => {
+      expect(cents(N.bayport)).toBe(2.36);
+      expect(cents(N.north)).toBe(2.16);
+      expect(Math.round(N.bayportShare * 1000) / 10).toBe(6.9);
+      expect(Math.round(N.northShare * 1000) / 10).toBe(2.6);
+      expect(cents(N.power2x)).toBe(2.31);
+      expect(cents(N.powerFree)).toBe(2.13);
+      expect(about(N.perMwTechpark)).toBe('610');
+      expect(about(N.bayportGpus)).toBe('12,000');
+      expect(cents(N.bLiquid)).toBe(3.39);
+      expect(Math.round((N.bLiquid / N.basePerUsed - 1) * 100)).toBe(53);
+    });
+
+    it('quotes utilization, life and the cost of capital correctly', () => {
+      expect(cents(N.idleHour)).toBe(1.51);
+      expect(cents(N.busyHour)).toBe(1.57);
+      expect(cents(N.u80)).toBe(1.95);
+      expect(cents(N.u60)).toBe(2.58);
+      expect(Math.round(N.be5 * 1000) / 10).toBe(64.6);
+      expect(Math.round(N.be3 * 1000) / 10).toBe(91);
+      expect(Math.round(N.be7 * 1000) / 10).toBe(53.4);
+      expect(cents(N.life3)).toBe(3.1);
+      expect(cents(N.life7)).toBe(1.85);
+      expect(cents(N.rate0)).toBe(1.69);
+      expect(cents(N.rate15)).toBe(2.51);
+      const profit = 2.4 * 8760 * 0.7 - costOf(PLANNER_DEFAULTS).totalYear;
+      expect(Math.round(profit)).toBe(1109);
+    });
+
+    it('solves the first challenge only with capital terms, at 70%', () => {
+      expect(underTargetSolved(PLANNER_DEFAULTS)).toBe(false);
+      for (const site of ['bayport', 'techpark', 'northfield'] as const)
+        for (const cooling of ['air', 'liquid'] as const) expect(underTargetSolved({ ...PLANNER_DEFAULTS, site, cooling })).toBe(false);
+      expect(underTargetSolved({ ...PLANNER_DEFAULTS, util: 80 })).toBe(false);
+      expect(underTargetSolved({ ...PLANNER_DEFAULTS, life: 7 })).toBe(true);
+      expect(underTargetSolved({ ...PLANNER_DEFAULTS, life: 6, rate: 9 })).toBe(true);
+      expect(underTargetSolved({ ...PLANNER_DEFAULTS, life: 6 })).toBe(false);
+      expect(underTargetSolved({ ...PLANNER_DEFAULTS, gpu: 'L', life: 7 })).toBe(false);
+    });
+
+    it('solves the second challenge at 75% with a four-year life', () => {
+      expect(breakEvenSolved(PRICE_DEFAULTS)).toBe(false);
+      expect(Math.round(breakEven(4, 2.4) * 1000) / 10).toBe(74.5);
+      expect(breakEvenSolved({ util: 75, life: 4, price: 2.4 })).toBe(true);
+      expect(breakEvenSolved({ util: 74, life: 4, price: 2.4 })).toBe(false);
+      expect(breakEvenSolved({ util: 76, life: 4, price: 2.4 })).toBe(false);
+      expect(breakEvenSolved({ util: 75, life: 5, price: 2.4 })).toBe(false);
+      expect(usedHourCost(75, 4)).toBeLessThanOrEqual(2.4);
+      expect(breakEven(5, 1)).toBe(Infinity);
     });
   });
 }
