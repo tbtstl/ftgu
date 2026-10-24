@@ -220,11 +220,11 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Keep the valley’s harvest average and 100 million tonnes carried in. How short must everyone else’s harvest be, to the whole percent, before storing hedged at Cedar Bend until July stops paying?"
+        question="Keep the valley’s harvest average and 100 million tons carried in. How short must everyone else’s harvest be, to the whole percent, before storing hedged at Cedar Bend until July stops paying?"
         solved={solved1}
         status={
           s.state.valley !== CURVE0.valley || s.state.carryIn !== CURVE0.carryIn
-            ? 'Set the valley’s harvest back to 506 million bushels and the stocks to 100 million tonnes.'
+            ? 'Set the valley’s harvest back to 506 million bushels and the stocks to 100 million tons.'
             : ret >= 0
               ? `With everyone else’s harvest at ${s.state.world}%, storing still earns ${centsPlain(ret)} a bushel.`
               : `At ${s.state.world}% storing loses ${centsPlain(-ret)} a bushel. Is this the first whole percent where it does?`

@@ -235,7 +235,7 @@ export default function Lesson() {
 
       <H2>What the score rewards</H2>
       <P>
-        Why not just state a very wide band and be safe? Because the score charges for width. The next demonstration takes one forecast apart: it misses the
+        Why not just state a very wide band and be safe? Because the score charges for width. In the next demonstration one forecast is taken apart: it misses the
         harvest by a set amount, and the curve shows its score for every width of band. With no band at all the score is the full miss. A band that roughly
         matches the size of the miss scores best; a band much wider scores worse again. Set the miss and the band:
       </P>

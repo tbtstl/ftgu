@@ -29,7 +29,7 @@ export interface WorldState {
   us: number;
   southAmerica: number;
   blackSea: number;
-  /** Stocks outside China carried in, million tonnes. */
+  /** Stocks outside China carried in, million tons. */
   carryIn: number;
 }
 
@@ -42,7 +42,7 @@ export function balanceOf(st: WorldState): Balance {
 const SHORT = -10;
 const CAP = 6;
 
-/** Challenge 1: with a 10% U.S. shortfall, the least carry-in (in steps of 5 million tonnes) that holds the price to $6.00 or less. */
+/** Challenge 1: with a 10% U.S. shortfall, the least carry-in (in steps of 5 million tons) that holds the price to $6.00 or less. */
 export function bufferSolved(st: WorldState): boolean {
   if (st.us !== SHORT || st.southAmerica !== 0 || st.blackSea !== 0) return false;
   const ok = (c: number) => balanceOf({ ...st, carryIn: c }).price <= CAP;
@@ -97,10 +97,10 @@ function BalanceChart({ b }: { b: Balance }) {
       className="chart"
       viewBox="0 0 640 236"
       role="img"
-      aria-label={`The world corn balance: ${b.regions.map((r) => `${SHORT_NAME[r.id]} grows ${fmt(r.production)} and uses ${fmt(r.use)} million tonnes`).join('; ')}. The price is ${usd(b.price, 2)} a bushel with stocks at ${fmt(b.stocksToUse * 100, 1)}% of a year’s use.`}
+      aria-label={`The world corn balance: ${b.regions.map((r) => `${SHORT_NAME[r.id]} grows ${fmt(r.production)} and uses ${fmt(r.use)} million tons`).join('; ')}. The price is ${usd(b.price, 2)} a bushel with stocks at ${fmt(b.stocksToUse * 100, 1)}% of a year’s use.`}
     >
       <text className="ax" x={X} y={14}>
-        Million tonnes a year
+        Million tons a year
       </text>
       {b.regions.map((r, i) => {
         const y = 28 + i * 40;
@@ -200,24 +200,24 @@ export default function Lesson() {
       <P>
         In <a href={lessonHref('agriculture/4.4')}>the last lesson</a> the two ports’ prices were given: $5.95 a bushel at Westhaven and $5.60 at Port Sable. A
         bushel loaded at Port Sable competes with corn from every other exporting country, for a place in a feed mill in Japan, a poultry farm in Egypt or a
-        starch plant in Mexico. The world trades grain in metric tonnes — a tonne of corn is 39.4 bushels — and the Crane Valley’s 290 million bushels of exports are
-        about 7 million tonnes, roughly 4% of the world’s corn trade in this lesson’s model. That is too little to move the world price, so the valley takes it as
+        starch plant in Mexico. The world trades grain in metric tons — a metric ton of corn is 39.4 bushels — and the Crane Valley’s 290 million bushels of exports are
+        about 7 million tons, roughly 4% of the world’s corn trade in this lesson’s model. That is too little to move the world price, so the valley takes it as
         given. This lesson is about where it comes from.
       </P>
       <P>
-        The world grows a little over 1.2 billion tonnes of corn a year. The United States grows nearly a third of it and China about a quarter; Brazil, Argentina
+        The world grows a little over 1.2 billion tons of corn a year. The United States grows nearly a third of it and China about a quarter; Brazil, Argentina
         and Ukraine are the other big exporters. Most corn is used — largely fed to animals — in the country that grows it, and only about a sixth crosses a border.
         Each month the U.S. Department of Agriculture publishes a <K tone="gold">balance sheet</K> for every major producer and buyer, and each obeys the same
         identity: stocks at the start of the year, plus production and imports, equal use, plus exports and stocks at the end. Our model has five regions, in round
-        numbers simplified from recent years, which balance at $5.60 a bushel ($220 a tonne) in a normal year. China’s government holds well over half the world’s
-        corn stocks in reserves that rarely reach the world market, so the stocks that matter here are those outside China: about 100 million tonnes, 11% of a
+        numbers simplified from recent years, which balance at $5.60 a bushel ($220 a ton) in a normal year. China’s government holds well over half the world’s
+        corn stocks in reserves that rarely reach the world market, so the stocks that matter here are those outside China: about 100 million tons, 11% of a
         year’s use.
       </P>
       <P>
         When the harvest comes up short, two things give. Use falls: livestock feeders switch to wheat or sorghum, or feed fewer animals, and ethanol plants run
         slower — but not by much, between half a percent and 2% for each 10% rise in the price in our regions. And stocks fall, because a high price persuades
         their holders to sell what they would otherwise have carried into the next year. Stocks can’t fall to zero: some grain is always on ships, in rail cars and in
-        the bins of mills — about {PIPELINE} million tonnes, the world’s pipeline. In the next demonstration, the bars are each region’s production and the black
+        the bins of mills — about {PIPELINE} million tons, the world’s pipeline. In the next demonstration, the bars are each region’s production and the black
         ticks its use, and the curve is the price at each level of <K tone="green">stocks-to-use</K>, the stocks carried out as a share of a year’s use. Change the
         harvests and the stocks carried in:
       </P>
@@ -234,7 +234,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'world price, a bushel', value: usd(b.price, 2), tone: 'green' },
-            { label: 'a tonne', value: usd(b.price * BU_PER_TONNE) },
+            { label: 'a ton', value: usd(b.price * BU_PER_TONNE) },
             { label: 'stocks carried out', value: `${fmt(b.carryOut)} million t`, tone: 'gold' },
             { label: drawn > 0.5 ? 'drawn from stocks' : drawn < -0.5 ? 'added to stocks' : 'change in stocks', value: `${fmt(Math.abs(drawn))} million t` },
           ]}
@@ -248,28 +248,28 @@ export default function Lesson() {
       <P>
         Take 20% off the U.S. harvest — a drought on the scale of 2012’s, when the U.S. corn yield fell to 123 bushels an acre and corn futures set records above $8
         a bushel. In the model the price rises 39%, to $7.77. The United States no longer has corn to spare, Brazil and Argentina export a little more, and most of
-        the gap is closed by use: the importing countries buy 31 million tonnes less, and 23 million tonnes come out of stocks. Now look at the curve. It is steep
-        where stocks are scarce and flat where they are plentiful, because each tonne drawn from stocks brings them closer to the pipeline, where nobody can sell
+        the gap is closed by use: the importing countries buy 31 million tons less, and 23 million tons come out of stocks. Now look at the curve. It is steep
+        where stocks are scarce and flat where they are plentiful, because each ton drawn from stocks brings them closer to the pipeline, where nobody can sell
         more. That is why traders watch stocks-to-use more closely than any other number on a balance sheet: the same shortfall costs much more when the world starts
         the year with less.
       </P>
 
       <Challenge
         id="a"
-        question="Make the U.S. harvest 10% short. With the usual 100 million tonnes carried in, the price rises to $6.55. How much must the world carry in, to the nearest 5 million tonnes, to hold the price to $6.00 or less?"
+        question="Make the U.S. harvest 10% short. With the usual 100 million tons carried in, the price rises to $6.55. How much must the world carry in, to the nearest 5 million tons, to hold the price to $6.00 or less?"
         solved={solved1}
         status={
           s.state.us !== SHORT || s.state.southAmerica !== 0 || s.state.blackSea !== 0
             ? 'Set the U.S. harvest to −10% and the other two to 0%.'
             : b.price > CAP
-              ? `With ${s.state.carryIn} million tonnes carried in, the price is ${usd(b.price, 2)}.`
-              : `With ${s.state.carryIn} million tonnes carried in, the price is ${usd(b.price, 2)}. Would less do?`
+              ? `With ${s.state.carryIn} million tons carried in, the price is ${usd(b.price, 2)}.`
+              : `With ${s.state.carryIn} million tons carried in, the price is ${usd(b.price, 2)}. Would less do?`
         }
-        success={`Solved: ${s.state.carryIn} million tonnes carried in holds the price to ${usd(b.price, 2)} — ${fmt(s.state.carryIn - WORLD0.carryIn)} million tonnes more than usual, to absorb a shortfall of ${fmt(-REGIONS[0].production * SHORT / 100)} million. Stocks work as the world’s insurance against a bad harvest, and like insurance they cost money to hold; Chapter 5 will show the market paying for them.`}
+        success={`Solved: ${s.state.carryIn} million tons carried in holds the price to ${usd(b.price, 2)} — ${fmt(s.state.carryIn - WORLD0.carryIn)} million tons more than usual, to absorb a shortfall of ${fmt(-REGIONS[0].production * SHORT / 100)} million. Stocks work as the world’s insurance against a bad harvest, and like insurance they cost money to hold; Chapter 5 will show the market paying for them.`}
       />
 
       <P>
-        The same arithmetic works for any region. Wipe out Ukraine and Russia’s corn exports — about 31 million tonnes, which in the model takes a 65% smaller crop
+        The same arithmetic works for any region. Wipe out Ukraine and Russia’s corn exports — about 31 million tons, which in the model takes a 65% smaller crop
         there — and the price rises to about $6.37. When Russia’s invasion of Ukraine in 2022 shut Ukraine’s seaports for months, until a deal brokered by the United
         Nations and Turkey reopened them that summer, corn and wheat prices rose by much more than that, because the war hit a market already tightened by a
         drought-damaged Brazilian crop in 2021 and record Chinese imports. Wheat has its own cast — Russia is now its largest exporter, ahead of the European Union,
@@ -316,7 +316,7 @@ export default function Lesson() {
             ? `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, more than its ${fmt(avg)}-million average, and corn was ${usd(sel.price, 2)}. Is there a dearer year like it?`
             : `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, less than its ${fmt(avg)}-million average.`
         }
-        success={`Solved: in year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, ${fmt((sel.valleyCorn / avg - 1) * 100)}% more than average, yet corn was ${usd(sel.price, 2)}, because Brazil and Argentina’s harvest was ${fmt(-sel.crop.southAmerica * 100)}% short, Ukraine and Russia’s ${fmt(-sel.crop.blackSea * 100)}%, and the world carried in only ${fmt(sel.carryIn)} million tonnes. A farmer who forecast the valley’s crop perfectly would still have guessed wrong about the price. A good price forecast needs the world’s balance sheet, not only the view from Cedar Bend.`}
+        success={`Solved: in year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, ${fmt((sel.valleyCorn / avg - 1) * 100)}% more than average, yet corn was ${usd(sel.price, 2)}, because Brazil and Argentina’s harvest was ${fmt(-sel.crop.southAmerica * 100)}% short, Ukraine and Russia’s ${fmt(-sel.crop.blackSea * 100)}%, and the world carried in only ${fmt(sel.carryIn)} million tons. A farmer who forecast the valley’s crop perfectly would still have guessed wrong about the price. A good price forecast needs the world’s balance sheet, not only the view from Cedar Bend.`}
       />
 
       <P>
