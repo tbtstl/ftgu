@@ -21,8 +21,8 @@ export function Home() {
       </header>
 
       <p className="lede">
-        Every market is shaped by the thing it trades. Each course starts there — a battery, a gas well, a field of wheat — and builds the market up from it, one
-        simulation at a time.
+        Ground Up teaches how the markets for real-world resources work, starting from the physical systems underneath them. You build an understanding of
+        supply, price and risk on that foundation, through simulations you can change.
       </p>
       <p className="lede-2">
         {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
