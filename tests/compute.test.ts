@@ -10,6 +10,22 @@ import {
   CRITICAL_PATH_GATES,
   DIE_THERMAL_RESISTANCE,
 } from '../src/engines/compute/chipPower';
+import {
+  CUSTOMERS_DEFAULT,
+  FLEET_DEFAULT,
+  OPS_DEFAULT,
+  PRICEBOOK_DEFAULT,
+  WORLD_DEFAULT,
+  buyShare,
+  commitments,
+  evaluateFleet,
+  fleetProductivity,
+  offers,
+  operate,
+  prepare,
+  simulateBusiness,
+  type OpsPlan,
+} from '../src/engines/compute/cloud';
 import { busBandwidth, flatRingAllReduce, hierarchicalAllReduce, ringAllReduce, scaleOutLink, scaleUpLink } from '../src/engines/compute/collectives';
 import { checkAssignment, feasibleAssignments, workloadFit } from '../src/engines/compute/compatibility';
 import { breakEvenMarketPrice, contractPaths, rankedPaths } from '../src/engines/compute/contractPaths';
@@ -76,6 +92,7 @@ import {
   thermalVoltage,
 } from '../src/engines/compute/semiconductor';
 import { RESTART_MINUTES, bestInterval, checkpointMinutes, spotJobOf, spotRun } from '../src/engines/compute/spotCheckpoint';
+import { LEVERS_DEFAULT, businessUnder, contextUnder, fixedPerYearFor } from '../src/engines/compute/strategyChallenge';
 import { SUPPLY_DEFAULTS, dieYield, diesPerWafer, supplyChain, BUILD } from '../src/engines/compute/supplyChain';
 import { trainingRun, trainFlopsPerToken, TRAIN_COMPUTE_EFFICIENCY } from '../src/engines/compute/training';
 import { forwardPass, layerOps } from '../src/engines/compute/transformer';
@@ -458,6 +475,68 @@ import {
   pathSolved,
   priceSolved,
 } from '../src/lessons/compute/ch6/L6_5';
+import {
+  BAYPORT_RACKS,
+  CHAT_TARGET,
+  EXAMPLE_ANSWER,
+  LESSON_NUMBERS as L7_1_N,
+  allChecksPass,
+  bayportSolved as L7_1_bayportSolved,
+  capacityOf,
+  customerDemand,
+  evalOf,
+  fixedPerGpuHour,
+  racksByClass,
+} from '../src/lessons/compute/ch7/L7_1';
+import {
+  FILL_ANSWER,
+  LESSON_NUMBERS as L7_2_LESSON_NUMBERS,
+  busyByClass,
+  fillSolved,
+  growthView,
+  newCustomer,
+  smallestFill,
+  weekView,
+} from '../src/lessons/compute/ch7/L7_2';
+import {
+  LESSON_NUMBERS as L7_3_N,
+  PRICE_MAX,
+  bestPrice,
+  customersLost,
+  listWeekOf,
+  marginTarget,
+  onDemandASolved,
+  pricingSolved,
+  sweepPrice,
+  weekOf,
+  withPrice,
+} from '../src/lessons/compute/ch7/L7_3';
+import {
+  LAUNCH,
+  NORMAL,
+  RENT_A,
+  RENT_B,
+  bestPlan,
+  hourDetail,
+  hourName,
+  lessonNumbers,
+  planSolved,
+  runWeek,
+  turnedAway,
+} from '../src/lessons/compute/ch7/L7_4';
+import {
+  RIGHT_SIZED,
+  TARGET,
+  WORLD_STATE_DEFAULTS,
+  beatsStart,
+  customersAreStarting,
+  isStartingWorld,
+  lessonNumbers as L7_5_lessonNumbers,
+  runStrategy,
+  targetSolved,
+  worldOf,
+} from '../src/lessons/compute/ch7/L7_5';
+import { defaultCloud, sanitize } from '../src/lessons/compute/shared/cloudStore';
 import { ACCELERATORS, serverPowerW, ridgePoint, SM_LIMITS, GPU_SERIAL_GOPS, HOST_CPU, GPU_IDS } from '../src/model/compute/hardware';
 import { MODELS, kvBytesPerToken, paramCount, kvDim, matmulParams } from '../src/model/compute/models';
 import { PRICES } from '../src/model/compute/prices';
@@ -3001,6 +3080,7 @@ describe('chip power', () => {
 }
 
 // Chapter 6 engines
+
 {
   describe('yield management', () => {
     const base = { fleet: YIELD_FLEET, workloads: YIELD_WORKLOADS, policy: 'first-come' as const, protectB: 0, physics: PHYSICS_DEFAULTS, powerPrice: 55, hours: 168 };
@@ -3078,6 +3158,7 @@ describe('chip power', () => {
 }
 
 // Lesson 6.1
+
 {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -3194,6 +3275,7 @@ describe('chip power', () => {
 }
 
 // Lesson 6.2
+
 {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -3314,6 +3396,7 @@ describe('chip power', () => {
 }
 
 // Lesson 6.3
+
 {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -3439,6 +3522,7 @@ describe('chip power', () => {
 }
 
 // Lesson 6.4
+
 {
   const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -3553,6 +3637,7 @@ describe('chip power', () => {
 }
 
 // Lesson 6.5
+
 {
   describe('contract paths (contractPaths.ts)', () => {
     it('replays exactly the draws of runContract', () => {
@@ -3646,6 +3731,486 @@ describe('chip power', () => {
       expect(m(L6_5_N.hedgeAnswerMean)).toBe(1.48);
       expect(p(L6_5_N.hedgeAnswerLoss)).toBe(3.5);
       expect(L6_5_N.firstProfitable).toBe(219);
+    });
+  });
+}
+
+// Chapter 7 engines
+{
+  describe('capstone cloud', () => {
+    it('evaluates the starting fleet with chapter 4’s engines', () => {
+      const ev = evaluateFleet(FLEET_DEFAULT);
+      expect(ev.total).toBe(1536);
+      expect(ev.racks).toBe(47);
+      expect(ev.itMW).toBeCloseTo(1.789, 3);
+      expect(ev.checks.every((c) => c.ok)).toBe(true);
+      expect(ev.fixedPerYear / 1e6).toBeCloseTo(19.92, 2);
+      const hot = evaluateFleet({ ...FLEET_DEFAULT, supplyC: 35 });
+      expect(hot.speed.B).toBeLessThan(1);
+      expect(hot.checks.find((c) => c.id === 'cooling')!.ok).toBe(false);
+      expect(evaluateFleet({ ...FLEET_DEFAULT, site: 'bayport', gpus: { L: 0, A: 12000, B: 4000 } }).checks.find((c) => c.id === 'grid')!.ok).toBe(false);
+    });
+
+    it('prices customers’ work per unit and sells to those who value it', () => {
+      expect(buyShare(CUSTOMERS_DEFAULT[0], 3.5)).toBeCloseTo(0.5, 6);
+      const off = offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, fleetProductivity(FLEET_DEFAULT));
+      expect(off.every((o) => o.gpu === 'B')).toBe(true);
+      expect(off[0].price).toBeCloseTo(4.8 / 2.69, 1);
+      const far = offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, { ...FLEET_DEFAULT, site: 'northfield' });
+      expect(far.find((o) => o.customer.workload === 'code8')!.share).toBe(0);
+    });
+
+    it('commits reserved GPUs and runs a week', () => {
+      const ctx = prepare(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT);
+      const c = commitments(ctx);
+      expect(c.list.length).toBeGreaterThan(0);
+      const fc = operate(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, OPS_DEFAULT);
+      const tiered = operate(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, { ...OPS_DEFAULT, policy: 'tiered' });
+      expect(tiered.profit).toBeGreaterThan(fc.profit);
+      expect(tiered.utilization.B).toBeCloseTo(1, 3);
+      const noL = operate(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, { ...FLEET_DEFAULT, gpus: { L: 0, A: 1024, B: 256 } }, { ...OPS_DEFAULT, policy: 'tiered' });
+      expect(noL.profit).toBeGreaterThan(tiered.profit + 20000);
+    });
+
+    it('simulates three years', () => {
+      const b = simulateBusiness(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, { ...OPS_DEFAULT, policy: 'tiered' }, WORLD_DEFAULT);
+      expect(b.npvs.length).toBe(WORLD_DEFAULT.paths);
+      expect(b.probLoss).toBeGreaterThan(0.1);
+      const better = simulateBusiness(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, { ...FLEET_DEFAULT, gpus: { L: 0, A: 768, B: 384 } }, { ...OPS_DEFAULT, policy: 'tiered' }, WORLD_DEFAULT);
+      expect(better.riskAdjusted).toBeGreaterThan(b.riskAdjusted);
+    });
+
+    it('repairs stored designs', () => {
+      const d = defaultCloud();
+      expect(sanitize(JSON.parse(JSON.stringify(d, (_, v) => (v === Infinity ? null : v))))).toEqual(d);
+      expect(sanitize({ v: 1, fleet: { site: 'mars', gpus: { A: -5 } } }).fleet.site).toBe('techpark');
+      expect(sanitize(null)).toEqual(d);
+    });
+  });
+}
+
+// Lesson 7.1
+{
+  describe('lesson 7.1: the GPU Cloud Builder', () => {
+    it('quotes the starting fleet', () => {
+      expect(L7_1_N.total).toBe(1536);
+      expect(L7_1_N.racks).toBe(47);
+      expect(L7_1_N.itMW).toBeCloseTo(1.79, 2);
+      expect(L7_1_N.gridPeak).toBeCloseTo(2.5, 1);
+      expect(L7_1_N.gridMW).toBe(60);
+      expect(L7_1_N.pue).toBeCloseTo(1.28, 2);
+      expect(L7_1_N.capex / 1e6).toBeCloseTo(77.4, 1);
+      expect(L7_1_N.fixedYear / 1e6).toBeCloseTo(19.9, 1);
+      expect(L7_1_N.fixedHour).toBeCloseTo(1.48, 2);
+      expect(fixedPerGpuHour(FLEET_DEFAULT)).toBeCloseTo(L7_1_N.fixedHour, 9);
+      expect(L7_1_N.powerHour.A).toBeCloseTo(0.082, 3);
+      expect(allChecksPass(FLEET_DEFAULT)).toBe(true);
+      expect(racksByClass(FLEET_DEFAULT)).toEqual({ L: 4, A: 32, B: 11 });
+    });
+
+    it('quotes the other sites and the hot coolant', () => {
+      expect(L7_1_N.bayPue).toBeCloseTo(1.32, 2);
+      expect(L7_1_N.bayFixed / 1e6).toBeCloseTo(20.6, 1);
+      expect(L7_1_N.nfPue).toBeCloseTo(1.22, 2);
+      expect(L7_1_N.nfFixed / 1e6).toBeCloseTo(19.7, 1);
+      expect(Math.round(L7_1_N.hotSpeedB * 100)).toBe(95);
+      expect(evalOf({ ...FLEET_DEFAULT, supplyC: 35 }).checks.find((c) => c.id === 'cooling')!.ok).toBe(false);
+    });
+
+    it('quotes the network limits', () => {
+      expect(L7_1_N.bigTotal).toBe(2560);
+      expect(L7_1_N.bigNetworkOk).toBe(false);
+      expect(L7_1_N.bigPortsOk).toBe(true);
+      expect(Math.round(L7_1_N.bigPortsShare * 100)).toBe(60);
+      expect(L7_1_N.bigPortsTraining).toBe(1);
+      expect(L7_1_N.big48Share).toBeCloseTo(1 / 3, 9);
+      expect(Math.round(L7_1_N.big48Training * 100)).toBe(86);
+    });
+
+    it('solves the challenge only at Bayport, within 60 racks, with the chat capacity and every check', () => {
+      expect(L7_1_bayportSolved(FLEET_DEFAULT)).toBe(false);
+      expect(L7_1_bayportSolved({ ...FLEET_DEFAULT, site: 'bayport' })).toBe(false); // passes, but too little chat
+      expect(L7_1_bayportSolved(EXAMPLE_ANSWER)).toBe(true);
+      expect(L7_1_N.exOk).toBe(true);
+      expect(L7_1_N.exRacks).toBe(28);
+      expect(Math.round(L7_1_N.exChat)).toBe(6032);
+      expect(L7_1_N.exGridPeak).toBeCloseTo(4.0, 1);
+      expect(L7_1_N.exAirRacks).toBe(94);
+      // The same answer at Tech Park, or with too few ports for 2,240 GPUs, fails.
+      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, site: 'techpark' })).toBe(false);
+      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, downPorts: 34 })).toBe(false);
+      // Air can't do it: three B-class servers per rack.
+      expect(rackConfig({ gpu: 'B', cooling: 'air', servers: 0, feedKW: 140 }).maxServers).toBe(3);
+      expect(rackConfig({ gpu: 'B', cooling: 'liquid', servers: 0, feedKW: 140 }).maxServers).toBe(10);
+      for (const feed of [17, 30, 40, 60, 100, 140]) {
+        const airMax = { ...FLEET_DEFAULT, site: 'bayport' as const, feedKW: feed, gpus: { L: 0, A: 0, B: 1440 }, downPorts: 63 };
+        expect(capacityOf(airMax).chat70).toBeLessThan(CHAT_TARGET);
+      }
+      // Liquid A-class alone can't either: 60 racks × 80 GPUs.
+      const allA = { ...FLEET_DEFAULT, site: 'bayport' as const, cooling: 'liquid' as const, feedKW: 140, gpus: { L: 0, A: BAYPORT_RACKS * 80, B: 0 }, downPorts: 63 };
+      expect(evalOf(allA).racks).toBe(BAYPORT_RACKS);
+      expect(capacityOf(allA).chat70).toBeLessThan(CHAT_TARGET);
+      // A smaller liquid feed still works with more racks.
+      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, feedKW: 60 })).toBe(true);
+      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, gpus: { L: 0, A: 0, B: 2176 } })).toBe(false);
+    });
+
+    it('quotes the capacities and the customers’ demand', () => {
+      expect(Math.round(L7_1_N.capChat)).toBe(1724);
+      expect(Math.round(L7_1_N.capTrain)).toBe(1698);
+      expect(Math.round(L7_1_N.capFrontier)).toBe(1825);
+      expect(Math.round(L7_1_N.chatByB)).toBe(689);
+      expect(Math.round(L7_1_N.chatByL)).toBe(10);
+      expect(L7_1_N.chatByB / L7_1_N.gpus.A).toBeCloseTo(2 / 3, 1);
+      expect(L7_1_N.demandAvgTotal).toBe(1800);
+      expect(customerDemand(CUSTOMERS_DEFAULT, 'peak').chat70).toBe(600);
+      // At Northfield, code completion is out of reach (40 ms against 20).
+      const nf = { ...FLEET_DEFAULT, site: 'northfield' as const };
+      expect(evalOf(nf).checks.every((c) => c.ok)).toBe(true);
+    });
+  });
+}
+
+// Lesson 7.2
+{
+  const N = L7_2_LESSON_NUMBERS;
+  const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('lesson 7.2: generating demand', () => {
+    it('quotes the starting week', () => {
+      expect(r(N.wants)).toBe(1759);
+      expect(r(N.average)).toBe(1682);
+      expect(r(N.peak)).toBe(2093);
+      expect(N.peakWhen).toBe('15:00');
+      expect(r(N.servedShare * 100, 1)).toBe(87.3);
+      expect([r(N.busy.B * 100), r(N.busy.A * 100), r(N.busy.L * 100)]).toEqual([100, 79, 4]);
+      expect([r(N.chatB, 2), r(N.chatA, 2)]).toEqual([1.78, 2.4]);
+      expect([r(N.chatShareA * 100), r(N.chatShareB * 100)]).toEqual([81, 99]);
+      expect([r(N.chatServed * 100), r(N.codeServed * 100)]).toEqual([80, 93]);
+      expect(N.committedB).toBe(defaultCloud().fleet.gpus.B);
+      expect(N.committedB).toBe(256);
+      expect(SITES.techpark.rttMs).toBe(6);
+    });
+
+    it('quotes the trainer on spot and the filled fleet', () => {
+      expect(r(N.spotChat * 100)).toBe(83);
+      expect(r(N.spotShare * 100, 1)).toBe(91.5);
+      expect([r(N.fillChat * 100), r(N.fillCode * 100)]).toEqual([51, 66]);
+    });
+
+    it('solves the challenge only once every class is half busy', () => {
+      const d = defaultCloud();
+      expect(fillSolved(d)).toBe(false);
+      expect(smallestFill()).toBe(FILL_ANSWER);
+      const at = (size: number) => ({ ...d, customers: d.customers.map((c) => (c.id === 'c6' ? { ...c, size } : c)) });
+      expect(fillSolved(at(FILL_ANSWER))).toBe(true);
+      expect(fillSolved(at(FILL_ANSWER - 10))).toBe(false);
+      // Without L-class cards the starting fleet's other classes are already at least half busy.
+      const noL = { ...d, fleet: { ...d.fleet, gpus: { ...d.fleet.gpus, L: 0 } } };
+      expect(busyByClass(noL).map((b) => b.gpu)).toEqual(['A', 'B']);
+      expect(fillSolved(noL)).toBe(true);
+      // A fleet with no GPUs can't be kept busy.
+      expect(fillSolved({ ...d, fleet: { ...d.fleet, gpus: { L: 0, A: 0, B: 0 } } })).toBe(false);
+    });
+
+    it('grows demand against a fixed fleet', () => {
+      const g = growthView(defaultCloud());
+      expect(r(g.totals[0])).toBe(r(weekView(defaultCloud()).average));
+      expect(r(N.q12Share * 100)).toBe(69);
+      expect(r((N.demandGrowth - 1) * 100)).toBe(50);
+      for (let q = 1; q < 12; q++) expect(g.servedShare[q]).toBeLessThan(g.servedShare[q - 1]);
+      const noChatGrowth = defaultCloud();
+      noChatGrowth.customers = noChatGrowth.customers.map((c) => (c.workload === 'chat70' ? { ...c, growth: 0 } : c));
+      const g0 = growthView(noChatGrowth);
+      expect(g0.servedShare[11]).toBeGreaterThan(g.servedShare[11]);
+      expect(g0.servedShare[11]).toBeLessThan(g0.servedShare[0]);
+    });
+
+    it('signs up new customers with unique ids', () => {
+      const d = defaultCloud();
+      const a = newCustomer('batch8', d.customers, 1000);
+      const b = newCustomer('batch8', [...d.customers, a], 1000);
+      expect(a.id).not.toBe(b.id);
+      expect(a.name).toBe('Batch summarization customer 2');
+      expect(a.size).toBe(100);
+      expect(a.tier).toBe('spot');
+    });
+
+    it('handles empty fleets and out-of-reach customers', () => {
+      const d = defaultCloud();
+      const empty = weekView({ ...d, fleet: { ...d.fleet, gpus: { L: 0, A: 0, B: 0 } } });
+      expect(empty.servedShare).toBe(1);
+      const far = weekView({ ...d, fleet: { ...d.fleet, site: 'northfield' } });
+      expect(far.ctx.off.find((o) => o.customer.workload === 'code8')!.reason).toMatch(/too far/);
+    });
+  });
+}
+
+// Lesson 7.3
+{
+  const START = defaultCloud();
+  const withRB = (p: number) => ({ ...START, prices: withPrice(START.prices, 'reserved', 'B', p) });
+
+  describe('lesson 7.3: pricing the cloud', () => {
+    it('quotes the starting design at list prices', () => {
+      expect(Math.round(L7_3_N.listRevenue)).toBe(394502);
+      expect(Math.round(L7_3_N.listPower)).toBe(17399);
+      expect(Math.round(L7_3_N.listFixed)).toBe(382065);
+      expect(Math.round(L7_3_N.listProfit)).toBe(-4962);
+      expect(Math.round(L7_3_N.listUtil.B * 100)).toBe(100);
+      expect(Math.round(L7_3_N.listUtil.A * 100)).toBe(79);
+      expect(Math.round(L7_3_N.listUtil.L * 100)).toBe(4);
+      expect(L7_3_N.allFirstB).toBe(true);
+      expect(L7_3_N.prodBMin.toFixed(1)).toBe('2.3');
+      expect(L7_3_N.prodBMax.toFixed(1)).toBe('3.1');
+      expect(L7_3_N.chatOnB.toFixed(2)).toBe('1.78');
+      expect(L7_3_N.chatOnA).toBe(2.4);
+      expect(Math.round(L7_3_N.chatShareA * 100)).toBe(81);
+      expect([L7_3_N.frontierCommitB, L7_3_N.trainerCommitB, L7_3_N.trainerCommitA]).toEqual([96, 160, 66]);
+      expect(L7_3_N.frontierOnB.toFixed(2)).toBe('1.02');
+      expect(Math.round(L7_3_N.frontierRevenueList)).toBe(51610);
+    });
+
+    it('finds the reserved B-class ceiling at the frontier lab’s substitute', () => {
+      expect(L7_3_N.prodFrontierB.toFixed(2)).toBe('3.13');
+      expect(L7_3_N.ceilingRaw.toFixed(2)).toBe('5.01');
+      expect(L7_3_N.ceiling).toBeCloseTo(5, 9);
+      expect(Math.round(L7_3_N.ceilProfit)).toBe(25834);
+      expect(Math.round(L7_3_N.ceilFrontierRevenue)).toBe(80640);
+      expect(L7_3_N.ceilTrainerCommitA).toBe(443);
+      expect(L7_3_N.ceilFreedB).toBe(160);
+      expect(Math.round(L7_3_N.pastProfit)).toBe(11856);
+      expect(L7_3_N.prodTrainB.toFixed(2)).toBe('2.36');
+      expect(L7_3_N.trainerCeilingRaw.toFixed(2)).toBe('3.77');
+      expect(L7_3_N.trainerLast).toBeCloseTo(3.75, 9);
+      expect(Math.round(L7_3_N.trainerStayProfit)).toBe(18693);
+      expect(Math.round(L7_3_N.trainerGoneProfit)).toBe(6481);
+      expect(bestPrice(START, 'reserved', 'B')).toEqual({ price: 5, profit: L7_3_N.ceilProfit });
+    });
+
+    it('solves challenge a only with a targeted price change', () => {
+      expect(Math.round(L7_3_N.marginTarget)).toBe(395958);
+      expect(pricingSolved(START)).toBe(false);
+      // Every price up 10% is not enough: 4.1% more margin.
+      expect((L7_3_N.up10Gain * 100).toFixed(1)).toBe('4.1');
+      expect(pricingSolved(withRB(5))).toBe(true);
+      expect(pricingSolved(withRB(3.75))).toBe(true);
+      expect(pricingSolved(withRB(4))).toBe(false);
+      // Pricing a reachable customer out of buying fails it, however much it earns.
+      const noChat = { ...withRB(5), customers: START.customers.map((c) => (c.id === 'c1' ? { ...c, value: 0.5 } : c)) };
+      expect(customersLost(noChat)).toEqual(['Chat startup']);
+      expect(pricingSolved(noChat)).toBe(false);
+      expect(marginTarget(START)).toBeCloseTo(listWeekOf(START).margin * 1.05, 6);
+    });
+
+    it('solves challenge b at the best on-demand A-class price', () => {
+      expect(L7_3_N.odaListBest.price).toBeCloseTo(2.95, 9);
+      expect(Math.round(L7_3_N.odaListBest.profit)).toBe(5401);
+      expect(L7_3_N.odaCeilBest.price).toBeCloseTo(2.9, 9);
+      expect(Math.round(L7_3_N.odaCeilBest.profit)).toBe(31066);
+      expect(onDemandASolved(START)).toBe(false);
+      const best = { ...START, prices: withPrice(START.prices, 'onDemand', 'A', 2.95) };
+      expect(onDemandASolved(best)).toBe(true);
+      expect(onDemandASolved({ ...START, prices: withPrice(START.prices, 'onDemand', 'A', 3.4) })).toBe(false);
+    });
+
+    it('sweeps prices without breaking on extreme designs', () => {
+      const s = sweepPrice(START, 'onDemand', 'A');
+      expect(s.prices.length).toBe(41);
+      expect(s.prices[40]).toBe(PRICE_MAX.A);
+      const empty = { ...START, fleet: { ...START.fleet, gpus: { L: 0, A: 0, B: 0 } } };
+      expect(Number.isFinite(weekOf(empty).profit)).toBe(true);
+      expect(customersLost(empty)).toEqual([]);
+      const far = { ...START, fleet: { ...START.fleet, site: 'northfield' as const } };
+      expect(customersLost(far)).toEqual([]);
+      expect(weekOf({ ...START, prices: PRICEBOOK_DEFAULT }).profit).toBeCloseTo(L7_3_N.listProfit, 6);
+    });
+  });
+}
+
+// Lesson 7.4
+{
+  const START = defaultCloud();
+  const plan = (policy: OpsPlan['policy'], A = 0, B = 0, burst = false): OpsPlan => ({ policy, rented: { L: 0, A, B }, burst });
+  const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+  const pc = (x: number) => Math.round(x * 100);
+
+  describe('lesson 7.4: the week, hour by hour', () => {
+    it('splits an hour consistently with the week', () => {
+      for (const h of [0, 4, 15, 100, 167]) {
+        const d = hourDetail(START, plan('tiered'), NORMAL, h);
+        const wanted = d.customers.reduce((s, c) => s + c.wanted, 0);
+        const served = d.customers.reduce((s, c) => s + c.served, 0);
+        expect(wanted).toBeCloseTo(d.row.demand, 6);
+        expect(served).toBeCloseTo(d.row.owned + d.row.rented + d.row.burst, 6);
+        expect(d.row.demand).toBeCloseTo(d.row.owned + d.row.rented + d.row.burst + d.row.unmet, 6);
+        for (const g of ['L', 'A', 'B'] as const) expect(d.busy[g]).toBeLessThanOrEqual(START.fleet.gpus[g] + 1e-6);
+      }
+      expect(hourName(15)).toBe('Mon 15:00');
+      expect(hourName(167)).toBe('Sun 23:00');
+    });
+
+    it('copes with extreme designs', () => {
+      const empty = { ...START, fleet: { ...START.fleet, gpus: { L: 0, A: 0, B: 0 } } };
+      const r = runWeek(empty, plan('tiered', RENT_A.max, RENT_B.max, true), { outPct: 30, demandPct: 200 });
+      expect(Number.isFinite(r.profit)).toBe(true);
+      expect(turnedAway(r)).toBeGreaterThanOrEqual(0);
+      const d = hourDetail(empty, plan('first-come'), NORMAL, 0);
+      expect(d.customers.every((c) => Number.isFinite(c.served))).toBe(true);
+    });
+  });
+
+  describe('lesson 7.4 challenges', () => {
+    it('a: in a normal week the best plan serves on demand first and rents nothing', () => {
+      const best = bestPlan(START, NORMAL);
+      expect(best.ops.policy).toBe('tiered');
+      expect(best.ops.rented).toEqual({ L: 0, A: 0, B: 0 });
+      expect(planSolved(START, plan('first-come'), NORMAL, NORMAL)).toBe(false);
+      expect(planSolved(START, plan('tiered'), NORMAL, NORMAL)).toBe(true);
+      expect(planSolved(START, plan('tiered', 0, 0, true), NORMAL, NORMAL)).toBe(true); // bursting changes nothing at list prices
+      expect(planSolved(START, plan('tiered', 64), NORMAL, NORMAL)).toBe(false);
+      expect(planSolved(START, plan('tiered'), { outPct: 10, demandPct: 100 }, NORMAL)).toBe(false);
+    });
+
+    it('b: in a launch week renting 320 A-class GPUs pays', () => {
+      const best = bestPlan(START, LAUNCH);
+      expect(best.ops).toMatchObject({ policy: 'tiered', rented: { L: 0, A: 320, B: 0 } });
+      expect(planSolved(START, plan('tiered', 320), LAUNCH, LAUNCH)).toBe(true);
+      expect(planSolved(START, plan('tiered', 256), LAUNCH, LAUNCH)).toBe(false);
+      expect(planSolved(START, plan('tiered', 384), LAUNCH, LAUNCH)).toBe(false);
+      expect(planSolved(START, plan('tiered'), LAUNCH, LAUNCH)).toBe(false);
+      expect(planSolved(START, plan('tiered', 320), NORMAL, LAUNCH)).toBe(false);
+    });
+  });
+
+  describe('lesson 7.4 numbers', () => {
+    const N = lessonNumbers();
+    it('the starting design, first come and tiered', () => {
+      expect([N.fleetTotal, N.fleetB, N.committedB]).toEqual([1536, 256, 256]);
+      expect(r0(N.fc.revenue)).toBe(394502);
+      expect(r0(N.fc.power)).toBe(17399);
+      expect(r0(N.fc.fixed)).toBe(382065);
+      expect(r0(N.fc.profit)).toBe(-4962);
+      expect([pc(N.fc.util.B), pc(N.fc.util.A), pc(N.fc.util.L), pc(N.fc.away)]).toEqual([100, 79, 4, 13]);
+      expect([pc(N.fc.served.c2), pc(N.tiered.served.c2), pc(N.fc.served.c1), pc(N.tiered.served.c1), pc(N.fc.served.c6), pc(N.tiered.served.c6)]).toEqual([93, 100, 80, 82, 84, 80]);
+      expect(r0(N.tiered.gain)).toBe(3635);
+      expect(r0(N.tiered.profit)).toBe(-1326);
+      expect(r0(N.normalBest.profit)).toBe(-1326);
+    });
+
+    it('buying capacity elsewhere', () => {
+      expect(r0(N.rentB32.loss)).toBe(20130);
+      expect(r0(N.rentA64.loss)).toBe(15433);
+      expect([r0(N.chatPeak), r0(N.chatNight)]).toEqual([600, 200]);
+      expect([r0(N.premium.gain), r0(N.premium.noBurst), r0(N.premium.burst)]).toEqual([6180, 2318, 8498]);
+    });
+
+    it('when the week isn’t normal', () => {
+      expect(r0(N.out10.profit)).toBe(-3938);
+      expect([pc(N.out10.served.c4), pc(N.tieredServed.c4), pc(N.tieredServed.c6), pc(N.out10.served.c6)]).toEqual([82, 91, 80, 74]);
+      expect(r0(N.low70)).toBe(-116717);
+      expect(r0(N.launch.none)).toBe(116502);
+      expect(pc(N.launch.noneChat)).toBe(31);
+      expect([N.launch.bestA, N.launch.bestB]).toEqual([320, 0]);
+      expect(r0(N.launch.rentCost)).toBe(86016);
+      expect(r0(N.launch.gain)).toBe(12439);
+      expect(pc(N.launch.bestChat)).toBe(62);
+    });
+
+    it('one hour at a time', () => {
+      expect([r0(N.peak.demand), r0(N.peak.owned), r0(N.peak.unmet)]).toEqual([2093, 1730, 363]);
+      expect([r0(N.night.demand), r0(N.night.unmet), r0(N.night.idleA)]).toEqual([1366, 162, 458]);
+      // The peak is the busiest hour of the week.
+      const week = runWeek(START, plan('tiered'), NORMAL);
+      const busiest = week.hours.reduce((m, h, i) => (h.demand > week.hours[m].demand ? i : m), 0);
+      expect(busiest).toBe(15);
+    });
+  });
+}
+
+// Lesson 7.5
+{
+  const M = (x: number) => Math.round((x / 1e6) * 100) / 100;
+  const pc = (x: number) => Math.round(x * 100);
+
+  describe('strategy challenge engine', () => {
+    it('reproduces simulateBusiness with the levers at their starting values', () => {
+      const ops = { ...OPS_DEFAULT, policy: 'tiered' as const };
+      const a = simulateBusiness(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, ops, WORLD_DEFAULT);
+      const b = businessUnder(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, ops, WORLD_DEFAULT, LEVERS_DEFAULT);
+      expect(b.npvs).toEqual(a.npvs);
+      const ctx = contextUnder(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT);
+      expect(fixedPerYearFor(ctx, 5)).toBeCloseTo(evaluateFleet(FLEET_DEFAULT).fixedPerYear, 6);
+      expect(fixedPerYearFor(ctx, 3)).toBeGreaterThan(fixedPerYearFor(ctx, 5));
+      expect(worldOf(WORLD_STATE_DEFAULTS)).toEqual(WORLD_DEFAULT);
+    });
+
+    it('makes energy cost more and longer server lives cost less', () => {
+      const d = RIGHT_SIZED;
+      const base = runStrategy(d);
+      expect(runStrategy(d, { ...WORLD_STATE_DEFAULTS, energy: 3 }).mean).toBeLessThan(base.mean);
+      expect(runStrategy(d, { ...WORLD_STATE_DEFAULTS, life: 7 }).mean).toBeGreaterThan(base.mean);
+    });
+  });
+
+  describe('lesson 7.5: the strategy challenge', () => {
+    const N = L7_5_lessonNumbers();
+
+    it('quotes the starting design', () => {
+      expect([M(N.start.mean), M(N.start.p5), pc(N.start.probLoss), M(N.start.riskAdjusted)]).toEqual([0.34, -5.88, 44, -1.47]);
+      expect(N.startGpus).toBe(1536);
+      expect(Math.round(N.startFixedWeek)).toBe(382065);
+      expect(pc(N.startWeek.utilization.B)).toBe(100);
+      expect([pc(N.startWeek.utilization.A), pc(N.startWeek.utilization.L)]).toEqual([79, 4]);
+      expect(Math.round(N.startWeek.revenue)).toBe(394502);
+      expect(Math.round(N.startWeek.profit)).toBe(-4962);
+    });
+
+    it('quotes the smaller fleet', () => {
+      expect(N.rightGpus).toBe(832);
+      expect(Math.round(N.rightWeek.revenue)).toBe(362077);
+      expect(Math.round(N.rightFixedWeek)).toBe(251929);
+      expect(Math.round(N.rightWeek.profit)).toBe(97078);
+      expect([pc(N.rightWeek.utilization.A), pc(N.rightWeek.served.c1), pc(N.rightWeek.served.c6)]).toEqual([97, 76, 43]);
+      expect([M(N.right.mean), M(N.right.p5), N.right.probLoss, M(N.right.riskAdjusted)]).toEqual([11.89, 8.83, 0, 11.09]);
+      expect(M(N.rightFirstCome.riskAdjusted)).toBe(8.46);
+    });
+
+    it('quotes the world’s drivers', () => {
+      expect([M(N.life3.riskAdjusted), pc(N.life3.probLoss)]).toEqual([-3.06, 96]);
+      expect(M(N.life7.riskAdjusted)).toBe(17.07);
+      expect([M(N.early.riskAdjusted), pc(N.early.probLoss)]).toEqual([-3.4, 73]);
+      expect(M(N.energy3.riskAdjusted)).toBe(7.74);
+      expect(M(N.fail10.riskAdjusted)).toBe(9.97);
+    });
+
+    it('every starting customer buys the B-class first, as the prose says', () => {
+      expect(offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT).every((o) => o.gpu === 'B')).toBe(true);
+    });
+
+    it('solves challenge a only with a buildable design worth $10M against the starting world and customers', () => {
+      const W = WORLD_STATE_DEFAULTS;
+      expect(isStartingWorld(W)).toBe(true);
+      expect(targetSolved(RIGHT_SIZED, W)).toBe(true);
+      expect(targetSolved(defaultCloud(), W)).toBe(false);
+      expect(targetSolved(RIGHT_SIZED, { ...W, energy: 1.25 })).toBe(false);
+      const greedy = { ...RIGHT_SIZED, customers: RIGHT_SIZED.customers.map((c) => ({ ...c, size: c.size * 2 })) };
+      expect(customersAreStarting(greedy.customers)).toBe(false);
+      expect(targetSolved(greedy, W)).toBe(false);
+      const unbuildable = { ...RIGHT_SIZED, fleet: { ...RIGHT_SIZED.fleet, feedKW: 8 } };
+      expect(evaluateFleet(unbuildable.fleet).ok).toBe(false);
+      expect(targetSolved(unbuildable, W)).toBe(false);
+      expect(TARGET).toBe(10e6);
+    });
+
+    it('solves challenge b with a saved strategy that beats the start on both counts', () => {
+      const start = defaultCloud();
+      const right = runStrategy(RIGHT_SIZED);
+      const startRun = runStrategy(start);
+      expect(beatsStart([])).toBe(false);
+      expect(beatsStart([{ design: start, mean: startRun.mean, p5: startRun.p5 }])).toBe(false);
+      expect(beatsStart([{ design: { ...start, ...RIGHT_SIZED }, mean: right.mean, p5: right.p5 }])).toBe(true);
+      expect(beatsStart([{ design: { ...start, customers: [] }, mean: right.mean, p5: right.p5 }])).toBe(false);
     });
   });
 }
