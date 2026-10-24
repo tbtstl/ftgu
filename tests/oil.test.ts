@@ -104,6 +104,25 @@ import { BASIS_DEFAULTS, QUALITY_DEFAULTS, idleGrowth, idleGrowthSolved, losingS
 import { CRACK_STATE_DEFAULTS, calendarWinsSolved, runCrack, splitFor, stillTradesSolved } from '../src/lessons/oil/ch6/L6_3';
 import { HEDGE_DEFAULTS, QUARTER_DEFAULTS, bestHedge, fastestWtiGrowth, hedgeFor, quartersFor, standardCrackSolved, summarizeQuarters, wtiGrowthSolved } from '../src/lessons/oil/ch6/L6_4';
 import { LAB_DEFAULTS, TUNED_BOOK, calendarBeforeCosts, crackShift, crackSolved, runLab, sizingSolved } from '../src/lessons/oil/ch6/L6_5';
+import { DECK_DEFAULTS, WORLD_DEFAULTS, cheapestPlanSolved, cheapestTargetPlan, fanValuations, luckAnswer, luckSolved, worldParams } from '../src/lessons/oil/ch7/L7_1';
+import { COKER_TEST, HISTORY_STATE_DEFAULTS, bestWithinBudget, budgetSolved, designOf, designValue, shiftSolved, smallestShift } from '../src/lessons/oil/ch7/L7_2';
+import { CHAIN_DEFAULTS, SWEEP_DEFAULTS, slowestPayingGrowth, slowestPayingSolved, steadiestFirmSpace, steadiestSolved } from '../src/lessons/oil/ch7/L7_3';
+import { CASH_DEFAULTS, DRIVER_DEFAULTS as DESK_DRIVERS, fastestSteadyGrowth, narrowBandSolved, steadyBasisSolved } from '../src/lessons/oil/ch7/L7_4';
+import { DRIVER_DEFAULTS as TRADER_DRIVERS, bestAnyHedges, harderWorldSolved, hedgesSolved, withHedges } from '../src/lessons/oil/ch7/L7_5';
+import {
+  BUSINESS_DEFAULTS,
+  COMMITTED_TARIFF,
+  bestHedges,
+  businessFan,
+  exposures,
+  productionOnPath,
+  refineryCapital,
+  refineryDay,
+  refineryMargin,
+  runBusiness,
+  sanitizeBusiness,
+  type OilBusiness,
+} from '../src/engines/oil/business';
 
 const finite = (x: number) => Number.isFinite(x);
 
@@ -1161,5 +1180,125 @@ describe('chapter 6 lessons', () => {
     const cal = calendarBeforeCosts();
     expect(cal.minGrossAll).toBeGreaterThan(0);
     expect(cal.othersNet).toBeLessThan(cal.othersGross / 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The capstone's business engine.
+
+describe('integrated business', () => {
+  const h = oilHistory();
+  const withHedges = (production: number, crack: number, base: OilBusiness = BUSINESS_DEFAULTS): OilBusiness => ({ ...base, hedges: { ...base.hedges, production, crack } });
+  it('values the production plan as Lesson 2.5 does on a flat price', () => {
+    const flat = h.map((w) => ({ ...w, wti: 75 }));
+    const onPath = productionOnPath(BUSINESS_DEFAULTS.production, flat);
+    const program = runProgram({ wellsPerYear: 20, waterflood: true, price: 75 });
+    expect(onPath.npv).toBeCloseTo(program.npv, -3);
+    expect(onPath.capitalTotal).toBeCloseTo(program.capital, 0);
+    // A drilling threshold above every year's starting price drills nothing.
+    expect(productionOnPath({ ...BUSINESS_DEFAULTS.production, drillAbove: 100 }, h).wellsDrilled).toBe(0);
+  });
+  it('runs Calder at its reference day exactly as Lesson 6.4 did', () => {
+    const d = refineryDay(CALDER);
+    for (const i of [0, 100, 200]) expect(refineryMargin(h[i], d)).toBeCloseTo(calderMargin(h[i]), -3);
+    expect(refineryCapital(CALDER)).toBe(0);
+    const bigger = { ...CALDER, capacity: { ...CALDER.capacity, coker: 35 } };
+    expect(refineryCapital(bigger)).toBe(300e6);
+    expect(refineryDay(bigger).margin).toBeGreaterThan(d.margin);
+  });
+  it('earns on firm space only when the line congests', () => {
+    const firm = (hp = {}) => runBusiness({ ...BUSINESS_DEFAULTS, logistics: { firmSpace: 100 } }, hp).sums.logistics;
+    expect(COMMITTED_TARIFF).toBe(3.5);
+    expect(firm()).toBeGreaterThan(0);
+    expect(firm({ basinGrowth: 20 })).toBeLessThan(0);
+  });
+  it('is partly hedged by its own refinery, and hedges best as one company', () => {
+    const none = runBusiness();
+    expect(none.effectiveness).toBe(0);
+    // Selling all the production forward leaves the refinery's short crude position exposed.
+    expect(runBusiness(withHedges(1, 0)).rmsHedged).toBeGreaterThan(none.rmsSurprise);
+    const best = bestHedges();
+    expect(best.production).toBeGreaterThan(0.3);
+    expect(best.production).toBeLessThan(0.7);
+    expect(best.effectiveness).toBeGreaterThan(0.85);
+    expect(runBusiness(withHedges(best.production, best.crack)).effectiveness).toBeCloseTo(best.effectiveness, 6);
+    const e = exposures(BUSINESS_DEFAULTS, 0);
+    expect(e.crude).toBeLessThan(0);
+    expect(exposures(BUSINESS_DEFAULTS, 156).crude).toBeGreaterThan(0);
+  });
+  it('spreads across histories and keeps plans valid', () => {
+    const f = businessFan();
+    expect(f.totals.length).toBe(30);
+    expect(f.total.p10).toBeLessThan(f.total.p90);
+    expect(f.quarters.length).toBe(20);
+    const s = sanitizeBusiness({ production: { wellsPerYear: 999, waterflood: 'yes' }, refinery: { capacity: { coker: 33 } }, hedges: { mix: 'nope', crack: -1 } });
+    expect(s.production.wellsPerYear).toBe(60);
+    expect(s.production.waterflood).toBe(true);
+    expect(s.refinery.capacity.coker).toBe(35);
+    expect(s.refinery.capacity.cdu).toBe(150);
+    expect(s.hedges.mix).toBe('calder');
+    expect(s.hedges.crack).toBe(0);
+    expect(sanitizeBusiness(null)).toEqual(BUSINESS_DEFAULTS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 7 lessons.
+
+describe('chapter 7 lessons', () => {
+  const plan = BUSINESS_DEFAULTS.production;
+  it('7.1: the fast valuation matches the engine, and the challenges have exact answers', () => {
+    for (const p of [plan, { ...plan, drillAbove: 65 }]) {
+      const fast = fanValuations(p, WORLD_DEFAULTS);
+      [2024, 1, 2, 3, 4, 5].forEach((seed, i) => {
+        expect(fast[i].at75).toBeCloseTo(productionOnPath(p, oilHistory({ ...worldParams(WORLD_DEFAULTS), seed })).npv, -2);
+      });
+    }
+    expect(cheapestTargetPlan().plan).toEqual({ wellsPerYear: 10, waterflood: true, drillAbove: 0 });
+    expect(cheapestPlanSolved(plan)).toBe(false);
+    expect(cheapestPlanSolved({ wellsPerYear: 10, waterflood: true, drillAbove: 0 })).toBe(true);
+    expect(cheapestPlanSolved({ wellsPerYear: 5, waterflood: true, drillAbove: 0 })).toBe(false);
+    expect(luckAnswer(plan)).toBe(67);
+    expect(luckSolved(plan, { ...DECK_DEFAULTS, longRun: 67 })).toBe(true);
+    expect(luckSolved(plan, DECK_DEFAULTS)).toBe(false);
+  });
+  it('7.2: the crude unit and hydrotreater beat the coker unless fuel oil cheapens for good', () => {
+    expect(designValue(COKER_TEST).npv).toBeLessThan(0);
+    expect(designValue(designOf({ cdu: 180 })).npv).toBeGreaterThan(0);
+    const best = bestWithinBudget();
+    expect(best.config.capacity.cdu).toBe(170);
+    expect(best.config.capacity.dht).toBe(65);
+    expect(budgetSolved(best.config)).toBe(true);
+    expect(budgetSolved(CALDER)).toBe(false);
+    expect(smallestShift()).toBe(12);
+    expect(shiftSolved({ ...HISTORY_STATE_DEFAULTS, shift: 12 })).toBe(true);
+    expect(shiftSolved({ ...HISTORY_STATE_DEFAULTS, shift: 11 })).toBe(false);
+  });
+  it('7.3: firm space pays when the basin outgrows the line, and about 40 kb/d steadies the basis', () => {
+    expect(slowestPayingGrowth()).toBe(50);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50 }, 10)).toBe(true);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 40 }, 10)).toBe(false);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50 }, 0)).toBe(false);
+    expect(steadiestFirmSpace(plan, SWEEP_DEFAULTS)).toBe(40);
+    expect(steadiestSolved(40, plan, SWEEP_DEFAULTS)).toBe(true);
+    expect(steadiestSolved(30, plan, SWEEP_DEFAULTS)).toBe(false);
+  });
+  it('7.4: the spread is forecastable with enough pipeline; outages widen the cash band', () => {
+    expect(fastestSteadyGrowth()).toBe(30);
+    expect(steadyBasisSolved({ ...DESK_DRIVERS, growth: 30 })).toBe(true);
+    expect(steadyBasisSolved({ ...DESK_DRIVERS, growth: 40 })).toBe(false);
+    expect(narrowBandSolved({ ...CASH_DEFAULTS, plan: 'start' }, BUSINESS_DEFAULTS)).toBe(false);
+    expect(narrowBandSolved({ ...CASH_DEFAULTS, plan: 'start', refinery: 0 }, BUSINESS_DEFAULTS)).toBe(true);
+  });
+  it('7.5: the company hedges best as one, with a crack that matches its refinery', () => {
+    const best = bestAnyHedges(BUSINESS_DEFAULTS);
+    expect(best.mix).toBe('calder');
+    expect(best.bench).toBe('brent');
+    expect(best.effectiveness).toBeGreaterThan(0.9);
+    expect(hedgesSolved(BUSINESS_DEFAULTS, TRADER_DRIVERS)).toBe(false);
+    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, 'calder', 'brent'), TRADER_DRIVERS)).toBe(true);
+    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, '3:2:1', 'brent'), TRADER_DRIVERS)).toBe(false);
+    expect(harderWorldSolved(BUSINESS_DEFAULTS, { ...TRADER_DRIVERS, seasonality: 0 })).toBe(true);
+    expect(harderWorldSolved(BUSINESS_DEFAULTS, TRADER_DRIVERS)).toBe(false);
   });
 });

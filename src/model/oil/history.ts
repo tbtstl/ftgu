@@ -262,7 +262,7 @@ export function oilHistory(params: HistoryParams = {}): HistoryWeek[] {
       freight,
     });
   }
-  if (cache.size > 60) cache.clear();
+  if (cache.size > 100) cache.clear();
   cache.set(key, out);
   return out;
 }
