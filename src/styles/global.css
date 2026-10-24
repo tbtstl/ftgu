@@ -65,6 +65,25 @@ button { font-family: inherit; letter-spacing: inherit; }
 .name { margin: 0; font-size: 16px; font-weight: 500; line-height: 1.5; }
 .dek { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .hdr { margin-top: 32px; }
+
+/* The logo beside the site's name. A click bursts it into a new color in 200 ms: the mark pops
+   and a ring in the new color flares out behind it. */
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; margin: 0 -2px 0 -2px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.logo:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.logo-mark { position: relative; width: 40px; height: 40px; transition: color 200ms ease-out; }
+.logo-mark.pop { animation: logo-pop 200ms cubic-bezier(.2, .9, .3, 1.4); }
+.logo-ring {
+  position: absolute; inset: 2px; border-radius: 50%; border: 2px solid currentColor; opacity: 0; pointer-events: none;
+  animation: logo-ring 200ms ease-out;
+}
+@keyframes logo-pop { 0% { transform: scale(.82); } 60% { transform: scale(1.14); } 100% { transform: scale(1); } }
+@keyframes logo-ring { 0% { transform: scale(.5); opacity: .55; } 100% { transform: scale(1.45); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .logo-mark.pop, .logo-ring { animation: none; } }
 .lede { margin: 24px 0 0; }
 /* The way back into the course: bordered like a challenge, the whole box one link. */
 .resume {

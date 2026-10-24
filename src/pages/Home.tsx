@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { COURSES } from '../course/courses';
 import { getLesson, LESSONS } from '../course/registry';
 import { useLastLesson } from '../course/progress';
+import { Logo } from './Logo';
 import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
@@ -15,9 +16,12 @@ export function Home() {
 
   return (
     <main className="col page">
-      <header>
-        <h1 className="name">From The Ground Up</h1>
-        <p className="dek">Understand markets from first principles.</p>
+      <header className="brand">
+        <Logo />
+        <div>
+          <h1 className="name">From The Ground Up</h1>
+          <p className="dek">Understand markets from first principles.</p>
+        </div>
       </header>
 
       <p className="lede">
