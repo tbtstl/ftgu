@@ -64,8 +64,8 @@ export const DISTRICTS: District[] = [
     ph: 6.6,
     springWater: 0.95,
     hybridGdd: 1250,
-    cornKAc: 400,
-    wheatKAc: 250,
+    cornKAc: 350,
+    wheatKAc: 350,
     irrigatedKAc: 0,
     polygon: [
       [128, 26],
@@ -92,8 +92,8 @@ export const DISTRICTS: District[] = [
     ph: 7.6,
     springWater: 0.45,
     hybridGdd: 1500,
-    cornKAc: 400,
-    wheatKAc: 1400,
+    cornKAc: 300,
+    wheatKAc: 1500,
     irrigatedKAc: 260,
     polygon: [
       [22, 122],
@@ -121,8 +121,8 @@ export const DISTRICTS: District[] = [
     ph: 6.4,
     springWater: 0.95,
     hybridGdd: 1500,
-    cornKAc: 1400,
-    wheatKAc: 200,
+    cornKAc: 1300,
+    wheatKAc: 1000,
     irrigatedKAc: 0,
     polygon: [
       [230, 118],
@@ -149,8 +149,8 @@ export const DISTRICTS: District[] = [
     ph: 5.8,
     springWater: 0.95,
     hybridGdd: 1500,
-    cornKAc: 600,
-    wheatKAc: 300,
+    cornKAc: 450,
+    wheatKAc: 500,
     irrigatedKAc: 0,
     polygon: [
       [440, 124],
@@ -177,8 +177,8 @@ export const DISTRICTS: District[] = [
     ph: 6.8,
     springWater: 1,
     hybridGdd: 1550,
-    cornKAc: 600,
-    wheatKAc: 100,
+    cornKAc: 700,
+    wheatKAc: 400,
     irrigatedKAc: 0,
     polygon: [
       [226, 228],
@@ -211,6 +211,9 @@ export const CEDAR_BEND = {
   /** The usual split: corn on most fields, winter wheat on the rest in rotation. */
   cornAcres: 1000,
   wheatAcres: 600,
+  /** The family owns most of the land and rents the rest from neighbors. */
+  ownedAcres: 1000,
+  rentedAcres: 600,
   /** Map position, near Fairview. */
   x: 282,
   y: 200,

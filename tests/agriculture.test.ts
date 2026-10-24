@@ -7,7 +7,26 @@ import { CROP, gdd, kernelSetFactor, simulateSeason, waterStress } from '../src/
 import { nitrogenSeason, sufficiency } from '../src/engines/agriculture/soil';
 import { describe as describeSample } from '../src/engines/strategy/distribution';
 import { REFERENCE_YEAR, applyShift, firstColdSpell, frostDates, normalYear, simulatedYear, spliceWeather } from '../src/model/agriculture/climate';
-import { DISTRICT, DISTRICTS, dateLabel, dayOf } from '../src/model/agriculture/region';
+import { DISTRICT, DISTRICTS, dateLabel, dayOf, type Crop, type DistrictId } from '../src/model/agriculture/region';
+import { PLAN_PRICE } from '../src/model/agriculture/economics';
+import {
+  PLAINS_IRRIGATION,
+  YEARS,
+  blightField,
+  cropMix,
+  expectedYieldByPlantDay,
+  fieldSeason,
+  historyYields,
+  marginOverVariable,
+  plantingRun,
+  variableCost,
+  type MixResult,
+} from '../src/engines/agriculture/farm';
+import { allCornSolved, plantingStats } from '../src/lessons/agriculture/ch2/L2_1';
+import { doubledNitrogenSolved, inputCurve } from '../src/lessons/agriculture/ch2/L2_2';
+import { bestScoutingThreshold, outcome, strategyRecord, thresholdSolved } from '../src/lessons/agriculture/ch2/L2_3';
+import { bestStart, harvestSolved, wheatValue } from '../src/lessons/agriculture/ch2/L2_4';
+import { acreBudget, breakevenSolved, farmProfits } from '../src/lessons/agriculture/ch2/L2_5';
 import { ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
 import { lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
 import { ridgeSolved } from '../src/lessons/agriculture/ch1/L1_3';
@@ -216,5 +235,119 @@ describe('the season model stays finite at the extremes', () => {
         }
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 2
+
+describe('chapter 2: planting and land allocation (2.1)', () => {
+  const mean = (a: number[]) => a.reduce((s, x) => s + x, 0) / a.length;
+  it('gives the margins and mixes in the prose', () => {
+    expect(variableCost('corn')).toBe(412);
+    expect(variableCost('wheat')).toBe(201);
+    const margin = (d: DistrictId, crop: Crop) => Math.round(marginOverVariable(crop, mean(historyYields({ district: d, crop })), PLAN_PRICE[crop]));
+    expect(margin('prairie', 'corn')).toBe(357);
+    expect(margin('prairie', 'wheat')).toBe(195);
+    expect(margin('north', 'corn')).toBe(189);
+    expect(margin('north', 'wheat')).toBe(185);
+    expect(margin('plains', 'corn')).toBe(-79);
+    expect(margin('plains', 'wheat')).toBe(134);
+    const perAcre = (r: MixResult) => Math.round(r.mean / 1600);
+    expect(perAcre(cropMix('prairie', 1600, 0.5, PLAN_PRICE))).toBe(276);
+    expect(perAcre(cropMix('prairie', 1600, 1, PLAN_PRICE))).toBe(256);
+    expect(perAcre(cropMix('prairie', 1600, 0.625, PLAN_PRICE))).toBe(271);
+    expect(Math.round(cropMix('prairie', 1600, 0.5, PLAN_PRICE).p10 / 1600)).toBe(190);
+    expect(Math.round(cropMix('prairie', 1600, 1, PLAN_PRICE).p10 / 1600)).toBe(103);
+    const irr = YEARS.map((y) => fieldSeason(y, { district: 'plains', crop: 'corn', irrigation: PLAINS_IRRIGATION }));
+    expect(Math.round(marginOverVariable('corn', mean(irr.map((r) => r.yield)), PLAN_PRICE.corn, mean(irr.map((r) => r.irrigationTotal))))).toBe(208);
+  });
+  it('has a solvable challenge', () => {
+    expect(allCornSolved('prairie', 4.9, 6)).toBe(true);
+    expect(allCornSolved('prairie', 4.8, 6)).toBe(false);
+    expect(allCornSolved('prairie', 5.0, 6)).toBe(false);
+  });
+  it('plants on workable days', () => {
+    const ey = expectedYieldByPlantDay('prairie');
+    expect(Math.round(ey(dayOf(5, 25)) * 10) / 10).toBe(172.5);
+    expect(Math.round(ey(dayOf(6, 14)) * 10) / 10).toBe(148.5);
+    const ref = simulatedYear(REFERENCE_YEAR, 'prairie');
+    expect(dateLabel(plantingRun(ref, dayOf(4, 25), 1000, 180).finished)).toBe('May 10');
+    expect(dateLabel(plantingRun(ref, dayOf(4, 25), 1000, 90).finished)).toBe('May 21');
+    const wet = plantingRun(simulatedYear(3, 'prairie'), dayOf(4, 25), 1000, 90, dayOf(6, 20));
+    expect(wet.finished).toBe(-1);
+    expect(Math.round(1000 - wet.cumulative[wet.cumulative.length - 1])).toBe(280);
+    expect(Math.round(plantingStats(dayOf(4, 25), 90).meanLost)).toBe(676);
+    expect(Math.round(plantingStats(dayOf(4, 25), 270).meanLost)).toBe(212);
+    expect(Math.round(plantingStats(dayOf(4, 25), 90).worstLost)).toBe(13017);
+  });
+});
+
+describe('chapter 2: inputs (2.2)', () => {
+  it('finds the optima in the prose', () => {
+    const n = inputCurve('nitrogen', 4.6, 0.6);
+    expect(n.levels[n.best]).toBe(120);
+    expect(Math.round(n.output[n.best] * 10) / 10).toBe(172);
+    expect(Math.round(n.output[1] - n.output[0])).toBe(14);
+    expect(inputCurve('nitrogen', 3.5, 0.6).levels[inputCurve('nitrogen', 3.5, 0.6).best]).toBe(100);
+    expect(inputCurve('nitrogen', 4.6, 0.3).levels[inputCurve('nitrogen', 4.6, 0.3).best]).toBe(140);
+    const w = inputCurve('water', 4.6, 11);
+    expect(w.levels[w.best]).toBe(12);
+    expect(Math.round(w.output[0] * 10) / 10).toBe(78.6);
+    expect(Math.round(w.output[1] * 10) / 10).toBe(109.1);
+    expect(inputCurve('water', 4.6, 20).levels[inputCurve('water', 4.6, 20).best]).toBe(10);
+    expect(inputCurve('planter', 4.6, 1).best).toBe(0);
+  });
+  it('has a solvable challenge', () => {
+    expect(doubledNitrogenSolved('nitrogen', 5, 4.6, 1.2)).toBe(true);
+    expect(doubledNitrogenSolved('nitrogen', 6, 4.6, 1.2)).toBe(false);
+  });
+});
+
+describe('chapter 2: crop risk (2.3)', () => {
+  const o = { cornOnCorn: false, threshold: 0.02, pressure: 1, price: 4.6, fungicide: 32 };
+  it('gives the blight numbers in the prose', () => {
+    const ref = outcome(REFERENCE_YEAR, 'fungicide', o);
+    expect(Math.round(ref.none * 10) / 10).toBe(175.5);
+    expect(Math.round(ref.yield * 10) / 10).toBe(183.5);
+    expect(Math.round(fieldSeason(REFERENCE_YEAR, blightField('none', { cornOnCorn: true })).yield * 10) / 10).toBe(157.3);
+    expect(Math.round(strategyRecord('fungicide', o).mean * 100) / 100).toBe(0.58);
+    expect(strategyRecord('fungicide', o).pays).toBe(75);
+    expect(Math.round(strategyRecord('resistant', o).mean * 100) / 100).toBe(6.22);
+    expect(Math.round(strategyRecord('scout', o).mean * 100) / 100).toBe(3.2);
+  });
+  it('has a solvable challenge', () => {
+    expect(bestScoutingThreshold()).toBe(0.02);
+    expect(thresholdSolved({ strategy: 'scout', ...o })).toBe(true);
+    expect(thresholdSolved({ strategy: 'scout', ...o, threshold: 0.025 })).toBe(false);
+  });
+});
+
+describe('chapter 2: harvest (2.4)', () => {
+  it('finds the best start and the wheat discounts', () => {
+    const best = bestStart({ perDay: 100, drying: 0.035, price: 4.6 });
+    expect(dateLabel(best.day)).toBe('Oct 17');
+    expect(dateLabel(bestStart({ perDay: 100, drying: 0.02, price: 4.6 }).day)).toBe('Oct 4');
+    expect(dateLabel(bestStart({ perDay: 100, drying: 0.06, price: 4.6 }).day)).toBe('Nov 1');
+    expect(harvestSolved({ start: dayOf(10, 17), perDay: 100, drying: 0.035, price: 4.6 })).toBe(true);
+    expect(harvestSolved({ start: dayOf(9, 16), perDay: 100, drying: 0.035, price: 4.6 })).toBe(false);
+    expect(Math.round(wheatValue(7).sprouted * 1000) / 10).toBe(2.7);
+    expect(Math.round(wheatValue(28).discount * 100)).toBe(46);
+  });
+});
+
+describe('chapter 2: farm economics (2.5)', () => {
+  it('gives the budget numbers in the prose', () => {
+    const b = acreBudget('corn', 4.6, 176, 1, 265);
+    expect(Math.round(b.cost)).toBe(835);
+    expect(Math.round(b.profit)).toBe(-25);
+    expect(Math.round(b.breakevenPrice * 100)).toBe(474);
+    const farm = farmProfits({ corn: 4.6, wheat: 6, yieldMult: 1, fertMult: 1, rent: 265 });
+    expect(Math.round(farm.reduce((s, x) => s + x, 0) / farm.length)).toBe(73649);
+    expect(farm.filter((x) => x < 0).length).toBe(50);
+  });
+  it('has a solvable challenge', () => {
+    expect(breakevenSolved('corn', 4.75, 176, 1, 265)).toBe(true);
+    expect(breakevenSolved('corn', 4.8, 176, 1, 265)).toBe(false);
   });
 });

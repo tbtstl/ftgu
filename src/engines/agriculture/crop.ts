@@ -213,6 +213,8 @@ export interface Irrigation {
   amount: number;
   /** Fewest days between irrigations (the well's capacity). */
   interval: number;
+  /** Most water that may be pumped in the season, inches (a water allocation). */
+  cap?: number;
 }
 
 export interface SeasonOptions {
@@ -234,6 +236,35 @@ export interface SeasonOptions {
   irrigation?: Irrigation | null;
   /** Wheat only: how well the stand established in the fall, 0–1. */
   fallStand?: number;
+  /** A leaf disease that spreads through the canopy in warm, wet weather. */
+  disease?: DiseaseOptions | null;
+}
+
+export interface DiseaseOptions {
+  /** Share of the leaf area diseased when the disease first appears. */
+  inoculum: number;
+  /** Development fraction at which it appears. */
+  onset: number;
+  /** Daily growth rate of the epidemic on a favorable day (logistic). */
+  rate: number;
+  /** How much a resistant hybrid slows the epidemic, 0–1. */
+  resistance?: number;
+  /** Development fraction at which a fungicide is sprayed. */
+  sprayAt?: number;
+  /** Spray only if the diseased share is at least this when sprayAt arrives (scouting). 0 = always spray. */
+  sprayThreshold?: number;
+  /** How much the fungicide slows the epidemic while it lasts, 0–1. */
+  efficacy?: number;
+  /** Days the fungicide protects the leaves. */
+  protectDays?: number;
+}
+
+/** Is today's weather good for leaf disease? Wet or humid, and warm. */
+export function diseaseFavorability(w: DayWeather): number {
+  const tmean = (w.tmax + w.tmin) / 2;
+  const warm = tmean >= 17 && tmean <= 30;
+  const wet = w.rain >= 0.1 || vpd(w) < 0.9;
+  return warm && wet ? 1 : warm ? 0.3 : 0.1;
 }
 
 export interface SeasonDay {
@@ -263,6 +294,8 @@ export interface SeasonDay {
   irrigation: number;
   /** Water draining below the root zone today, inches. */
   drainage: number;
+  /** Share of the leaf area diseased. */
+  disease: number;
   /** Grain dry matter so far, g/m². */
   grain: number;
   alive: boolean;
@@ -309,6 +342,10 @@ export interface SeasonResult {
   stressDays: number;
   /** Water that drained below the root zone, inches. */
   drainageTotal: number;
+  /** Share of the leaf area diseased at the end of the season. */
+  diseaseFinal: number;
+  /** Day a fungicide was sprayed, or −1. */
+  sprayDay: number;
 }
 
 /** Leaf area the crop is programmed to reach at this development fraction (no stress). */
@@ -385,6 +422,10 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
   let drainTotal = 0;
   let coldRun = 0;
   let premature = false;
+  let severity = 0;
+  let diseaseStarted = false;
+  let sprayDecided = false;
+  let sprayDay = -1;
 
   let prevPotLai = potentialLai(crop, 0, laiMax);
 
@@ -399,7 +440,7 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     let irr = 0;
     const ir = opts.irrigation;
     if (ir && alive && dev < 0.97 && depletion >= ir.trigger * taw && d - lastIrr >= ir.interval) {
-      irr = Math.min(ir.amount, depletion);
+      irr = Math.max(0, Math.min(ir.amount, depletion, (ir.cap ?? Infinity) - irrTotal));
       lastIrr = d;
       depletion -= irr;
       ks = waterStress(depletion, taw, P.stressAt);
@@ -408,7 +449,19 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     // Water use: the canopy transpires in proportion to the light it intercepts, held back when
     // the soil runs dry; bare soil between the plants evaporates a little.
     const growing = alive && dev < 1;
-    const intercept = 1 - Math.exp(-EXTINCTION[crop] * lai);
+    // Leaf disease: diseased leaf area catches light but doesn't use it.
+    const dz = opts.disease;
+    if (dz && growing) {
+      if (!diseaseStarted && dev >= dz.onset) {
+        severity = dz.inoculum;
+        diseaseStarted = true;
+      }
+      if (dz.sprayAt !== undefined && !sprayDecided && dev >= dz.sprayAt) {
+        sprayDecided = true;
+        if (severity >= (dz.sprayThreshold ?? 0)) sprayDay = d;
+      }
+    }
+    const intercept = 1 - Math.exp(-EXTINCTION[crop] * lai * (1 - severity));
     const e0 = et0(w, d);
     const transpiration = growing ? e0 * BASAL[crop] * intercept * ks : 0;
     const evaporation = e0 * SOIL_EVAP * (1 - (growing ? intercept : 0)) * (depletion < 0.25 * taw ? 1 : 0.4);
@@ -463,6 +516,13 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
       ksSum += ks;
       ksN++;
       if (ks < 0.8) stressDays++;
+    }
+
+    // The epidemic grows logistically on favorable days, slowed by resistance and by fungicide while it lasts.
+    if (dz && diseaseStarted && growing) {
+      const protectedNow = sprayDay >= 0 && d - sprayDay < (dz.protectDays ?? 21);
+      const r = dz.rate * diseaseFavorability(w) * (1 - (dz.resistance ?? 0)) * (protectedNow ? 1 - (dz.efficacy ?? 0.8) : 1);
+      severity = Math.min(0.95, severity + r * severity * (1 - severity));
     }
 
     // Development.
@@ -523,6 +583,7 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
       irrigation: irr,
       drainage,
       grain: fillSupply,
+      disease: severity,
       alive: alive || (newDev >= 1 && !killed),
     });
     if (!alive && maturityDay >= 0 && d >= maturityDay) break;
@@ -580,6 +641,8 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     irrigationTotal: irrTotal,
     stressDays,
     drainageTotal: drainTotal,
+    diseaseFinal: severity,
+    sprayDay,
   };
 }
 
