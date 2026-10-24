@@ -348,7 +348,7 @@ export default function Lesson() {
         Chapter 5 wrote contracts on the weather, priced them, traded them against a market and tested every idea against history.
       </P>
       <P>
-        Each of those lessons took one piece at a time, in Calder Bay. This chapter puts them together, in a region of your own. In this lesson you build the region;
+        Each of those lessons took one piece at a time, in Calder Bay. This chapter puts them together, in a region of your own. First you build the region;
         in <a href={lessonHref('weather/6.2')}>6.2</a> you forecast its days; in <a href={lessonHref('weather/6.3')}>6.3</a> you turn those forecasts into a
         business’s exposure; in <a href={lessonHref('weather/6.4')}>6.4</a> you price contracts on its weather and choose which to hold; and in{' '}
         <a href={lessonHref('weather/6.5')}>6.5</a> you replay the whole book over the archive’s winters, with every decision made from forecasts issued on their own
