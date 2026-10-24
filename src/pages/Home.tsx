@@ -17,12 +17,12 @@ export function Home() {
     <main className="col page">
       <header>
         <h1 className="name">Ground Up</h1>
-        <p className="dek">Seven courses in how markets work</p>
+        <p className="dek">Understand markets from first principles.</p>
       </header>
 
       <p className="lede">
-        Ground Up teaches how the markets for real-world resources work, starting from the physical systems underneath them. You build an understanding of
-        supply, price and risk on that foundation, through simulations you can change.
+        Learn how real-world markets work by exploring the physical systems behind them. Experiment with interactive simulations, discover how constraints shape
+        prices, and develop trading strategies from the ground up.
       </p>
       <p className="lede-2">
         {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
