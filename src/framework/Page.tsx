@@ -61,7 +61,7 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
   const { prev, next } = neighbors(id);
 
   useEffect(() => {
-    document.title = meta ? `${meta.id} ${meta.title} · FTGU` : 'From The Ground Up';
+    document.title = meta ? `FTGU | ${meta.id} ${meta.title}` : 'From The Ground Up';
     if (meta) markVisited(meta.id);
   }, [meta]);
 
