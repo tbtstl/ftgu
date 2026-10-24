@@ -42,6 +42,9 @@ import { REFERENCE_GAS, energyDay, plantCost } from '../src/engines/weather/ener
 import { capacityFactor, powerCurve } from '../src/engines/weather/renewables';
 import { farmSeason, yieldHistory } from '../src/engines/weather/crops';
 import { regress, utilityWinters, windYear } from '../src/engines/weather/exposure';
+import { contractSpan, indexDistribution, indexValue, monthContract, payoff, probAbove, settledIndex } from '../src/engines/weather/pricing';
+import { MARKET, expectedIndex, replay, tradeStats } from '../src/engines/weather/market';
+import { DRIVER_DEFAULTS, crossMarketIdeas } from '../src/engines/weather/crossMarket';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
@@ -62,6 +65,11 @@ import { COLDEST_WINTER, DAY_DEFAULTS, oilSolved, pipelineSolved } from '../src/
 import { breakevenRainSolved, steadiestSolved as cropSteadiestSolved } from '../src/lessons/weather/ch4/L4_3';
 import { SITE_DEFAULTS, cfSolved, uncertaintySolved } from '../src/lessons/weather/ch4/L4_4';
 import { INDEX_DEFAULTS, RISK_DEFAULTS, bestIndexSolved, variabilitySolved } from '../src/lessons/weather/ch4/L4_5';
+import { BUILDER_DEFAULTS, SETTLE_DEFAULTS, droughtSolved, settlementSolved } from '../src/lessons/weather/ch5/L5_1';
+import { atTheMoneySolved, windowSolved } from '../src/lessons/weather/ch5/L5_2';
+import { EDGE_DEFAULTS, REPLAY_DEFAULTS, gapSolved as edgeGapSolved, vanishSolved } from '../src/lessons/weather/ch5/L5_3';
+import { BOOK_DEFAULTS, LAB_DEFAULTS, bookSolved, pipelineSolved as labPipelineSolved } from '../src/lessons/weather/ch5/L5_4';
+import { BACKTEST_DEFAULTS, ensoGoneSolved, hedgeSolved, lookAheadSolved } from '../src/lessons/weather/ch5/L5_5';
 
 describe('the Calder region', () => {
   it('gives Calder Bay a New York–like year', () => {
@@ -468,6 +476,76 @@ describe('fronts and storms', () => {
     expect(variabilitySolved({ ...RISK_DEFAULTS, variability: 1.45 })).toBe(false);
     expect(bestIndexSolved({ business: 'farm', farmIndex: 'heat' })).toBe(true);
     expect(bestIndexSolved(INDEX_DEFAULTS)).toBe(false);
+  });
+  it('prices, quotes and trades degree-day contracts honestly (chapter 5 engines)', () => {
+    const jan = monthContract('HDD', 0);
+    expect(payoff({ ...jan, strike: 1000 }, 1010)).toBe(200);
+    expect(payoff({ ...jan, type: 'call', strike: 1000 }, 990)).toBe(0);
+    expect(payoff({ ...jan, type: 'put', strike: 1000, cap: 100 }, 900)).toBe(100);
+    // The distribution narrows as the month is settled, and ends at the settlement.
+    const { start, end } = contractSpan(jan, 20);
+    const early = indexDistribution(jan, 20, start - 30, { paths: 300 });
+    const late = indexDistribution(jan, 20, end - 1, { paths: 300 });
+    expect(early.sd).toBeGreaterThan(70);
+    expect(late.sd).toBeLessThan(10);
+    expect(late.mean).toBeCloseTo(settledIndex(jan, 20), -1);
+    // The fast closed form agrees with the simulation's mean.
+    expect(expectedIndex(jan, 20, start - 30)).toBeCloseTo(early.mean, -1.5);
+    // Calibrated across Januaries: the outcome's rank in the distribution is roughly uniform.
+    const ranks: number[] = [];
+    for (let y = 2; y <= 40; y++) {
+      const s = contractSpan(jan, y).start;
+      const dist = indexDistribution(jan, y, s - 6, { paths: 200 });
+      ranks.push(probAbove(dist, settledIndex(jan, y)));
+    }
+    const mean = ranks.reduce((a, b) => a + b, 0) / ranks.length;
+    expect(mean).toBeGreaterThan(0.35);
+    expect(mean).toBeLessThan(0.65);
+    // A forecaster who sees ENSO beats a market that doesn't; when the market sees it too, the edge goes.
+    const years = Array.from({ length: 39 }, (_, i) => i + 2);
+    const edge = tradeStats(replay(jan, years, 60, { threshold: 5, size: 1, view: {} }));
+    const none = tradeStats(replay(jan, years, 60, { threshold: 5, size: 1, view: {} }, { ...MARKET, usesEnso: true }));
+    expect(edge.mean).toBeGreaterThan(0);
+    expect(none.trades).toBeLessThan(edge.trades / 4);
+    // A look-ahead bug flatters the backtest.
+    const honest = tradeStats(replay(jan, years, 0, { threshold: 5, size: 1, view: {} }));
+    const cheat = tradeStats(replay(jan, years, 0, { threshold: 5, size: 1, view: { lookAheadDays: 7 } }));
+    expect(cheat.mean).toBeGreaterThan(honest.mean);
+    // Gas only answers a forecast revision when the pipelines are nearly full.
+    const coldWeek = Array.from({ length: 7 }, () => ({ mean: 18, sd: 5 }));
+    const mildWeek = Array.from({ length: 7 }, () => ({ mean: 34, sd: 5 }));
+    const coldGas = crossMarketIdeas(coldWeek, -6, DRIVER_DEFAULTS)[1];
+    const mildGas = crossMarketIdeas(mildWeek, -6, DRIVER_DEFAULTS)[1];
+    expect(coldGas.edge).toBeGreaterThan(mildGas.edge * 10);
+    const bigPipe = crossMarketIdeas(coldWeek, -6, { ...DRIVER_DEFAULTS, pipeline: 2_000_000 })[1];
+    expect(bigPipe.netPerContract).toBeLessThan(0);
+    // Rain and frost indices settle from the archive.
+    expect(indexValue('rain', 'marlow', [[0, 5], [0, 6], [0, 7]], 10)).toBeGreaterThan(3);
+    expect(indexValue('frost', 'calder', [[0, 0]], 10)).toBeGreaterThan(5);
+  });
+  it('chapter 5 challenges', () => {
+    expect(droughtSolved({ ...BUILDER_DEFAULTS, index: 'rain', station: 'marlow', start: 5, length: 3, type: 'put', strike: 9.5, tickI: 11, capI: 5 })).toBe(true);
+    expect(droughtSolved(BUILDER_DEFAULTS)).toBe(false);
+    expect(settlementSolved({ ...SETTLE_DEFAULTS, fill: 'ridgeAdj' })).toBe(true);
+    expect(settlementSolved(SETTLE_DEFAULTS)).toBe(false);
+    expect(atTheMoneySolved({ year: 20, offset: -60, strike: 1000 })).toBe(true);
+    expect(atTheMoneySolved({ year: 20, offset: -60, strike: 1050 })).toBe(false);
+    expect(windowSolved({ window: 27, detrend: false })).toBe(true);
+    expect(windowSolved({ window: 10, detrend: false })).toBe(false);
+    expect(edgeGapSolved({ ...EDGE_DEFAULTS, year: 24 })).toBe(true);
+    expect(edgeGapSolved(EDGE_DEFAULTS)).toBe(false);
+    expect(vanishSolved({ ...REPLAY_DEFAULTS, lead: 5, ensoF: 0, lag: 0 })).toBe(true);
+    expect(vanishSolved(REPLAY_DEFAULTS)).toBe(false);
+    expect(labPipelineSolved({ ...LAB_DEFAULTS, pipeline: 1.85 })).toBe(true);
+    expect(labPipelineSolved({ ...LAB_DEFAULTS, pipeline: 2.0 })).toBe(false);
+    expect(bookSolved(LAB_DEFAULTS, { hdd: 50, gas: 1, power: 0 })).toBe(true);
+    expect(bookSolved(LAB_DEFAULTS, BOOK_DEFAULTS)).toBe(false);
+    expect(ensoGoneSolved({ ...BACKTEST_DEFAULTS, ensoF: 0.1 })).toBe(true);
+    expect(ensoGoneSolved(BACKTEST_DEFAULTS)).toBe(false);
+    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 0, lookAhead: 2 })).toBe(true);
+    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 0, lookAhead: 1 })).toBe(false);
+    expect(hedgeSolved({ contracts: 2800, variability: 1, ensoF: 1 })).toBe(true);
+    expect(hedgeSolved({ contracts: 2700, variability: 1, ensoF: 1 })).toBe(false);
   });
   it('places the Hadley cell’s edge with the rotation rate', () => {
     expect(circulation(1, 1 / 3).cells.length).toBe(3);
