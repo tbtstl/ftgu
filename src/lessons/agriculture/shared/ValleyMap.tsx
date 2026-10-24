@@ -20,6 +20,8 @@ export interface ValleyMapProps {
   ariaLabel: string;
   /** Extra SVG drawn on top (routes, flows). */
   children?: ReactNode;
+  /** Extra SVG drawn over the districts, river and rail but under the labels and places. */
+  beneath?: ReactNode;
   height?: number;
 }
 
@@ -42,7 +44,7 @@ const PLACE_SHAPE: Record<Place['kind'], string> = {
   port: 'M0 -7 L7 0 L0 7 L-7 0 Z',
 };
 
-export function ValleyMap({ fill, label, selected, onSelect, places = 'all', showRail = true, ariaLabel, children, height = 400 }: ValleyMapProps) {
+export function ValleyMap({ fill, label, selected, onSelect, places = 'all', showRail = true, ariaLabel, children, beneath, height = 400 }: ValleyMapProps) {
   const shown = places === 'all' ? PLACES : places === 'none' ? [] : PLACES.filter((p) => places.includes(p.id));
   const key = (id: DistrictId) => (e: KeyboardEvent<SVGGElement>) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -72,6 +74,7 @@ export function ValleyMap({ fill, label, selected, onSelect, places = 'all', sho
       })}
       <path d={RIVER_PATH} fill="none" stroke={WATER} strokeWidth={6} strokeLinecap="round" />
       {showRail && <path d={RAIL_PATH} fill="none" stroke="#6b6b6b" strokeWidth={2} strokeDasharray="7 4" />}
+      {beneath}
       {DISTRICTS.map((d) => {
         const [lx, ly] = d.label ?? centroid(d.polygon);
         const lines = label ? label(d.id) : [d.name];

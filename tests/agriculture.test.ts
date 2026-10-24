@@ -38,6 +38,17 @@ import { ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L
 import { lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
 import { ridgeSolved } from '../src/lessons/agriculture/ch1/L1_3';
 import { triggerSolved } from '../src/lessons/agriculture/ch1/L1_4';
+import { blend, cornGrade, cornPrice } from '../src/engines/agriculture/grain';
+import { EXPORT_PACE, inventoryYear, simulateBin } from '../src/engines/agriculture/storage';
+import { harvestRush } from '../src/engines/agriculture/elevator';
+import { DEFAULT_NETWORK, districtProduction, networkCapacity, routeCrop, scaleSupply } from '../src/engines/agriculture/logistics';
+import { clearWorld, worldHistory } from '../src/engines/agriculture/world';
+import { valleySeason } from '../src/engines/agriculture/valley';
+import { moistureSolved } from '../src/lessons/agriculture/ch4/L4_1';
+import { wettestSolved } from '../src/lessons/agriculture/ch4/L4_2';
+import { blendGain, blendSolved, spreadSolved } from '../src/lessons/agriculture/ch4/L4_3';
+import { NET0, bargeSolved, fillShare, railSolved, seasons, settingsOf } from '../src/lessons/agriculture/ch4/L4_4';
+import { WORLD0, balanceOf, bufferSolved, dearBigYear, history, valleyAverage } from '../src/lessons/agriculture/ch4/L4_5';
 import { bumperSolved } from '../src/lessons/agriculture/ch1/L1_5';
 
 const P = DISTRICT.prairie;
@@ -432,5 +443,163 @@ describe('chapter 3: Monte Carlo (3.5)', () => {
     expect(percentileSolved(200, 'corn', false, 420)).toBe(true);
     expect(percentileSolved(200, 'corn', false, 410)).toBe(false);
     expect(Math.round(describeSample(endings(46, dayOf(8, 1))).mean)).toBe(321);
+  });
+});
+
+describe('chapter 4: grain quality (4.1)', () => {
+  it('grades and discounts as the prose says', () => {
+    const load = { testWeight: 55, damaged: 2.5, bcfm: 1.5, moisture: 15 };
+    expect(cornGrade(load).grade).toBe(2);
+    expect(moistureSolved({ ...load, moisture: 20.5 })).toBe(true);
+    expect(moistureSolved({ ...load, moisture: 20 })).toBe(false);
+    expect(cornPrice({ ...load, moisture: 20 }, 4.4).netPerBushel).toBeLessThan(4.4);
+  });
+});
+
+describe('chapter 4: storage (4.2)', () => {
+  const fill = dayOf(10, 20);
+  const toJuly = 365 - fill + dayOf(7, 15);
+  it('keeps and spoils corn as the prose says', () => {
+    expect(wettestSolved({ dryTo: 16, aeration: 'off', days: toJuly, where: 'farm' })).toBe(true);
+    expect(wettestSolved({ dryTo: 15.5, aeration: 'off', days: toJuly, where: 'farm' })).toBe(false);
+    const held = simulateBin({ year: REFERENCE_YEAR, district: 'prairie', fillDay: fill, days: toJuly, harvestMoisture: 19, dryTo: 15, aeration: true, price: 4.4, interest: 0.07, perMonth: 0.02 });
+    expect(held.spoiledAt).toBeLessThan(0);
+    expect(Math.round(held.costs.total * 100)).toBe(54);
+    const elevator = simulateBin({ year: REFERENCE_YEAR, district: 'prairie', fillDay: fill, days: toJuly, harvestMoisture: 19, dryTo: 15, aeration: true, price: 4.4, interest: 0.07, perMonth: 0.035 });
+    expect(Math.round(elevator.costs.total * 100)).toBe(67);
+  });
+  it('fills the valley’s storage in a big year', () => {
+    const inv = (harvest: number, pace: keyof typeof EXPORT_PACE) => inventoryYear({ carryIn: 70, harvest, domesticPerMonth: 18, exports: 290, exportPace: EXPORT_PACE[pace], capacity: 450 });
+    const avg = inv(506, 'harvest');
+    expect(Math.round(Math.max(...avg.map((m) => m.stocks)))).toBe(410);
+    expect(Math.round(avg[avg.length - 1].stocks)).toBe(70);
+    const big = inv(600, 'harvest');
+    expect(Math.round(Math.max(...big.map((m) => m.overflow)))).toBe(49);
+  });
+});
+
+describe('chapter 4: the elevator (4.3)', () => {
+  it('blends and rations as the prose says', () => {
+    expect(blendSolved(42)).toBe(true);
+    expect(blendSolved(43)).toBe(false);
+    expect(Math.round(blendGain(0.2))).toBe(12000);
+    expect(Math.round(blendGain(0.3))).toBe(18000);
+    expect(Math.round(blendGain(0.43))).toBe(-14280);
+    const base = { harvest: 12e6, spread: 0.35, capacity: 3e6, trainsPerWeek: 1, localPerDay: 30000, days: 50 };
+    const r = harvestRush(base);
+    expect(r.turnedAway).toBe(0);
+    expect(Math.round(Math.max(...r.stocks) / 1e5) / 10).toBe(2.8);
+    expect(Math.round(r.margin / 1e4) / 100).toBe(1.62);
+    const big = harvestRush({ ...base, harvest: 15.6e6 });
+    expect(Math.round(big.turnedAway / 1e4) / 100).toBe(1.45);
+    expect(big.daysFull).toBe(13);
+    expect(harvestRush({ ...base, harvest: 15.6e6, trainsPerWeek: 2 }).turnedAway).toBe(0);
+    expect(spreadSolved({ harvestMult: 1.3, spreadCents: 42, capacity: 3e6, trains: 1 })).toBe(true);
+    expect(spreadSolved({ harvestMult: 1.3, spreadCents: 43, capacity: 3e6, trains: 1 })).toBe(false);
+    expect(blend([{ bushels: 1, sample: { testWeight: 56, damaged: 2, bcfm: 1, moisture: 15 } }]).testWeight).toBe(56);
+  });
+});
+
+describe('chapter 4: logistics (4.4)', () => {
+  const lv = (st = NET0) => routeCrop(settingsOf(st))!;
+  it('routes the average crop as the prose says', () => {
+    expect(Math.round(Object.values(seasons().supply).reduce((a, b) => a + b, 0))).toBe(506);
+    const r = lv();
+    expect(Math.round(r.exports.sable)).toBe(180);
+    expect(Math.round(r.exports.westhaven)).toBe(110);
+    expect(r.stored).toBeLessThan(0.01);
+    expect(r.locationValue.prairie).toBeCloseTo(4.65, 6);
+    expect(r.locationValue.bottoms).toBeCloseTo(4.65, 6);
+    expect(r.locationValue.fairview).toBeCloseTo(4.75, 6);
+    expect(r.riverValue).toBeCloseTo(0.42, 6);
+    expect(DEFAULT_NETWORK.sable - DEFAULT_NETWORK.barge).toBeCloseTo(5.15, 9);
+    expect(bargeSolved({ ...NET0, barge: 87 })).toBe(true);
+    expect(bargeSolved({ ...NET0, barge: 86 })).toBe(false);
+    expect(bargeSolved({ ...NET0, barge: 88 })).toBe(false);
+  });
+  it('fills in a big year or at low water', () => {
+    const big = lv({ ...NET0, harvest: 120 });
+    expect(Math.round(big.stored)).toBe(42);
+    expect(big.locationValue.prairie).toBeCloseTo(4.02, 6);
+    for (const o of ['north', 'plains', 'prairie', 'ridge', 'bottoms'] as const) expect(lv().locationValue[o] - big.locationValue[o]).toBeCloseTo(0.63, 6);
+    const low = lv({ ...NET0, river: 120 });
+    expect(low.stored).toBeGreaterThan(0.1);
+    expect(low.stored).toBeLessThan(1);
+    for (const o of ['north', 'plains', 'prairie', 'ridge', 'bottoms'] as const) expect(lv().locationValue[o] - low.locationValue[o]).toBeGreaterThanOrEqual(0.63 - 1e-6);
+    expect(lv({ ...NET0, river: 130 }).stored).toBeLessThan(0.01);
+  });
+  it('fills as often as the prose says', () => {
+    expect(networkCapacity(DEFAULT_NETWORK)).toBe(566);
+    expect(Math.round(fillShare({ rail: 170, river: 180, ethanol: 96 }) * 400)).toBe(74);
+    expect(railSolved({ rail: 190, river: 180, ethanol: 96 })).toBe(true);
+    expect(railSolved({ rail: 180, river: 180, ethanol: 96 })).toBe(false);
+    expect(railSolved({ rail: 200, river: 180, ethanol: 96 })).toBe(false);
+    expect(fillShare({ rail: 190, river: 180, ethanol: 96 }) * 2).toBeCloseTo(fillShare({ rail: 170, river: 180, ethanol: 96 }), 9);
+    // The capacity rule matches the linear program season by season.
+    const s0 = seasons();
+    void s0;
+    for (const y of [1, 46, 100, 250]) {
+      const supply = districtProduction(valleySeason(y), DISTRICTS);
+      const total = Object.values(supply).reduce((a, b) => a + b, 0);
+      const r = routeCrop({ ...DEFAULT_NETWORK, supply })!;
+      expect(r.stored > 1e-6).toBe(total > networkCapacity(DEFAULT_NETWORK));
+    }
+    // A Black Prairie bushel in the smallest harvests, and along the middle.
+    const small = routeCrop({ ...DEFAULT_NETWORK, supply: scaleSupply(s0.supply, 0.6) })!;
+    expect(small.locationValue.prairie).toBeCloseTo(5.15, 6);
+  });
+});
+
+describe('chapter 4: the world balance (4.5)', () => {
+  it('clears the world as the prose says', () => {
+    const base = balanceOf(WORLD0);
+    expect(base.price).toBeCloseTo(5.6, 6);
+    expect(Math.round(base.price * 39.368)).toBe(220);
+    expect(Math.round(base.production)).toBe(1230);
+    expect(Math.round(base.trade)).toBe(171);
+    expect(Math.round(base.stocksToUse * 100)).toBe(11);
+    const drought = balanceOf({ ...WORLD0, us: -20 });
+    expect(Math.round(drought.price * 100) / 100).toBe(7.77);
+    expect(Math.round((drought.price / 5.6 - 1) * 100)).toBe(39);
+    expect(Math.round(485 - drought.regions[4].use)).toBe(31);
+    expect(Math.round(drought.carryIn - drought.carryOut)).toBe(23);
+    expect(Math.round(balanceOf({ ...WORLD0, us: -10 }).price * 100) / 100).toBe(6.55);
+    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 125 })).toBe(true);
+    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 120 })).toBe(false);
+    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 130 })).toBe(false);
+    const noExports = clearWorld({ crop: { blackSea: -0.65 } });
+    expect(Math.abs(noExports.regions[2].net)).toBeLessThan(1);
+    expect(Math.round(noExports.price * 100) / 100).toBe(6.37);
+  });
+  it('simulates a history like the one the prose describes', () => {
+    const h = history();
+    expect(h).toHaveLength(60);
+    expect(dearBigYear()).toBe(7);
+    expect(Math.round(h[6].valleyCorn)).toBe(551);
+    expect(Math.round(valleyAverage())).toBe(500);
+    const worst = h.reduce((a, b) => (b.valleyCorn < a.valleyCorn ? b : a));
+    expect(worst.year).toBe(46);
+    expect(Math.round(worst.valleyCorn)).toBe(269);
+    expect(Math.round(worst.crop.us * 100)).toBe(-24);
+    expect(Math.round(worst.price * 100) / 100).toBe(9.94);
+    const long = worldHistory(400);
+    const corr = (a: number[], b: number[]) => {
+      const m = (x: number[]) => x.reduce((t, v) => t + v, 0) / x.length;
+      const ma = m(a);
+      const mb = m(b);
+      let c = 0;
+      let va = 0;
+      let vb = 0;
+      a.forEach((v, i) => {
+        c += (v - ma) * (b[i] - mb);
+        va += (v - ma) ** 2;
+        vb += (b[i] - mb) ** 2;
+      });
+      return c / Math.sqrt(va * vb);
+    };
+    const r = corr(long.map((y) => y.valleyCorn), long.map((y) => y.price));
+    expect(Math.round(r * 100)).toBe(-63);
+    expect(Math.round(r * r * 5)).toBe(2);
+    expect(corr(long.slice(1).map((y) => y.price), long.slice(0, -1).map((y) => y.price))).toBeGreaterThan(0.2);
   });
 });
