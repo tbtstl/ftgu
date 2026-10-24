@@ -39,6 +39,31 @@ import { NORTHFIELD_PI, TIME_STEP, fieldDefaults, halfwaySolved, heavyOilSolved,
 import { cheapestSolved, cheapestYearOneWell, contactArea, fewestStagesSolved as fewestFracStagesSolved, firstMonthRate } from '../src/lessons/oil/ch2/L2_3';
 import { BEST_FIT, DATA, TRUE_EUR30, fitError, fitSolved, floodTimingSolved } from '../src/lessons/oil/ch2/L2_4';
 import { allProjectsSolved, breakevenSolved, volumeCleared } from '../src/lessons/oil/ch2/L2_5';
+import {
+  BLEND_STREAMS,
+  SUMMER,
+  ULSD_LIMIT,
+  WINTER,
+  atmosphericEquivalent,
+  blendProps,
+  carbonRejected,
+  distill,
+  fccMargin,
+  fccYields,
+  hdsSulfurOut,
+  hydrogenToUpgrade,
+  meetsSpec,
+  optimizeBlend,
+  pressureForCut,
+  rangeProps,
+} from '../src/engines/oil/refining';
+import { crudeBreakeven, marginPerBarrel, planRefinery, shadowPrices } from '../src/engines/oil/refinery';
+import { CALDER } from '../src/model/oil/refinery';
+import { TOWER_DEFAULTS, jetRate, maxJetSolved, pressureOf, vacuumSolved } from '../src/lessons/oil/ch3/L3_1';
+import { DEFAULT_PRICES as FCC_DEFAULTS, bestTempSolved, bestTemperature, hydrogenLimitSolved, marginAt } from '../src/lessons/oil/ch3/L3_2';
+import { CHEAPEST_15, DHT_M3_PER_HOUR, feedOf, getSlates, hydrogenPlantSolved, productPpm, throughputSolved, treatingCost } from '../src/lessons/oil/ch3/L3_3';
+import { butaneAt, butaneFiveSolved, handBlendSolved, optimumCost } from '../src/lessons/oil/ch3/L3_4';
+import { bestExpansionSolved, coldwaterLimitSolved, expansionGain } from '../src/lessons/oil/ch3/L3_5';
 
 const finite = (x: number) => Number.isFinite(x);
 
@@ -473,5 +498,188 @@ describe('chapter 2 lessons', () => {
     expect(allProjectsSolved('full', 78.5)).toBe(true);
     expect(allProjectsSolved('full', 78)).toBe(false);
     expect(allProjectsSolved('half', 78.5)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 3 engines.
+
+describe('refining processes', () => {
+  it('distills with movable cut points and closes the balance', () => {
+    for (const id of ['ridgeback', 'seaboard', 'northfield', 'coldwater'] as const) {
+      const c = crude(id);
+      const d = distill(c);
+      expect(Object.values(d).reduce((s, r) => s + r.volume, 0)).toBeCloseTo(1, 9);
+      const mass = Object.values(d).reduce((s, r) => s + r.volume * r.sg, 0);
+      expect(mass).toBeCloseTo(c.sg, 9);
+      expect(Object.values(d).reduce((s, r) => s + r.volume * r.sg * r.sulfur, 0) / mass).toBeCloseTo(c.sulfur, 9);
+    }
+    // A wider kerosene cut takes from its neighbors.
+    expect(rangeProps(crude('ridgeback'), 150, 280).volume).toBeCloseTo(0.2443, 4);
+  });
+  it('converts vacuum conditions to atmospheric-equivalent cut points', () => {
+    expect(atmosphericEquivalent(400, 760)).toBeCloseTo(400, 9);
+    expect(atmosphericEquivalent(400, 25)).toBeCloseTo(582.4, 1);
+    expect(atmosphericEquivalent(400, pressureForCut(400, 550))).toBeCloseTo(550, 6);
+    expect(pressureForCut(400, 550)).toBeCloseTo(45.9, 1);
+  });
+  it('cracks with a volume gain and a gasoline peak', () => {
+    const y = fccYields(0.75);
+    expect(y.gasoline + y.lpg + y.lco + y.slurry).toBeCloseTo(1.09, 2);
+    expect(fccYields(0.75).gasoline).toBeGreaterThan(fccYields(0.85).gasoline);
+    const p = { gasoline: 96, lpg: 36, lco: 88, slurry: 55, feed: 78 };
+    let best = 0;
+    let bestM = -Infinity;
+    for (let i = 0; i <= 30; i++) {
+      const X = 0.55 + i / 100;
+      if (fccMargin(X, p) > bestM) {
+        bestM = fccMargin(X, p);
+        best = X;
+      }
+    }
+    expect(best).toBeCloseTo(0.66, 2);
+    expect(carbonRejected(1.6)).toBeCloseTo(0.214, 3);
+    expect(Math.round(hydrogenToUpgrade(1.6, 0.93))).toBe(1361);
+  });
+  it('hydrotreats diesel to 15 ppm', () => {
+    const feed = { sulfur: distill(crude('northfield')).diesel.sulfur, hardShare: 0.15, baseHydrogen: 150 };
+    expect(hdsSulfurOut(feed, 370, 1.5)).toBeLessThanOrEqual(ULSD_LIMIT);
+    expect(hdsSulfurOut(feed, 370, 1.55)).toBeGreaterThan(ULSD_LIMIT);
+    expect(hdsSulfurOut(feed, 350, 1)).toBeGreaterThan(hdsSulfurOut(feed, 370, 1));
+  });
+  it('blends summer and winter gasoline to spec', () => {
+    const s = optimizeBlend(SUMMER, 60)!;
+    const w = optimizeBlend(WINTER, 60)!;
+    expect(meetsSpec(blendProps(s), SUMMER)).toBe(true);
+    expect(meetsSpec(blendProps(w), WINTER)).toBe(true);
+    expect(blendProps(s).costPerBbl).toBeCloseTo(43.04, 2);
+    expect(blendProps(w).costPerBbl).toBeCloseTo(38.99, 2);
+    expect(w.butane).toBeGreaterThan(s.butane);
+    expect(BLEND_STREAMS.find((b) => b.id === 'fccGasoline')!.available).toBe(28);
+  });
+});
+
+describe('refinery LP', () => {
+  it('plans the reference day', () => {
+    const p = planRefinery();
+    expect(p.status).toBe('optimal');
+    expect(p.crude.ridgeback).toBeCloseTo(58.0, 1);
+    expect(p.crude.coldwater).toBeCloseTo(92.0, 1);
+    expect(p.crude.northfield).toBeCloseTo(0, 6);
+    expect(p.crude.seaboard).toBeCloseTo(0, 6);
+    expect(p.unitFeed.cdu).toBeCloseTo(CALDER.capacity.cdu, 6);
+    expect(p.unitFeed.coker).toBeCloseTo(CALDER.capacity.coker, 6);
+    expect(p.unitFeed.dht).toBeCloseTo(CALDER.capacity.dht, 6);
+    expect(marginPerBarrel(p)).toBeCloseTo(17.09, 2);
+    expect(p.fuelOilSulfur).toBeLessThanOrEqual(3.5 + 1e-6);
+    expect(p.hydrogen.used).toBeLessThanOrEqual(p.hydrogen.reformer + p.hydrogen.plant + 1e-6);
+    const sp = shadowPrices();
+    expect(sp.fcc).toBeCloseTo(0, 3);
+    expect(sp.dht).toBeGreaterThan(sp.coker);
+  });
+  it('values crudes', () => {
+    expect(crudeBreakeven('coldwater')).toBeCloseTo(68.7, 1);
+    expect(crudeBreakeven('northfield')).toBeCloseTo(69.77, 1);
+    for (const id of ['ridgeback', 'seaboard', 'northfield', 'coldwater'] as const) {
+      const only = planRefinery({ crudeAvailable: { ridgeback: 0, seaboard: 0, northfield: 0, coldwater: 0, [id]: 150 } });
+      expect(only.status).toBe('optimal');
+      expect(only.crude[id]).toBeCloseTo(150, 6);
+    }
+  });
+});
+
+describe('chapter 3 lessons', () => {
+  it('3.1: distillation tower and vacuum', () => {
+    expect(maxJetSolved(TOWER_DEFAULTS)).toBe(false);
+    expect(maxJetSolved({ crude: 'ridgeback', nk: 150, kd: 280, dg: 350 })).toBe(true);
+    expect(maxJetSolved({ crude: 'ridgeback', nk: 150, kd: 280, dg: 365 })).toBe(false);
+    expect(maxJetSolved({ crude: 'seaboard', nk: 150, kd: 280, dg: 350 })).toBe(false);
+    expect(jetRate(TOWER_DEFAULTS)).toBeCloseTo(24.0, 1);
+    expect(jetRate({ crude: 'ridgeback', nk: 150, kd: 280, dg: 350 })).toBeCloseTo(36.64, 2);
+    expect(vacuumSolved(380, 2.9)).toBe(false);
+    expect(vacuumSolved(400, 1.66)).toBe(true);
+    expect(vacuumSolved(400, 1.65)).toBe(false);
+    expect(vacuumSolved(400, 1.67)).toBe(false);
+    expect(pressureOf(2.9)).toBe(760);
+    expect(1 - cumulativeYield(crude('coldwater'), 350)).toBeCloseTo(0.63, 3);
+    expect(1 - cumulativeYield(crude('coldwater'), atmosphericEquivalent(400, 25))).toBeCloseTo(0.305, 3);
+  });
+  it('3.2: cracking and hydrogen', () => {
+    expect(bestTemperature('ridgeback')).toBe(506);
+    expect(bestTemperature('northfield')).toBe(516);
+    expect(bestTemperature('coldwater')).toBe(521);
+    expect(marginAt('northfield', 516)).toBeCloseTo(7.9, 2);
+    expect(bestTempSolved('northfield', 530, 96, 88)).toBe(false);
+    expect(bestTempSolved('northfield', 516, 96, 88)).toBe(true);
+    expect(bestTempSolved('northfield', 516, 100, 88)).toBe(false);
+    expect(bestTemperature('ridgeback', { ...FCC_DEFAULTS, lco: 100 })).toBe(503);
+    expect(bestTemperature('ridgeback', { ...FCC_DEFAULTS, lco: 70 })).toBe(512);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.58)).toBe(true);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.57)).toBe(false);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.59)).toBe(false);
+    expect(hydrogenLimitSolved('reject', 'gasOil', 1.58)).toBe(false);
+    expect(Math.round(hydrogenToUpgrade(1.5, 1.0))).toBe(1965);
+    expect(carbonRejected(1.5)).toBeCloseTo(0.286, 3);
+  });
+  it('3.3: hydrotreating and the hydrogen balance', () => {
+    expect(throughputSolved('northfield', 350, 1)).toBe(false);
+    expect(throughputSolved('northfield', 370, 1.5)).toBe(true);
+    expect(throughputSolved('northfield', 370, 1.45)).toBe(false);
+    expect(throughputSolved('coldwater', 370, 1.4)).toBe(false);
+    expect(productPpm('northfield', 350, 1)).toBeCloseTo(52.08, 1);
+    expect(productPpm('northfield', 370, 1.5)).toBeCloseTo(14.27, 1);
+    expect(Math.round(DHT_M3_PER_HOUR / 0.7)).toBe(520);
+    expect(Math.round(treatingCost('northfield', 350, 0.7).scf)).toBe(274);
+    expect(CHEAPEST_15.min).toBeCloseTo(1.35, 2);
+    expect(CHEAPEST_15.max).toBeCloseTo(1.43, 2);
+    expect(feedOf('coldwater').sulfur).toBeCloseTo(1.666, 3);
+    const s = getSlates();
+    expect(s.length).toBe(21);
+    expect(hydrogenPlantSolved(20)).toBe(false);
+    expect(hydrogenPlantSolved(85)).toBe(false);
+    expect(hydrogenPlantSolved(90)).toBe(true);
+    expect(hydrogenPlantSolved(95)).toBe(false);
+    expect(s[7].plan.unitFeed.dht).toBeLessThan(55 - 0.5);
+    expect(s[8].plan.unitFeed.dht).toBeCloseTo(55, 6);
+    expect(s[10].plan.fuelOilSulfur).toBeLessThan(3.5 - 0.01);
+    expect(s[11].plan.fuelOilSulfur).toBeCloseTo(3.5, 4);
+    expect(s.reduce((a, x) => (x.marginPerBbl > a.marginPerBbl ? x : a)).share).toBe(80);
+    expect(s[20].plan.sulfurPlant).toBeCloseTo(153.9, 1);
+  });
+  it('3.4: blending', () => {
+    const def = { butane: 6, lightNaphtha: 10, reformate: 16, fccGasoline: 28, alkylate: 0 };
+    expect(handBlendSolved(def, false)).toBe(false);
+    const opt = optimizeBlend(SUMMER, 60)!;
+    expect(handBlendSolved(opt, true)).toBe(false);
+    expect(handBlendSolved({ butane: 2.8, lightNaphtha: 6.5, reformate: 22.7, fccGasoline: 28, alkylate: 0 }, false)).toBe(true);
+    expect(handBlendSolved({ butane: 2.8, lightNaphtha: 6.5, reformate: 22.7, fccGasoline: 27.9, alkylate: 0.1 }, false)).toBe(false);
+    expect(blendProps(def).aki).toBeCloseTo(85.55, 2);
+    expect(blendProps(def).rvp).toBeCloseTo(12.57, 2);
+    expect(butaneFiveSolved(9, 60)).toBe(false);
+    expect(butaneFiveSolved(11.2, 60)).toBe(true);
+    expect(butaneFiveSolved(11.3, 60)).toBe(false);
+    expect(butaneAt(11.1)).toBeLessThan(5);
+    expect(optimumCost(60) - optimumCost(60, WINTER)).toBeCloseTo(4.05, 2);
+    expect(optimumCost(60, { ...SUMMER, rvp: 8.5 }) - optimumCost(60, { ...SUMMER, rvp: 9.5 })).toBeCloseTo(0.85, 2);
+    expect(optimizeBlend(SUMMER, 50)).toBeNull();
+    expect(optimizeBlend(SUMMER, 53)).not.toBeNull();
+  });
+  it('3.5: the refinery LP', () => {
+    const base = { gasoline: 96, diesel: 106, coldwater: 62, northfield: 72 };
+    expect(coldwaterLimitSolved(base)).toBe(false);
+    expect(coldwaterLimitSolved({ ...base, coldwater: 68.5 })).toBe(true);
+    expect(coldwaterLimitSolved({ ...base, coldwater: 68 })).toBe(false);
+    expect(planRefinery({ crudePrice: { coldwater: 67.5 } }).crude.coldwater).toBeCloseTo(84.4, 1);
+    expect(planRefinery({ crudePrice: { coldwater: 68.5 } }).crude.northfield).toBeGreaterThan(100);
+    expect(bestExpansionSolved('none', 10)).toBe(false);
+    expect(bestExpansionSolved('coker', 10)).toBe(true);
+    expect(bestExpansionSolved('cdu', 10)).toBe(false);
+    expect(expansionGain('coker', 10) / 1000).toBeCloseTo(112.5, 0);
+    expect(expansionGain('cdu', 10) / 1000).toBeCloseTo(84.7, 0);
+    expect(expansionGain('fcc', 10)).toBeCloseTo(0, 0);
+    const cfg = (c: number) => ({ ...CALDER, capacity: { ...CALDER.capacity, coker: c } });
+    expect(shadowPrices({ config: cfg(37) }).coker).toBeGreaterThan(1000);
+    expect(shadowPrices({ config: cfg(38) }).coker).toBeCloseTo(0, 0);
+    expect(crudeBreakeven('coldwater', { config: cfg(0) })).toBeCloseTo(62.54, 1);
   });
 });
