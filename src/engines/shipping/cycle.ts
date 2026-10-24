@@ -132,8 +132,18 @@ export function shipValue(id: ClassId, age: number, expected: number, longRun: n
   return Math.max(classScrapValue(id), v + classScrapValue(id) / (1 + RATE) ** years);
 }
 
-/** The earnings at which a new ship is worth exactly its baseline newbuilding price. */
+const REPLACEMENT = new Map<ClassId, number>();
+
+/** The earnings at which a new ship is worth exactly its baseline newbuilding price (memoized). */
 export function replacementEarnings(id: ClassId): number {
+  const hit = REPLACEMENT.get(id);
+  if (hit !== undefined) return hit;
+  const v = solveReplacement(id);
+  REPLACEMENT.set(id, v);
+  return v;
+}
+
+function solveReplacement(id: ClassId): number {
   const nb = NEWBUILD_PRICE[MARKET_CLASSES[id].vessel.id] * 1e6;
   let lo = 0;
   let hi = 200_000;

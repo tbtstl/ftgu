@@ -38,6 +38,15 @@ import { fewestBerthsSolved, CV, CHALLENGE as CHALLENGE32, serviceDays } from '.
 import { CUT_SLOTS, DETOUR_DAYS, canalState, extraShips, slotCutSolved, tradeStatus } from '../src/lessons/shipping/ch3/L3_3';
 import { cheapestSolved as cheapestSolved34, cheapestPlan, planCost, START_PLAN, ballasters, SHIPS as SHIPS34, type Plan } from '../src/lessons/shipping/ch3/L3_4';
 import { BASE_MT, QIN_TONNES, capeNeeds, sourcingSolved } from '../src/lessons/shipping/ch3/L3_5';
+import { clearMarket, reservation } from '../src/engines/shipping/clearing';
+import { equivalentFreight, equivalentHire, timeCharter, voyageCharter, PLANNED, sampleOutcomes } from '../src/engines/shipping/charter';
+import { TC_ROUTES, dailyPath, monthAverage, panelAssessment, routeTce, weightedIndex } from '../src/engines/shipping/indices';
+import { dailyIndex, ffaSettlement, forwardPrice, markToMarket } from '../src/engines/shipping/ffa';
+import { qingdaoSolved, marketAt, BIDS, SHIPS as SHIPS41 } from '../src/lessons/shipping/ch4/L4_1';
+import { CHALLENGE_FREIGHT, CHALLENGE_OUTCOME, START_FREIGHT, VOYAGE, averageMatchFreight, matchSolved, riskRuns, DEFAULT_SPREAD } from '../src/lessons/shipping/ch4/L4_2';
+import { balancedSolved, truthOnDay, START_DAY, KFH, MISS, PAIR, K_FREIGHT, type BuilderState } from '../src/lessons/shipping/ch4/L4_3';
+import { BASE as BASE44, START as START44, runCycle, swingHalvedSolved, eventEffect } from '../src/lessons/shipping/ch4/L4_4';
+import { collapseSolved, ffaTrade, fastForward, hedgeStrip, missSpread, LAST_TRADE_DAY, COLLAPSE_MONTH } from '../src/lessons/shipping/ch4/L4_5';
 import { floating, freshLoadSolved, surveyResult } from '../src/lessons/shipping/ch1/L1_1';
 import { CLEAN_14_KW, drag, foulingSolved, shipWavelength } from '../src/lessons/shipping/ch1/L1_2';
 import { twelveDaySolved, voyageAt, PASSAGE_NM } from '../src/lessons/shipping/ch1/L1_3';
@@ -741,5 +750,174 @@ describe('lesson 3.5', () => {
     expect(sourcingSolved({ ...BASE_MT, 'C-PHE-QIN': 530, 'C-TUB-QIN': 320, 'C-TUB-ROT': 45 })).toBe(false);
     expect(sourcingSolved({ ...BASE_MT, 'C-TUB-QIN': 340 })).toBe(false);
     expect(capeNeeds({ ...BASE_MT, 'C-PHE-QIN': 890, 'C-TUB-QIN': 0, 'C-NEW-QIN': 0 }).ships).toBeLessThan(capeNeeds({ ...BASE_MT, 'C-PHE-QIN': 0, 'C-TUB-QIN': 890, 'C-NEW-QIN': 0 }).ships / 2);
+  });
+});
+
+describe('spot clearing, charters, indices and FFAs (engines)', () => {
+  const lane = { vessel: ALBATROSS, load: 'TUB', discharge: 'QIN', cargo: 170_000, portDays: 6, portCosts: 250_000, ladenSpeed: 11, ballastSpeed: 12, bunker: 600 };
+
+  it('ranks ships by distance and clears at the marginal ship', () => {
+    const near = reservation({ id: 'a', name: 'A', at: 'TUB', openIn: 0 }, lane, 15_000);
+    const far = reservation({ id: 'b', name: 'B', at: 'QIN', openIn: 0 }, lane, 15_000);
+    expect(near.reservation).toBeLessThan(far.reservation);
+    const c = clearMarket([near, far], [{ id: 'x', bid: 30 }]);
+    expect(c.fixtures).toHaveLength(1);
+    expect(c.fixtures[0].ship.ship.id).toBe('a');
+    expect(c.rate).toBeGreaterThanOrEqual(near.reservation);
+    expect(c.rate).toBeLessThanOrEqual(30);
+  });
+
+  it('makes voyage and time charters equivalent as planned', () => {
+    const v = { vessel: KESTREL, ladenNm: 11_339, cargo: 75_000, speed: 12, laytime: 8, portCosts: 150_000, canalCost: 0, bunker: 600, demurrage: 15_000 };
+    const f = equivalentFreight(v, 15_000);
+    expect(equivalentHire(v, f)).toBeCloseTo(15_000, 3);
+    const vc = voyageCharter(v, f, PLANNED(v));
+    const tc = timeCharter(v, 15_000, PLANNED(v));
+    expect(vc.owner.net).toBeCloseTo(tc.owner.net, 3);
+    // Dearer bunkers hurt the voyage-charter owner and the time charterer.
+    const dear = { ...PLANNED(v), bunker: 800 };
+    expect(voyageCharter(v, f, dear).owner.net).toBeLessThan(vc.owner.net);
+    expect(timeCharter(v, 15_000, dear).owner.net).toBeCloseTo(tc.owner.net, 6);
+    expect(sampleOutcomes(v, { bunkerSd: 0.1, weatherMean: 1, delayMean: 1, breakdownChance: 0.1, breakdownDays: 2 }, 50, 1)).toHaveLength(50);
+  });
+
+  it('prices fronthaul above and backhaul below the market', () => {
+    const m = standardHistory().cls.kmax[30];
+    const [ta, fh, , bh] = TC_ROUTES.kmax.map((r) => routeTce(m, r));
+    expect(ta).toBeCloseTo(m.tce, 6);
+    expect(fh).toBeGreaterThan(m.tce);
+    expect(bh).toBeLessThan(m.tce);
+    expect(weightedIndex([1, 3], [1, 1])).toBe(2);
+    const p = panelAssessment(10_000, { panelists: 5, error: 0, trim: true, seed: 1 }, 3);
+    expect(p.published).toBeCloseTo(10_000, 6);
+    expect(dailyPath('kmax').tce).toHaveLength(144 * 21);
+  });
+
+  it('settles FFAs on the month’s average and marks them to the forward curve', () => {
+    const idx = dailyIndex('kmax');
+    expect(ffaSettlement('buy', 10_000, 30, 12_000)).toBe(60_000);
+    expect(ffaSettlement('sell', 10_000, 30, 12_000)).toBe(-60_000);
+    const day = 30 * 21;
+    const month = 33;
+    const price = forwardPrice('kmax', idx, day, month);
+    const mtm = markToMarket('kmax', idx, day, month, 'sell', price, 30);
+    expect(mtm[0].value).toBeCloseTo(0, 6);
+    expect(mtm[mtm.length - 1].forward).toBeCloseTo(monthAverage(idx, month), 6);
+    // Past months price at their settlement.
+    expect(forwardPrice('kmax', idx, 40 * 21, 33)).toBeCloseTo(monthAverage(idx, 33), 6);
+  });
+});
+
+describe('lesson 4.1', () => {
+  it('needs nine cargoes before a ship from Qingdao is fixed, at $17.80 a tonne', () => {
+    expect(qingdaoSolved(9, 15_000, 600)).toBe(true);
+    expect(qingdaoSolved(8, 15_000, 600)).toBe(false);
+    expect(qingdaoSolved(10, 15_000, 600)).toBe(false);
+    expect(qingdaoSolved(9, 15_000, 900)).toBe(false);
+    expect(marketAt(9, 15_000, 600).rate).toBeCloseTo(17.8, 1);
+    expect(marketAt(6, 15_000, 600).rate).toBeCloseTo(13.78, 2);
+    expect(marketAt(7, 15_000, 600).fixtures.at(-1)!.ship.ship.at).toBe('SIN');
+    expect(BIDS).toHaveLength(10);
+    expect(SHIPS41).toHaveLength(11);
+  });
+});
+
+describe('lesson 4.2', () => {
+  const s = { contract: 'voyage' as const, freight: 22.85, hire: 15_000, bunker: 800, weather: 3, delay: 0, offHire: 0 };
+  it('matches the time charter after dear bunkers and weather only at $22.85 a tonne', () => {
+    expect(START_FREIGHT).toBeCloseTo(19.03, 2);
+    expect(CHALLENGE_FREIGHT).toBeCloseTo(22.85, 2);
+    expect(matchSolved(s)).toBe(true);
+    expect(matchSolved({ ...s, freight: 22.84 })).toBe(false);
+    expect(matchSolved({ ...s, freight: 22.86 })).toBe(false);
+    expect(matchSolved({ ...s, bunker: 790 })).toBe(false);
+    expect(matchSolved({ ...s, hire: 15_250 })).toBe(false);
+    expect(voyageCharter(VOYAGE, 22.85, CHALLENGE_OUTCOME).owner.net).toBeGreaterThanOrEqual(timeCharter(VOYAGE, 15_000, CHALLENGE_OUTCOME).owner.net);
+    expect(voyageCharter(VOYAGE, 22.84, CHALLENGE_OUTCOME).owner.net).toBeLessThan(timeCharter(VOYAGE, 15_000, CHALLENGE_OUTCOME).owner.net);
+  });
+
+  it('gives the owner a steady income on time charter and a spread one on voyage charter', () => {
+    const r = riskRuns(DEFAULT_SPREAD, START_FREIGHT);
+    const spread = (a: number[]) => a[475] - a[24];
+    expect(spread(r.ownerVc)).toBeGreaterThan(10 * spread(r.ownerTc));
+    expect(spread(r.chartTc)).toBeGreaterThan(spread(r.chartVc));
+    expect(averageMatchFreight()).toBeCloseTo(19.7, 2);
+  });
+});
+
+describe('lesson 4.3', () => {
+  const st = (cls: 'kmax' | 'cape', w: Record<string, number>, day = START_DAY, extra: Partial<BuilderState> = {}): BuilderState => ({ cls, day, panelists: 5, error: 0, trim: false, biased: false, weights: w, ...extra });
+  const kw = (fh: number, bh: number, ta = 0) => ({ 'P-TA': ta, 'P-FH': fh, 'P-TP': 0, 'P-BH': bh });
+  const cw = (fh: number, bh: number) => ({ 'C-TA': 0, 'C-FH': fh, 'C-TP': 0, 'C-BR': 0, 'C-BH': bh });
+
+  it('balances the fronthaul and backhaul by trip length on any day', () => {
+    expect(balancedSolved(st('kmax', kw(60, 55)))).toBe(true);
+    expect(balancedSolved(st('kmax', kw(50, 50)))).toBe(false);
+    expect(balancedSolved(st('kmax', kw(60, 55, 5)))).toBe(false);
+    expect(balancedSolved(st('kmax', kw(60, 55), START_DAY, { error: 0.01 }))).toBe(false);
+    expect(balancedSolved(st('kmax', kw(60, 55), START_DAY, { biased: true }))).toBe(false);
+    for (let d = 0; d < 3024; d += 97) {
+      expect(balancedSolved(st('kmax', kw(60, 55), d))).toBe(true);
+      expect(balancedSolved(st('cape', cw(65, 60), d))).toBe(true);
+    }
+  });
+
+  it('prices round voyages at the market and quotes the model', () => {
+    const t = truthOnDay('kmax', START_DAY);
+    expect(t.routes[0]).toBeCloseTo(t.market, 6);
+    expect(t.routes[1]).toBeGreaterThan(t.market);
+    expect(t.routes[3]).toBeLessThan(t.market);
+    expect(KFH.mean).toBeCloseTo(8_531, -1);
+    expect(MISS.ten).toBeLessThan(MISS.five);
+    expect(MISS.fiveBiasedTrim).toBeLessThan(MISS.fiveBiased);
+    expect(K_FREIGHT[PAIR.dear]).toBeGreaterThan(K_FREIGHT[PAIR.cheap]);
+  });
+});
+
+describe('lesson 4.4', () => {
+  it('halves the swing only with a shipyard lag of 10 months or less', () => {
+    const sols: number[] = [];
+    for (let lag = 6; lag <= 48; lag++) if (swingHalvedSolved({ ...START44, lag })) sols.push(lag);
+    expect(sols).toEqual([6, 7, 8, 9, 10]);
+    expect(BASE44.gap).toBeCloseTo(12_260, -1);
+    expect(BASE44.peaks).toEqual([3, 8, 12]);
+    expect(swingHalvedSolved({ ...START44, lag: 8, shock: 0.06 })).toBe(false);
+    expect(swingHalvedSolved({ ...START44, lag: 8, congestion: 'qingdao' })).toBe(false);
+    expect(swingHalvedSolved({ ...START44, shock: 0 })).toBe(false);
+    expect(runCycle({ ...START44, shock: 0 }).gap).toBeLessThan(BASE44.gap / 2);
+  });
+
+  it('shows each disruption hitting the class that carries its trade', () => {
+    expect(eventEffect('cape', 'brazil')).toBeCloseTo(-0.628, 2);
+    expect(eventEffect('kmax', 'brazil')).toBeCloseTo(0, 9);
+    expect(eventEffect('kmax', 'panama')).toBeCloseTo(0.159, 2);
+    expect(eventEffect('cape', 'panama')).toBeCloseTo(0, 9);
+    expect(eventEffect('cape', 'china')).toBeGreaterThan(0.3);
+  });
+});
+
+describe('lesson 4.5', () => {
+  it('only selling April from January of Year 6 makes $400,000 on 30 days', () => {
+    const sols: string[] = [];
+    for (let d = COLLAPSE_MONTH * 21; d < (COLLAPSE_MONTH + 1) * 21; d++)
+      for (let a = 1; a <= 6; a++) for (const side of ['buy', 'sell'] as const) for (let q = 15; q <= 90; q += 15) if (collapseSolved(d, a, side, q)) sols.push(`${a}/${side}/${q}`);
+    expect(sols).toHaveLength(21);
+    expect(new Set(sols)).toEqual(new Set(['3/sell/30']));
+    expect(collapseSolved(24 * 21, 3, 'sell', 30)).toBe(false);
+    expect(ffaTrade(COLLAPSE_MONTH * 21, 3, 'sell', 30).pnl).toBeCloseTo(465_747, -1);
+    expect(ffaTrade(24 * 21, 3, 'sell', 30).pnl).toBeCloseTo(-402_856, -1);
+  });
+
+  it('prices forwards exactly as the engine does', () => {
+    const idx = dailyIndex('kmax');
+    for (let d = 0; d <= LAST_TRADE_DAY; d += 97)
+      for (let a = 0; a <= 6; a++) expect(fastForward(d, Math.floor(d / 21) + a)).toBeCloseTo(forwardPrice('kmax', idx, d, Math.floor(d / 21) + a), 6);
+  });
+
+  it('a full hedge leaves only basis; over-hedging adds risk back', () => {
+    const tp = hedgeStrip(54, 'P-TP', 1);
+    expect(missSpread(tp, true)).toBeLessThan(missSpread(tp, false) / 10);
+    expect(missSpread(hedgeStrip(54, 'P-TP', 1.5), true)).toBeGreaterThan(missSpread(tp, true) * 5);
+    expect(missSpread(hedgeStrip(54, 'P-FH', 1), true)).toBeGreaterThan(missSpread(tp, true) * 3);
   });
 });

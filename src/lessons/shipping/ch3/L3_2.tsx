@@ -334,7 +334,7 @@ export default function Lesson() {
         <Legend
           items={[
             { label: 'Ships needed to carry the trades', color: GRAPHIC.orange, kind: 'line' },
-            { label: `The ${clsName.toLowerCase()} fleet, ${fmt(fleet)} ships`, color: '#777', kind: 'line', dashed: true },
+            { label: `The ${clsName} fleet, ${fmt(fleet)} ships`, color: '#777', kind: 'line', dashed: true },
           ]}
         />
         <XYChart
@@ -363,7 +363,7 @@ export default function Lesson() {
         <Slider label="Extra waiting at Qingdao" tone="teal" value={lost.state.wait} min={0} max={10} step={0.5} onChange={(v) => lost.set({ wait: v })} display={days(lost.state.wait)} />
         <Caption>
           {need > fleet
-            ? `At these speeds the trades now need more ${clsName.toLowerCase()}s than exist: the fleet would have to sail faster to carry everything.`
+            ? `At these speeds the trades now need more ${clsName}s than exist: the fleet would have to sail faster to carry everything.`
             : `${fmt(lost.state.wait, 1)} days of waiting on each of ${fmt(L.calls)} calls is ${fmt(lost.state.wait * L.calls)} ship-days a year: ${ships(extra)} doing nothing but wait.`}
         </Caption>
       </Figure>
