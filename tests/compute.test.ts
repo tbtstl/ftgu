@@ -14,6 +14,7 @@ import { busBandwidth, flatRingAllReduce, hierarchicalAllReduce, ringAllReduce, 
 import { checkAssignment, feasibleAssignments, workloadFit } from '../src/engines/compute/compatibility';
 import { airflowM3s, annualPue, chipCooling, waterFlowLs, chillerCop, junctionC } from '../src/engines/compute/cooling';
 import { fabric, jobNetworkShare, maxTwoTierGpus } from '../src/engines/compute/dcNetwork';
+import { DEMAND_DEFAULTS, growthFan, normalCdf, normalQuantile, weeklyDemand } from '../src/engines/compute/demand';
 import { breakEvenUtilization, capitalRecovery, gpuHourCost } from '../src/engines/compute/facilityCost';
 import { POWER_DEFAULTS, powerChain, upsEfficiency, upsPlan } from '../src/engines/compute/facilityPower';
 import { issueUtilization, occupancy, warpTimeline, warpsToHide, waves } from '../src/engines/compute/gpuExec';
@@ -31,6 +32,7 @@ import {
   FULL_ADDER_TRANSISTORS,
   type GateType,
 } from '../src/engines/compute/logic';
+import { MARKET_BUYERS, MARKET_SUPPLY, clearMarket, productivity } from '../src/engines/compute/marketplace';
 import { batchedMatmul, compulsoryBytes, largestTile, matmulFlops, tileFit, tiledMatmul } from '../src/engines/compute/matmul';
 import {
   FORMATS,
@@ -45,6 +47,13 @@ import {
   relativeError,
 } from '../src/engines/compute/memory';
 import { CPU, GPU, amdahl, crossoverItems, peakTflops, runTask } from '../src/engines/compute/parallel';
+import {
+  bestReservation,
+  breakEvenUtilization as L5_0_breakEvenUtilization,
+  buyerCost,
+  providerEconomics,
+  spotEffective,
+} from '../src/engines/compute/pricing';
 import { clusterLayout, rackConfig, rackLimits, serverUnits } from '../src/engines/compute/rack';
 import { attainableTflops, cachedKernel, kernelTime, machineOf } from '../src/engines/compute/roofline';
 import { simulateServing } from '../src/engines/compute/scheduling';
@@ -59,6 +68,8 @@ import {
   SI_ATOMS,
   thermalVoltage,
 } from '../src/engines/compute/semiconductor';
+import { RESTART_MINUTES, bestInterval, checkpointMinutes, spotJobOf, spotRun } from '../src/engines/compute/spotCheckpoint';
+import { SUPPLY_DEFAULTS, dieYield, diesPerWafer, supplyChain, BUILD } from '../src/engines/compute/supplyChain';
 import { trainingRun, trainFlopsPerToken, TRAIN_COMPUTE_EFFICIENCY } from '../src/engines/compute/training';
 import { forwardPass, layerOps } from '../src/engines/compute/transformer';
 import {
@@ -73,6 +84,7 @@ import {
   fetRegion,
   inverterThroughCurrent,
 } from '../src/engines/compute/transistor';
+import { cheapestBy, unitCost } from '../src/engines/compute/units';
 import { conductivityGain, dotCount, holesMillionSolved, leastDopingForMillion, sci } from '../src/lessons/compute/ch1/L1_1';
 import { IOFF, ION, LOW_VTH, PINCH_V, SWING_MV, current, thresholdSolved } from '../src/lessons/compute/ch1/L1_2';
 import {
@@ -298,8 +310,77 @@ import {
   underTargetSolved,
   usedHourCost,
 } from '../src/lessons/compute/ch4/L4_5';
+import {
+  EXPLORER_DEFAULTS as L5_1_EXPLORER_DEFAULTS,
+  LESSON_NUMBERS as L5_1_LESSON_NUMBERS,
+  WORTH_ANSWER,
+  cheapLSolved,
+  cheapestIn,
+  inUnit,
+  lParityForBatch,
+  lWorthSolved,
+  money,
+  parityPrice,
+  pricesOf,
+} from '../src/lessons/compute/ch5/L5_1';
+import {
+  AHEAD_EXAMPLE,
+  CHAIN_DEFAULTS as L5_2_CHAIN_DEFAULTS,
+  LESSON_NUMBERS as L5_2_N,
+  QUARTERS,
+  WAFER_DEFAULTS,
+  aheadSolved,
+  cleanSolved,
+  goodDies,
+  runChain,
+  shortQuarters,
+  waferDefects,
+  waferLayout,
+} from '../src/lessons/compute/ch5/L5_2';
+import {
+  DEMO_DEFAULTS,
+  FORECAST_DEFAULTS,
+  LESSON_NUMBERS as L5_3_N,
+  SHORT_IN_OVERLAP,
+  START,
+  fanOf,
+  finalRisk,
+  fleetSolved as L5_3_fleetSolved,
+  hourLabel,
+  riskSolved,
+  runDemand,
+  safeFleet,
+  segmentHours,
+  smallestFleet,
+} from '../src/lessons/compute/ch5/L5_3';
+import {
+  BEST_RESERVED,
+  CHEAPEST as L5_4_CHEAPEST,
+  LESSON_NUMBERS as L5_4_N,
+  PROVIDER_DEFAULTS,
+  SPOT_DEFAULTS,
+  bill,
+  intervalSolved,
+  providerOf,
+  providerSolved,
+  reserveSolved,
+} from '../src/lessons/compute/ch5/L5_4';
+import {
+  ADD_STEP,
+  LESSON_NUMBERS as L5_5_N,
+  MARKET_DEFAULTS,
+  buildSolved,
+  latencySolved,
+  marketAt,
+  premium,
+  priceSetter,
+  sameEverywhere,
+  thresholdAt,
+  worth,
+} from '../src/lessons/compute/ch5/L5_5';
 import { ACCELERATORS, serverPowerW, ridgePoint, SM_LIMITS, GPU_SERIAL_GOPS, HOST_CPU, GPU_IDS } from '../src/model/compute/hardware';
 import { MODELS, kvBytesPerToken, paramCount, kvDim, matmulParams } from '../src/model/compute/models';
+import { PRICES } from '../src/model/compute/prices';
 import { SITES, outdoorTempC } from '../src/model/compute/sites';
 import { WORKLOAD_IDS, WORKLOADS, type ServingWorkload } from '../src/model/compute/workloads';
 
@@ -1810,6 +1891,7 @@ describe('chip power', () => {
 }
 
 // Chapter 4 engines
+
 {
   describe('racks', () => {
     it('fills a rack until space, power or cooling runs out', () => {
@@ -1886,6 +1968,7 @@ describe('chip power', () => {
 }
 
 // Lesson 4.1
+
 {
   describe('lesson 4.1: rack builder', () => {
     it('breaks every server’s power into parts that add up', () => {
@@ -1962,6 +2045,7 @@ describe('chip power', () => {
 }
 
 // Lesson 4.2
+
 {
   describe('lesson 4.2 challenges', () => {
     it('cuts losses before the racks only with eco mode and a spare', () => {
@@ -2043,6 +2127,7 @@ describe('chip power', () => {
 }
 
 // Lesson 4.3
+
 {
   describe('lesson 4.3: the chip', () => {
     it('finds the warmest coolant for a full-speed B-class', () => {
@@ -2143,6 +2228,7 @@ describe('chip power', () => {
 }
 
 // Lesson 4.4
+
 {
   describe('lesson 4.4: the fabric', () => {
     const N = L4_4_LESSON_NUMBERS;
@@ -2231,6 +2317,7 @@ describe('chip power', () => {
 }
 
 // Lesson 4.5
+
 {
   const cents = (x: number) => Math.round(x * 100) / 100;
 
@@ -2298,6 +2385,531 @@ describe('chip power', () => {
       expect(breakEvenSolved({ util: 75, life: 5, price: 2.4 })).toBe(false);
       expect(usedHourCost(75, 4)).toBeLessThanOrEqual(2.4);
       expect(breakEven(5, 1)).toBe(Infinity);
+    });
+  });
+}
+
+// Chapter 5 engines
+{
+  describe('units of compute', () => {
+    it('ranks accelerators differently by GPU-hour and by token', () => {
+      expect(cheapestBy('chat70', 'gpuHour').best).toBe('L');
+      expect(cheapestBy('chat70', 'mTokens').best).toBe('B');
+      expect(unitCost('chat70', 'A').mTokens).toBeCloseTo(0.779, 3);
+      expect(unitCost('chat70', 'L').mTokens).toBeCloseTo(7.18, 2);
+      expect(unitCost('train70', 'A').run / 1e6).toBeCloseTo(0.51, 2);
+    });
+  });
+
+  describe('supply chain', () => {
+    it('turns wafers into GPUs and finds the scarcest stage', () => {
+      expect(diesPerWafer(814)).toBe(63);
+      expect(dieYield(0.1, 814)).toBeCloseTo(0.443, 3);
+      const qs = supplyChain(SUPPLY_DEFAULTS);
+      expect(qs[0].binding).toBe('packaging');
+      expect(qs[0].built.A).toBeCloseTo(600, 6);
+      expect(qs[5].binding).toBe('power');
+      expect(qs[9].binding).toBe('wafers');
+      expect(qs[11].installedAEq).toBeCloseTo(13012, -1);
+    });
+  });
+
+  describe('demand', () => {
+    it('stacks four kinds of demand against a fleet', () => {
+      const d = weeklyDemand(DEMAND_DEFAULTS);
+      expect(d.hours).toBe(672);
+      expect(d.utilization).toBeCloseTo(0.677, 3);
+      expect(d.batchUnplaced).toBe(0);
+      expect(weeklyDemand({ ...DEMAND_DEFAULTS, batchFlexible: false }).peak).toBeGreaterThan(d.peak);
+    });
+
+    it('fans out a growth forecast', () => {
+      expect(normalCdf(0)).toBeCloseTo(0.5, 6);
+      expect(normalQuantile(0.95)).toBeCloseTo(1.645, 2);
+      const fan = growthFan(5000, 12, 0.05, 0.04, 8000);
+      expect(fan[12].shortfall).toBeCloseTo(0.78, 2);
+      expect(fan[6].p50).toBeLessThan(fan[6].p95);
+    });
+  });
+
+  describe('pricing', () => {
+    it('reserves up to the level needed reserved ÷ on-demand of the time', () => {
+      expect(L5_0_breakEvenUtilization(PRICES.A)).toBeCloseTo(2 / 3, 6);
+      const need = [100, 100, 200, 300];
+      const best = bestReservation(need, PRICES.A);
+      expect(buyerCost(need, best, PRICES.A).total).toBeLessThanOrEqual(buyerCost(need, best + 10, PRICES.A).total);
+      expect(buyerCost(need, best, PRICES.A).total).toBeLessThanOrEqual(buyerCost(need, Math.max(0, best - 10), PRICES.A).total);
+      expect(spotEffective(PRICES.A, 2, 30, 10).perUsefulHour).toBeCloseTo(0.984, 3);
+    });
+
+    it('fills the provider’s buffer with spot', () => {
+      const r = providerEconomics({ fleet: 1000, reserved: 500, onDemandMean: 300, onDemandSwing: 0.3, onDemandNoise: 0.1, spotDemand: 400, prices: PRICES.A, costPerGpuHour: 1.55, hours: 672 });
+      expect(r.soldShare).toBeCloseTo(1, 6);
+      expect(r.firmShare).toBeCloseTo(0.799, 3);
+      expect(r.marginPerHour).toBeCloseTo(159, 0);
+    });
+  });
+
+  describe('marketplace', () => {
+    it('prices GPUs near users above remote ones when latency binds', () => {
+      expect(productivity('chat70', 'B')).toBeCloseTo(36 / 14, 6);
+      const c = clearMarket(MARKET_BUYERS, MARKET_SUPPLY);
+      expect(c.prices.bayport.A).toBeCloseTo(3.5, 2);
+      expect(c.prices.northfield.A).toBeCloseTo(1.52, 2);
+      expect(c.prices.bayport.B).toBeCloseTo(9.0, 2);
+      const loose = clearMarket(
+        MARKET_BUYERS.map((b) => (b.id === 'chat70' || b.id === 'frontier400' ? { ...b, maxRttMs: 100 } : b)),
+        MARKET_SUPPLY,
+      );
+      expect(loose.prices.bayport.A).toBeCloseTo(loose.prices.northfield.A, 2);
+    });
+  });
+}
+
+// Lesson 5.1
+{
+  const N = L5_1_LESSON_NUMBERS;
+
+  describe('lesson 5.1: units of computation', () => {
+    it('ranks the accelerators differently by hour and by work', () => {
+      const list = pricesOf(L5_1_EXPLORER_DEFAULTS);
+      expect(cheapestIn('chat70', 'gpuHour', list)).toBe('L');
+      expect(cheapestIn('chat70', 'work', list)).toBe('B');
+      expect(cheapestIn('chat70', 'peakPflop', list)).toBe('B');
+      // The L-class can't run the frontier model, so it is never the cheapest for it.
+      expect(cheapestIn('frontier400', 'gpuHour', list)).toBe('A');
+    });
+
+    it('solves challenge a only by lowering the L-class to about $0.51', () => {
+      expect(lParityForBatch()).toBeCloseTo(0.515, 3);
+      expect(cheapLSolved(L5_1_EXPLORER_DEFAULTS)).toBe(false);
+      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.5 })).toBe(true);
+      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.55 })).toBe(false);
+      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.5, pB: 6 })).toBe(false);
+    });
+
+    it('solves challenge b at an A-class price of $2.55', () => {
+      expect(WORTH_ANSWER).toBeCloseTo(2.55, 6);
+      expect(lWorthSolved(2.55)).toBe(true);
+      expect(lWorthSolved(2.5)).toBe(false);
+      expect(lWorthSolved(2.6)).toBe(false);
+      expect(lWorthSolved(2.4)).toBe(false);
+    });
+
+    it('quotes true numbers', () => {
+      expect(N.cost45PerHour).toBeCloseTo(1.55, 2);
+      expect(N.cost45PerUsed).toBeCloseTo(2.22, 2);
+      expect(inUnit(N.peak.L, 'peakPflop')).toBe('$2.49');
+      expect(inUnit(N.peak.A, 'peakPflop')).toBe('$2.43');
+      expect(inUnit(N.peak.B, 'peakPflop')).toBe('$2.13');
+      expect(Math.round(N.chatUtil.A * 100)).toBe(41);
+      expect(Math.round(N.chatUtil.B * 100)).toBe(56);
+      expect(N.chatUtil.L * 100).toBeCloseTo(1.7, 1);
+      expect(money(N.chatUseful.L)).toBe('$144');
+      expect(N.chatBatchL).toBe(14);
+      expect(money(N.chatTokens.L)).toBe('$7.18');
+      expect(money(N.chatTokens.A)).toBe('$0.779');
+      expect(money(N.chatTokens.B)).toBe('$0.579');
+      expect(N.chatTokens.L / N.chatTokens.B).toBeCloseTo(12.4, 1);
+      expect(money(N.batchTokens.L)).toBe('$0.400');
+      expect(money(N.batchTokens.A)).toBe('$0.286');
+      expect(money(N.batchTokens.B)).toBe('$0.229');
+      expect(money(N.trainRun.L)).toBe('$703,000');
+      expect(money(N.trainRun.A)).toBe('$513,000');
+      expect(money(N.trainRun.B)).toBe('$435,000');
+      expect(N.trainGpus).toEqual({ L: 1088, A: 304, B: 128 });
+      expect(N.chatGpus).toEqual({ L: 864, A: 36, B: 14 });
+      expect(N.batchTokPerHour.L / 1e6).toBeCloseTo(2.25, 2);
+      expect(N.batchTokPerHour.B / 1e6).toBeCloseTo(21.0, 1);
+      expect(Math.round((N.batchTokPerHour.L / N.batchTokPerHour.B) * 100)).toBe(11);
+      expect(N.value.chatB).toBeCloseTo(6.17, 2);
+      expect(N.value.frontierB).toBeCloseTo(7.2, 6);
+      expect(N.value.tuneB).toBeCloseTo(4.8, 6);
+      expect(N.value.chatL).toBeCloseTo(0.1, 2);
+      expect(N.value.batchL).toBeCloseTo(0.67, 2);
+      expect(N.value.tuneL).toBeCloseTo(0.86, 2);
+      expect(N.bLow).toBeCloseTo(2, 6);
+      expect(N.bHigh).toBeCloseTo(3, 6);
+      expect(parityPrice('frontier400', 'L', 2.4)).toBe(0);
+    });
+  });
+}
+
+// Lesson 5.2
+{
+  const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('lesson 5.2: the supply chain', () => {
+    it('quotes the default chain', () => {
+      expect(L5_2_N.aDies).toBe(63);
+      expect(r(L5_2_N.aYield, 3)).toBe(0.443);
+      expect(r(L5_2_N.aPerWafer, 1)).toBe(27.9);
+      expect(r(L5_2_N.bPerWafer, 1)).toBe(14.4);
+      expect(r(L5_2_N.bAEq, 2)).toBe(2.28);
+      expect(r(L5_2_N.q1Wafers)).toBe(837);
+      expect(r(L5_2_N.q1Memory)).toBe(700);
+      expect(r(L5_2_N.q1Built)).toBe(600);
+      expect(r(L5_2_N.q1Installed)).toBe(1600);
+      expect(r(L5_2_N.q1Demand)).toBe(1800);
+      expect(L5_2_N.firstPowerLimit).toBe(3);
+      expect(r(L5_2_N.q4Built)).toBe(799);
+      expect(r(L5_2_N.q4Deployed)).toBe(698);
+      expect(r(L5_2_N.q4Waiting)).toBe(28);
+      expect(r(L5_2_N.q6Waiting)).toBe(132);
+      expect(r(L5_2_N.q7BuiltA)).toBe(159);
+      expect(L5_2_N.firstWaferLimit).toBe(7);
+      expect(r(L5_2_N.q12Installed / 1000, 1)).toBe(13.0);
+      expect(r(L5_2_N.q12Demand / 1000, 1)).toBe(13.4);
+      expect(r(L5_2_N.q1Needed)).toBe(800);
+    });
+
+    it('moves the limit when one stage is relieved', () => {
+      const pack = runChain({ ...L5_2_CHAIN_DEFAULTS, packaging: 1500 });
+      expect(pack[0].binding).toBe('power');
+      expect(shortQuarters(pack)).toContain(0);
+      const packPower = runChain({ ...L5_2_CHAIN_DEFAULTS, packaging: 1500, power: 2000 });
+      expect(packPower[0].binding).toBe('memory');
+      expect(shortQuarters(packPower)).toContain(0);
+    });
+
+    it('is solved only when every quarter keeps up', () => {
+      expect(aheadSolved(L5_2_CHAIN_DEFAULTS)).toBe(false);
+      expect(aheadSolved(AHEAD_EXAMPLE)).toBe(true);
+      expect(r(L5_2_N.aheadQ12Margin / 1000, 2)).toBe(0.66);
+      // Each of the three changes is needed on the slider grid.
+      expect(aheadSolved({ ...AHEAD_EXAMPLE, hbm: 3.9 })).toBe(false);
+      expect(aheadSolved({ ...AHEAD_EXAMPLE, packaging: 750 })).toBe(false);
+      expect(aheadSolved({ ...AHEAD_EXAMPLE, power: 1150 })).toBe(false);
+      expect(runChain(AHEAD_EXAMPLE).length).toBe(QUARTERS);
+    });
+
+    it('grows faster in A-class equivalents when the B-class starts earlier', () => {
+      const early = runChain({ ...L5_2_CHAIN_DEFAULTS, bStart: 1 });
+      const late = runChain({ ...L5_2_CHAIN_DEFAULTS, bStart: 8 });
+      const base = runChain(L5_2_CHAIN_DEFAULTS);
+      expect(early[QUARTERS - 1].installedAEq).toBeGreaterThan(base[QUARTERS - 1].installedAEq);
+      expect(base[QUARTERS - 1].installedAEq).toBeGreaterThan(late[QUARTERS - 1].installedAEq);
+    });
+  });
+
+  describe('lesson 5.2: yield', () => {
+    it('quotes the yield figures', () => {
+      expect(L5_2_N.halfDies).toBe(143);
+      expect(r(L5_2_N.halfYield, 3)).toBe(0.67);
+      expect(r(L5_2_N.aSilicon)).toBe(22722);
+      expect(r(L5_2_N.halfSilicon)).toBe(38342);
+      expect(r(L5_2_N.halfSilicon / L5_2_N.aSilicon - 1, 2)).toBe(0.69);
+      expect(r((L5_2_N.bPerWafer * L5_2_N.bAEq) / L5_2_N.aPerWafer - 1, 2)).toBe(0.17);
+    });
+
+    it('draws exactly the dies the formula counts, for every die on the slider', () => {
+      for (let a = 100; a <= 850; a += 2) {
+        const lay = waferLayout(a);
+        expect(lay.gridCount).toBeGreaterThanOrEqual(diesPerWafer(a));
+        expect(lay.dies.length).toBe(diesPerWafer(a));
+      }
+    });
+
+    it('spoils dies that defects land on, about as often as the formula says', () => {
+      let good = 0;
+      let total = 0;
+      for (let seed = 1; seed <= 60; seed++) {
+        const lay = waferLayout(BUILD.A.dieMm2);
+        const g = goodDies(lay.dies, lay.side, waferDefects(0.1, seed));
+        good += g.filter(Boolean).length;
+        total += g.length;
+      }
+      expect(Math.abs(good / total - dieYield(0.1, BUILD.A.dieMm2))).toBeLessThan(0.04);
+      expect(waferDefects(0.1, 1).length).toBe(71);
+    });
+
+    it('solves the clean-process challenge only at 0.06', () => {
+      expect(cleanSolved(WAFER_DEFAULTS.area, WAFER_DEFAULTS.defects)).toBe(false);
+      expect(cleanSolved(814, 0.06)).toBe(true);
+      expect(cleanSolved(814, 0.05)).toBe(false);
+      expect(cleanSolved(814, 0.07)).toBe(false);
+      expect(cleanSolved(800, 0.06)).toBe(false);
+      expect(r(dieYield(0.06, 814), 3)).toBe(0.614);
+    });
+  });
+}
+
+// Lesson 5.3
+{
+  describe('lesson 5.3: demand', () => {
+    it('peaks inference in the afternoon and bottoms out before dawn', () => {
+      const d = runDemand(DEMO_DEFAULTS);
+      // Tuesday of week 1, hours 24–47.
+      const day = d.inference.slice(24, 48);
+      const peakHod = day.indexOf(Math.max(...day));
+      const troughHod = day.indexOf(Math.min(...day));
+      expect(peakHod).toBeGreaterThanOrEqual(12);
+      expect(peakHod).toBeLessThanOrEqual(18);
+      expect(troughHod).toBeLessThanOrEqual(6);
+    });
+
+    it('quotes the starting month correctly', () => {
+      expect(Math.round(L5_3_N.peak)).toBe(5675);
+      expect(Math.round(L5_3_N.average)).toBe(3389);
+      expect(L5_3_N.utilization).toBeCloseTo(0.677, 3);
+      expect(L5_3_N.unmetShare).toBeCloseTo(0.00046, 5);
+      expect(L5_3_N.shortHours).toBe(4);
+      expect(Math.round(L5_3_N.shortWorst)).toBe(675);
+      expect(SHORT_IN_OVERLAP).toBe(true);
+      expect(Math.round(L5_3_N.trough)).toBe(1046);
+      expect(L5_3_N.trainingMax).toBe(3072);
+      expect(L5_3_N.threeRunHours).toBe(17);
+      expect(Math.round(L5_3_N.shares.inference * 100)).toBe(50);
+      expect(Math.round(L5_3_N.shares.training * 100)).toBe(33);
+      expect(Math.round(L5_3_N.shares.batch * 100)).toBe(15);
+      expect(Math.round(L5_3_N.shares.dev * 100)).toBe(2);
+      expect(Math.round(L5_3_N.noTrainingPeak)).toBe(2964);
+      expect(L5_3_N.noTrainingUtil).toBeCloseTo(0.457, 3);
+      const s = segmentHours(runDemand(DEMO_DEFAULTS));
+      expect(s.total).toBeCloseTo(s.hours.inference + s.hours.training + s.hours.batch + s.hours.dev, 6);
+      expect(hourLabel(17)).toBe('Mon 17:00, week 1');
+    });
+
+    it('shows flexible batch saving GPUs', () => {
+      expect(Math.round(L5_3_N.fixedPeak)).toBe(6552);
+      expect(L5_3_N.fixedUnmet).toBeCloseTo(0.0218, 4);
+      expect(L5_3_N.fixedShortHours).toBe(117);
+      expect(L5_3_N.flexFleet).toBe(4900);
+      expect(L5_3_N.fixedFleet).toBe(6100);
+      expect(L5_3_N.fullFleet).toBe(5700);
+      expect(L5_3_N.flexUtil).toBeCloseTo(0.691, 3);
+      expect(L5_3_N.fixedUtil).toBeCloseTo(0.555, 3);
+    });
+
+    it('solves the fleet challenge only at the smallest fleet, with flexible batch', () => {
+      expect(L5_3_fleetSolved(DEMO_DEFAULTS)).toBe(false);
+      expect(L5_3_fleetSolved({ ...DEMO_DEFAULTS, fleet: 4900 })).toBe(true);
+      expect(L5_3_fleetSolved({ ...DEMO_DEFAULTS, fleet: 5000 })).toBe(false);
+      expect(L5_3_fleetSolved({ ...DEMO_DEFAULTS, fleet: 4800 })).toBe(false);
+      expect(L5_3_fleetSolved({ ...DEMO_DEFAULTS, batch: 'fixed', fleet: 6100 })).toBe(false);
+      expect(smallestFleet({ ...DEMO_DEFAULTS, batch: 'fixed' })).toBe(6100);
+    });
+
+    it('forecasts a year ahead', () => {
+      expect(START).toBe(5700);
+      const fan = fanOf(FORECAST_DEFAULTS);
+      expect(Math.round(fan[12].p50)).toBe(10139);
+      expect(Math.round(fan[12].p5)).toBe(8072);
+      expect(Math.round(fan[12].p95)).toBe(12734);
+      expect(Math.round(fan[6].shortfall * 100)).toBe(30);
+      expect(Math.round(fan[9].shortfall * 100)).toBe(78);
+      expect(Math.round(fan[12].shortfall * 100)).toBe(96);
+      expect(L5_3_N.safe).toBe(12200);
+      expect(L5_3_N.safeCertain).toBe(10300);
+      expect(L5_3_N.safeWide).toBe(14100);
+      expect(Math.round(L5_3_N.hedgeGpus / 100) * 100).toBe(2100);
+      expect(Math.round(L5_3_N.aYear / 100) * 100).toBe(13600);
+      expect(Math.round(L5_3_N.hedgeCost / 1e6)).toBe(28);
+      // No uncertainty: risk is 0 or 1, never NaN.
+      expect(finalRisk({ growth: 5, sigma: 0, fleet: 10300 })).toBe(0);
+      expect(finalRisk({ growth: 5, sigma: 0, fleet: 10200 })).toBe(1);
+      expect(safeFleet(5, 4)).toBe(12200);
+    });
+
+    it('solves the risk challenge only at the smallest safe fleet', () => {
+      expect(riskSolved(FORECAST_DEFAULTS)).toBe(false);
+      expect(riskSolved({ ...FORECAST_DEFAULTS, fleet: 12200 })).toBe(true);
+      expect(riskSolved({ ...FORECAST_DEFAULTS, fleet: 12300 })).toBe(false);
+      expect(riskSolved({ ...FORECAST_DEFAULTS, fleet: 12100 })).toBe(false);
+      expect(riskSolved({ growth: 3, sigma: 2, fleet: safeFleet(3, 2) })).toBe(true);
+    });
+  });
+}
+
+// Lesson 5.4
+{
+  const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('interruptible training jobs (spotCheckpoint.ts)', () => {
+    it('reduces to spotEffective for one server with free checkpoints', () => {
+      const one = spotRun({ id: 'tune8', gpus: 8, servers: 1, stateBytes: 0 }, PRICES.A.spot, 2, 30);
+      expect(one.perUsefulHour).toBeCloseTo(spotEffective(PRICES.A, 2, 30, RESTART_MINUTES).perUsefulHour, 9);
+    });
+
+    it('sizes the jobs from Lesson 3.5 and their checkpoints from Lesson 3.3', () => {
+      const tune = spotJobOf('tune8');
+      const train = spotJobOf('train70');
+      expect([tune.gpus, tune.servers, train.gpus, train.servers]).toEqual([10, 2, 304, 38]);
+      expect(r0(tune.stateBytes / 1e9)).toBe(120);
+      expect(r0(train.stateBytes / 1e12, 2)).toBe(1.11);
+      expect(r0(checkpointMinutes(tune) * 60)).toBe(24);
+      expect(r0(checkpointMinutes(train) * 60)).toBe(56);
+    });
+
+    it('has a best checkpoint interval, and makes big synchronous runs expensive', () => {
+      const tune = spotJobOf('tune8');
+      const train = spotJobOf('train70');
+      expect(bestInterval(tune, PRICES.A.spot, 2, 120)).toBe(17);
+      expect(bestInterval(train, PRICES.A.spot, 2, 120)).toBe(5);
+      expect(spotRun(train, PRICES.A.spot, 2, 30).perUsefulHour).toBe(Infinity);
+    });
+  });
+
+  describe('lesson 5.4 challenges', () => {
+    it('a: the cheapest reservation', () => {
+      expect(L5_4_CHEAPEST.reserved).toBe(139);
+      expect(reserveSolved(139)).toBe(true);
+      expect(reserveSolved(138)).toBe(true);
+      expect(reserveSolved(137)).toBe(false);
+      expect(reserveSolved(0)).toBe(false);
+      expect(reserveSolved(130)).toBe(false);
+      expect(reserveSolved(145)).toBe(false);
+    });
+
+    it('b: the cheapest checkpoint interval for the fine-tuning job', () => {
+      expect(intervalSolved(SPOT_DEFAULTS)).toBe(false);
+      expect(intervalSolved({ ...SPOT_DEFAULTS, interval: 17 })).toBe(true);
+      expect(intervalSolved({ ...SPOT_DEFAULTS, interval: 30 })).toBe(false);
+      expect(intervalSolved({ ...SPOT_DEFAULTS, interval: 5 })).toBe(false);
+      expect(intervalSolved({ job: 'train70', reclaims: 2, interval: 5 })).toBe(false);
+      expect(intervalSolved({ ...SPOT_DEFAULTS, reclaims: 1, interval: 24 })).toBe(false);
+    });
+
+    it('c: the most margin within 1% turned away', () => {
+      expect(BEST_RESERVED.reserved).toBe(600);
+      expect(providerSolved({ ...PROVIDER_DEFAULTS, reserved: 600 })).toBe(true);
+      expect(providerSolved(PROVIDER_DEFAULTS)).toBe(false);
+      expect(providerSolved({ ...PROVIDER_DEFAULTS, reserved: 610 })).toBe(false);
+      expect(providerOf({ ...PROVIDER_DEFAULTS, reserved: 610 }).turnedAway).toBeGreaterThan(0.01);
+      expect(providerSolved({ ...PROVIDER_DEFAULTS, reserved: 600, spot: 350 })).toBe(false);
+    });
+  });
+
+  describe('lesson 5.4 numbers', () => {
+    it('the buyer', () => {
+      expect([r0(L5_4_N.needMin), r0(L5_4_N.needMax)]).toEqual([85, 269]);
+      expect(r0(L5_4_N.allOnDemandTotal)).toBe(275021);
+      expect(L5_4_N.peakReserved).toBe(269);
+      expect(r0(L5_4_N.reservePeakTotal)).toBe(289229);
+      expect(r0(L5_4_N.reservePeakPerHour, 2)).toBe(2.52);
+      expect(r0(L5_4_N.reservePeakIdle * 100)).toBe(37);
+      expect(L5_4_N.breakEven).toBeCloseTo(2 / 3, 9);
+      expect(r0(L5_4_N.levelAtBreakEven)).toBe(139);
+      expect(L5_4_N.bestReserved).toBe(139);
+      expect(r0(L5_4_N.bestPerHour, 2)).toBe(1.86);
+      expect(r0(L5_4_N.bestSaving * 100)).toBe(23);
+      expect(r0(L5_4_N.bestIdle * 100)).toBe(6);
+      expect(r0(bill(139).total)).toBe(213075);
+    });
+
+    it('interruptible hours', () => {
+      expect(L5_4_N.tuneInterruptions).toBe(4);
+      expect(r0(L5_4_N.tune60, 2)).toBe(1.08);
+      expect(L5_4_N.tuneBestInterval).toBe(17);
+      expect(r0(L5_4_N.tuneBestCost, 2)).toBe(1.03);
+      expect(r0(L5_4_N.tuneBestUseful * 100)).toBe(92);
+      expect(L5_4_N.trainInterruptions).toBe(76);
+      expect(r0(L5_4_N.trainMinutesBetween)).toBe(19);
+      expect(L5_4_N.trainBestInterval).toBe(5);
+      expect(r0(L5_4_N.trainBestUseful * 100)).toBe(14);
+      expect(r0(L5_4_N.trainBestCost, 2)).toBe(7.04);
+      expect(L5_4_N.trainBestCost / PRICES.A.onDemand).toBeGreaterThan(2.8);
+      expect(L5_4_N.trainBestCost / PRICES.A.onDemand).toBeLessThan(3);
+      expect(r0(L5_4_N.trainCalmCost, 2)).toBe(1.35);
+      expect(L5_4_N.trainCalmCost).toBeLessThan(PRICES.A.reserved);
+      expect(RESTART_MINUTES).toBe(10);
+    });
+
+    it('the provider', () => {
+      expect(r0(L5_4_N.gpuCostBusy, 2)).toBe(1.57);
+      expect(r0(L5_4_N.peakOnDemand)).toBe(484);
+      expect(r0(L5_4_N.baseRevenue)).toBe(1709);
+      expect(r0(L5_4_N.baseMargin)).toBe(139);
+      expect(r0(L5_4_N.baseFirm * 100)).toBe(80);
+      expect(r0(L5_4_N.noSpotMargin)).toBe(-40);
+      expect(r0(L5_4_N.reclaimsPerHour, 1)).toBe(18.9);
+      expect(r0(L5_4_N.reclaimsPerSpotGpuDay, 1)).toBe(2.3);
+      expect(L5_4_N.bestProviderReserved).toBe(600);
+      expect(r0(L5_4_N.bestProviderMargin)).toBe(201);
+      expect(r0(L5_4_N.bestProviderAway * 100, 2)).toBe(0.73);
+      expect(L5_4_N.greedyReserved).toBe(690);
+      expect(r0(L5_4_N.greedyMargin)).toBe(226);
+      expect(r0(L5_4_N.greedyAway * 100, 1)).toBe(8.4);
+    });
+  });
+}
+
+// Lesson 5.5
+{
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+
+  describe('lesson 5.5 challenges', () => {
+    it('a: the tightest latency limit with one price everywhere is Northfield’s 40 ms', () => {
+      expect(latencySolved(MARKET_DEFAULTS)).toBe(false);
+      expect(latencySolved({ ...MARKET_DEFAULTS, lat: 40 })).toBe(true);
+      expect(latencySolved({ ...MARKET_DEFAULTS, lat: 39 })).toBe(false);
+      expect(latencySolved({ ...MARKET_DEFAULTS, lat: 41 })).toBe(false);
+      expect(latencySolved({ ...MARKET_DEFAULTS, lat: 40, addB: 400 })).toBe(false);
+      expect(sameEverywhere({ ...MARKET_DEFAULTS, lat: 60 })).toBe(true);
+    });
+
+    it('b: the fewest B-class GPUs at Tech Park that close the premium is 350', () => {
+      expect(buildSolved(MARKET_DEFAULTS)).toBe(false);
+      expect(buildSolved({ ...MARKET_DEFAULTS, addB: 350 })).toBe(true);
+      expect(buildSolved({ ...MARKET_DEFAULTS, addB: 325 })).toBe(false);
+      expect(buildSolved({ ...MARKET_DEFAULTS, addB: 375 })).toBe(false);
+      expect(buildSolved({ ...MARKET_DEFAULTS, lat: 10, addB: 350 })).toBe(true);
+      expect(buildSolved({ ...MARKET_DEFAULTS, lat: 40, addB: 0 })).toBe(false);
+      expect(buildSolved({ ...MARKET_DEFAULTS, demand: 120, addB: 350 })).toBe(false);
+      expect(premium({ ...MARKET_DEFAULTS, addB: 350 - ADD_STEP })).toBeGreaterThan(0.1);
+      expect(thresholdAt(100)).toBe(350);
+    });
+  });
+
+  describe('lesson 5.5 numbers', () => {
+    it('the reference market', () => {
+      expect([r2(L5_5_N.nearA), r2(L5_5_N.nearB), r2(L5_5_N.nearL), r2(L5_5_N.techparkA)]).toEqual([3.5, 9, 0.58, 3.5]);
+      expect([r2(L5_5_N.farA), r2(L5_5_N.farB)]).toEqual([1.52, 3.6]);
+      expect(r2(L5_5_N.nearA - L5_5_N.farA)).toBe(1.98);
+      expect(L5_5_N.chatWanted).toBe(14000);
+      expect(Math.round(L5_5_N.chatServed)).toBe(13726);
+      expect(Math.round(L5_5_N.chatShort)).toBe(274);
+      expect(Math.round(L5_5_N.chatShortInB)).toBe(106);
+      expect(L5_5_N.batchWanted).toBe(20000);
+      expect(Math.round(L5_5_N.batchServed)).toBe(8932);
+      expect(L5_5_N.supply.bayport.A + L5_5_N.supply.techpark.A).toBe(11000);
+    });
+
+    it('loosening and tightening the latency limit', () => {
+      expect(L5_5_N.openSame).toBe(true);
+      expect([r2(L5_5_N.openA), r2(L5_5_N.openB), r2(L5_5_N.openL)]).toEqual([1.4, 3.6, 0.5]);
+      expect(Math.round(L5_5_N.openWelfare - L5_5_N.welfareRef)).toBe(2203);
+      expect(Math.round(L5_5_N.tightChatServed)).toBe(63);
+      expect([r2(L5_5_N.tightBayA), r2(L5_5_N.tightBayB), r2(L5_5_N.tightTechA)]).toEqual([3.5, 10.5, 0.08]);
+      expect(r2(L5_5_N.runCostTechA)).toBe(0.08);
+      expect(r2(L5_5_N.tightBayB / L5_5_N.tightBayA)).toBe(3);
+      const open = marketAt({ ...MARKET_DEFAULTS, lat: 40 });
+      expect(open.allocation.some((a) => a.buyer === 'chat70' && a.site === 'northfield')).toBe(true);
+      expect(marketAt({ ...MARKET_DEFAULTS, lat: 5 }).idle.techpark.A).toBeGreaterThan(0);
+    });
+
+    it('building near the users', () => {
+      expect([L5_5_N.lastFlatAdd, L5_5_N.firstDropAdd, L5_5_N.matchAdd]).toEqual([100, 125, 350]);
+      expect(r2(L5_5_N.firstDropPrice)).toBe(3.25);
+      expect(r2(L5_5_N.matchPrice)).toBe(1.52);
+      expect(L5_5_N.matchAdd125).toBe(2200);
+      expect(marketAt({ ...MARKET_DEFAULTS, addB: 125 }).served.chat70).toBeCloseTo(14000, 3);
+      expect(sameEverywhere({ ...MARKET_DEFAULTS, demand: 75 })).toBe(true);
+    });
+
+    it('who sets each price', () => {
+      const c = marketAt(MARKET_DEFAULTS);
+      expect(priceSetter(c, MARKET_DEFAULTS, 'bayport', 'B')).toEqual({ kind: 'buyer', id: 'chat70' });
+      expect(priceSetter(c, MARKET_DEFAULTS, 'northfield', 'B')).toEqual({ kind: 'buyer', id: 'batch8' });
+      expect(priceSetter(c, MARKET_DEFAULTS, 'northfield', 'A')).toEqual({ kind: 'chain' });
+      expect(r2(worth('chat70', 'B'))).toBe(9);
+      expect(r2(worth('frontier400', 'B'))).toBe(13.5);
+      expect(r2(worth('code8', 'B'))).toBe(11.88);
+      expect(r2((1.4 * productivity('batch8', 'B')) / productivity('train70', 'B'))).toBe(1.52);
+      expect(r2(L5_5_N.prodChatB)).toBe(2.57);
+      expect(Math.round(L5_5_N.prodTrainB * 1000) / 1000).toBe(2.375);
+      expect(r2(L5_5_N.farB / L5_5_N.farA)).toBe(2.37);
+      expect(L5_5_N.listRatio).toBe(2);
     });
   });
 }
