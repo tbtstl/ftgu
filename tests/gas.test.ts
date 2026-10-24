@@ -29,6 +29,15 @@ import { dayPreset, hollowSolved, LOOP_DEFAULTS, LOOP_TARGET, loopedCapacity, lo
 import { ANSWER_RAMP, bestStart, ccgtMW, CHALLENGE_AVG, clean, dayMean, largestRamp, PACK_DEFAULTS, RAMP_STEP, rampSolved, simulate, START_MAX, START_MIN, START_STEP, startRange } from '../src/lessons/gas/ch3/L3_3';
 import { coldSpell, CROSSOVER_DAY, crossoverSolved, dayLabel, DESIGN_INV, DESIGN_NEED, firmRate, firmSolved, gasYear, INJ_DAYS, WD_DAYS, YEAR_DEFAULTS } from '../src/lessons/gas/ch3/L3_4';
 import { breakevenSolved as cargoBreakevenSolved, CHAIN_DEFAULTS, CHALLENGE, challengeAnswer, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
+import { clearRegion, forwardCurve, marketDay, normalPlan, planInventory, planMonth, SEASONAL_COSTS, seasonalPlan, simulateYear } from '../src/engines/gas/market';
+import { capacityAuction, firmCapacityValue, futuresMarks, interruptibleValue, marginCalls } from '../src/engines/gas/contracts';
+import { GAS_MONTHS, normalTemp, weatherYear } from '../src/model/gas/weather';
+import { demandByNode, OIL_SWITCH_VALUE } from '../src/model/gas/demand';
+import { BAL_JAN15, BAL_JUL15, BALANCE_DEFAULTS, BALANCE_YEARS, balanceDay, balanceWeeks, LNG_CUT_TEMP, lngCutSolved, storageValue, winterDraw } from '../src/lessons/gas/ch4/L4_1';
+import { BASIS_STEPS, breakawaySolved, breakawayTemp, HUB_DAY, HUB_DEFAULTS, hubDay, hubWinter, hubWinterStats, metroSetter, SHORTCUT_RENT } from '../src/lessons/gas/ch4/L4_2';
+import { ANCHOR_ANSWER, anchorSolved, CAPACITY_AUCTION_DEFAULTS, EXPANSION_ANNUAL_COST, EXPANSION_COST, EXPANSION_COST_PER_UNIT, EXPANSION_MMBTU_D, expansionOutcome, IT_TOTAL, MARKETER_BID, METRO_GAS_VALUE, QTY_STEP, SPIKE_METRO_PRICE, WINTERS } from '../src/lessons/gas/ch4/L4_3';
+import { enoughStorageScale, enoughStorageSolved, ROUND_TRIP, SEASON_DEFAULTS, seasonPlan, seasonSummary, STORAGE_BCF, WINTER_SEEDS, winterStats } from '../src/lessons/gas/ch4/L4_4';
+import { backwardationThreshold, curveAt, curveChallengeSolved, HEDGE_CONTRACTS, hedgeSolved, INITIAL_MARGIN, MAINTENANCE_MARGIN, SHORT_LEVEL, strips, swapBasis, utilityCost, type WinterId, winterRun } from '../src/lessons/gas/ch4/L4_5';
 
 describe('gas chapter 1: properties', () => {
   it('uses 60 °F and 14.73 psia as standard conditions', () => {
@@ -1309,5 +1318,430 @@ describe('gas 3.5', () => {
     expect(voyagePhase(8, 13).phase).toBe('laden');
     expect(voyagePhase(16, 13).phase).toBe('unloading');
     expect(voyagePhase(29, 13).phase).toBe('ballast');
+  });
+});
+
+describe('gas chapter 4: the market model', () => {
+  const plan = normalPlan();
+
+  it('fills storage by November and empties it by April in a normal year', () => {
+    expect(plan.inventory.hollowcreek[7]).toBeGreaterThan(115);
+    expect(plan.inventory.saltflat[7]).toBeGreaterThan(28);
+    expect(plan.totalInventory[12]).toBeCloseTo(plan.totalInventory[0], 6);
+    expect(plan.rationed.every((x) => x < 1e-9)).toBe(true);
+  });
+
+  it('prices each month above the last by at least the cost of holding gas, and Metro one transport cost above Calder', () => {
+    for (const m of [1, 2, 3, 4, 5, 7, 8, 9, 10]) expect(plan.price.calder[m + 1] - plan.price.calder[m]).toBeGreaterThanOrEqual(SEASONAL_COSTS.holdCostPerMonth - 1e-9);
+    // Storage is full by November, so winter costs more than summer by more than the cost of carrying gas.
+    expect(plan.price.calder[7] - plan.price.calder[6]).toBeGreaterThan(0.5);
+    for (let m = 0; m < 12; m++) expect(plan.price.metro[m] - plan.price.calder[m]).toBeCloseTo(PIPELINE['calder-metro'].variableCost, 6);
+    expect(plan.price.calder[0]).toBeGreaterThan(2.5);
+    expect(plan.price.calder[11]).toBeLessThan(4);
+  });
+
+  it('starts a plan in any month', () => {
+    const nov = seasonalPlan({ startMonth: 7, start: { saltflat: plan.inventory.saltflat[7], hollowcreek: plan.inventory.hollowcreek[7] }, end: { saltflat: plan.inventory.saltflat[7], hollowcreek: plan.inventory.hollowcreek[7] } });
+    expect(nov.startMonth).toBe(7);
+    expect(planMonth(7, 5)).toBe(0);
+    expect(nov.price.calder[5]).toBeLessThan(nov.price.calder[4]);
+  });
+
+  it('clears a day with storage inside its limits and sectors adding up', () => {
+    const d = marketDay({ tempF: 20, storage: { saltflat: 15, hollowcreek: 60 }, waterValue: { saltflat: 3.4, hollowcreek: 3.55 } });
+    const total = Object.values(d.sectors).reduce((a, b) => a + b, 0);
+    expect(total).toBeCloseTo(Object.values(d.served).reduce((a, b) => a + b, 0), 9);
+    expect(-d.storageFlow.hollowcreek).toBeLessThanOrEqual(withdrawCapacity(STORAGE_SPECS.hollowcreek, 60) + 1e-9);
+    expect(d.price.metro).toBeGreaterThanOrEqual(d.price.calder + PIPELINE['calder-metro'].variableCost - 1e-9);
+    const r = clearRegion({ tempF: 20, storage: { saltflat: 15, hollowcreek: 60 }, waterValue: { saltflat: 3.4, hollowcreek: 3.55 } });
+    expect(r.price).toBeGreaterThan(1);
+  });
+
+  it('runs a year deterministically and keeps storage within its fields', () => {
+    const a = simulateYear({ weather: weatherYear(4) });
+    const b = simulateYear({ weather: weatherYear(4) });
+    expect(a[364].price.calder).toBe(b[364].price.calder);
+    for (const d of a) {
+      expect(d.storage.saltflat).toBeGreaterThanOrEqual(0);
+      expect(d.storage.hollowcreek).toBeLessThanOrEqual(120 + 1e-9);
+      expect(d.rationed).toBeLessThan(1e-6);
+    }
+    expect(Math.max(...a.map((d) => d.price.metro - d.price.calder))).toBeGreaterThan(1);
+  });
+
+  it('expects winter to cost more than summer, and more still when storage is short', () => {
+    const st = { saltflat: planInventory(plan, 'saltflat', 214), hollowcreek: planInventory(plan, 'hollowcreek', 214) };
+    const c = forwardCurve({ startDay: 214, startStorage: st, scenarios: 8 });
+    const short = forwardCurve({ startDay: 214, startStorage: { saltflat: st.saltflat * 0.75, hollowcreek: st.hollowcreek * 0.75 }, scenarios: 8 });
+    expect(GAS_MONTHS[c.months[0]]).toBe('Dec');
+    const feb = c.months.indexOf(10);
+    const jul = c.months.indexOf(3);
+    expect(c.calder[feb]).toBeGreaterThan(c.calder[jul] + 0.5);
+    expect(short.calder[feb]).toBeGreaterThan(c.calder[feb]);
+  });
+
+  it('keeps the demand model near the reference days of Chapter 3', () => {
+    const summer = demandByNode(80);
+    const cold = demandByNode(25);
+    expect(summer.metro).toBeGreaterThan(0.9);
+    expect(summer.metro).toBeLessThan(1.4);
+    expect(cold.metro).toBeGreaterThan(2.2);
+    expect(cold.metro).toBeLessThan(2.9);
+  });
+});
+
+describe('gas chapter 4: contracts', () => {
+  it('runs uniform and pay-as-bid capacity auctions', () => {
+    const bids = [
+      { id: 'a', units: 100, price: 5 },
+      { id: 'b', units: 100, price: 3 },
+      { id: 'c', units: 100, price: 1 },
+    ];
+    const u = capacityAuction(bids, 150, 0.5);
+    expect(u.awards).toEqual({ a: 100, b: 50, c: 0 });
+    expect(u.clearingPrice).toBe(3);
+    expect(u.revenue).toBe(450);
+    expect(capacityAuction(bids, 150, 0.5, 'payAsBid').revenue).toBe(650);
+    expect(capacityAuction(bids, 400, 0.5).clearingPrice).toBe(0.5);
+  });
+
+  it('values firm capacity by its spreads and interruptible capacity by the days it flows', () => {
+    expect(firmCapacityValue([0.1, 0.5, 2], 0.15)).toBeCloseTo(0.35 + 1.85, 9);
+    expect(interruptibleValue([0.1, 0.5, 2], [false, false, true], 0.15, 0.05)).toBeCloseTo(0.3, 9);
+  });
+
+  it('marks futures to market and calls margin', () => {
+    const m = futuresMarks(2, 3, [3.1, 2.9, 2.5]);
+    expect(m.daily[0]).toBeCloseTo(2000, 6);
+    expect(m.cumulative[2]).toBeCloseTo(-10000, 6);
+    expect(marginCalls(2, m.cumulative, 3000, 1500)).toEqual([2]);
+  });
+});
+
+describe('gas 4.1', () => {
+  it('opens on a normal January 15 with storage setting the price', () => {
+    expect(BALANCE_DEFAULTS).toEqual({ day: BAL_JAN15, temp: 28, lng: 6.5, ridgeback: 2.6 });
+    expect(storageValue(BAL_JAN15)).toBeCloseTo(3.889, 3);
+    const b = balanceDay(BALANCE_DEFAULTS);
+    expect(b.price).toBeCloseTo(3.939, 3);
+    expect(b.marginal.id.startsWith('wd-')).toBe(true);
+    expect(b.consumption).toBeCloseTo(3.33, 2);
+    expect(b.exports).toBeCloseTo(1.2, 9);
+    expect(b.storage).toBeCloseTo(-1.13, 2);
+    // The balance identity.
+    expect(b.production - b.consumption - b.exports).toBeCloseTo(b.storage, 9);
+  });
+
+  it('injects on a normal July 15 at storage’s bid', () => {
+    const b = balanceDay({ ...BALANCE_DEFAULTS, day: BAL_JUL15, temp: Math.round(normalTemp(BAL_JUL15)) });
+    expect(Math.round(normalTemp(BAL_JUL15))).toBe(76);
+    expect(b.price).toBeCloseTo(2.839, 3);
+    expect(b.consumption).toBeCloseTo(1.58, 2);
+    expect(b.storage).toBeCloseTo(0.62, 2);
+    expect(b.marginal.id.startsWith('inj-')).toBe(true);
+  });
+
+  it('climbs the demand curve once storage reaches its limit on January 15', () => {
+    const at = (t: number) => balanceDay({ ...BALANCE_DEFAULTS, temp: t });
+    expect(at(10).marginal.id.startsWith('wd-')).toBe(true);
+    expect(at(10).storage).toBeCloseTo(-2.09, 2);
+    expect(at(10).withdrawLimit).toBeCloseTo(2.14, 2);
+    expect(at(9).marginal.id.startsWith('wd-')).toBe(false);
+    expect(at(9).price).toBeCloseTo(4.0, 9);
+    expect(at(8).price).toBeCloseTo(4.5, 9);
+    expect(at(7).price).toBeCloseTo(5.0, 9);
+    expect(at(7).marginal.id).toBe('bayport-flexible');
+    expect(Math.round((at(27).storage - at(28).storage) * -1000)).toBe(53);
+  });
+
+  it('solves the LNG challenge at 4 °F and nowhere else', () => {
+    expect(LNG_CUT_TEMP).toBe(4);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 4 })).toBe(true);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 5 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 3 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 4, lng: 6 })).toBe(false);
+    const b = balanceDay({ ...BALANCE_DEFAULTS, temp: 4 });
+    expect(b.price).toBeCloseTo(6.5, 9);
+    expect(b.lngCut).toBeCloseTo(0.024, 3);
+  });
+
+  it('quotes the cold December and the mild winter', () => {
+    const cold = balanceWeeks(BALANCE_YEARS[2].seed);
+    const surprise = cold.reduce((a, w) => (w.change - w.planChange < a.change - a.planChange ? w : a));
+    expect(surprise.start).toBe(266);
+    expect(surprise.change).toBeCloseTo(-12.4, 1);
+    expect(surprise.planChange).toBeCloseTo(-5.9, 1);
+    expect(surprise.tempDev).toBeCloseTo(-18.5, 1);
+    const gap = cold.reduce((a, w) => (w.inventory - w.planInventory < a.inventory - a.planInventory ? w : a));
+    expect(gap.planInventory - gap.inventory).toBeCloseTo(20.3, 1);
+    const peak = cold.reduce((a, w) => (w.price > a.price ? w : a));
+    expect(peak.start).toBe(273);
+    expect(peak.price).toBeCloseTo(6.25, 2);
+    const mild = balanceWeeks(BALANCE_YEARS[0].seed);
+    expect(Math.max(...mild.map((w) => w.price))).toBeCloseTo(4.25, 2);
+    expect(mild[51].inventory).toBeCloseTo(53.1, 1);
+    expect(mild[51].planInventory).toBeCloseTo(37.5, 1);
+    const draw = winterDraw(BALANCE_YEARS[0].seed);
+    expect(draw.actual).toBeCloseTo(92.5, 1);
+    expect(draw.plan - draw.actual).toBeCloseTo(20.0, 1);
+  });
+});
+
+describe('gas 4.2', () => {
+  const start = hubDay(HUB_DEFAULTS);
+  const b = (d: ReturnType<typeof hubDay>, n: 'metro' | 'bayport' | 'ridgeback' | 'sandhill') => d.price[n] - d.price.calder;
+
+  it('starts on January 20 at 28 °F with Hollow Creek a fraction above plan', () => {
+    expect(HUB_DAY).toBe(294);
+    expect(HUB_DEFAULTS).toEqual({ temp: 28, hollow: 73, northline: 1.8, ridgeback: 2.6 });
+    expect(HUB_DEFAULTS.hollow).toBeGreaterThan(planInventory(normalPlan(), 'hollowcreek', HUB_DAY));
+  });
+
+  it('prices every place at the hub plus or minus transport at the start', () => {
+    expect(start.price.calder).toBeCloseTo(3.94, 2);
+    expect(b(start, 'metro')).toBeCloseTo(0.15, 2);
+    expect(b(start, 'bayport')).toBeCloseTo(0.1, 2);
+    expect(b(start, 'ridgeback')).toBeCloseTo(-0.12, 2);
+    expect(b(start, 'sandhill')).toBeCloseTo(-0.1, 2);
+    expect(metroSetter(start, HUB_DEFAULTS)).toBe('gas from Calder Hub, plus the cost of moving it');
+    expect(-start.storageFlow.hollowcreek).toBeCloseTo(0.9, 2);
+    expect(-start.storageFlow.hollowcreek).toBeCloseTo(withdrawCapacity(STORAGE_SPECS.hollowcreek, 73), 6);
+    expect(start.flow['calder-metro']).toBeCloseTo(1.06, 2);
+    expect(SHORTCUT_RENT.coastal).toBeCloseTo(0.06, 2);
+    expect(SHORTCUT_RENT.valley).toBeCloseTo(0.07, 2);
+  });
+
+  it('breaks Metro away from Calder in steps as it gets colder', () => {
+    expect(BASIS_STEPS).toEqual({ breaks: 12, interruptible: 10, oil: 8, industry: -7, homes: -12 });
+    const at = (t: number) => hubDay({ ...HUB_DEFAULTS, temp: t });
+    expect(b(at(13), 'metro')).toBeCloseTo(0.15, 6);
+    expect(at(12).price.metro).toBeCloseTo(4.5, 6);
+    expect(at(11).price.metro).toBeCloseTo(5, 6);
+    expect(at(10).price.metro).toBeCloseTo(8, 6);
+    expect(at(8).price.metro).toBeCloseTo(15, 6);
+    expect(at(8).price.calder).toBeCloseTo(3.94, 2);
+    expect(b(at(8), 'metro')).toBeCloseTo(11.06, 2);
+  });
+
+  it('solves the challenge at 11 °F and nowhere else', () => {
+    expect(breakawayTemp()).toBe(11);
+    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 11 })).toBe(true);
+    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 12 })).toBe(false);
+    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 10 })).toBe(false);
+    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 11, hollow: 72 })).toBe(false);
+  });
+
+  it('quotes the derated Northline and the flooded basin', () => {
+    expect(b(hubDay({ ...HUB_DEFAULTS, northline: 1.0 }), 'metro')).toBeCloseTo(1.06, 2);
+    expect(b(hubDay({ ...HUB_DEFAULTS, northline: 0.8 }), 'metro')).toBeCloseTo(11.16, 2);
+    expect(b(hubDay({ ...HUB_DEFAULTS, ridgeback: 3.05 }), 'ridgeback')).toBeCloseTo(-0.12, 2);
+    const glut = hubDay({ ...HUB_DEFAULTS, ridgeback: 3.1 });
+    expect(glut.price.ridgeback).toBeCloseTo(1.2, 6);
+    expect(b(glut, 'ridgeback')).toBeCloseTo(-2.73, 2);
+    expect(glut.price.calder).toBeCloseTo(3.93, 2);
+  });
+
+  it('describes the three winters correctly', () => {
+    const mild = hubWinterStats('mild');
+    const typical = hubWinterStats('typical');
+    const harsh = hubWinterStats('harsh');
+    expect(hubWinter('harsh').length).toBe(151);
+    expect(mild.breakaways).toBe(0);
+    expect(mild.maxBasis).toBeCloseTo(0.15, 6);
+    expect(Math.round(mild.coldest)).toBe(15);
+    expect(typical.breakaways).toBe(1);
+    expect(typical.maxDay).toBe(342);
+    expect(typical.maxBasis).toBeCloseTo(1.6, 2);
+    expect(Math.round(typical.maxTemp)).toBe(17);
+    expect(Math.round(typical.peakInv)).toBe(39);
+    expect(typical.coldestDay).toBe(274);
+    expect(Math.round(typical.coldest)).toBe(10);
+    expect(typical.coldestBasis).toBeCloseTo(0.32, 2);
+    expect(Math.round(typical.coldestInv)).toBe(81);
+    expect(harsh.breakaways).toBe(7);
+    expect(harsh.maxDay).toBe(harsh.coldestDay);
+    expect(harsh.maxDay).toBe(281);
+    expect(harsh.maxBasis).toBeCloseTo(10.43, 2);
+    expect(Math.round(harsh.maxTemp)).toBe(7);
+    expect(harsh.avgBasis).toBeCloseTo(0.45, 2);
+  });
+});
+
+describe('gas 4.3', () => {
+  it('prices Northline’s fourth station: 259,250 MMBtu/d for $233 million, $95.54 per MMBtu/d a year', () => {
+    expect(Math.round(EXPANSION_MMBTU_D)).toBe(259250);
+    expect(EXPANSION_COST / 1e6).toBeCloseTo(233.5, 1);
+    expect(EXPANSION_ANNUAL_COST / 1e6).toBeCloseTo(24.77, 2);
+    expect(EXPANSION_COST_PER_UNIT).toBeCloseTo(95.54, 2);
+    expect((EXPANSION_COST_PER_UNIT / 365) * 100).toBeCloseTo(26.2, 1);
+  });
+
+  it('finds firm capacity worth $12.36 a year on average over twenty winters, and interruptible worth nothing', () => {
+    const firm = WINTERS.map((w) => w.firm);
+    expect(MARKETER_BID).toBeCloseTo(12.36, 2);
+    expect(Math.max(...firm)).toBeCloseTo(45.31, 2);
+    expect(firm.filter((v) => v < 1).length).toBe(10);
+    expect(WINTERS.filter((w) => w.fullDays === 0).length).toBe(2);
+    expect(WINTERS.reduce((a, w) => a + w.fullDays, 0) / 20).toBeCloseTo(4.4, 6);
+    const share = WINTERS.reduce((a, w) => a + w.topThree, 0) / WINTERS.reduce((a, w) => a + w.firm, 0);
+    expect(Math.round(share * 100)).toBe(81);
+    expect(IT_TOTAL).toBeLessThan(0.005);
+    expect(SPIKE_METRO_PRICE).toBeCloseTo(OIL_SWITCH_VALUE, 6);
+  });
+
+  it('settles the starting open season short of the station’s cost, under either rule', () => {
+    const pab = expansionOutcome(CAPACITY_AUCTION_DEFAULTS);
+    expect(pab.revenue / 1e6).toBeCloseTo(12.97, 2);
+    expect(pab.built).toBe(false);
+    const uni = expansionOutcome({ ...CAPACITY_AUCTION_DEFAULTS, rule: 'uniform' });
+    expect(uni.result.clearingPrice).toBeCloseTo(MARKETER_BID, 9);
+    expect(uni.revenue / 1e6).toBeCloseTo(3.2, 2);
+    expect((EXPANSION_MMBTU_D * Math.max(...WINTERS.map((w) => w.firm))) / 1e6).toBeCloseTo(11.75, 2);
+  });
+
+  it('needs an anchor contract of 225,000 MMBtu/d at $110, and the challenge is solved only there', () => {
+    expect(ANCHOR_ANSWER).toBe(225000);
+    expect(anchorSolved({ rule: 'payAsBid', qty: 225000, bid: METRO_GAS_VALUE })).toBe(true);
+    expect(anchorSolved({ rule: 'payAsBid', qty: 225000 - QTY_STEP, bid: METRO_GAS_VALUE })).toBe(false);
+    expect(anchorSolved({ rule: 'payAsBid', qty: 230000, bid: METRO_GAS_VALUE })).toBe(false);
+    expect(anchorSolved({ rule: 'uniform', qty: 225000, bid: METRO_GAS_VALUE })).toBe(false);
+    expect(anchorSolved({ rule: 'payAsBid', qty: 225000, bid: 115 })).toBe(false);
+    expect(expansionOutcome({ rule: 'payAsBid', qty: 225000, bid: METRO_GAS_VALUE }).revenue / 1e6).toBeCloseTo(25.2, 1);
+  });
+});
+
+describe('gas 4.4', () => {
+  it('fills storage by November and prices winter $0.90 above October, $0.80 of it scarcity rent', () => {
+    const p = seasonPlan(SEASON_DEFAULTS);
+    const s = seasonSummary(p);
+    expect(p.totalInventory[0]).toBeCloseTo(37.5, 1);
+    expect(p.totalInventory[7]).toBeCloseTo(150, 1);
+    expect(s.full).toBe(true);
+    expect(ROUND_TRIP).toBeCloseTo(0.1, 9);
+    expect(s.step).toBeCloseTo(0.9, 6);
+    expect(s.rent).toBeCloseTo(0.8, 6);
+    expect(p.price.calder[1]).toBeCloseTo(2.85, 6);
+    expect(p.price.calder[6]).toBeCloseTo(2.95, 6);
+    expect(p.price.calder[11]).toBeCloseTo(3.93, 6);
+    expect(p.price.metro[1]).toBeCloseTo(3.0, 6);
+    expect(p.price.metro[7]).toBeCloseTo(4.0, 6);
+    expect(Math.round((s.rent * STORAGE_BCF * 1e6 * MMBTU_PER_MCF) / 1e6)).toBe(124);
+  });
+
+  it('stops filling at 160.5 Bcf, the challenge’s only answer', () => {
+    expect(enoughStorageScale()).toBe(1.07);
+    const answers: number[] = [];
+    for (let i = 50; i <= 150; i++) if (enoughStorageSolved({ ...SEASON_DEFAULTS, scale: i / 100 })) answers.push(i / 100);
+    expect(answers).toEqual([1.07]);
+    expect(enoughStorageSolved({ ...SEASON_DEFAULTS, scale: 1.07, shift: -1 })).toBe(false);
+    expect(seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, scale: 1.07 })).peak).toBeCloseTo(160, 0);
+  });
+
+  it('quotes the effects of storage size, winter weather and LNG', () => {
+    const small = seasonPlan({ ...SEASON_DEFAULTS, scale: 0.75 });
+    expect(small.price.calder[1]).toBeCloseTo(1.7, 6);
+    expect(small.price.sandhill[1]).toBeCloseTo(1.6, 6);
+    expect(small.price.calder[7]).toBeCloseTo(4.9, 6);
+    expect(seasonSummary(small).rent).toBeCloseTo(3.0, 6);
+    const big = seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, scale: 1.5 }));
+    expect(big.rent).toBeCloseTo(0, 9);
+    expect(big.summer).toBeCloseTo(3.36, 2);
+    expect(big.winter).toBeCloseTo(3.55, 2);
+    expect(seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, shift: -1 })).winter).toBeCloseTo(4.81, 2);
+    expect(seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, shift: 1 })).winter).toBeCloseTo(3.39, 2);
+    expect(seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, lng: 1.1 })).summer).toBeCloseTo(1.75, 2);
+  });
+
+  it('simulates the four winters', () => {
+    expect(WINTER_SEEDS).toEqual({ mild: 23, typical: 11, cold: 29 });
+    const n = winterStats('normal');
+    const mild = winterStats('mild');
+    const typ = winterStats('typical');
+    const cold = winterStats('cold');
+    expect(Math.round(n.winterHdd)).toBe(4640);
+    expect(n.mar31).toBeCloseTo(33.2, 1);
+    expect(n.winterPrice).toBeCloseTo(4.21, 2);
+    expect(Math.round((1 - mild.winterHdd / n.winterHdd) * 100)).toBe(15);
+    expect(mild.mar31).toBeCloseTo(56.9, 1);
+    expect(mild.winterPrice).toBeCloseTo(3.91, 2);
+    expect(Math.round(typ.winterHdd)).toBe(4643);
+    expect(typ.winterPrice).toBeCloseTo(4.38, 2);
+    expect(Math.round((cold.winterHdd / n.winterHdd - 1) * 100)).toBe(14);
+    expect(cold.mar31).toBeCloseTo(22.2, 1);
+    expect(cold.winterPrice).toBeCloseTo(4.97, 2);
+    expect(cold.maxPrice).toBeCloseTo(6.4, 6);
+  });
+});
+
+describe('gas 4.5', () => {
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const at = (c: ReturnType<typeof curveAt>, m: number) => c.calder[c.months.indexOf(m)];
+  const basisAt = (c: ReturnType<typeof curveAt>, m: number) => c.metro[c.months.indexOf(m)] - at(c, m);
+
+  it('draws the November 1 curve with a winter premium', () => {
+    const c = curveAt('nov1', 100);
+    expect([8, 9, 10, 11, 0].map((m) => r2(at(c, m)))).toEqual([4.08, 4.31, 4.56, 4.23, 2.9]);
+    const summer = [0, 1, 2, 3, 4, 5].map((m) => at(c, m));
+    expect(r2(Math.min(...summer))).toBe(2.78);
+    expect(r2(Math.max(...summer))).toBe(2.9);
+    const s = strips(c);
+    expect(r2(s.winter)).toBe(4.26);
+    expect(r2(s.summer)).toBe(2.87);
+    expect(r2(c.calderSd[c.months.indexOf(10)])).toBe(0.63);
+    expect(Math.max(...c.calderSd)).toBe(c.calderSd[c.months.indexOf(10)]);
+    expect(r2(normalPlan().price.calder[10])).toBe(3.91);
+    expect(r2(basisAt(c, 9))).toBe(0.22);
+    expect(r2(basisAt(c, 10))).toBe(0.32);
+    expect(r2(basisAt(c, 0))).toBe(0.15);
+    expect(r2(swapBasis())).toBe(0.32);
+  });
+
+  it('raises the curve, winter most, when storage is short, and draws a full year from April 1', () => {
+    const c = curveAt('nov1', SHORT_LEVEL);
+    expect(SHORT_LEVEL).toBe(75);
+    expect(r2(at(c, 8))).toBe(5.35);
+    expect(r2(at(c, 10))).toBe(5.5);
+    expect(r2(strips(c).winter)).toBe(5.09);
+    expect(r2(strips(c).summer)).toBe(3.16);
+    expect(r2(basisAt(c, 10))).toBe(0.48);
+    const apr = curveAt('apr1', 100);
+    expect(r2(at(apr, 3))).toBe(2.91);
+    expect(r2(at(apr, 10))).toBe(4.87);
+  });
+
+  it('backwardates the winter at 70% of plan and no higher: the first challenge', () => {
+    expect(backwardationThreshold()).toBe(70);
+    expect(curveChallengeSolved({ date: 'nov1', level: 70 })).toBe(true);
+    for (const l of [60, 65, 75, 80, 100]) expect(curveChallengeSolved({ date: 'nov1', level: l })).toBe(false);
+    expect(curveChallengeSolved({ date: 'apr1', level: 70 })).toBe(false);
+  });
+
+  it('moves the February contract with storage through three winters', () => {
+    const end = (id: WinterId) => winterRun(id).path[winterRun(id).path.length - 1];
+    for (const id of ['cold', 'ordinary', 'mild'] as WinterId[]) expect(r2(winterRun(id).path[0])).toBe(4.56);
+    expect(r2(end('cold'))).toBe(5.06);
+    expect(r2(end('ordinary'))).toBe(4.35);
+    expect(r2(end('mild'))).toBe(3.54);
+    expect(r2(winterRun('cold').calderAvg)).toBe(5.12);
+    expect(r2(winterRun('ordinary').calderAvg)).toBe(4.23);
+    expect(r2(winterRun('mild').calderAvg)).toBe(3.32);
+  });
+
+  it('hedges the utility with 140 contracts: the second challenge', () => {
+    expect(HEDGE_CONTRACTS).toBe(140);
+    expect(hedgeSolved({ contracts: 140 })).toBe(true);
+    expect(hedgeSolved({ contracts: 130 })).toBe(false);
+    const range = (n: number, swap: boolean) => {
+      const xs = (['cold', 'ordinary', 'mild'] as WinterId[]).map((id) => utilityCost(id, n, swap).net);
+      return [r2(Math.min(...xs)), r2(Math.max(...xs))];
+    };
+    expect(range(0, false)).toEqual([3.47, 5.57]);
+    expect(range(140, false)).toEqual([4.49, 5.07]);
+    expect(range(140, true)).toEqual([4.67, 4.94]);
+    const mild = utilityCost('mild', 140, false);
+    expect(Math.round(-mild.futuresGain / 1e4) / 100).toBe(1.43);
+    const w = winterRun('mild');
+    const marks = futuresMarks(140, w.path[0], w.path.slice(1));
+    expect(marginCalls(140, marks.cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN).length).toBe(5);
   });
 });
