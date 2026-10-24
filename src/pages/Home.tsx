@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { COURSES } from '../course/courses';
-import { getLesson, LESSONS } from '../course/registry';
+import { getCourse, getLesson, LESSONS } from '../course/registry';
 import { lessonHref } from '../course/router';
 import { useLastLesson } from '../course/progress';
 import { SiteFooter } from './SiteFooter';
@@ -27,7 +27,8 @@ export function Home() {
       <p className="lede-2">
         {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
         <a href={lessonHref(lesson.id)}>
-          {lesson.id} {lesson.title}
+          {lesson.course === 'electricity' ? '' : `${getCourse(lesson.course)?.short}: `}
+          {lesson.num} {lesson.title}
         </a>
         .
       </p>

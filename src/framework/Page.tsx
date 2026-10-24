@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import { getChapter, getLesson, neighbors, type LessonMeta } from '../course/registry';
+import { getChapter, getCourse, getLesson, neighbors, type LessonMeta } from '../course/registry';
 import { courseHref, lessonHref } from '../course/router';
 import { markVisited } from '../course/progress';
 import { TwoUpLayout, useWideViewport } from './twoUp';
@@ -38,10 +38,13 @@ export function Crumbs({ items }: { items: Crumb[] }) {
 
 /** The thin bar above a lesson: where it sits in the school, and a way back to the contents. */
 export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean }) {
+  const meta = getLesson(id);
+  const course = getCourse(meta?.course ?? (id.includes('/') ? id.split('/')[0] : 'electricity'));
+  const home = courseHref(course?.slug);
   return (
     <header className={wide ? 'sh wide' : 'sh'}>
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Electricity', href: courseHref() }, { label: id }]} />
-      <a className="sh-link" href={courseHref()}>
+      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: course?.short ?? 'Course', href: home }, { label: meta?.num ?? id }]} />
+      <a className="sh-link" href={home}>
         Contents
       </a>
     </header>
@@ -57,11 +60,11 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
   const wideViewport = useWideViewport();
   const wide = twoUp && wideViewport;
   const meta = getLesson(id);
-  const chapter = meta ? getChapter(meta.chapter) : undefined;
+  const chapter = meta ? getChapter(meta.chapter, meta.course) : undefined;
   const { prev, next } = neighbors(id);
 
   useEffect(() => {
-    document.title = meta ? `${meta.id} ${meta.title} · Ground Up` : 'Ground Up';
+    document.title = meta ? `${meta.num} ${meta.title} · Ground Up` : 'Ground Up';
     if (meta) markVisited(meta.id);
   }, [meta]);
 
@@ -72,18 +75,18 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
         <TwoUpLayout wide={wide}>
           <h1 className="tt">{meta ? meta.title : id}</h1>
           <p className="dek">
-            Lesson {id}
+            Lesson {meta?.num ?? id}
             {chapter && ` · ${chapter.title}`}
           </p>
           {children}
-          <LessonNav prev={prev} next={next} />
+          <LessonNav prev={prev} next={next} home={courseHref(meta?.course)} />
         </TwoUpLayout>
       </main>
     </LessonContext.Provider>
   );
 }
 
-function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
+function LessonNav({ prev, next, home }: { prev?: LessonMeta; next?: LessonMeta; home: string }) {
   return (
     <nav className="lnav" aria-label="Lessons">
       <ul className="rows">
@@ -92,10 +95,10 @@ function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
             <a className="row row-wide" href={lessonHref(prev.id)}>
               <span className="row-n">Previous</span>
               <span className="row-t">{prev.title}</span>
-              <span className="row-m">{prev.id}</span>
+              <span className="row-m">{prev.num}</span>
             </a>
           ) : (
-            <a className="row row-wide" href={courseHref()}>
+            <a className="row row-wide" href={home}>
               <span className="row-n">Previous</span>
               <span className="row-t">Course contents</span>
               <span className="row-m" />
@@ -107,7 +110,7 @@ function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
             <a className="row row-wide" href={lessonHref(next.id)}>
               <span className="row-n">Next</span>
               <span className="row-t">{next.title}</span>
-              <span className="row-m">{next.id}</span>
+              <span className="row-m">{next.num}</span>
             </a>
           ) : (
             <a className="row row-wide" href="#/">

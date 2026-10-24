@@ -1,45 +1,62 @@
 import { useEffect, useState } from 'react';
-import { CHAPTERS, getLesson, hasLesson, LESSONS } from '../course/registry';
+import { courseLessons, getCourse, getLesson, hasLesson } from '../course/registry';
 import { lessonHref } from '../course/router';
 import { useLastLesson, useProgress } from '../course/progress';
 import { Crumbs } from '../framework/Page';
 import { SiteFooter } from './SiteFooter';
 
-/** The electricity course: a short introduction, then the contents, chapter by chapter. */
-export function Course() {
+/** A course page: a short introduction, then the contents, chapter by chapter. */
+export function Course({ slug = 'electricity' }: { slug?: string }) {
+  const course = getCourse(slug);
   const progress = useProgress();
   const last = useLastLesson();
-  const current = (last && getLesson(last)) || undefined;
+  const lastMeta = (last && getLesson(last)) || undefined;
+  const current = lastMeta?.course === slug ? lastMeta : undefined;
+  const LESSONS = courseLessons(slug);
+  const CHAPTERS = course?.chapters ?? [];
   const [open, setOpen] = useState<Record<number, boolean>>(() => ({ [current?.chapter ?? 1]: true }));
   const solved = (id: string) => (progress[id]?.length ?? 0) > 0;
-  const resume = current ?? LESSONS[0];
+  const resume = current ?? LESSONS.find((l) => hasLesson(l.id));
 
   useEffect(() => {
-    document.title = 'Electricity & Energy Markets · Ground Up';
-  }, []);
+    document.title = course ? `${course.title} · Ground Up` : 'Ground Up';
+  }, [course]);
+
+  if (!course) {
+    return (
+      <main className="col page">
+        <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Not found' }]} />
+        <p className="lede">
+          There’s no course at this address. <a href="#/">Back to Ground Up</a>
+        </p>
+        <SiteFooter />
+      </main>
+    );
+  }
 
   return (
     <main className="col page">
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Electricity' }]} />
+      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: course.short }]} />
 
       <header className="hdr">
-        <h1 className="name">Electricity &amp; Energy Markets</h1>
+        <h1 className="name">{course.title}</h1>
         <p className="dek">
           {CHAPTERS.length} chapters · {LESSONS.length} lessons
         </p>
       </header>
 
-      <p className="lede">
-        Flip a switch and a lamp turns on. Somewhere, a generator works a little harder to keep up — and a market decided, minutes earlier, who would be paid to do
-        it. This course explains both halves, from a single battery to a grid of your own.
-      </p>
-      <p className="lede-2">
-        {current ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-        <a href={lessonHref(resume.id)}>
-          {resume.id} {resume.title}
-        </a>
-        .
-      </p>
+      <p className="lede">{course.lede}</p>
+      {resume ? (
+        <p className="lede-2">
+          {current ? 'Continue where you left off: ' : 'Start with the first lesson: '}
+          <a href={lessonHref(resume.id)}>
+            {resume.num} {resume.title}
+          </a>
+          .
+        </p>
+      ) : (
+        <p className="lede-2">This course is being written. Its contents are below.</p>
+      )}
 
       <section className="sec" aria-labelledby="contents">
         <h2 className="label" id="contents">
@@ -76,13 +93,13 @@ export function Course() {
                         <li key={l.id}>
                           {hasLesson(l.id) ? (
                             <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
-                              <span className="row-n">{l.id}</span>
+                              <span className="row-n">{l.num}</span>
                               <span className="row-t">{l.title}</span>
                               <span className="row-m">{mark}</span>
                             </a>
                           ) : (
                             <div className={cls + ' done'}>
-                              <span className="row-n">{l.id}</span>
+                              <span className="row-n">{l.num}</span>
                               <span className="row-t">{l.title}</span>
                               <span className="row-m">Soon</span>
                             </div>

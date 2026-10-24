@@ -4,16 +4,16 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ComponentType } from 'react';
-import { LESSONS } from '../src/course/registry';
+import { ALL_LESSONS, lessonModulePath, OUTLINES } from '../src/course/registry';
 import { COURSES } from '../src/course/courses';
 import { Course } from '../src/pages/Course';
 import { Home } from '../src/pages/Home';
 
-const modules = import.meta.glob<{ default: ComponentType }>('../src/lessons/ch*/L*_*.tsx');
+const modules = import.meta.glob<{ default: ComponentType }>(['../src/lessons/ch*/L*_*.tsx', '../src/lessons/*/ch*/L*_*.tsx']);
 
+// lessonModulePath is relative to src/course; the glob above is relative to tests/.
 function pathOf(id: string) {
-  const [c, m] = id.split('.');
-  return `../src/lessons/ch${c}/L${c}_${m}.tsx`;
+  return lessonModulePath(id).replace(/^\.\.\//, '../src/');
 }
 
 // The home and course footers fetch a forecast; keep tests offline.
@@ -30,15 +30,17 @@ describe('home', () => {
 });
 
 describe('course', () => {
-  it('renders the contents', () => {
-    const { getAllByRole, unmount } = render(<Course />);
-    expect(getAllByRole('heading', { level: 3 }).length).toBe(8);
-    unmount();
-  });
+  for (const outline of OUTLINES) {
+    it(`renders the ${outline.slug} contents`, () => {
+      const { getAllByRole, unmount } = render(<Course slug={outline.slug} />);
+      expect(getAllByRole('heading', { level: 3 }).length).toBe(outline.chapters.length);
+      unmount();
+    });
+  }
 });
 
 describe('lessons', () => {
-  for (const lesson of LESSONS) {
+  for (const lesson of ALL_LESSONS) {
     const load = modules[pathOf(lesson.id)];
     it.skipIf(!load)(`${lesson.id} ${lesson.title}`, async () => {
       const mod = await load!();

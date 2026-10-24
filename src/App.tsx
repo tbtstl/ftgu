@@ -18,7 +18,7 @@ function lessonComponent(id: string): ComponentType | undefined {
 
 export function App() {
   const route = useRoute();
-  const key = route.kind === 'lesson' ? route.id : route.kind;
+  const key = route.kind === 'lesson' ? route.id : route.kind === 'course' ? `course:${route.course}` : route.kind;
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -27,7 +27,7 @@ export function App() {
   const Lesson = useMemo(() => (route.kind === 'lesson' ? lessonComponent(route.id) : undefined), [key]);
 
   if (route.kind === 'home') return <Home />;
-  if (route.kind === 'course') return <Course />;
+  if (route.kind === 'course') return <Course key={route.course} slug={route.course} />;
   if (!Lesson) return <Missing id={route.id} />;
   return (
     <LessonBoundary key={key} id={route.id}>
@@ -52,7 +52,7 @@ class LessonBoundary extends Component<{ id: string; children: ReactNode }, { fa
     return (
       <Notice id={this.props.id} title={meta ? meta.title : 'Lesson'}>
         Something went wrong while loading this lesson. <a href={`#/${this.props.id}`} onClick={() => window.location.reload()}>Reload the page</a> or go{' '}
-        <a href={courseHref()}>back to the contents</a>.
+        <a href={courseHref(meta?.course)}>back to the contents</a>.
       </Notice>
     );
   }
@@ -75,7 +75,7 @@ function Missing({ id }: { id: string }) {
   const meta = getLesson(id);
   return (
     <Notice id={id} title={meta ? meta.title : 'Lesson not found'}>
-      {meta ? 'This lesson isn’t available yet.' : 'There’s no lesson at this address.'} <a href={courseHref()}>Back to the contents</a>
+      {meta ? 'This lesson isn’t available yet.' : 'There’s no lesson at this address.'} <a href={courseHref(meta?.course)}>Back to the contents</a>
     </Notice>
   );
 }
@@ -87,7 +87,7 @@ function Notice({ id, title, children }: { id: string; title: string; children: 
       <main className="art">
         <div className="wrap">
           <h1 className="tt">{title}</h1>
-          <p className="dek">Lesson {id}</p>
+          <p className="dek">Lesson {getLesson(id)?.num ?? id}</p>
           <p className="pp">{children}</p>
         </div>
       </main>
