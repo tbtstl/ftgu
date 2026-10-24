@@ -26,7 +26,6 @@ export function Home() {
       </p>
       <p className="lede-2">
         {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-        {COURSES[0].name} —{' '}
         <a href={lessonHref(lesson.id)}>
           {lesson.id} {lesson.title}
         </a>
