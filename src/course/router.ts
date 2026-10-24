@@ -1,16 +1,16 @@
 // Hash routing so the built site works on any static host without rewrites.
-//   #/            home
-//   #/contents    home, scrolled to the contents
-//   #/engines     home, scrolled to the engine diagram
-//   #/4.4         lesson 4.4
+//   #/             the school's home page
+//   #/electricity  the electricity course: introduction and contents
+//   #/4.4          lesson 4.4
+// The old #/contents and #/engines links lead to the course page.
 
 import { useSyncExternalStore } from 'react';
 
-export type Route = { kind: 'home'; section?: 'contents' | 'engines' } | { kind: 'lesson'; id: string };
+export type Route = { kind: 'home' } | { kind: 'course' } | { kind: 'lesson'; id: string };
 
 function parse(hash: string): Route {
   const path = hash.replace(/^#\/?/, '');
-  if (path === 'contents' || path === 'engines') return { kind: 'home', section: path };
+  if (path === 'electricity' || path === 'contents' || path === 'engines') return { kind: 'course' };
   if (/^\d+\.\d+$/.test(path)) return { kind: 'lesson', id: path };
   return { kind: 'home' };
 }
@@ -27,4 +27,8 @@ export function useRoute(): Route {
 
 export function lessonHref(id: string): string {
   return `#/${id}`;
+}
+
+export function courseHref(): string {
+  return '#/electricity';
 }

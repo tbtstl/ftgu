@@ -1,0 +1,104 @@
+import { useEffect, useState } from 'react';
+import { CHAPTERS, getLesson, hasLesson, LESSONS } from '../course/registry';
+import { lessonHref } from '../course/router';
+import { useLastLesson, useProgress } from '../course/progress';
+import { Crumbs } from '../framework/Page';
+import { SiteFooter } from './SiteFooter';
+
+/** The electricity course: a short introduction, then the contents, chapter by chapter. */
+export function Course() {
+  const progress = useProgress();
+  const last = useLastLesson();
+  const current = (last && getLesson(last)) || undefined;
+  const [open, setOpen] = useState<Record<number, boolean>>(() => ({ [current?.chapter ?? 1]: true }));
+  const solved = (id: string) => (progress[id]?.length ?? 0) > 0;
+  const resume = current ?? LESSONS[0];
+
+  useEffect(() => {
+    document.title = 'Electricity & Energy Markets · Ground Up';
+  }, []);
+
+  return (
+    <main className="col page">
+      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Electricity' }]} />
+
+      <header className="hdr">
+        <h1 className="name">Electricity &amp; Energy Markets</h1>
+        <p className="dek">
+          {CHAPTERS.length} chapters · {LESSONS.length} lessons
+        </p>
+      </header>
+
+      <p className="lede">
+        Flip a switch and a lamp turns on. Somewhere, a generator works a little harder to keep up — and a market decided, minutes earlier, who would be paid to do
+        it. This course explains both halves, from a single battery to a grid of your own.
+      </p>
+      <p className="lede-2">
+        {current ? 'Continue where you left off: ' : 'Start with the first lesson: '}
+        <a href={lessonHref(resume.id)}>
+          {resume.id} {resume.title}
+        </a>
+        .
+      </p>
+
+      <section className="sec" aria-labelledby="contents">
+        <h2 className="label" id="contents">
+          Contents
+        </h2>
+        <ol className="rows">
+          {CHAPTERS.map((c) => {
+            const isOpen = !!open[c.n];
+            const done = c.lessons.filter((l) => solved(l.id)).length;
+            const status = done === c.lessons.length ? 'Done' : done > 0 ? `${done} of ${c.lessons.length}` : `${c.lessons.length} lessons`;
+            return (
+              <li key={c.n}>
+                <h3 className="row-h">
+                  <button
+                    type="button"
+                    className="row"
+                    aria-expanded={isOpen}
+                    aria-controls={`chapter-${c.n}`}
+                    onClick={() => setOpen((o) => ({ ...o, [c.n]: !o[c.n] }))}
+                  >
+                    <span className="row-n">{c.n}</span>
+                    <span className="row-t">{c.title}</span>
+                    <span className="row-m">{status}</span>
+                  </button>
+                </h3>
+                {isOpen && (
+                  <ol className="rows rows-in" id={`chapter-${c.n}`}>
+                    {c.lessons.map((l) => {
+                      const isDone = solved(l.id);
+                      const isCurrent = l.id === current?.id;
+                      const cls = 'row' + (isDone ? ' done' : '') + (isCurrent ? ' now' : '');
+                      const mark = isCurrent ? 'Up next' : isDone ? 'Done' : '';
+                      return (
+                        <li key={l.id}>
+                          {hasLesson(l.id) ? (
+                            <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
+                              <span className="row-n">{l.id}</span>
+                              <span className="row-t">{l.title}</span>
+                              <span className="row-m">{mark}</span>
+                            </a>
+                          ) : (
+                            <div className={cls + ' done'}>
+                              <span className="row-n">{l.id}</span>
+                              <span className="row-t">{l.title}</span>
+                              <span className="row-m">Soon</span>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+
+      <SiteFooter />
+    </main>
+  );
+}

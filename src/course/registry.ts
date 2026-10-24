@@ -31,14 +31,14 @@ function ch(n: number, title: string, blurb: string, tone: Tone, lessons: Array<
 }
 
 export const CHAPTERS: ChapterMeta[] = [
-  ch(1, 'Electricity Fundamentals', 'Charge, fields and wires: the physics every later model is built on.', 'blue', [
+  ch(1, 'Electricity fundamentals', 'Charge, fields and wires: the physics every later model is built on.', 'blue', [
     ['Voltage, current, resistance, and power', 'Circuit Builder'],
     ['AC vs. DC and three-phase electricity', 'Waveform Explorer'],
     ['Electromagnetism and generation', 'Generator Simulator'],
     ['Transformers and voltage conversion', 'Transformer Lab'],
     ['Electrical losses and efficiency', 'Transmission Loss Simulator'],
   ]),
-  ch(2, 'Building an Electrical Grid', 'From power plant to wall socket, and how power chooses its path.', 'blue', [
+  ch(2, 'Building an electrical grid', 'From power plant to wall socket, and how power chooses its path.', 'blue', [
     ['Power plants and generators', 'Generation Portfolio Builder'],
     ['Transmission and distribution networks', 'Grid Constructor'],
     ['Substations, transformers, and loads', 'Substation Designer'],
@@ -46,7 +46,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Transmission capacity and congestion', 'Congestion Playground'],
     ['Grid reliability and failure scenarios', 'Grid Failure Simulator'],
   ]),
-  ch(3, 'Operating the Grid', 'Matching supply to demand every second, with less and less of the supply under anyone’s control.', 'teal', [
+  ch(3, 'Operating the grid', 'Matching supply to demand every second, with less and less of the supply under anyone’s control.', 'teal', [
     ['Supply-demand balancing', 'Grid Balancing Game'],
     ['Frequency, inertia, and stability', 'Frequency Simulator'],
     ['Dispatchable vs. intermittent generation', 'Generation Scheduler'],
@@ -54,7 +54,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Demand response and load shifting', 'Load Shifting Lab'],
     ['Grid operations and control systems', 'Control Room Simulator'],
   ]),
-  ch(4, 'Electricity Market Fundamentals', 'Turning a physical balancing problem into an auction.', 'orange', [
+  ch(4, 'Electricity market fundamentals', 'Turning a physical balancing problem into an auction.', 'orange', [
     ['Why electricity markets exist', 'Central Planner vs. Market'],
     ['Market participants and grid operators', 'Market Role Simulator'],
     ['Generator bids and merit-order dispatch', 'Bid Stack Builder'],
@@ -62,7 +62,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Day-ahead vs. real-time markets', 'Two-Settlement Simulator'],
     ['Ancillary services and capacity markets', 'Grid Services Auction'],
   ]),
-  ch(5, 'Locational Pricing & Congestion', 'Why the same megawatt-hour costs different amounts in different places.', 'orange', [
+  ch(5, 'Locational pricing & congestion', 'Why the same megawatt-hour costs different amounts in different places.', 'orange', [
     ['Economic dispatch across a network', 'Network Dispatch Optimizer'],
     ['Transmission constraints and congestion', 'Congestion Simulator'],
     ['Locational marginal pricing (LMP)', 'Nodal Price Explorer'],
@@ -70,7 +70,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Scarcity pricing and negative prices', 'Extreme Price Laboratory'],
     ['Security-constrained optimal power flow', 'Grid Optimization Challenge'],
   ]),
-  ch(6, 'Energy Trading & Market Strategies', 'Making, and losing, money on the gaps between prices.', 'violet', [
+  ch(6, 'Energy trading & market strategies', 'Making, and losing, money on the gaps between prices.', 'violet', [
     ['Physical vs. financial electricity trading', 'Trading Desk Simulator'],
     ['Day-ahead / real-time price spreads', 'Virtual Trading Backtester'],
     ['Congestion and basis trading', 'Nodal Basis Trader'],
@@ -78,7 +78,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Hedging, forwards, and virtual positions', 'Power Portfolio Simulator'],
     ['Backtesting and risk management', 'Strategy Laboratory'],
   ]),
-  ch(7, 'Distributed Energy & Virtual Power Plants', 'Thousands of rooftops and home batteries acting as one power plant.', 'teal', [
+  ch(7, 'Distributed energy & virtual power plants', 'Thousands of rooftops and home batteries acting as one power plant.', 'teal', [
     ['Rooftop solar and residential batteries', 'Home Energy Simulator'],
     ['Distributed energy resource aggregation', 'DER Aggregator'],
     ['Virtual power plant architecture', 'VPP Control Center'],
@@ -86,7 +86,7 @@ export const CHAPTERS: ChapterMeta[] = [
     ['Fleet dispatch and optimization', 'Fleet Scheduling Simulator'],
     ['Wholesale market participation and regulation', 'Market Access Simulator'],
   ]),
-  ch(8, 'Capstone: Build & Operate a Power Grid', 'Everything at once: design, run and profit from a grid of your own.', 'ink', [
+  ch(8, 'Capstone: build & operate a power grid', 'Everything at once: design, run and profit from a grid of your own.', 'ink', [
     ['Design a grid', 'Grid Builder'],
     ['Simulate 24-hour demand', 'Demand Scenario Engine'],
     ['Implement dispatch and nodal pricing', 'Electricity Market Engine'],

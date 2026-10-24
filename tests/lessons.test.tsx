@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { LESSONS } from '../src/course/registry';
-import { titleCase } from '../src/framework/Page';
+import { COURSES } from '../src/course/courses';
+import { Course } from '../src/pages/Course';
 import { Home } from '../src/pages/Home';
 
 const modules = import.meta.glob<{ default: ComponentType }>('../src/lessons/ch*/L*_*.tsx');
@@ -16,8 +17,16 @@ function pathOf(id: string) {
 }
 
 describe('home', () => {
+  it('lists every course', () => {
+    const { container, unmount } = render(<Home />);
+    expect(container.querySelectorAll('.rows > li').length).toBe(COURSES.length);
+    unmount();
+  });
+});
+
+describe('course', () => {
   it('renders the contents', () => {
-    const { getAllByRole, unmount } = render(<Home />);
+    const { getAllByRole, unmount } = render(<Course />);
     expect(getAllByRole('heading', { level: 3 }).length).toBe(8);
     unmount();
   });
@@ -33,7 +42,7 @@ describe('lessons', () => {
       const onError = (e: ErrorEvent) => errors.push(e.error);
       window.addEventListener('error', onError);
       const view = render(<Lesson />);
-      expect(view.getByRole('heading', { level: 1 }).textContent).toBe(titleCase(lesson.title));
+      expect(view.getByRole('heading', { level: 1 }).textContent).toBe(lesson.title);
       expect(view.container.querySelectorAll('figure').length).toBeGreaterThan(0);
       expect(view.container.querySelectorAll('.chal').length).toBeGreaterThan(0);
       // Nudge every slider and press every segmented button: nothing should throw.

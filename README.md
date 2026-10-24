@@ -1,10 +1,14 @@
-# Electricity Grids & Energy Markets
+# Ground Up
 
-An interactive course, from zero to energy markets: how the electrical grid works, and how the
-markets that run it work. Every lesson is a long-form explanation built around simulations you
-manipulate — circuits, generators, power flow, frequency, dispatch, auctions, nodal prices,
-trading, storage and virtual power plants — ending in a capstone where you build and operate a
-grid of your own.
+Interactive courses in how markets work, from the ground up. Each course starts with the
+physical thing being traded and builds the market on top of it, one simulation at a time.
+
+The first course, **Electricity Grids & Energy Markets**, goes from zero to energy markets: how
+the electrical grid works, and how the markets that run it work. Every lesson is a long-form
+explanation built around simulations you manipulate — circuits, generators, power flow,
+frequency, dispatch, auctions, nodal prices, trading, storage and virtual power plants — ending
+in a capstone where you build and operate a grid of your own. Courses on natural gas,
+agricultural commodities, oil, weather derivatives, freight and compute capacity are planned.
 
 ## Running it
 
@@ -21,6 +25,18 @@ npm test
 ```
 
 runs the engine unit tests and a smoke test that renders every lesson and exercises its controls.
+
+## Hosting
+
+The site is a free, read-only resource and stores nothing about its readers: progress (solved
+challenges and the last lesson opened) stays in the reader's own browser.
+
+The footer on the home and course pages shows today's weather where the reader is. That comes
+from `functions/api/weather.ts`, a Cloudflare Pages Function: deploy `dist/` to Cloudflare Pages
+with the `functions/` directory alongside, and it estimates the place from the request, rounds
+it to about 10 km, and asks [Open-Meteo](https://open-meteo.com/) for the forecast (cached for 30
+minutes per place). Elsewhere, or if there's no estimate, the footer is simply hidden. In
+development, `npm run dev` answers the same request with a fixed sample.
 
 ## How it's built
 

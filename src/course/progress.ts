@@ -1,12 +1,16 @@
-// Challenge progress, kept in the reader's browser. Storage can be unavailable (private
-// windows, blocked site data), so every access is guarded and the app works without it.
+// Progress, kept only in the reader's browser: which challenges they've solved, and the last
+// lesson they opened, so the home and course pages can say where they left off. Storage can be
+// unavailable (private windows, blocked site data), so every access is guarded and the app
+// works without it.
 
 import { useSyncExternalStore } from 'react';
 
 const KEY = 'emc.progress.v1';
+const LAST_KEY = 'emc.last.v1';
 type Progress = Record<string, string[]>; // lesson id → solved challenge ids
 
 let cache: Progress | null = null;
+let lastCache: string | null | undefined;
 const listeners = new Set<() => void>();
 
 function read(): Progress {
@@ -30,11 +34,33 @@ function write(p: Progress) {
   listeners.forEach((l) => l());
 }
 
+function readLast(): string | null {
+  if (lastCache !== undefined) return lastCache;
+  try {
+    lastCache = window.localStorage.getItem(LAST_KEY);
+  } catch {
+    lastCache = null;
+  }
+  return lastCache;
+}
+
 export function markSolved(lessonId: string, challengeId: string) {
   const p = read();
   const done = p[lessonId] ?? [];
   if (done.includes(challengeId)) return;
   write({ ...p, [lessonId]: [...done, challengeId] });
+}
+
+/** Remember the lesson the reader is on. */
+export function markVisited(lessonId: string) {
+  if (readLast() === lessonId) return;
+  lastCache = lessonId;
+  try {
+    window.localStorage.setItem(LAST_KEY, lessonId);
+  } catch {
+    // The home page just won't know where they left off.
+  }
+  listeners.forEach((l) => l());
 }
 
 function subscribe(l: () => void) {
@@ -44,4 +70,9 @@ function subscribe(l: () => void) {
 
 export function useProgress(): Progress {
   return useSyncExternalStore(subscribe, read, () => ({}));
+}
+
+/** The id of the last lesson the reader opened, if any. */
+export function useLastLesson(): string | null {
+  return useSyncExternalStore(subscribe, readLast, () => null);
 }

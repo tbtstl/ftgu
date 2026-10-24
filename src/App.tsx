@@ -1,8 +1,9 @@
 import { Component, lazy, Suspense, useEffect, useMemo, type ComponentType, type ReactNode } from 'react';
-import { useRoute } from './course/router';
+import { courseHref, useRoute } from './course/router';
 import { getLesson, lessonLoader } from './course/registry';
 import { Home } from './pages/Home';
-import { Banner, Footer, titleCase } from './framework/Page';
+import { Course } from './pages/Course';
+import { LessonHeader } from './framework/Page';
 
 const cache = new Map<string, ComponentType>();
 
@@ -17,23 +18,20 @@ function lessonComponent(id: string): ComponentType | undefined {
 
 export function App() {
   const route = useRoute();
-  const key = route.kind === 'lesson' ? route.id : 'home';
+  const key = route.kind === 'lesson' ? route.id : route.kind;
 
   useEffect(() => {
-    if (route.kind === 'home' && route.section) {
-      document.getElementById(route.section)?.scrollIntoView();
-    } else {
-      window.scrollTo(0, 0);
-    }
-  }, [key, route.kind === 'home' ? route.section : undefined]);
+    window.scrollTo(0, 0);
+  }, [key]);
 
   const Lesson = useMemo(() => (route.kind === 'lesson' ? lessonComponent(route.id) : undefined), [key]);
 
   if (route.kind === 'home') return <Home />;
+  if (route.kind === 'course') return <Course />;
   if (!Lesson) return <Missing id={route.id} />;
   return (
     <LessonBoundary key={key} id={route.id}>
-      <Suspense fallback={<Loading />}>
+      <Suspense fallback={<Loading id={route.id} />}>
         <Lesson />
       </Suspense>
     </LessonBoundary>
@@ -52,31 +50,21 @@ class LessonBoundary extends Component<{ id: string; children: ReactNode }, { fa
     if (!this.state.failed) return this.props.children;
     const meta = getLesson(this.props.id);
     return (
-      <>
-        <Banner />
-        <main className="art">
-          <div className="wrap">
-            <div className="meta">Lesson {this.props.id}</div>
-            <h1 className="tt">{meta ? titleCase(meta.title) : 'Lesson'}</h1>
-            <p className="pp">
-              Something went wrong while loading this lesson. <a href={`#/${this.props.id}`} onClick={() => window.location.reload()}>Reload the page</a> or go{' '}
-              <a href="#/contents">back to the contents</a>.
-            </p>
-          </div>
-        </main>
-        <Footer />
-      </>
+      <Notice id={this.props.id} title={meta ? meta.title : 'Lesson'}>
+        Something went wrong while loading this lesson. <a href={`#/${this.props.id}`} onClick={() => window.location.reload()}>Reload the page</a> or go{' '}
+        <a href={courseHref()}>back to the contents</a>.
+      </Notice>
     );
   }
 }
 
-function Loading() {
+function Loading({ id }: { id: string }) {
   return (
     <>
-      <Banner />
+      <LessonHeader id={id} />
       <main className="art">
         <div className="wrap">
-          <p className="meta">Loading the lesson…</p>
+          <p className="dek">Loading the lesson…</p>
         </div>
       </main>
     </>
@@ -86,18 +74,23 @@ function Loading() {
 function Missing({ id }: { id: string }) {
   const meta = getLesson(id);
   return (
+    <Notice id={id} title={meta ? meta.title : 'Lesson not found'}>
+      {meta ? 'This lesson isn’t available yet.' : 'There’s no lesson at this address.'} <a href={courseHref()}>Back to the contents</a>
+    </Notice>
+  );
+}
+
+function Notice({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  return (
     <>
-      <Banner />
+      <LessonHeader id={id} />
       <main className="art">
         <div className="wrap">
-          <div className="meta">Lesson {id}</div>
-          <h1 className="tt">{meta ? titleCase(meta.title) : 'Lesson not found'}</h1>
-          <p className="pp">
-            {meta ? 'This lesson isn’t available yet.' : 'There’s no lesson at this address.'} <a href="#/contents">Back to the contents</a>
-          </p>
+          <h1 className="tt">{title}</h1>
+          <p className="dek">Lesson {id}</p>
+          <p className="pp">{children}</p>
         </div>
       </main>
-      <Footer />
     </>
   );
 }
