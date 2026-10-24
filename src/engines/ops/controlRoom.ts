@@ -85,6 +85,13 @@ export const CR_SCENARIO: CRScenario = {
   aceMinutes: 30,
 };
 
+/**
+ * Line outages covered by a special protection scheme: if Central–Metro trips, relays disconnect load
+ * in Metro automatically. No dispatch can cover that outage once Mill Creek is gone, so the
+ * contingency table shows it as covered rather than as something to re-dispatch for.
+ */
+export const CR_SPS: string[] = ['center-city'];
+
 /** Frequency response of the whole interconnection, MW per Hz (governors plus load damping). */
 export const INTERCONNECTION_BETA =
   DEFAULT_FREQUENCY.governorMW / (DEFAULT_FREQUENCY.droop * DEFAULT_FREQUENCY.f0) + (DEFAULT_FREQUENCY.damping * DEFAULT_FREQUENCY.loadMW) / DEFAULT_FREQUENCY.f0;
@@ -268,8 +275,10 @@ function measure(s: CRState, sc: CRScenario): CRState {
   const wind = WIND.capacity * interp(WIND_CF, t);
   const solar = SOLAR.capacity * interp(SOLAR_CF, t);
   const gen = CR_FIXED.mw + wind + solar + CR_UNITS.reduce((a, u) => a + (s.out[u.id] ?? 0), 0);
-  // ACE = actual − scheduled interchange (scheduled is zero) − 10B·Δf. With the bias set to the
-  // area's own frequency response, the governor terms cancel and ACE is the area's own imbalance.
+  // ACE = (actual − scheduled interchange) + β·Δf, with scheduled interchange zero and the bias β
+  // (MW per Hz, positive) set to the area's own frequency response. The governor terms then cancel
+  // and ACE is the area's own imbalance. (NERC writes the same thing as −10B·Δf, with B negative
+  // and in MW per 0.1 Hz.)
   const ace = gen - demand;
   const f = DEFAULT_FREQUENCY.f0 + ace / INTERCONNECTION_BETA;
   const inj: Record<string, number> = Object.fromEntries(REGION.nodes.map((n) => [n.id, -REGION_LOAD_SHARE[n.id] * demand]));
@@ -321,6 +330,35 @@ function measure(s: CRState, sc: CRScenario): CRState {
 
 const SUB = 0.5; // simulated minutes per step
 
+/** A unit's setpoint, within its range (its current output if the operator hasn't set one). */
+function spOf(u: CRUnit, setpoints: Record<string, number>, out: Record<string, number>): number {
+  return Math.max(0, Math.min(u.capacity, setpoints[u.id] ?? out[u.id] ?? 0));
+}
+
+/**
+ * Split the AGC signal among its units by participation factor, each within the room it has
+ * around its setpoint. A unit that reaches its limit hands the rest of its share to the others,
+ * so AGC runs out of room only when every one of its units has.
+ */
+export function allocateAgc(signal: number, units: CRUnit[], setpoints: Record<string, number>, out: Record<string, number> = {}): Record<string, number> {
+  const give: Record<string, number> = Object.fromEntries(units.map((u) => [u.id, 0]));
+  const room = (u: CRUnit) => (signal >= 0 ? u.capacity - spOf(u, setpoints, out) : spOf(u, setpoints, out)) - give[u.id];
+  let left = Math.abs(signal);
+  let active = units.filter((u) => u.agc > 0 && room(u) > 1e-9);
+  while (left > 1e-9 && active.length) {
+    const share = active.reduce((a, u) => a + u.agc, 0);
+    let used = 0;
+    for (const u of active) {
+      const add = Math.min(room(u), (left * u.agc) / share);
+      give[u.id] += add;
+      used += add;
+    }
+    left -= used;
+    active = active.filter((u) => room(u) > 1e-9);
+  }
+  return Object.fromEntries(units.map((u) => [u.id, Math.sign(signal) * give[u.id]]));
+}
+
 /**
  * Advance the control room by `dtMin` simulated minutes with the operator's setpoints. Scripted
  * events fire at their times; AGC (if on) integrates −ACE onto its units around their setpoints.
@@ -341,14 +379,13 @@ export function stepControlRoom(s0: CRState, setpoints: Record<string, number>, 
           const lost = out[e.unit] ?? 0;
           trippedUnits = [...trippedUnits, e.unit];
           out[e.unit] = 0;
-          const fr = simulateTrip(DEFAULT_FREQUENCY, Math.max(1, lost), 20, 0.1);
-          log = [
-            ...log,
-            {
-              t: e.at,
-              text: `${plant(e.unit).name} tripped, losing ${Math.round(lost)} MW. Interconnection frequency dipped to ${fr.nadir.toFixed(3)} Hz within seconds as governors everywhere responded; the region now leans on its neighbors.`,
-            },
-          ];
+          let text: string;
+          if (lost < 0.5) text = `${plant(e.unit).name} tripped while producing nothing, so no power was lost — but it can’t be called on for the rest of the shift.`;
+          else {
+            const fr = simulateTrip(DEFAULT_FREQUENCY, lost, 20, 0.1);
+            text = `${plant(e.unit).name} tripped, losing ${Math.round(lost)} MW. Interconnection frequency dipped to ${fr.nadir.toFixed(3)} Hz within seconds as governors everywhere responded; the region now leans on its neighbors.`;
+          }
+          log = [...log, { t: e.at, text }];
         } else if (e.kind === 'lineTrip') {
           linesOut = [...linesOut, e.line];
           log = [...log, { t: e.at, text: `Lightning: line ${lineName(e.line)} tripped. Its flow shifted instantly onto the remaining lines.` }];
@@ -360,25 +397,25 @@ export function stepControlRoom(s0: CRState, setpoints: Record<string, number>, 
     // Forecast miss grows linearly after it starts.
     const miss = sc.events.find((e) => e.kind === 'forecastMiss') as Extract<ScenarioEvent, { kind: 'forecastMiss' }> | undefined;
     if (miss && t1 > miss.at) forecastMissShare = miss.share * Math.min(1, (t1 - miss.at) / miss.rampMinutes);
-    // AGC: integrate −ACE, limited to the room its units have around their setpoints.
+    // AGC: integrate −ACE, limited to the room its units have, together, around their setpoints.
     let agc = s.agc;
     const agcUnits = CR_UNITS.filter((u) => u.agc > 0 && !trippedUnits.includes(u.id));
+    let agcShare: Record<string, number> = {};
     if (agcOn && agcUnits.length) {
-      const share = agcUnits.reduce((a, u) => a + u.agc, 0);
       agc += (-s.ace * h) / 2;
-      const up = Math.min(...agcUnits.map((u) => (u.capacity - Math.min(u.capacity, setpoints[u.id] ?? 0)) / (u.agc / share)));
-      const down = Math.min(...agcUnits.map((u) => Math.max(0, setpoints[u.id] ?? 0) / (u.agc / share)));
+      const up = agcUnits.reduce((a, u) => a + u.capacity - spOf(u, setpoints, out), 0);
+      const down = agcUnits.reduce((a, u) => a + spOf(u, setpoints, out), 0);
       agc = Math.max(-down, Math.min(up, agc));
+      agcShare = allocateAgc(agc, agcUnits, setpoints, out);
     } else agc = 0;
     // Units move toward their targets at their ramp limits.
-    const share = agcUnits.reduce((a, u) => a + u.agc, 0) || 1;
     for (const u of CR_UNITS) {
       if (trippedUnits.includes(u.id)) {
         out[u.id] = 0;
         continue;
       }
-      const sp = Math.max(0, Math.min(u.capacity, setpoints[u.id] ?? out[u.id]));
-      const target = Math.max(0, Math.min(u.capacity, sp + (agcOn && u.agc > 0 ? (agc * u.agc) / share : 0)));
+      const sp = spOf(u, setpoints, out);
+      const target = Math.max(0, Math.min(u.capacity, sp + (agcShare[u.id] ?? 0)));
       const max = u.ramp * h;
       out[u.id] += Math.max(-max, Math.min(max, target - out[u.id]));
     }

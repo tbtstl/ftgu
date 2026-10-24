@@ -4,25 +4,27 @@ import {
   Caption,
   Challenge,
   Checkbox,
-  Controls,
   DataTable,
   Eq,
+  FUEL,
   Figure,
-  GRAPHIC,
   GridY,
   H2,
   K,
   LessonPage,
   NetworkView,
+  lessonHref,
   Op,
   P,
   Readouts,
   Segmented,
   Slider,
+  Swatch,
   Tn,
   fmt,
   hour,
   linePath,
+  mix,
   mw,
   scale,
   signed,
@@ -33,6 +35,7 @@ import {
 import {
   CR_FIXED,
   CR_SCENARIO,
+  CR_SPS,
   CR_UNITS,
   INTERCONNECTION_BETA,
   crForecast,
@@ -46,30 +49,42 @@ import { estimateState } from '../../engines/ops/stateEstimation';
 import { REGION, REGION_LOAD_SHARE } from '../../model/networks';
 import { SOLAR_CF, WIND_CF } from '../../model/profiles';
 import { STANDARD_FLEET } from '../../model/fleet';
+import { GAME, islandBeta } from '../../engines/ops/balancing';
 
 const SC = CR_SCENARIO;
-const nodeName = (id: string) => REGION.nodes.find((n) => n.id === id)!.name;
+/** The region's own frequency response at evening demand, MW per Hz: roughly the bias β its ACE uses. */
+const REGION_BETA = islandBeta(GAME, 1400);
 const clock = (t: number) => hour(t / 60);
-const UNIT_TONE: Record<string, 'orange' | 'red' | 'blue' | 'gray'> = { coal: 'gray', cc1: 'orange', cc2: 'orange', ct: 'red', oil: 'red', hydro: 'blue' };
+/** Each unit's fuel color, for its slider and the map. */
+const UNIT_COLOR: Record<string, string> = { coal: FUEL.coal, cc1: FUEL.gasCC, cc2: mix(FUEL.gasCC, '#ffffff', 0.4), ct: FUEL.gasCT, oil: FUEL.oil, hydro: FUEL.hydro };
+const SHORT: Record<string, string> = { coal: 'Ironwood', cc1: 'Lakeside', cc2: 'Mill Creek', ct: 'Eastgate', oil: 'Old Quay', hydro: 'Falls hydro' };
+const ACE_INK = '#444';
 
-/** Where each node's generator annotation goes in the 600 × 400 drawing. */
-const GEN_LABEL: Record<string, { dx: number; dy: number; anchor: 'start' | 'middle' | 'end' }> = {
-  north: { dx: 0, dy: -62, anchor: 'middle' },
-  east: { dx: 0, dy: -62, anchor: 'middle' },
+/**
+ * The region map, squashed vertically so the control room fits beside the prose: each node keeps
+ * its x, and its y is compressed toward the top.
+ */
+const MAP_H = 284;
+const mapY = (y: number) => 48 + (y - 70) * 0.66;
+
+/** Where each node's generator annotation goes, relative to the node; `stack` puts one plant per line. */
+const GEN_LABEL: Record<string, { dx: number; dy: number; anchor: 'start' | 'middle' | 'end'; stack?: boolean }> = {
+  north: { dx: -34, dy: -2, anchor: 'end', stack: true },
+  east: { dx: 34, dy: -2, anchor: 'start', stack: true },
   center: { dx: 34, dy: -4, anchor: 'start' },
   harbor: { dx: -34, dy: 48, anchor: 'start' },
   west: { dx: -34, dy: 5, anchor: 'end' },
   city: { dx: 0, dy: 52, anchor: 'middle' },
 };
-const SHORT: Record<string, string> = { coal: 'Ironwood', cc1: 'Lakeside', cc2: 'Mill Creek', ct: 'Eastgate', oil: 'Old Quay', hydro: 'Falls hydro' };
 
-function genText(s: CRState, node: string): string {
+/** Each plant at a node with what it's producing now, MW. */
+function genParts(s: CRState, node: string): string[] {
   const parts: string[] = [];
   if (CR_FIXED.node === node) parts.push(`Harbor Point ${CR_FIXED.mw}`);
   for (const u of CR_UNITS) if (u.node === node) parts.push(`${SHORT[u.id]} ${s.trippedUnits.includes(u.id) ? 'tripped' : fmt(s.out[u.id])}`);
   if (node === 'north') parts.push(`Ridge ${fmt(s.wind)}`);
   if (node === 'east') parts.push(`Valley ${fmt(s.solar)}`);
-  return parts.join(' · ');
+  return parts;
 }
 
 function Grid({ s }: { s: CRState }) {
@@ -77,14 +92,14 @@ function Grid({ s }: { s: CRState }) {
   return (
     <NetworkView
       width={600}
-      height={420}
-      ariaLabel={`The region at ${clock(s.t)}. ${s.alarms.filter((a) => a.level === 'alarm').length} alarms. Highest line loading ${Math.round(
-        Math.max(...REGION.lines.map((l) => (Math.abs(s.flows[l.id]) / l.limit) * 100)),
-      )} percent.`}
+      height={MAP_H}
+      ariaLabel={`The region at ${clock(s.t)}. Highest line loading ${Math.round(Math.max(...REGION.lines.map((l) => (Math.abs(s.flows[l.id]) / l.limit) * 100)))} percent${
+        s.linesOut.length ? `; ${s.linesOut.map(lineName).join(' and ')} out of service` : ''
+      }.`}
       nodes={REGION.nodes.map((n) => ({
         id: n.id,
         x: n.x,
-        y: n.y + 10,
+        y: mapY(n.y),
         r: 26,
         label: n.name,
         labelPos: n.id === 'city' ? 'right' : n.id === 'west' ? 'below' : 'above',
@@ -95,22 +110,30 @@ function Grid({ s }: { s: CRState }) {
       lines={REGION.lines.map((l) => {
         const out = s.linesOut.includes(l.id);
         const u = Math.abs(s.flows[l.id]) / l.limit;
-        return { id: l.id, from: l.from, to: l.to, flow: s.flows[l.id], limit: l.limit, out, label: out ? 'out' : `${Math.round(u * 100)}%` };
+        // East–Metro's label would crowd Central's plant annotation on the squashed map; lift it.
+        const labelDy = l.id === 'east-city' ? -22 : undefined;
+        return { id: l.id, from: l.from, to: l.to, flow: s.flows[l.id], limit: l.limit, out, label: out ? 'out' : `${Math.round(u * 100)}%`, labelDy };
       })}
     >
       {REGION.nodes.map((n) => {
         const g = GEN_LABEL[n.id];
-        const text = genText(s, n.id);
-        return text ? (
-          <text key={n.id} className="ax" x={n.x + g.dx} y={n.y + 10 + g.dy} textAnchor={g.anchor} style={{ paintOrder: 'stroke', stroke: '#f8f8f8', strokeWidth: 4 }}>
-            {text}
+        const parts = genParts(s, n.id);
+        if (!parts.length) return null;
+        const lines = g.stack ? parts : [parts.join(' · ')];
+        return (
+          <text key={n.id} className="ax" x={n.x + g.dx} y={mapY(n.y) + g.dy} textAnchor={g.anchor} style={{ paintOrder: 'stroke', stroke: '#f8f8f8', strokeWidth: 4 }}>
+            {lines.map((t, i) => (
+              <tspan key={i} x={n.x + g.dx} dy={i === 0 ? 0 : 14}>
+                {t}
+              </tspan>
+            ))}
           </text>
-        ) : null;
+        );
       })}
-      <text className="lab" x={16} y={130}>
+      <text className="lab" x={16} y={96}>
         Ties to the neighbors
       </text>
-      <text className="ax" x={16} y={147}>
+      <text className="ax" x={16} y={112}>
         {Math.abs(imports) < 1 ? 'balanced' : imports > 0 ? `importing ${fmt(imports)} MW` : `exporting ${fmt(-imports)} MW`}
       </text>
     </NetworkView>
@@ -118,8 +141,8 @@ function Grid({ s }: { s: CRState }) {
 }
 
 const TX = scale(SC.start, SC.end, 52, 628);
-const YD = scale(1100, 1600, 118, 22);
-const YA = scale(-300, 150, 212, 142);
+const YD = scale(1100, 1600, 64, 18);
+const YA = scale(-300, 150, 126, 86);
 const FORECAST = (() => {
   const ts = Array.from({ length: 73 }, (_, k) => SC.start + k * 5);
   return linePath(ts.map(TX), ts.map((t) => YD(crForecast(t))));
@@ -129,29 +152,29 @@ function Trends({ s }: { s: CRState }) {
   const h = s.hist;
   const xs = h.map((p) => TX(p.t));
   return (
-    <svg className="chart" viewBox="0 0 640 236" role="img" aria-label={`Demand against the day-ahead forecast, and the area control error. Now ${fmt(s.demand)} MW against a forecast of ${fmt(s.forecast)} MW; ACE ${fmt(s.ace)} MW.`}>
-      <text className="ax" x={52} y={12}>
+    <svg className="chart" viewBox="0 0 640 150" role="img" aria-label={`Demand against the day-ahead forecast, and the area control error. Now ${fmt(s.demand)} MW against a forecast of ${fmt(s.forecast)} MW; ACE ${fmt(s.ace)} MW.`}>
+      <text className="ax" x={52} y={10}>
         Demand and forecast, MW
       </text>
       <GridY y={YD} ticks={[1100, 1300, 1500]} x0={52} x1={628} format={(v) => fmt(v)} />
       {SC.events.map((e, i) => (
         <g key={i}>
-          <line x1={TX(e.at)} x2={TX(e.at)} y1={22} y2={212} stroke="#bbb" strokeDasharray="2 3" />
-          <text className="ax" x={TX(e.at) + 3} y={30} style={{ fontSize: 10.5 }}>
+          <line x1={TX(e.at)} x2={TX(e.at)} y1={18} y2={126} stroke="#bbb" strokeDasharray="2 3" />
+          <text className="ax" x={TX(e.at) + 3} y={26} style={{ fontSize: 10.5 }}>
             {e.kind === 'unitTrip' ? 'unit trip' : e.kind === 'lineTrip' ? 'line trip' : 'forecast miss'}
           </text>
         </g>
       ))}
       <path d={FORECAST} fill="none" stroke="#777" strokeWidth={1.5} strokeDasharray="5 5" />
       {h.length > 1 && <path d={linePath(xs, h.map((p) => YD(Math.min(1600, p.demand))))} fill="none" stroke="#333" strokeWidth={2.5} />}
-      <text className="ax" x={52} y={136}>
+      <text className="ax" x={52} y={80}>
         Area control error, MW
       </text>
       <GridY y={YA} ticks={[-SC.aceLimit, 0]} x0={52} x1={628} format={(v) => signed(v)} baseline={0} />
-      {h.length > 1 && <path d={linePath(xs, h.map((p) => YA(Math.max(-300, Math.min(150, p.ace)))))} fill="none" stroke={GRAPHIC.blue} strokeWidth={2} />}
-      <line className="cur" x1={TX(s.t)} x2={TX(s.t)} y1={22} y2={212} />
+      {h.length > 1 && <path d={linePath(xs, h.map((p) => YA(Math.max(-300, Math.min(150, p.ace)))))} fill="none" stroke={ACE_INK} strokeWidth={2} />}
+      <line className="cur" x1={TX(s.t)} x2={TX(s.t)} y1={18} y2={126} />
       {[15, 16, 17, 18, 19, 20, 21].map((hh) => (
-        <text key={hh} className="ax ax-m" x={TX(hh * 60)} y={230}>
+        <text key={hh} className="ax ax-m" x={TX(hh * 60)} y={144}>
           {hour(hh)}
         </text>
       ))}
@@ -159,45 +182,30 @@ function Trends({ s }: { s: CRState }) {
   );
 }
 
-function AlarmList({ s }: { s: CRState }) {
-  const items = [...s.alarms].sort((a, b) => (a.level === b.level ? 0 : a.level === 'alarm' ? -1 : 1));
-  return (
-    <div className="card" role="log" aria-live="polite" aria-label="Alarms" style={{ minHeight: 120, padding: '10px 14px', fontSize: 14.5, lineHeight: 1.45 }}>
-      <div style={{ fontFamily: 'var(--display)', fontWeight: 600, fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 4 }}>Alarms</div>
-      {items.length === 0 && <div style={{ color: '#6b6b6b' }}>None.</div>}
-      {items.slice(0, 6).map((a) => (
-        <div key={a.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-          <span aria-hidden="true" style={{ flex: 'none', width: 9, height: 9, borderRadius: 5, background: a.level === 'alarm' ? '#c4382f' : '#d0702a', transform: 'translateY(-1px)' }} />
-          <span style={{ color: a.level === 'alarm' ? '#c4382f' : '#444' }}>
-            <span className="sr-only">{a.level === 'alarm' ? 'Alarm: ' : 'Warning: '}</span>
-            {a.text}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ContingencyTable({ s }: { s: CRState }) {
+  // The two worst outages that re-dispatch can do something about, then the one covered by a special protection scheme.
+  const covered = (r: CRState['contingency'][number]) => CR_SPS.includes(r.out);
+  const rows = [...s.contingency.filter((r) => !covered(r)).slice(0, 2), ...s.contingency.filter(covered)];
   return (
-    <div>
-      <div style={{ fontFamily: 'var(--display)', fontWeight: 600, fontSize: 12, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', margin: '4px 0 0' }}>
-        Contingency analysis (N-1)
-      </div>
-      <DataTable
-        caption="The worst single line outages"
-        rows={s.contingency.slice(0, 3)}
-        rowKey={(r) => r.out}
-        columns={[
-          { label: 'If this line trips', cell: (r) => lineName(r.out) },
-          { label: 'worst line after', cell: (r) => lineName(r.worst) },
-          {
-            label: 'loading',
-            cell: (r) => <span style={{ color: r.loading > 1.0005 ? '#c4382f' : r.loading >= 0.9 ? '#ad5310' : undefined, fontWeight: r.loading > 1 ? 600 : undefined }}>{Math.round(r.loading * 100)}%</span>,
-          },
-        ]}
-      />
-    </div>
+    <DataTable
+      caption="Contingency analysis (N-1): the worst single line outages, and the one covered by a special protection scheme (SPS)"
+      rows={rows}
+      rowKey={(r) => r.out}
+      rowClass={(r) => (covered(r) ? 'dim' : '')}
+      columns={[
+        { label: 'N-1: if this line trips', cell: (r) => lineName(r.out) },
+        { label: 'worst line after', cell: (r) => lineName(r.worst) },
+        {
+          label: 'loading',
+          cell: (r) =>
+            covered(r) ? (
+              `${Math.round(r.loading * 100)}% · SPS`
+            ) : (
+              <span style={{ color: r.loading > 1.0005 ? '#c4382f' : r.loading >= 0.9 ? '#ad5310' : undefined, fontWeight: r.loading > 1 ? 600 : undefined }}>{Math.round(r.loading * 100)}%</span>
+            ),
+        },
+      ]}
+    />
   );
 }
 
@@ -209,8 +217,7 @@ export interface RoomResult {
 function ControlRoom({ onFinish }: { onFinish: (r: RoomResult) => void }) {
   const play = usePlay(false);
   const [sp, setSp] = useState<Record<string, number>>(() => scheduleSetpoints(SC.start));
-  const [agc, setAgc] = useState(true);
-  const [s, setS] = useSimulation<CRState>(() => initialControlRoom(), (x, dt) => stepControlRoom(x, sp, agc, dt * SC.minutesPerSecond), play.playing);
+  const [s, setS] = useSimulation<CRState>(() => initialControlRoom(), (x, dt) => stepControlRoom(x, sp, true, dt * SC.minutesPerSecond), play.playing);
   const reported = useRef(false);
   useEffect(() => {
     if (s.done && play.playing) play.setPlaying(false);
@@ -222,7 +229,6 @@ function ControlRoom({ onFinish }: { onFinish: (r: RoomResult) => void }) {
   const restart = (start: boolean) => {
     setS(initialControlRoom());
     setSp(scheduleSetpoints(SC.start));
-    setAgc(true);
     reported.current = false;
     play.setPlaying(start);
   };
@@ -231,7 +237,7 @@ function ControlRoom({ onFinish }: { onFinish: (r: RoomResult) => void }) {
     else play.toggle();
   };
   const reserveOk = s.reserve >= s.reserveNeed;
-  const log = [...s.log].reverse().slice(0, 3);
+  const log = [...s.log].reverse();
   let msg: string;
   if (s.done) {
     msg =
@@ -252,51 +258,56 @@ function ControlRoom({ onFinish }: { onFinish: (r: RoomResult) => void }) {
         </>
       }
     >
-      <Readouts
-        items={[
-          { label: 'time', value: clock(s.t) },
-          { label: 'frequency', value: `${s.f.toFixed(3)} Hz`, tone: 'teal' },
-          { label: 'area control error', value: `${signed(s.ace)} MW`, tone: s.ace < -SC.aceLimit ? 'red' : 'blue' },
-          { label: `reserve, needs ${fmt(s.reserveNeed)}`, value: mw(s.reserve), tone: reserveOk ? undefined : 'orange' },
-        ]}
-      />
       <Grid s={s} />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: 16, alignItems: 'start', marginTop: 4 }}>
-        <AlarmList s={s} />
-        <ContingencyTable s={s} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 16px', alignItems: 'center' }}>
+        <div style={{ flex: '1 1 250px' }}>
+          <Readouts
+            items={[
+              { label: 'area control error', value: `${signed(s.ace)} MW`, tone: s.ace < -SC.aceLimit ? 'red' : undefined },
+              { label: `reserve · needs ${fmt(s.reserveNeed)}`, value: mw(s.reserve), tone: reserveOk ? undefined : 'red' },
+              { label: 'frequency', value: `${s.f.toFixed(3)} Hz`, tone: 'teal' },
+            ]}
+          />
+        </div>
+        <div style={{ flex: '1.6 1 320px', minWidth: 0 }}>
+          <ContingencyTable s={s} />
+        </div>
       </div>
       <Trends s={s} />
-      <Controls columns={2}>
+      <div className="ctls" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', columnGap: 20 }}>
         {CR_UNITS.map((u) => {
           const tripped = s.trippedUnits.includes(u.id);
           return (
             <Slider
               key={u.id}
-              label={`${u.name} (${nodeName(u.node)})${u.agc > 0 ? ' · AGC' : ''}`}
-              tone={UNIT_TONE[u.id]}
+              label={
+                <>
+                  <Swatch color={UNIT_COLOR[u.id]} />
+                  {SHORT[u.id]}
+                  {u.agc > 0 ? ' · AGC' : ''}
+                </>
+              }
               value={sp[u.id]}
               min={0}
               max={u.capacity}
               step={5}
               disabled={tripped}
               onChange={(v) => setSp((x) => ({ ...x, [u.id]: v }))}
-              display={tripped ? 'tripped' : `${fmt(sp[u.id])} MW · now ${fmt(s.out[u.id])}`}
+              display={tripped ? 'tripped' : mw(sp[u.id])}
             />
           );
         })}
-      </Controls>
-      <div className="ctl">
-        <Checkbox label="AGC on Lakeside and Falls hydro" checked={agc} onChange={setAgc} />
       </div>
-      <div style={{ fontSize: 14.5, lineHeight: 1.5, color: '#555', padding: '6px 0 0' }} aria-label="Event log">
+      <Caption>{msg}</Caption>
+      <details style={{ fontSize: 14, lineHeight: 1.5, color: '#555', padding: '4px 0 0' }}>
+        <summary style={{ cursor: 'pointer', color: '#6b6b6b' }}>Event log ({s.log.length})</summary>
         {log.map((e, i) => (
           <div key={e.t + '-' + i}>
             <span style={{ fontVariantNumeric: 'tabular-nums', color: '#6b6b6b', marginRight: 8 }}>{clock(e.t)}</span>
             {e.text}
           </div>
         ))}
-      </div>
-      <Caption>{msg}</Caption>
+      </details>
     </Figure>
   );
 }
@@ -331,8 +342,12 @@ function EstimatorFigure() {
   const { meter, error, detect } = sc.state;
   const est = useMemo(() => estimateState(REGION, SNAP, { gross: { meter, mw: error }, detect }), [meter, error, detect]);
   const bad = est.rows.find((r) => r.meter.id === meter)!;
-  const worst = est.rows.reduce((b, r) => (r.used && Math.abs(r.normalized) > Math.abs(b.normalized) ? r : b), est.rows[0]);
-  const flagged = est.rows.filter((r) => r.used && Math.abs(r.normalized) > 3);
+  const used = est.rows.filter((r) => r.used);
+  const worst = used.reduce((b, r) => (Math.abs(r.normalized) > Math.abs(b.normalized) ? r : b), used[0]);
+  const runnerUp = used.reduce<(typeof used)[number] | null>(
+    (b, r) => (r !== worst && (!b || Math.abs(r.normalized) > Math.abs(b.normalized)) ? r : b),
+    null,
+  );
   const badLine = meter.startsWith('f:') ? meter.slice(2) : null;
   return (
     <Figure name="Control Room Simulator · state estimation" scenario={sc}>
@@ -362,31 +377,15 @@ function EstimatorFigure() {
           };
         })}
       />
-      <DataTable
-        caption="Meter readings, estimates and normalized residuals"
-        rows={est.rows}
-        rowKey={(r) => r.meter.id}
-        rowClass={(r) => (!r.used ? 'dim' : Math.abs(r.normalized) > 3 ? 'hl' : '')}
-        columns={[
-          { label: 'Meter', cell: (r) => r.meter.label },
-          { label: 'Reading, MW', cell: (r) => fmt(r.reading) },
-          { label: 'Estimate, MW', cell: (r) => fmt(r.estimate) },
-          {
-            label: 'Residual, σ',
-            cell: (r) =>
-              r.used ? (
-                <span style={{ color: Math.abs(r.normalized) > 3 ? '#c4382f' : undefined, fontWeight: Math.abs(r.normalized) > 3 ? 600 : undefined }}>{signed(r.normalized, 1)}</span>
-              ) : (
-                'rejected'
-              ),
-          },
-        ]}
-      />
       <Readouts
         items={[
           { label: 'largest error in an estimated flow', value: mw(est.worstFlowError) },
-          { label: 'meters flagged', value: flagged.length ? String(flagged.length) : 'none' },
-          { label: 'meters rejected', value: est.rejected.length ? String(est.rejected.length) : 'none' },
+          {
+            label: `largest residual · ${worst.meter.label.toLowerCase()}`,
+            value: `${signed(worst.normalized, 1)}σ`,
+            tone: Math.abs(worst.normalized) > 3 ? 'red' : undefined,
+          },
+          { label: `next largest · ${runnerUp ? runnerUp.meter.label.toLowerCase() : '—'}`, value: runnerUp ? `${signed(runnerUp.normalized, 1)}σ` : '—' },
         ]}
       />
       <Slider label={`Error on the ${METERS.find((m) => m.value === meter)!.label.toLowerCase()} meter`} tone="red" value={error} min={-200} max={200} step={10} onChange={(v) => sc.set({ error: v })} display={`${signed(error)} MW`} />
@@ -426,66 +425,91 @@ export default function Lesson() {
   return (
     <LessonPage id="3.6">
       <P>
-        Every lesson in this chapter has handed you one lever at a time: a few setpoints, a commitment plan, a battery’s schedule. A grid operator has all of them at once,
+        Every lesson in this chapter has handed you one lever at a time: a few setpoints, a commitment plan, a battery’s schedule. A grid operator works with many at once,
         along with a picture of the whole system that updates every few seconds and a set of rules for what the system must be able to survive. In this lesson we take a shift
-        in the control room.
+        in the control room. The evening’s plants are already committed and there’s no battery to schedule, so our levers are the oldest ones, the plants’ setpoints; what’s
+        new is everything around them.
       </P>
       <P>
         The picture comes from <b>SCADA</b> — supervisory control and data acquisition — the network of sensors, remote terminals and communication links that report flows,
         voltages and breaker positions from every substation, typically every few seconds, and carry the operator’s commands back out. Behind the screens sits the{' '}
-        <b>energy management system</b>, or EMS: the software that turns those raw measurements into a consistent model of the grid, runs the AGC from Lesson 3.1, and
-        repeatedly asks what would happen if something broke.
+        <b>energy management system</b>, or EMS: the software that turns those raw measurements into a consistent model of the grid, runs the AGC from{' '}
+        <a href={lessonHref('3.1')}>Lesson 3.1</a>, and repeatedly asks what would happen if something broke.
       </P>
       <P>
-        Our region is now one <b>balancing area</b> inside the interconnection of Lesson 3.2. Its job is to keep its own generation matched to its own demand, so that it
-        neither leans on its neighbors nor pushes power onto them. The measure of how well it’s doing is the <K tone="blue">area control error</K>:
+        Our region is now one <b>balancing area</b> inside the interconnection of <a href={lessonHref('3.2')}>Lesson 3.2</a>. Its job is to keep its own generation matched to its own demand, so that it
+        neither leans on its neighbors nor pushes power onto them. The measure of how well it’s doing is the <K>area control error</K>:
       </P>
       <Eq label="Area control error">
-        <Tn tone="blue">ACE</Tn>
+        <Tn tone="ink">ACE</Tn>
         <Op>=</Op>
         <span>(actual − scheduled interchange)</span>
-        <Op>−</Op>
-        <span>10B × Δf</span>
+        <Op>+</Op>
+        <span>
+          β × <Tn tone="teal">Δf</Tn>
+        </span>
       </Eq>
       <P>
         The first term is how much more power is flowing out over the ties than planned; here the region plans to neither import nor export. The second removes the part of that
-        flow that is just the region’s governors helping the rest of the interconnection, through a bias B set close to the region’s own frequency response. What remains is the
-        region’s own imbalance. A negative ACE means the region is short and its neighbors are covering for it. AGC drives ACE back toward zero, and so must you.
+        flow that is just the region’s governors helping the rest of the interconnection. When a plant trips somewhere else, the frequency falls and Δf is negative. Our
+        governors raise their output, the extra flows out over the ties, and the first term goes up. The <b>bias</b> β, in megawatts per hertz, is set close to the region’s own
+        frequency response — about {fmt(Math.round(REGION_BETA / 50) * 50)} MW per hertz, as for the island of <a href={lessonHref('3.1')}>Lesson 3.1</a> — so β × Δf takes
+        about the same amount back off. (NERC writes the same term as −10B × Δf, with B negative and in megawatts per tenth of a hertz.) What remains is the region’s own imbalance. A negative
+        ACE means the region is short and its neighbors are covering for it. AGC drives ACE back toward zero, and so must you.
       </P>
 
       <H2>Your shift</H2>
       <P>
-        The shift runs from 15:00 to 21:00, two simulated minutes to every second. Your units start on the day-ahead schedule, made from yesterday’s forecast; AGC rides on top
-        of your setpoints on Lakeside and Falls hydro. Harbor Point runs flat out, and the wind and solar plants follow the weather. The network view shows each line’s loading,
-        with the same colors as before; the alarm list shows what’s wrong now, and the contingency table what would be wrong if a single line tripped. The day-ahead button
-        moves every setpoint back to the plan for the current time — useful for the evening climb, but the plan knows nothing about what happens during your shift:
+        The shift runs from {clock(SC.start)} to {clock(SC.end)}, two simulated minutes to every second, and the goal is to reach the end without breaking either of two rules.
+        If ACE stays below −{SC.aceLimit} MW for more than {SC.aceMinutes} minutes, the <b>reliability coordinator</b> — the organization that oversees several balancing
+        areas — orders the region to shed load. And if any line carries more than 100 percent of its rating for more than {SC.overloadAllowance} minutes, that’s a sustained
+        overload. So keep an eye on the ACE readout and its trend, on the loading of each line, and on the contingency table, which shows what would be overloaded if any single
+        line tripped.
+      </P>
+      <P>
+        Watch the reserve readout, too. A balancing area holds spare capacity, or <b>reserves</b>, of two kinds. <b>Regulation</b> is the small margin AGC moves up and down to
+        follow demand’s minute-to-minute wobbles. <b>Contingency reserve</b> is a larger block held back for a sudden loss, and the usual rule is that it must cover the
+        largest unit online, so that losing that unit can be made good. Unused room on plants that are already running is <b>spinning</b> reserve, and responds within
+        seconds to minutes; <b>non-spinning</b> reserve is plant that’s off but can start quickly, on real grids typically within ten minutes. The readout lumps it all together:
+        the room every available unit has above its current output, running or not, against the largest unit online, Harbor Point’s {CR_FIXED.mw} MW.
+      </P>
+      <P>
+        Your units start on the day-ahead schedule, made from yesterday’s forecast; AGC rides on top of your setpoints on Lakeside and Falls hydro. Harbor Point runs flat out,
+        and the wind and solar plants follow the weather. Each slider sets a unit’s setpoint, and the map shows what every plant is actually producing as it ramps there,
+        along with each line’s loading, in the same colors as before. (Like every network model in this course, it’s a
+        DC model: it leaves out voltages and the reactive power that holds them up, which real operators manage alongside everything here.) The day-ahead button moves every
+        setpoint to the plan for the current time. That’s useful for the evening climb, but the plan knows nothing about what happens during your shift, and it overwrites
+        every setpoint, including any you’ve moved yourself to protect a line — so after pressing it, put those back by hand:
       </P>
 
       <ControlRoom onFinish={onFinish} />
 
       <P>
         Three things go wrong. From {clock(missAt)}, demand starts running ahead of the forecast, because the evening turns out hotter than predicted, and by early evening it’s 5
-        percent above plan. Without new setpoints, AGC soaks up the difference until its two units run out of room, and then ACE starts to sink. In our simulator, if the region
-        leans on its neighbors by more than {SC.aceLimit} MW for more than {SC.aceMinutes} minutes, the reliability coordinator — the organization that oversees several
-        balancing areas — orders it to shed load.
+        percent above plan. Without new setpoints, AGC soaks up the difference until both of its units run out of room, and then ACE starts to sink toward the −{SC.aceLimit} MW
+        limit.
       </P>
       <P>
         At {clock(lineAt)}, lightning takes out line Harbor–Central. Nobody steers the power around the gap; it redistributes itself instantly across the lines that remain,
         following their impedances, and a good part of it lands on West–Metro. A line’s rating is mostly about how hot its conductors get, and heating takes time, so lines can
-        carry more than their normal rating for a while. In our simulator a
-        line may stay above 100 percent for up to {SC.overloadAllowance} minutes. After that it’s a sustained overload. The relief has to come from re-dispatch: moving
+        carry more than their normal rating for a while — which is why the simulator allows {SC.overloadAllowance} minutes above 100 percent before calling it a sustained
+        overload. The relief has to come from re-dispatch: moving
         generation from the plants that push power onto the overloaded line to plants that don’t. Ironwood coal, at West, feeds West–Metro most directly; Mill Creek and Old
         Quay, inside Metro, relieve it. Every plant changes output slowly, though, so the time to act is before the line trips.
       </P>
       <P>
         That’s the point of the contingency table, and of the posture operators call <b>N-1</b>: run the system so it can survive the loss of any single element — any line,
         any generator — without overloading anything else. The table runs a power flow for every possible line outage, as a real EMS does every few minutes, and shows the worst. If
-        the Harbor–Central row is red before {clock(lineAt)}, the system isn’t ready for it. (Not every red row can be fixed by re-dispatch. Covering the loss of
-        Central–Metro, the region’s main artery into the city, would mean shutting Ironwood down for most of the evening; operators facing a contingency like that prepare an
-        automatic scheme instead, which disconnects some load in Metro the moment it happens.) Then, at {clock(tripAt)}, Mill Creek trips. The interconnection barely notices — even at
+        the Harbor–Central row is red before {clock(lineAt)}, the system isn’t ready for it. (Not every red row is worth fixing by re-dispatch. Covering the loss of
+        Central–Metro, the region’s main artery into the city, would mean running Mill Creek and the two peakers hard through the evening — more than 300 MW between them from
+        18:00 — and once Mill Creek trips, no dispatch could cover it at all. For a contingency like that, operators arm a <b>special protection scheme</b>, or SPS, instead: it
+        disconnects some load in Metro automatically the moment the line trips. The table shows that row in gray, marked SPS: it’s covered, and the rows that need you are the
+        others.)
+        Then, at {clock(tripAt)}, Mill Creek trips. The interconnection barely notices — even at
         its full 250 MW, the loss would leave the frequency only about {lostHz.toFixed(2)} Hz low once governors everywhere had responded — but your ACE drops by everything
-        Mill Creek was producing, and you have to replace it from plants that still have room. That spare room is the reserve readout, which N-1 says should never fall below
-        the largest unit online.
+        Mill Creek was producing, and you have to replace it from plants that still have room: the reserve. Once Mill Creek is gone, though, the region’s remaining plants
+        can’t cover both the evening’s demand and the {CR_FIXED.mw} MW that losing Harbor Point would call for, so the reserve readout stays red to the end of the shift. A real
+        balancing area in that position would lean on a reserve-sharing agreement with its neighbors while it rebuilt its own.
       </P>
 
       <Challenge

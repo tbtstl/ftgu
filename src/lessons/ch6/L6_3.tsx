@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
+  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -14,6 +15,7 @@ import {
   Segmented,
   Slider,
   TimeChart,
+  lessonHref,
   linePath,
   niceDomain,
   niceTicks,
@@ -54,6 +56,20 @@ const MW = 10;
 const COST = 0.5;
 
 const avg = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+
+/** North's average day-ahead basis between midnight and 06:00, on days whose mean wind forecast is at least `level` MW. */
+function windyNights(level: number) {
+  const days = DAYS.filter((d) => matches(d, { kind: 'windy', level }));
+  const byHour = meanByHour(days, (d) => basis(d, 'north', 'da'));
+  return { days: days.length, night: avg(NIGHT.map((h) => byHour[h])) };
+}
+/** The wind slider's levels, and the lowest of them at which North's nights average at least $10 below the hub. */
+const WIND_LEVELS = Array.from({ length: 26 }, (_, i) => 50 + 10 * i);
+const LOWEST_WINDY = WIND_LEVELS.find((l) => {
+  const r = windyNights(l);
+  return r.days > 0 && r.night <= -10;
+})!;
+const CONVENTION: Record<BasisNode, string> = { metro: 'Metro − hub', north: 'hub − North' };
 
 function kusd(v: number): string {
   if (v === 0) return '$0';
@@ -108,7 +124,9 @@ export default function Lesson() {
   const night = avg(NIGHT.map((h) => byHour[h]));
   const aft = avg(AFTERNOON.map((h) => byHour[h]));
   const eve = avg(EVENING.map((h) => byHour[h]));
-  const solvedA = node === 'north' && market === 'da' && kind === 'windy' && picked.length > 0 && night <= -10;
+  const testingA = node === 'north' && market === 'da' && kind === 'windy';
+  const solvedA = testingA && wind === LOWEST_WINDY;
+  const belowA = windyNights(wind - 10);
 
   const p = s2.state;
   const block = BLOCKS[p.block];
@@ -125,22 +143,32 @@ export default function Lesson() {
   const tradedDays = traded.filter(Boolean).length;
   const won = spread.filter((v, i) => traded[i] && v > 0).length;
   const fair = knownDayAhead(cond2);
-  const solvedB = fair && tradedDays >= 5 && spreadTotal > 0;
+  const metroEvening = p.node === 'metro' && p.block === 'evening';
+  const solvedB = metroEvening && Math.abs(p.price - breakEven) <= 0.125 + 1e-9;
   const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
   const dir = p.node === 'metro' ? 'hub to Metro' : 'North to hub';
+  const conv = CONVENTION[p.node];
 
   return (
     <LessonPage id="6.3">
       <P>
         The spreads of the last lesson were differences between two markets at the same place. Chapter 5 showed that prices also differ between places: when a line
-        is full, the price on one side of it rises and the price on the other side falls. Traders call the difference between a node’s price and the price at a liquid
-        trading hub the <K c="price">basis</K>. Here it’s simply the node’s price minus the hub’s, so it’s negative where the node is cheap and positive where it’s dear.
+        is full, the price on one side of it rises and the price on the other side falls. Traders call the difference between a node’s price and the price at a
+        trading hub — the published price where contracts trade, in our region the price without congestion — the <K c="price">basis</K>. Here it’s simply the
+        node’s price minus the hub’s, so it’s negative where the node is cheap and positive where it’s dear. Mind the sign, because it has changed with each
+        lesson: <a href={lessonHref('6.1')}>Lesson 6.1</a> counted what an inc earns, day-ahead minus real-time; Lesson 6.2 counted real-time minus day-ahead; and
+        every chart in the first half of this lesson is node minus hub.
       </P>
       <P>
         Two nodes in our region have bases that matter. <K tone="teal">North</K> is where Ridge wind and Falls hydro sit, far from most of the demand; in the simulated
         history, its wind and hydro, less its own small load, must leave through a 380 MW export limit. <K tone="orange">Metro</K> is the city, with 55% of the region’s
-        demand and an import limit of 560 MW; whatever it can’t import must come from its own plants, Mill Creek and the Old Quay oil plant. A trader who believes
-        something about congestion can test it against the history before risking money on it. Two beliefs you’ll hear, in one form or another, about almost any grid:
+        demand and an import limit of 560 MW; whatever it can’t import must come from its own plants, Mill Creek and the Old Quay oil plant. Both limits are well
+        below the lines of Chapter 5, where 800 MW of line capacity leaves North and 1,250 MW enters Metro. The history’s market uses these tighter security limits
+        as a stand-in for the contingency constraints of <a href={lessonHref('5.6')}>Lesson 5.6</a>, which keep every line within its emergency rating even if
+        another one trips.
+      </P>
+      <P>
+        A trader who believes something about congestion can test it against the history before risking money on it. Two beliefs you’ll hear, in one form or another, about almost any grid:
         the export-constrained node “goes negative on windy nights,” and the city’s premium “rises on hot afternoons.” Choose a condition and compare the average
         basis on the days that meet it with the average over all 120 days:
       </P>
@@ -209,15 +237,15 @@ export default function Lesson() {
             { label: 'evening, 17:00–22:00', value: usd(eve, 2), tone: 'green' },
           ]}
         />
-        <Caption>
-          {picked.length === 0
-            ? 'No day in the history meets this condition, so there is nothing to test.'
-            : kind === 'outage'
-              ? 'Outages happen in real time, so the day-ahead market can’t see them coming; compare the two markets.'
-              : picked.length < 10
-                ? `Only ${picked.length} days match. An average over so few days is a story about those days, not a law.`
-                : `${picked.length} days match.`}
-        </Caption>
+        {(picked.length < 10 || kind === 'outage') && (
+          <Caption>
+            {picked.length === 0
+              ? 'No day in the history meets this condition, so there is nothing to test.'
+              : kind === 'outage'
+                ? 'Outages happen in real time, so the day-ahead market can’t see them coming; compare the two markets.'
+                : `Only ${picked.length} days match. An average over so few days is a story about those days, not a law.`}
+          </Caption>
+        )}
       </Figure>
 
       <P>
@@ -228,16 +256,18 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Test the first belief. Find a wind-forecast level at which North’s average day-ahead basis between midnight and 06:00 is at least $10 below the hub."
+        question="Test the first belief. What’s the lowest wind-forecast level at which North’s average day-ahead basis between midnight and 06:00 is at least $10 below the hub?"
         solved={solvedA}
         status={
-          node !== 'north' || market !== 'da' || kind !== 'windy'
+          !testingA
             ? 'Choose North, the day-ahead market and windy days.'
             : picked.length === 0
               ? 'No day is that windy.'
-              : `On the ${picked.length} days with at least ${wind} MW of forecast wind, North’s night-time basis averages ${usd(night, 2)}.`
+              : night > -10
+                ? `On the ${picked.length} days with at least ${wind} MW of forecast wind, North’s night-time basis averages ${usd(night, 2)}.`
+                : `At ${wind} MW the belief holds, on ${picked.length} days. Does it still hold at a lower level, with more days?`
         }
-        success={`Solved. The belief is true — but only on ${picked.length} of the 120 days. On a merely windy night, North’s export limit still has room, and its price is the hub’s.`}
+        success={`Solved. At ${wind} MW the belief holds — but only on ${picked.length} of the 120 days. Lower the level to ${wind - 10} MW and the ${belowA.days} matching nights average only ${usd(belowA.night, 2)}: on a merely windy night, North’s export limit still has room, and its price is the hub’s.`}
       />
 
       <P>
@@ -246,23 +276,32 @@ export default function Lesson() {
         falls, to $8.98. The second belief is half wrong.
       </P>
       <P>
-        The reason is that a basis has two prices in it. Metro is congested whenever the region’s demand is above about 1,018 MW, and then Mill Creek, at $42 times the
-        gas price, sets Metro’s price. On a mild afternoon, the hub’s price is set by Ironwood coal at $28, so the premium is large. On a hot afternoon, the hub’s
-        price rises too, to Lakeside’s gas-fired cost, and the gap between two gas plants is smaller than the gap between gas and coal. Only in the evening, when demand
-        passes about 1,473 MW and Mill Creek can no longer cover Metro’s shortfall, does Old Quay’s $165 oil set the price and the premium jump.
+        The reason is that a basis has two prices in it, and either can move. Metro is congested whenever the region’s demand is above about 1,018 MW, and then
+        Mill Creek, a gas plant, sets Metro’s price. On a mild afternoon, Ironwood coal at $28 sets the hub’s price, so the premium is the gap between gas and coal.
+        On a hot afternoon, the hub’s price rises to Lakeside’s gas-fired cost, and the gap between two gas plants is smaller.
+      </P>
+      <P>
+        The evening premium jumps for a different reason. Once demand passes about 1,473 MW, Mill Creek can no longer cover Metro’s shortfall, and Old Quay’s $165
+        oil sets Metro’s price.
+      </P>
+      <P>
+        Last, choose the outage days and switch between the two markets. On the 15 days a plant tripped, Metro’s afternoon premium averages $13.33 day-ahead but
+        $43.02 in real time. The day-ahead market cleared before the trip, so only the real-time price could react — and that gap between the two markets is what
+        the second half of this lesson trades.
       </P>
 
       <H2>Trading the basis</H2>
       <P>
-        There are two common ways to take a position on congestion. A <b>financial transmission right</b>, as in Lesson 5.4, pays the day-ahead congestion between two
+        There are two common ways to take a position on congestion. A <b>financial transmission right</b>, as in <a href={lessonHref('5.4')}>Lesson 5.4</a>, pays the day-ahead congestion between two
         points. It’s bought at an auction for a month, a season or a year at a time, long before anyone knows the weather, so its profit is the congestion that
         actually occurred minus the price paid. A <b>spread position</b> is placed day-ahead, one day at a time: buy at the dear end, sell at the cheap end, and reverse
         both in real time. It earns the real-time congestion minus the day-ahead congestion. PJM, for example, offers a version of it called an up-to-congestion
         transaction.
       </P>
       <P>
-        In the next demonstration, both positions are 10 MW in the congestion direction, from hub to Metro or from North to hub. The FTR covers a block of hours on every day. The spread
-        position trades the same block, only on days that meet a condition — every day, days whose demand forecast peaks at 1,500 MW or more, days whose wind
+        From here on we measure congestion in each node’s usual direction, so that it’s positive when the line is full: Metro − hub for Metro, and hub − North for
+        North. In the next demonstration, both positions are 10 MW in that direction, from hub to Metro or from North to hub. The FTR covers a block of hours on
+        every day. The spread position trades the same block, only on days that meet a condition — every day, days whose demand forecast peaks at 1,500 MW or more, days whose wind
         forecast averages 150 MW or more, or days with an outage — and pays $0.50 per MWh on each of its two legs:
       </P>
 
@@ -295,8 +334,8 @@ export default function Lesson() {
         />
         <Legend
           items={[
-            { label: `FTR, ${dir}`, color: GRAPHIC.violet, kind: 'line' },
-            { label: 'Spread position', color: '#333', kind: 'line' },
+            { label: `FTR, pays day-ahead ${conv}`, color: GRAPHIC.violet, kind: 'line' },
+            { label: `Spread position, real-time − day-ahead (${conv})`, color: '#333', kind: 'line' },
           ]}
         />
         <PositionsChart
@@ -309,44 +348,45 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'FTR P&L', value: usd(ftrTotal), tone: tone(ftrTotal) },
-            { label: 'FTR break-even price', value: usd(breakEven, 2) },
             { label: 'spread position P&L', value: usd(spreadTotal), tone: tone(spreadTotal) },
             { label: 'spread days won', value: `${won} of ${tradedDays}` },
           ]}
         />
-        <Caption>
-          {fair
-            ? `The FTR breaks even at the average day-ahead congestion over ${block.span}: ${usd(breakEven, 2)} per MWh.`
-            : 'Careful: outages aren’t known when day-ahead bids are due. This backtest uses information no trader would have had.'}
-        </Caption>
+        {!fair && <Caption>Careful: outages aren’t known when day-ahead bids are due. This backtest uses information no trader would have had.</Caption>}
       </Figure>
 
       <P>
         Start with the FTR. Bought for $15 a megawatt-hour, an FTR on Metro’s evening would have made $54,658 over the 120 days, after losing money
-        steadily until day 66, when the summer evenings began to pay. Its break-even price is exactly its average payout, $24.11, and an auction full of informed bidders would push its price toward that figure. Even at the break-even price, the FTR loses money on
-        75 of the 120 days and wins it back on the other 45. An FTR’s value is the expected congestion; its profit is the difference between what happened and what the
-        auction expected.
+        steadily until day 66, when the summer evenings began to pay. Fifteen dollars was a bargain, and an auction full of informed bidders would have bid the
+        price up. How far?
+      </P>
+
+      <Challenge
+        id="b"
+        question={
+          <>
+            What auction price would have made the Metro evening FTR exactly break even over the 120 days? Work it out from{' '}
+            <FigRef to="Nodal Basis Trader">the first demonstration</FigRef>, then set it here, to the nearest 25 cents.
+          </>
+        }
+        solved={solvedB}
+        status={
+          !metroEvening
+            ? 'Choose Metro and the evening hours.'
+            : `At $${p.price.toFixed(2)} per MWh, the FTR ${ftrTotal >= 0 ? 'makes' : 'loses'} ${usd(Math.abs(ftrTotal))} over the 120 days.`
+        }
+        success={`Solved. An FTR pays the day-ahead congestion in its hours, so it breaks even at their average: ${usd(breakEven, 2)} per MWh, the evening premium Metro showed in the first demonstration.`}
+      />
+
+      <P>
+        An FTR’s value is the expected congestion, and an auction full of informed bidders pushes its price toward that figure; its profit is the difference
+        between what happened and what the auction expected. Even at the break-even price, the FTR loses money on 75 of the 120 days and wins it back on the other 45.
       </P>
       <P>
         The spread position is subtler. Trading Metro’s evening only on high-demand days sounds like acting on the belief we just confirmed — but it loses $24,310.
         The day-ahead market knows the forecast too, and its evening prices on those days already include Old Quay’s $165. In real time, the premium is often{' '}
         <i>smaller</i>: when a hot evening turns into a scarcity spike, the hub’s price shoots past $165 and Metro’s premium disappears.
       </P>
-
-      <Challenge
-        id="b"
-        question="Find hours and a condition — using only what’s known day-ahead — where the spread position would have made money after costs."
-        solved={solvedB}
-        status={
-          !fair
-            ? 'Outages aren’t known day-ahead. Choose a condition a trader could actually see.'
-            : tradedDays < 5
-              ? 'This condition trades too few days to mean anything.'
-              : `Right now the spread position makes ${usd(spreadTotal)} over ${tradedDays} days.`
-        }
-        success={`Solved. It made ${usd(spreadTotal)}, but it won on only ${won} of its ${tradedDays} days. Look at what it’s really holding: the risk that something goes wrong in real time that the day-ahead market didn’t expect.`}
-      />
-
       <P>
         The morning and afternoon positions on Metro do make money, and the reason is instructive. On every day, they buy Metro’s real-time congestion at the
         day-ahead price. Most days that costs a little, but on the 6 days when Mill Creek tripped, Metro had to run Old Quay in real time and its premium jumped. The

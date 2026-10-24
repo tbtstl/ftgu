@@ -13,6 +13,7 @@ import {
   Readouts,
   Segmented,
   Slider,
+  lessonHref,
   linePath,
   niceDomain,
   niceTicks,
@@ -28,6 +29,11 @@ const DAYS = standardHistory();
 const WINDOWS = Array.from({ length: 12 }, (_, i) => 5 + 5 * i);
 const IN_DAYS = LAB_SPLIT - LAB_START;
 const OUT_DAYS = DAYS.length - LAB_SPLIT;
+/** Days 73 and 120 (indices 72 and 119): the two evenings when the real-time price passed $2,000. */
+const SPIKE_DAYS = [72, 119];
+/** The challenge's daily loss limit, $. */
+const DAY_LIMIT = 20000;
+const MW_MAX = 50;
 
 // Every strategy's P&L is proportional to its position limit, so backtests run at 1 MW and are
 // scaled. Results are cached for the session: revisiting a setting is instant.
@@ -41,6 +47,14 @@ function unitPnl(strategy: LabStrategy, window: number, threshold: number, cost:
     cache.set(key, v);
   }
   return v;
+}
+
+/** A strategy's daily P&L at a position limit of `mw`, with the stop-loss applied. */
+function runLab(strategy: LabStrategy, window: number, threshold: number, cost: number, mw: number, stop: number) {
+  return applyStopLoss(
+    unitPnl(strategy, window, threshold, cost).map((v) => v * mw),
+    stop,
+  );
 }
 
 function kusd(v: number): string {
@@ -166,13 +180,16 @@ export default function Lesson() {
   const { strategy, window, threshold, cost, mw, stop } = s.state;
   const battery = strategy === 'battery';
 
-  const raw = useMemo(() => unitPnl(strategy, window, threshold, cost).map((v) => v * mw), [strategy, window, threshold, cost, mw]);
-  const limited = useMemo(() => applyStopLoss(raw, stop), [raw, stop]);
+  const limited = useMemo(() => runLab(strategy, window, threshold, cost, mw, stop), [strategy, window, threshold, cost, mw, stop]);
   const pnl = limited.pnl;
   const st = summarize(pnl.slice(LAB_START));
   const mdd = maxDrawdown(pnl).drawdown;
   const total = st.total;
-  const solved = strategy === 'spread' && cost >= 1 && mw >= 10 && total >= 10000 && mdd < 5000;
+  const withoutSpikes = total - SPIKE_DAYS.reduce((a, i) => a + pnl[i], 0);
+  // The challenge: the largest position limit whose worst day stays within the daily loss limit.
+  const within = st.worst >= -DAY_LIMIT;
+  const nextWorst = useMemo(() => (mw < MW_MAX ? Math.min(...runLab(strategy, window, threshold, cost, mw + 1, stop).pnl) : 0), [strategy, window, threshold, cost, mw, stop]);
+  const solved = within && mw < MW_MAX && nextWorst < -DAY_LIMIT;
   const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
 
   // In-sample / out-of-sample sweep over lookback windows (without the stop-loss).
@@ -203,14 +220,16 @@ export default function Lesson() {
       <P>
         Every lesson in this chapter ended in a backtest: a strategy run over the simulated history, with a number at the end. This lesson is about reading those
         numbers — what they can tell you, and the ways they lie. It’s a laboratory with three strategies from the chapter. <K tone="violet">Spread virtuals</K> is the
-        trailing-mean rule of Lesson 6.2. <K tone="violet">Metro basis</K> takes the spread position of Lesson 6.3 in every hour, long or short, depending on whether
+        trailing-mean rule of <a href={lessonHref('6.2')}>Lesson 6.2</a>. <K tone="violet">Metro basis</K> takes the spread position of{' '}
+        <a href={lessonHref('6.3')}>Lesson 6.3</a> in every hour, long or short, depending on whether
         Metro’s real-time congestion has recently come in above or below its day-ahead congestion. <K tone="violet">Battery</K> is a four-hour battery that plans on the
-        day-ahead prices plus the real-time premium it has recently seen in each hour, and is paid real-time prices, as in Lesson 6.4.
+        day-ahead prices plus the real-time premium it has recently seen in each hour, and is paid real-time prices, as in <a href={lessonHref('6.4')}>Lesson 6.4</a>.
       </P>
       <P>
         Each strategy trades days 11 to 120, deciding every day from only the days before it. The <b>position limit</b> caps its size: megawatts per hour for the
-        virtual strategies, megawatts of power for the battery. The <b>stop-loss</b> is a rule a risk manager might impose: when the running total falls more than a
-        set amount below its previous peak, the desk stops trading for 10 days. Run some experiments:
+        virtual strategies, megawatts of power for the battery. How far the running total stands below the highest it has reached so far is its <b>drawdown</b>.
+        The <b>stop-loss</b> is a rule a risk manager might impose: when the drawdown grows past a set amount, the desk stops trading for 10 days. Run some
+        experiments:
       </P>
 
       <Figure name="Strategy Laboratory" scenario={s}>
@@ -239,10 +258,9 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'total P&L', value: usd(total), tone: tone(total) },
+            { label: 'without days 73 and 120', value: usd(withoutSpikes), tone: tone(withoutSpikes) },
             { label: 'maximum drawdown', value: usd(mdd), tone: mdd > 0 ? 'red' : 'ink' },
-            { label: 'Sharpe ratio', value: st.sharpe.toFixed(2) },
             { label: 'worst day', value: usd(st.worst), tone: tone(st.worst) },
-            { label: '95% value at risk', value: usd(st.var95), tone: st.var95 > 0 ? 'red' : 'ink' },
           ]}
         />
         <Slider label="Lookback window" value={window} min={5} max={60} step={5} onChange={(v) => s.set({ window: v })} display={`${window} days`} />
@@ -258,7 +276,7 @@ export default function Lesson() {
           display={battery ? 'not used' : `$${threshold.toFixed(1)} per MWh`}
         />
         <Slider label="Transaction cost" tone="red" value={cost} min={0} max={3} step={0.25} onChange={(v) => s.set({ cost: v })} display={`$${cost.toFixed(2)} per MWh`} />
-        <Slider label="Position limit" tone="violet" value={mw} min={1} max={50} onChange={(v) => s.set({ mw: v })} display={`${mw} MW`} />
+        <Slider label="Position limit" tone="violet" value={mw} min={1} max={MW_MAX} onChange={(v) => s.set({ mw: v })} display={`${mw} MW`} />
         <Slider
           label="Stop-loss"
           tone="red"
@@ -272,47 +290,59 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The upper chart is the <b>equity curve</b>, the running total of profit. The lower one is the <b>drawdown</b>: how far the total stands below the highest
-        it had reached so far. The maximum drawdown is the worst such fall, and it’s the number investors and risk managers watch most closely, because it’s what they
-        actually live through. The <b>Sharpe ratio</b> divides the average daily profit by its standard deviation and scales it to a year; it rewards steady
-        profits and punishes erratic ones.
+        The upper chart is the <b>equity curve</b>, the running total of profit, and the lower one is its drawdown. The maximum drawdown is the worst such fall,
+        and it’s the number investors and risk managers watch most closely, because it’s what they actually live through.
       </P>
       <P>
         The starting strategy decs and incs on the last five days’ average spread. Over the first half of the history it made $3,908, and looked respectable. Then,
         on day 120, recent spreads had been negative in the evening, so it held incs into the biggest spike in the history and lost $63,384 in a day; with its
-        $22,752 loss on day 73 it finished at −$71,851, with a maximum drawdown of $76,437. A five-day average is mostly a record of the last few days’ noise, and it
-        was confidently wrong at the worst possible moment.
+        $22,752 loss on day 73 it finished at −$71,851, with a maximum drawdown of $76,437. Without those two days it would have made $14,286. A five-day average is
+        mostly a record of the last few days’ noise, and it was confidently wrong at the worst possible moment.
       </P>
       <P>
         Try the stop-loss on it. At $1,000 the desk is stopped out four times and finishes worse, at −$81,023, and its worst day is still −$63,384. A stop-loss acts
-        after a loss has happened. It can end a slow bleed, but it can’t prevent a loss that arrives all at once, which is how electricity losses usually arrive. The
-        only limit that bounds a one-day loss in advance is the size of the position.
+        after a loss has happened. It can end a slow bleed, but it can’t prevent a loss that arrives all at once, which is how electricity losses usually arrive. For
+        linear positions like these, the only limit that bounds a one-day loss in advance is the size of the position.
       </P>
 
       <Challenge
         id="a"
-        question="With the spread strategy, a position limit of at least 10 MW and transaction costs of at least $1 per MWh, find settings that finish at least $10,000 ahead without ever falling more than $5,000 below a previous peak."
+        question="A risk manager rules that the desk must never lose more than $20,000 in a day. With the starting spread strategy, what’s the largest position limit that would have kept every day within that rule?"
         solved={solved}
         status={
-          strategy !== 'spread'
-            ? 'Choose the spread strategy.'
-            : cost < 1 || mw < 10
-              ? 'Set the transaction cost to at least $1 and the position limit to at least 10 MW.'
-              : `Right now it finishes at ${usd(total)} with a maximum drawdown of ${usd(mdd)}.`
+          !within
+            ? `At ${mw} MW the worst day loses ${usd(-st.worst)}, more than $20,000.`
+            : mw >= MW_MAX
+              ? 'Even at 50 MW every day stays within $20,000 with these settings, so there’s no limit to find. Return to the starting strategy.'
+              : `At ${mw} MW every day stays within $20,000. Could the desk trade more?`
         }
-        success={`Solved: ${usd(total)}, with a maximum drawdown of ${usd(mdd)}. A longer window stops the rule chasing last week’s noise, and a higher threshold keeps it out of hours where the expected spread can’t pay the costs. But look at the equity curve: it still climbs in a few large steps.`}
+        success={`Solved. At ${mw} MW the worst day lost ${usd(-st.worst)}; at ${mw + 1} MW it would have lost ${usd(-nextWorst)}. A day’s loss grows in proportion to the position, so the limit is the loss the desk can bear divided by the worst loss per megawatt — which we only know in hindsight. A real limit has to be sized for a worst day that hasn’t happened yet.`}
       />
 
       <H2>Overfitting</H2>
       <P>
-        You probably found settings that work by trying several. That’s exactly how backtests deceive. Try enough variations of a strategy on the same history and
+        The settings that made the spread rule look good in <a href={lessonHref('6.2')}>Lesson 6.2</a> — the trailing mean, a 30-day window, a $2 threshold — were
+        chosen after seeing the whole history, by trying several and keeping one that worked, just as that lesson’s challenge asked you to. That’s exactly how
+        backtests deceive. Try enough variations of a strategy on the same history and
         the best of them will look good partly because it happened to fit that history’s accidents. That’s <b>overfitting</b>, and the defense is to choose on one
-        period and judge on another. In the next demonstration, this strategy is run with every lookback window from 5 to 60 days. The dashed line is each
-        window’s average daily profit in the first half of the history, the <b>in-sample</b> period where we choose; the solid line is the same window in the second
-        half, which we pretend not to have seen until we’ve chosen:
+        period and judge on another. (A stricter version, the <b>walk-forward</b> test, repeats that as the history unfolds: every few weeks it re-chooses the
+        settings from the days so far and trades them on the days that follow. The lab makes a single split.) In the next demonstration, this strategy is run with
+        every lookback window from 5 to 60 days. The dashed line is each window’s average daily profit in the first half of the history, the <b>in-sample</b> period
+        where we choose; the solid line is the same window in the second half, the <b>out-of-sample</b> period, which we pretend not to have seen until we’ve
+        chosen:
       </P>
 
       <Figure name="Strategy Laboratory · in sample and out of sample" scenario={s}>
+        <Segmented
+          label="Strategy"
+          value={strategy}
+          onChange={(v) => s.set({ strategy: v })}
+          options={[
+            { value: 'spread', label: 'Spread virtuals' },
+            { value: 'basis', label: 'Metro basis' },
+            { value: 'battery', label: 'Battery' },
+          ]}
+        />
         <Legend
           items={[
             { label: 'In sample, days 11–60', color: GRAPHIC.blue, kind: 'line', dashed: true },
@@ -337,9 +367,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Switch the strategy in <FigRef to="Strategy Laboratory">the first demonstration</FigRef> to Metro basis, then look again at{' '}
-        <FigRef to="Strategy Laboratory · in sample and out of sample">the second</FigRef>. With the starting $2 threshold and $0.50 cost, the window that looks
-        best in sample is the shortest, 5 days, at $104 a day. Out of sample it loses $75 a day — the worst of all twelve windows, while the median window earns $187. Nothing about a 5-day window is special. It
+        Switch the strategy to Metro basis. With the starting 10 MW limit, $2 threshold and $0.50 cost, set in{' '}
+        <FigRef to="Strategy Laboratory">the first demonstration</FigRef>, the window that looks best in sample is the shortest, 5 days, at $104 a day. Out of
+        sample it loses $75 a day — the worst of all twelve windows, while the median window earns $187. Nothing about a 5-day window is special. It
         happened to fit the first half’s particular sequence of outages and noise, and the second half’s came differently.
       </P>
       <P>
@@ -353,7 +383,7 @@ export default function Lesson() {
       <P>
         That is the chapter’s lesson in one place. Price differences are where traders make money: between day-ahead and real time, between nodes and hubs, between
         night and evening. Some of those differences are structural, and earn a steady return for whoever has the asset or takes the risk. Others are the price of
-        rare events, and look like income until the event arrives. Telling them apart takes walk-forward tests, honest costs, risk limits sized for the worst day
+        rare events, and look like income until the event arrives. Telling them apart takes out-of-sample tests, honest costs, risk limits sized for the worst day
         rather than the average one, and a suspicious attitude to any backtest — especially your own. In Chapter 7 the assets get smaller and far more numerous:
         rooftop solar, home batteries and the aggregators that turn thousands of them into something that can trade like a power plant.
       </P>

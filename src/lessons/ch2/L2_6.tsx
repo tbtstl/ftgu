@@ -56,29 +56,27 @@ const LABEL_POS: Record<string, 'above' | 'below' | 'left' | 'right'> = {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Figure 1: the evening peak, some lines out, maybe a plant tripped, and three ways to dispatch.
+// Figure 1: the evening peak, some lines out, dispatched in merit order or N-1 secure.
 
-type Mode = 'merit' | 'redispatch' | 'secure';
-type Trip = 'none' | 'nuc' | 'cc1' | 'coal';
+type Mode = 'merit' | 'secure';
 
 export interface SecurityState {
   out: string[];
-  trip: Trip;
   mode: Mode;
 }
 
 export function securityCase(s: SecurityState) {
-  const rc = regionCase({ plantOutages: s.trip === 'none' ? [] : [s.trip] });
+  const rc = regionCase();
   let units: GridUnit[] = rc.units;
   let loads = rc.loads;
   let feasible = true;
-  if (s.mode !== 'merit') {
+  if (s.mode === 'secure') {
     const inService = REGION.lines.map((l) => l.id).filter((id) => !s.out.includes(id));
     const r = dcopf(
       REGION,
       rc.units.map((u) => ({ id: u.id, node: u.node, capacity: u.capacity, offer: COST[u.id] })),
       rc.loads,
-      { outages: s.out, contingencies: s.mode === 'secure' ? inService : undefined, voll: VOLL, lmp: false },
+      { outages: s.out, contingencies: inService, voll: VOLL, lmp: false },
     );
     feasible = r.feasible;
     if (r.feasible) {
@@ -94,8 +92,8 @@ export function securityCase(s: SecurityState) {
 }
 
 /** Running cost at the evening peak in merit order and with an N-1 secure dispatch, $/h. */
-export const MERIT_COST = securityCase({ out: [], trip: 'none', mode: 'merit' }).cost;
-export const SECURE_COST = securityCase({ out: [], trip: 'none', mode: 'secure' }).cost;
+export const MERIT_COST = securityCase({ out: [], mode: 'merit' }).cost;
+export const SECURE_COST = securityCase({ out: [], mode: 'secure' }).cost;
 
 // ---------------------------------------------------------------------------------------------
 // Figure 2: a double outage, a cascade, and the reader's preventive redispatch.
@@ -117,6 +115,9 @@ export function cascadeCase(s: CascadeState) {
   return { rc, steps, final: steps[steps.length - 1] };
 }
 
+/** The storm's shed demand at the default settings, valued at the value of lost load, $ per hour. */
+export const STORM_LOST_LOAD = cascadeCase({ out: [...STORM], cc2: 50, oil: 0, ct: 0, stage: 0 }).final.shedTotal * VOLL;
+
 /** Every customer still supplied after the storm, with no line above its rating. */
 export function stormSolved(s: CascadeState): boolean {
   if (s.out.length !== STORM.length || !STORM.every((id) => s.out.includes(id))) return false;
@@ -125,7 +126,7 @@ export function stormSolved(s: CascadeState): boolean {
 }
 
 export default function Lesson() {
-  const s1 = useScenario<SecurityState>('security', { out: [], trip: 'none', mode: 'merit' });
+  const s1 = useScenario<SecurityState>('security', { out: [], mode: 'merit' });
   const c1 = useMemo(() => securityCase(s1.state), [s1.state]);
   const failing = c1.scan.filter((r) => !r.ok);
   const toggle1 = (id: string) => s1.set((p) => ({ out: p.out.includes(id) ? p.out.filter((x) => x !== id) : [...p.out, id] }));
@@ -135,7 +136,6 @@ export default function Lesson() {
   const stage = Math.min(s2.state.stage, c2.steps.length - 1);
   const at = c2.steps[stage];
   const solved = stormSolved(s2.state);
-  const lost = c2.final.outages.length - s2.state.out.length;
   const toggle2 = (id: string) => s2.set((p) => ({ out: p.out.includes(id) ? p.out.filter((x) => x !== id) : [...p.out, id], stage: 0 }));
   const isStorm = s2.state.out.length === STORM.length && STORM.every((id) => s2.state.out.includes(id));
   const lakeside = c2.rc.output.cc1 ?? 0;
@@ -167,8 +167,9 @@ export default function Lesson() {
         leave something overloaded.
       </P>
       <P>
-        Here is the region at the 7 p.m. peak, dispatched in merit order as in the previous lesson. The table runs the contingency analysis: for each line still in
-        service, what would happen if it tripped next. Click lines on the map to take them out, trip a power plant, or change how the operator dispatches:
+        Here is the region at the 19:00 peak, dispatched in merit order as in the previous lesson. The table under the map runs the contingency analysis: it takes out
+        each line still in service in turn, recomputes the flows, and lists every outage that would overload a line or cut customers off. Click a line on the map to take
+        it out and see that outage’s flows for yourself:
       </P>
 
       <Figure name="Grid Failure Simulator" scenario={s1}>
@@ -178,19 +179,7 @@ export default function Lesson() {
           onChange={(mode) => s1.set({ mode })}
           options={[
             { value: 'merit', label: 'Merit order' },
-            { value: 'redispatch', label: 'Redispatch' },
             { value: 'secure', label: 'N-1 secure' },
-          ]}
-        />
-        <Segmented
-          label="Trip a power plant"
-          value={s1.state.trip}
-          onChange={(trip) => s1.set({ trip })}
-          options={[
-            { value: 'none', label: 'No trip' },
-            { value: 'nuc', label: 'Harbor Point' },
-            { value: 'cc1', label: 'Lakeside' },
-            { value: 'coal', label: 'Ironwood' },
           ]}
         />
         <NetworkView
@@ -226,31 +215,23 @@ export default function Lesson() {
             labelDy: LABEL_OFFSET[l.id][1],
           }))}
         />
-        <Readouts
-          items={[
-            { label: 'single line outages survived', value: `${c1.scan.length - failing.length} of ${c1.scan.length}`, tone: failing.length ? 'red' : 'green' },
-            { label: 'running cost per hour', value: usd(c1.cost), tone: 'green' },
-            { label: 'demand cut off', value: mw(c1.shed), tone: c1.shed > 0 ? 'red' : undefined },
-          ]}
-        />
-        <DataTable
-          caption="Contingency analysis: the state after each line still in service trips"
-          rows={c1.scan}
-          rowKey={(r) => r.outage}
-          rowClass={(r) => (r.ok ? '' : 'hl')}
-          columns={[
-            { label: 'If this line trips', cell: (r) => lineName(r.outage) },
-            { label: 'Most loaded line afterwards', cell: (r) => (r.worst ? `${lineName(r.worst.line)} · ${pct(r.worst.loading)}` : '—') },
-            {
-              label: 'Result',
-              cell: (r) =>
-                r.ok ? (
-                  r.separated.length ? (
-                    `${nodesList(r.separated)} separated, still supplied`
-                  ) : (
-                    'secure'
-                  )
-                ) : (
+        <Readouts items={[{ label: 'running cost per hour', value: usd(c1.cost), tone: 'green' }]} />
+        <Caption>
+          {failing.length
+            ? `${failing.length} of the ${c1.scan.length} possible single-line outages would overload a line or cut customers off:`
+            : `None of the ${c1.scan.length} possible single-line outages would overload a line or cut anyone off.`}
+        </Caption>
+        {failing.length > 0 && (
+          <DataTable
+            caption="Contingency analysis: the outages that would overload a line or cut customers off"
+            rows={failing}
+            rowKey={(r) => r.outage}
+            columns={[
+              { label: 'If this line trips', cell: (r) => lineName(r.outage) },
+              { label: 'Most loaded line afterwards', cell: (r) => (r.worst ? `${lineName(r.worst.line)} · ${pct(r.worst.loading)}` : '—') },
+              {
+                label: 'Result',
+                cell: (r) => (
                   <Tn tone="red">
                     {[
                       r.overloads.length ? `${r.overloads.length} overloaded` : '',
@@ -261,32 +242,24 @@ export default function Lesson() {
                       .join(', ')}
                   </Tn>
                 ),
-            },
-          ]}
-        />
+              },
+            ]}
+          />
+        )}
         {!c1.feasible && <Caption>The optimizer found no feasible dispatch; showing the merit order instead.</Caption>}
       </Figure>
 
       <P>
         With every line in service, the merit-order dispatch passes the base case but fails the N-1 test four times: losing North–East, Harbor–Central or West–Metro
-        each overloads one line by a few percent, and losing Central–Metro overloads two badly, as we found in the previous lesson. Tripping a plant is less dramatic
-        than you might expect. Lose Lakeside, the region’s largest gas plant, and Mill Creek and Eastgate make up its output; demand is still met. What changes is where
-        the power comes from, and so how it flows.
+        each overloads one line by a few percent, and losing Central–Metro overloads two badly, as we saw in the previous lesson. A real contingency analysis also takes
+        out each generator and transformer in turn; what happens in the seconds after a power plant trips is the subject of <a href={lessonHref('3.2')}>Lesson 3.2</a>.
       </P>
       <P>
-        Switch the dispatch to <b>Redispatch</b> and the operator uses the optimizer of <a href={lessonHref('5.1')}>Chapter 5</a> to find the cheapest dispatch that keeps
-        every line within its rating as the network stands. With every line in service, that’s the merit order itself; with a line out, it moves generation around until
-        the overloads disappear. That is <b>corrective</b> action, taken after an outage. <b>N-1 secure</b> goes further: it chooses a dispatch that would leave every
-        line within its rating after any one more outage, before that outage happens. At the evening peak this <b>preventive</b> security costs {usd(SECURE_COST)} an hour
-        rather than {usd(MERIT_COST)}, a third more, because Ironwood’s cheap coal in the West is replaced by Mill Creek and Eastgate, which sit in and near Metro, where
-        their power doesn’t have to cross the lines that might fail.
-      </P>
-      <P>
-        Now take out both lines into the North. North becomes an <b>island</b>: a piece of the grid with no connection to the rest. An island has to balance on its own,
-        so Falls and Ridge back down to the North’s 72 MW of demand, while the rest of the region makes up what they had been exporting. Cut all three lines into Metro,
-        and Metro becomes an island with only Mill Creek and Old Quay, 330 MW, for 792 MW of demand. The difference has to be <K c="power">shed</K>: customers are
-        disconnected, deliberately, so that the rest can stay on. The optimizer treats shed demand as the most expensive “generator” there is, priced at the value of
-        lost load — {usd(VOLL)} per megawatt-hour in our model, though real estimates are often far higher — so it sheds only what it must.
+        Switch the dispatch to <b>N-1 secure</b> and the operator uses the optimizer of <a href={lessonHref('5.1')}>Chapter 5</a> to find the cheapest dispatch that
+        would leave every line within its rating after any one outage, before that outage happens. This is <b>preventive</b> security. At the evening peak it costs{' '}
+        {usd(SECURE_COST)} an hour rather than {usd(MERIT_COST)}, a third more, because Ironwood’s cheap coal in the West is replaced by Mill Creek and Eastgate, which sit
+        in and near Metro, where their power doesn’t have to cross the lines that might fail. The cheaper alternative is <b>corrective</b> action: wait for an outage,
+        then rearrange the plants. It works only if the overload can be relieved before the line heats up too far.
       </P>
 
       <H2>Cascades</H2>
@@ -297,8 +270,8 @@ export default function Lesson() {
         left about 50 million people in the northeastern and midwestern United States and Ontario without power.
       </P>
       <P>
-        The next demonstration uses a deliberately simple model of a cascade: any line loaded beyond 120% of its rating trips; the flows are recalculated, islands balance as
-        best they can, and the process repeats until nothing more trips. A storm has taken out both 230 kV lines into Metro, East–Metro and West–Metro. Drag the stage
+        The next demonstration uses a deliberately simple model of a cascade: any line loaded beyond 120% of its rating trips; the flows are recalculated, any piece of the
+        grid cut off from the rest balances as best it can, and the process repeats until nothing more trips. A storm has taken out both 230 kV lines into Metro, East–Metro and West–Metro. Drag the stage
         slider to watch what follows:
       </P>
 
@@ -385,7 +358,6 @@ export default function Lesson() {
         </Controls>
         <Readouts
           items={[
-            { label: 'lines tripped by the cascade', value: String(lost), tone: lost ? 'red' : undefined },
             { label: 'demand cut off in the end', value: mw(c2.final.shedTotal), tone: c2.final.shedTotal > 0.5 ? 'red' : undefined },
             { label: 'Lakeside follows, at', value: mw(lakeside) },
             { label: 'running cost per hour', value: usd(c2.rc.cost), tone: 'green' },
@@ -394,10 +366,16 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With the storm’s two lines gone, everything Metro imports — 742 MW — has to come over Central–Metro, rated 600 MW. At 124% of its rating it trips, and Metro is
-        an island with just Mill Creek and Old Quay. Even running flat out they produce 330 MW against Metro’s 792, and 462 MW of demand, well over half of Metro’s, is
-        cut off. Try clicking the map: Central–Metro on its own sets off a cascade too, tripping West–Metro and North–East and leaving Metro and East together as an island
-        406 MW short.
+        With the storm’s two lines gone, everything Metro imports — 742 MW — has to come over Central–Metro, rated 600 MW. At 124% of its rating it trips, and Metro
+        becomes an <b>island</b>: a piece of the grid with no connection to the rest, which has to balance its own supply and demand. Metro’s island has just Mill Creek
+        and Old Quay. Even running flat out they produce 330 MW against Metro’s 792, so the difference, 462 MW — well over half of Metro’s demand — has to be{' '}
+        <K c="power">shed</K>: customers are disconnected, deliberately, so that the rest can stay on. Try clicking the map: Central–Metro on its own sets off a cascade
+        too, tripping West–Metro and North–East and leaving Metro and East together as an island 406 MW short.
+      </P>
+      <P>
+        Shedding has a cost of its own. Operators’ software puts a number on it, the <b>value of lost load</b>: an estimate of what an hour without power costs the people cut
+        off — {usd(VOLL)} per megawatt-hour in our model, though real estimates are often far higher. At that value, the storm’s 462 MW of
+        shed demand costs {usd(STORM_LOST_LOAD)} for every hour it lasts.
       </P>
       <P>
         The sliders set Metro’s and East’s plants by hand, before the storm arrives; the other plants follow the merit order, with Lakeside taking up the slack. This is
@@ -421,7 +399,8 @@ export default function Lesson() {
       />
       <P>
         Eastgate can’t help: once East–Metro is down, the East has no direct road into Metro. What works is generation inside Metro itself. Run Mill Creek at 200 MW
-        instead of 50 and Central–Metro has to bring in only 592 MW, just within its rating, for about $900 an hour more than the merit order. That is the general lesson:
+        instead of 50 and Central–Metro has to bring in only 592 MW, just within its rating, for about $900 an hour more than the merit order — a small premium against
+        {' '}{usd(STORM_LOST_LOAD)} an hour of lost load. That is the general lesson:
         generation inside a load pocket like Metro is insurance against losing the lines into it, which is why grid operators sometimes pay plants in such places to stay
         available even when the market alone wouldn’t keep them running.
       </P>

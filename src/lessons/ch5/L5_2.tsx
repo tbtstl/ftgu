@@ -8,24 +8,24 @@ import {
   H2,
   K,
   LessonPage,
-  NetworkView,
   P,
   Readouts,
   Segmented,
   Slider,
+  Swatch,
   fmt,
   lessonHref,
   linePath,
+  loadingColor,
   mw,
   niceTicks,
-  priceFill,
   scale,
   signed,
   usd,
   useScenario,
 } from '../../framework';
 import { dcopf, type OpfResult } from '../../engines/market/opf';
-import { fleetOffers, nodalLoads } from '../../engines/market/networkDispatch';
+import { checkDispatch, fleetOffers, nodalLoads } from '../../engines/market/networkDispatch';
 import { computePtdf } from '../../engines/physics/powerflow';
 import { STANDARD_FLEET, fleetById } from '../../model/fleet';
 import { REGION, REGION_LOAD_SHARE } from '../../model/networks';
@@ -56,6 +56,48 @@ function solve(limit: number, extra?: { node: string; mw: number }, lmp = true):
   return dcopf(REGION, GENS, loads, { limits: { [LINE]: limit }, lmp });
 }
 
+// The prose's example: Central–Metro limited to 250 MW, one more megawatt in Metro.
+const PROBE_LIMIT = 250;
+const PROBE = solve(PROBE_LIMIT);
+const PROBE_METRO = solve(PROBE_LIMIT, { node: 'city', mw: 1 }, false);
+const PROBE_EAST = PROBE_METRO.dispatch.ct - PROBE.dispatch.ct;
+const PROBE_LAKESIDE = PROBE_METRO.dispatch.cc1 - PROBE.dispatch.cc1;
+
+// Redispatch by hand: move output from Lakeside, at the head of the line, to Mill Creek, at its foot.
+const LAKESIDE_BASE = BASE.dispatch.cc1;
+const MILL_BASE = BASE.dispatch.cc2;
+const SWAP_MAX = Math.min(LAKESIDE_BASE, fleetById('cc2').capacity - MILL_BASE);
+const SWAP_COST = fleetById('cc2').marginalCost - fleetById('cc1').marginalCost;
+
+/** The flow on Central–Metro, and the extra cost, when `swap` MW of Lakeside's output moves to Mill Creek. */
+export function handSwap(swap: number) {
+  const d = { ...BASE.dispatch, cc1: LAKESIDE_BASE - swap, cc2: MILL_BASE + swap };
+  const c = checkDispatch(REGION, GENS, d, LOADS);
+  return { flow: Math.abs(c.flows[LINE]), cost: c.cost - BASE.cost, overloads: c.overloads };
+}
+
+// A line counts as at its limit within a megawatt (the figure shows whole megawatts).
+const OVER = 0.5;
+const UNDER = 1;
+
+/** The challenge: the line limited to 50 MW below its unconstrained flow, relieved by just enough redispatch. */
+export const CHALLENGE_LIMIT = 375;
+export const CHALLENGE_RELIEF = Math.round(BASE_FLOW - CHALLENGE_LIMIT);
+export function swapSolved(limit: number, swap: number): boolean {
+  if (limit !== CHALLENGE_LIMIT) return false;
+  const { flow } = handSwap(swap);
+  return flow <= limit + OVER && flow >= limit - UNDER;
+}
+
+/** The fewest whole megawatts of swap that bring the line within `limit` (half a megawatt's tolerance). */
+export function leastSwap(limit: number): number {
+  for (let sw = 0; sw <= SWAP_MAX; sw++) if (handSwap(sw).flow <= limit + OVER) return sw;
+  return NaN;
+}
+const SWAP_400 = leastSwap(400);
+
+export const CONGESTION_DEFAULTS = { limit: RATED, swap: 0, node: 'city' as NodeId };
+
 const SHORT: Record<string, string> = {
   nuc: 'Harbor Point',
   coal: 'Ironwood',
@@ -67,83 +109,48 @@ const SHORT: Record<string, string> = {
   wind: 'Ridge wind',
   solar: 'Valley solar',
 };
-const PLANT_TEXT: Record<string, { x: number; y: number; anchor: 'start' | 'middle' | 'end'; ids: string[] }> = {
-  north: { x: 22, y: 116, anchor: 'start', ids: ['hydro', 'wind'] },
-  east: { x: 492, y: 116, anchor: 'start', ids: ['ct'] },
-  center: { x: 340, y: 160, anchor: 'start', ids: ['cc1'] },
-  harbor: { x: 22, y: 304, anchor: 'start', ids: ['nuc'] },
-  west: { x: 190, y: 346, anchor: 'end', ids: ['coal'] },
-  city: { x: 510, y: 336, anchor: 'middle', ids: ['cc2', 'oil'] },
-};
-const LABEL_OFFSET: Record<string, [number, number]> = {
-  'north-center': [34, -14],
-  'north-east': [0, -10],
-  'harbor-center': [-6, -10],
-  'harbor-west': [40, -14],
-  'west-center': [34, 4],
-  'center-city': [10, -18],
-  'east-city': [44, 0],
-  'west-city': [10, 22],
-};
 
-function RegionMap({
-  r,
-  limit,
-  nodeValue,
-  plantText,
-  ariaLabel,
-  highlight,
-}: {
-  r: OpfResult;
-  limit: number;
-  nodeValue: (id: string) => { value: string; sub: string; fill: string };
-  plantText: boolean;
-  ariaLabel: string;
-  highlight?: string;
-}) {
+/** Line Central–Metro on its own: the flow at your dispatch against the limit. */
+function LineGauge({ flow, limit }: { flow: number; limit: number }) {
+  const X = scale(0, RATED, 24, 576);
+  const over = flow > limit + OVER;
+  const at = !over && flow >= limit - UNDER;
+  const fill = over ? '#b8302a' : at ? '#e75b55' : loadingColor(flow, limit);
+  const inside = X(flow) - X(0) > 90;
   return (
-    <NetworkView
-      ariaLabel={ariaLabel}
-      width={600}
-      height={408}
-      nodes={REGION.nodes.map((n) => ({
-        id: n.id,
-        x: n.x,
-        y: n.y,
-        r: 30,
-        label: n.name,
-        labelPos: n.id === 'west' ? 'below' : n.id === 'city' ? 'right' : 'above',
-        ...nodeValue(n.id),
-      }))}
-      lines={REGION.lines.map((l) => {
-        const lim = l.id === LINE ? limit : l.limit;
-        const [dx, dy] = LABEL_OFFSET[l.id] ?? [0, -10];
-        return {
-          id: l.id,
-          from: l.from,
-          to: l.to,
-          flow: r.flows[l.id] ?? 0,
-          limit: lim,
-          label: `${fmt(Math.abs(r.flows[l.id] ?? 0))} / ${fmt(lim)}`,
-          labelDx: dx,
-          labelDy: dy,
-        };
-      })}
+    <svg
+      className="chart"
+      viewBox="0 0 600 98"
+      role="img"
+      aria-label={`Line Central–Metro carries ${fmt(flow)} MW against a limit of ${fmt(limit)} MW${over ? ': it is overloaded' : ''}. At the cheapest dispatch it would carry ${fmt(BASE_FLOW)} MW.`}
     >
-      {highlight &&
-        (() => {
-          const n = REGION.nodes.find((x) => x.id === highlight)!;
-          return <circle cx={n.x} cy={n.y} r={35} fill="none" stroke="#3f7a1e" strokeWidth={2} strokeDasharray="5 4" />;
-        })()}
-      {plantText &&
-        Object.values(PLANT_TEXT).map((t) =>
-          t.ids.map((id, i) => (
-            <text key={id} x={t.x} y={t.y + i * 16} textAnchor={t.anchor} style={{ fontSize: 12, fill: '#444' }}>
-              <tspan style={{ fontWeight: 500 }}>{SHORT[id]}</tspan> {fmt(r.dispatch[id] ?? 0)} MW
-            </text>
-          )),
-        )}
-    </NetworkView>
+      <text x={24} y={14} style={{ fontSize: 13, fontWeight: 500, fill: '#333' }}>
+        Flow on Central–Metro, MW
+      </text>
+      <rect x={X(0)} y={26} width={X(RATED) - X(0)} height={26} fill="#ececec" rx={2} />
+      <rect x={X(0)} y={26} width={Math.max(0, X(flow) - X(0))} height={26} fill={fill} rx={2} />
+      <text
+        x={inside ? X(flow) - 6 : X(flow) + 6}
+        y={44}
+        textAnchor={inside ? 'end' : 'start'}
+        style={{ fontSize: 13, fontWeight: 500, fill: inside && (over || at) ? '#fff' : '#333' }}
+      >
+        {fmt(flow)} MW
+      </text>
+      <line x1={X(BASE_FLOW)} x2={X(BASE_FLOW)} y1={22} y2={56} stroke="#777" strokeWidth={1.5} strokeDasharray="3 3" />
+      <text className="ax ax-m" x={X(BASE_FLOW)} y={70}>
+        cheapest dispatch: {fmt(BASE_FLOW)}
+      </text>
+      <line x1={X(limit)} x2={X(limit)} y1={20} y2={58} stroke="#333" strokeWidth={2.5} />
+      <text x={X(limit) > 545 ? X(limit) + 2 : X(limit)} y={14} textAnchor={X(limit) > 545 ? 'end' : 'middle'} style={{ fontSize: 12, fontWeight: 500, fill: '#333' }}>
+        limit {fmt(limit)}
+      </text>
+      {[0, 100, 200, 300, 400, 500, 600].map((t) => (
+        <text key={t} className="ax ax-m" x={X(t)} y={92}>
+          {t}
+        </text>
+      ))}
+    </svg>
   );
 }
 
@@ -193,13 +200,26 @@ function ChangeBars({ deltas, maxAbs, digits, ariaLabel }: { deltas: Record<stri
 }
 
 export default function Lesson() {
-  const s = useScenario('congestion', { limit: RATED, node: 'city' as NodeId });
-  const { limit, node } = s.state;
+  const s = useScenario('congestion', CONGESTION_DEFAULTS);
+  const { limit, swap, node } = s.state;
   const r = solve(limit);
   const congestion = r.cost - BASE.cost;
-  const deltas = Object.fromEntries(PLANTS.map((id) => [id, (r.dispatch[id] ?? 0) - (BASE.dispatch[id] ?? 0)]));
-  const moved = PLANTS.reduce((t, id) => t + Math.max(0, deltas[id]), 0);
-  const binding = r.binding.includes(LINE);
+
+  // Figure 1: the cheapest dispatch with some of Lakeside's output moved to Mill Creek.
+  const hand = handSwap(swap);
+  const handOver = hand.flow > limit + OVER;
+  const handAt = !handOver && hand.flow >= limit - UNDER;
+  const relief = BASE_FLOW - hand.flow;
+  let handCaption: string;
+  if (swap === 0 && !handOver) handCaption = `At the cheapest dispatch Central–Metro carries ${fmt(BASE_FLOW)} MW, so a limit of ${mw(limit)} doesn’t bind.`;
+  else if (handOver)
+    handCaption =
+      swap >= SWAP_MAX
+        ? `Mill Creek is flat out, and Central–Metro is still ${fmt(hand.flow - limit)} MW over its limit: relief this deep has to come from another plant.`
+        : `Central–Metro is ${fmt(hand.flow - limit)} MW over its limit. Move ${swap > 0 ? 'more' : 'some'} of Lakeside’s output to Mill Creek.`;
+  else if (handAt) handCaption = `Central–Metro is at its limit. Moving ${mw(swap)} from Lakeside to Mill Creek took ${mw(relief)} off the line.`;
+  else handCaption = `Central–Metro has ${mw(limit - hand.flow)} to spare: you’ve moved more than the limit requires.`;
+  const swapOk = swapSolved(limit, swap);
 
   // Cost of congestion as the limit falls from its rating.
   const sweep = useMemo(() => {
@@ -208,14 +228,10 @@ export default function Lesson() {
     const res = ls.map((l) => solve(l, undefined, false));
     return { ls, cost: res.map((x) => x.cost - BASE.cost), mill: res.map((x) => x.dispatch.cc2) };
   }, []);
-  const threshold = 1000;
-  const answer = Math.min(...sweep.ls.filter((_, i) => sweep.cost[i] <= threshold));
-  const below = sweep.ls.filter((l) => l < answer).pop();
   const costAt = (l: number) => sweep.cost[sweep.ls.indexOf(l)];
   const millFullAt = sweep.ls.filter((_, i) => sweep.mill[i] >= 250 - 1e-6).pop() ?? MIN_LIMIT;
   const slope1 = (costAt(300) - costAt(400)) / 100;
   const slope2 = (costAt(220) - costAt(280)) / 60;
-  const solved = limit === answer;
 
   const X = scale(MIN_LIMIT, RATED, 70, 580);
   const yMax = Math.max(...sweep.cost) * 1.08;
@@ -227,8 +243,9 @@ export default function Lesson() {
   const perMW = Object.fromEntries(PLANTS.map((id) => [id, (bumped.dispatch[id] ?? 0) - (r.dispatch[id] ?? 0)]));
   const marginal = bumped.cost - r.cost;
   const nodeName = (id: string) => REGION.nodes.find((n) => n.id === id)!.name;
-  const mc = (id: string) => r.lmp[id] ?? 0;
-  const spread = Math.max(...NODE_ORDER.map(mc)) - Math.min(...NODE_ORDER.map(mc));
+  const limitSlider = (
+    <Slider label="Limit on line Central–Metro" tone="red" value={limit} min={MIN_LIMIT} max={RATED} step={5} onChange={(v) => s.set({ limit: v })} display={mw(limit)} />
+  );
 
   return (
     <LessonPage id="5.2">
@@ -240,60 +257,66 @@ export default function Lesson() {
         A line’s limit isn’t a fixed property of the wire. A conductor sags as it heats up, and how fast it heats depends on the air temperature and the wind, so the same
         line can carry less on a still, hot afternoon than on a cold, breezy night. Equipment at either end, maintenance work and the operator’s security margins can all
         lower it further. Here is the reference evening — {mw(DEMAND)} at 19:00, Ridge wind producing a more typical {mw(GENS.find((g) => g.id === 'wind')!.capacity)},
-        every line in service. Line Central–Metro is the main route into Metro, rated for {mw(RATED)}. Drag its limit down and watch the optimizer respond:
+        every line in service — on the region mapped in <a href={lessonHref('5.1')}>Lesson 5.1</a>. Line Central–Metro is the main route into Metro, rated for{' '}
+        {mw(RATED)}, and at the cheapest dispatch it carries {mw(BASE_FLOW)}. The next demonstration shows just that line. Lower its limit to {mw(400)}, and the cheapest
+        dispatch would overload it. Then relieve it by hand: move output from Lakeside, at Central, to Mill Creek, in Metro, until the line is back within its limit, and
+        notice how much you have to move:
       </P>
 
       <Figure name="Congestion Simulator" scenario={s}>
-        <RegionMap
-          r={r}
-          limit={limit}
-          plantText
-          nodeValue={(id) => ({ value: fmt(LOADS[id] ?? 0), sub: 'MW load', fill: '#fff' })}
-          ariaLabel={`The region with Central–Metro limited to ${limit} MW. It carries ${fmt(Math.abs(r.flows[LINE]))} MW. The cost of congestion is ${usd(congestion)} an hour.`}
+        <LineGauge flow={hand.flow} limit={limit} />
+        {limitSlider}
+        <Slider
+          label={
+            <>
+              <Swatch color={FUEL[fleetById('cc2').fuel]} />
+              Lakeside → Mill Creek
+            </>
+          }
+          tone="orange"
+          value={swap}
+          min={0}
+          max={SWAP_MAX}
+          step={1}
+          onChange={(v) => s.set({ swap: v })}
+          display={mw(swap)}
         />
-        <Slider label="Limit on line Central–Metro" tone="red" value={limit} min={MIN_LIMIT} max={RATED} step={10} onChange={(v) => s.set({ limit: v })} display={mw(limit)} />
-        <Readouts
-          items={[
-            { label: 'generation cost per hour', value: usd(r.cost) },
-            { label: 'cost of congestion per hour', value: usd(congestion), tone: congestion > 0.5 ? 'red' : undefined },
-            { label: 'redispatched', value: mw(moved) },
-          ]}
-        />
-        <ChangeBars
-          deltas={deltas}
-          maxAbs={400}
-          digits={0}
-          ariaLabel={`Change in each plant’s output compared with the dispatch without the limit: ${PLANTS.filter((id) => Math.abs(deltas[id]) > 0.5)
-            .map((id) => `${SHORT[id]} ${signed(deltas[id])} MW`)
-            .join(', ') || 'no changes'}.`}
-        />
-        <Caption>
-          {binding
-            ? `Central–Metro is full. Compared with the unconstrained dispatch, ${PLANTS.filter((id) => deltas[id] > 0.5)
-                .map((id) => SHORT[id])
-                .join(' and ')} produce more and ${PLANTS.filter((id) => deltas[id] < -0.5)
-                .map((id) => SHORT[id])
-                .join(' and ')} less.`
-            : `Central–Metro carries ${fmt(BASE_FLOW)} MW at the cheapest dispatch, so a limit of ${mw(limit)} doesn’t bind and nothing changes.`}
-        </Caption>
+        <Readouts items={[{ label: `extra cost per hour, at $${SWAP_COST} per MWh moved`, value: usd(hand.cost), tone: hand.cost > 0.5 ? 'red' : undefined }]} />
+        <Caption>{handCaption}</Caption>
       </Figure>
 
       <P>
-        At the cheapest dispatch, Central–Metro carries {fmt(BASE_FLOW)} MW, so nothing happens until the limit drops below that. From then on, the optimizer has to keep
-        the flow at the limit, and it does that by <b>redispatch</b>: running a plant on the Metro side of the bottleneck harder, and a plant on the far side less, so that
-        total generation stays the same. The bars show each plant’s change from the unconstrained dispatch.
+        Shifting output like this — a plant on the Metro side of the bottleneck runs harder, a plant on the far side less, and total generation stays the same — is called{' '}
+        <b>redispatch</b>. Lakeside and Mill Creek are the natural pair. Lakeside sits at Central, right at the head of the line, and Mill Creek in Metro, at its foot.
+        Both burn gas, and Mill Creek costs only ${SWAP_COST} more per megawatt-hour, so this relief is cheap; it’s the swap the optimizer makes first, too.
       </P>
       <P>
-        The first plant to move is Lakeside, which sits at Central, right at the head of the line. Mill Creek, in Metro, takes over its output. Both burn gas, and Mill
-        Creek costs only $6 more per megawatt-hour, so this first relief is cheap. It takes more redispatch than you might expect, though. Even before the swap, part of
-        Lakeside’s output reached Metro by other routes, through West or round by North and East, so moving one megawatt from Lakeside to Mill Creek takes only{' '}
-        {fmt(1 / SWAP_MILL, 2)} MW off Central–Metro. Every megawatt of relief needs {fmt(SWAP_MILL, 2)} MW of redispatch.
+        It takes more redispatch than you might expect, though. To bring the line from {fmt(BASE_FLOW)} MW to 400 MW, you had to move about {mw(SWAP_400)}. Even before
+        the swap, part of Lakeside’s output reached Metro by other routes, through West or round by North and East, so moving one megawatt from Lakeside to Mill Creek
+        takes only {fmt(1 / SWAP_MILL, 2)} MW off Central–Metro. That {fmt(1 / SWAP_MILL, 2)} is a power transfer distribution factor from{' '}
+        <a href={lessonHref('2.4')}>Lesson 2.4</a>: the share of each megawatt sent from Central to Metro that travels on Central–Metro itself. So every megawatt of
+        relief needs 1 ÷ {fmt(1 / SWAP_MILL, 2)} = {fmt(SWAP_MILL, 2)} MW of redispatch.
       </P>
+
+      <Challenge
+        id="a"
+        figure="Congestion Simulator"
+        question={`Lower the limit to ${mw(CHALLENGE_LIMIT)}, ${mw(CHALLENGE_RELIEF)} below what the line carries at the cheapest dispatch. Before you touch the swap, work out from the PTDF how many megawatts Lakeside must hand to Mill Creek to bring the line back within its limit. Then set the swap to your answer to check it.`}
+        solved={swapOk}
+        status={
+          limit !== CHALLENGE_LIMIT
+            ? `The limit is ${mw(limit)}; set it to ${mw(CHALLENGE_LIMIT)}.`
+            : handOver
+              ? `With ${mw(swap)} moved, Central–Metro still carries ${fmt(hand.flow)} MW.`
+              : `With ${mw(swap)} moved, the line has ${mw(limit - hand.flow)} to spare: that’s more than it takes.`
+        }
+        success={`Solved. ${mw(CHALLENGE_RELIEF)} of relief at ${fmt(1 / SWAP_MILL, 2)} MW per megawatt moved takes ${fmt(CHALLENGE_RELIEF, 0)} × ${fmt(SWAP_MILL, 2)} ≈ ${mw(CHALLENGE_RELIEF * SWAP_MILL)} of redispatch, at $${SWAP_COST} more for each: ${usd(hand.cost)} an hour.`}
+      />
 
       <H2>The cost of congestion</H2>
       <P>
-        The <K c="price">cost of congestion</K> is the cost of the cheapest dispatch with the limit, minus the cost of the cheapest dispatch without it. The next chart
-        repeats the optimization for every limit from {mw(RATED)} down to {mw(MIN_LIMIT)}:
+        The <K c="price">cost of congestion</K> is the cost of the cheapest dispatch with the limit, minus the cost of the cheapest dispatch without it. In the next
+        chart, the optimizer finds the cheapest dispatch for every limit from {mw(RATED)} down to {mw(MIN_LIMIT)}:
       </P>
 
       <Figure name="Congestion Simulator · cost of congestion" scenario={s}>
@@ -332,25 +355,17 @@ export default function Lesson() {
           <line className="cur" x1={X(limit)} x2={X(limit)} y1={36} y2={230} />
           <circle cx={X(limit)} cy={Y(congestion)} r={6} fill="#c4382f" stroke="#f8f8f8" strokeWidth={2} />
         </svg>
-        <Slider label="Limit on line Central–Metro" tone="red" value={limit} min={MIN_LIMIT} max={RATED} step={10} onChange={(v) => s.set({ limit: v })} display={mw(limit)} />
+        {limitSlider}
         <Readouts items={[{ label: 'cost of congestion per hour', value: usd(congestion), tone: 'red' }]} />
       </Figure>
 
       <P>
-        The curve has two straight pieces. While Mill Creek is replacing Lakeside, each megawatt of lost capacity costs {fmt(SWAP_MILL, 2)} MW × $6 ={' '}
-        {usd(slope1, 2)} an hour. Below about {mw(millFullAt + 5)}, Mill Creek is running flat out, and the next-cheapest relief is the Eastgate peaker at $88. That’s
+        The curve has two straight pieces. While Mill Creek is replacing Lakeside — the swap you made by hand — each megawatt of lost capacity costs{' '}
+        {fmt(SWAP_MILL, 2)} MW × ${SWAP_COST} = {usd(slope1, 2)} an hour. Below about {mw(millFullAt + 5)}, Mill Creek is running flat out, and the next-cheapest relief is the Eastgate peaker at $88. That’s
         not only more expensive, it’s also less effective: some of Eastgate’s output takes the long way to Metro, through North and Central, and onto the very line
         we’re trying to relieve. Each megawatt of relief now takes {fmt(SWAP_EAST, 2)} MW of redispatch at $52 more apiece, about {usd(slope2)} an hour. The kink is
         where the cheap fix runs out.
       </P>
-
-      <Challenge
-        id="a"
-        question={`A maintenance crew needs to work on Central–Metro, and the operator will allow at most ${usd(threshold)} an hour of congestion cost. What is the lowest limit the line can be set to?`}
-        solved={solved}
-        status={`At ${mw(limit)}, congestion costs ${usd(congestion)} an hour.`}
-        success={`Solved. At ${mw(answer)} congestion costs ${usd(costAt(answer))} an hour${below !== undefined ? `; at ${mw(below)} it would be ${usd(costAt(below))}` : ''}.`}
-      />
 
       <P>
         Real systems pay this cost every day. Where the market price ignores the wires — as in Europe’s zonal markets, where a whole country or region shares one price —
@@ -360,7 +375,8 @@ export default function Lesson() {
       <H2>One more megawatt</H2>
       <P>
         The cost of congestion is a total. For a market, the more useful number is a marginal one: if demand at one substation rose by a single megawatt, how much more
-        would the cheapest dispatch cost? Without congestion, it’s the same everywhere. Pick a place, and set the limit low enough that Central–Metro is full:
+        would the cheapest dispatch cost? Without congestion, and ignoring losses, it’s the same everywhere. Pick a place, and set the limit low enough that
+        Central–Metro is full. The bars show how the optimizer would meet the extra megawatt:
       </P>
 
       <Figure name="Congestion Simulator · one more megawatt" scenario={s}>
@@ -370,21 +386,8 @@ export default function Lesson() {
           onChange={(v) => s.set({ node: v })}
           options={NODE_ORDER.map((id) => ({ value: id, label: nodeName(id) }))}
         />
-        <RegionMap
-          r={r}
-          limit={limit}
-          plantText={false}
-          highlight={node}
-          nodeValue={(id) => ({ value: usd(mc(id)), sub: 'per MWh', fill: priceFill(mc(id)) })}
-          ariaLabel={`Cost of serving one more megawatt at each node: ${NODE_ORDER.map((id) => `${nodeName(id)} ${usd(mc(id))}`).join(', ')}.`}
-        />
-        <Slider label="Limit on line Central–Metro" tone="red" value={limit} min={MIN_LIMIT} max={RATED} step={10} onChange={(v) => s.set({ limit: v })} display={mw(limit)} />
-        <Readouts
-          items={[
-            { label: `one more MWh in ${nodeName(node)} costs`, value: usd(marginal, 2), tone: 'green' },
-            { label: 'gap between the cheapest and dearest place', value: usd(spread, 2) },
-          ]}
-        />
+        {limitSlider}
+        <Readouts items={[{ label: `one more MWh in ${nodeName(node)} costs`, value: usd(marginal, 2), tone: 'green' }]} />
         <ChangeBars
           deltas={perMW}
           maxAbs={2}
@@ -396,17 +399,17 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With the line at its full rating, one more megawatt anywhere is met by Mill Creek, the cheapest plant with room to spare, for $42. Now lower the limit to 250 MW
-        and choose Central. Lakeside produces the extra megawatt itself, for $36 — it’s consumed right where it’s made, so it never has to cross the full line. Choose
-        Metro, and the answer is strange. The obvious fix, Mill Creek, is already flat out. Lakeside can’t simply produce more, because a share of anything it makes
-        would try to squeeze through Central–Metro. The cheapest way to deliver one more megawatt to Metro is to raise Eastgate by about 1.45 MW and <i>lower</i>{' '}
-        Lakeside by about 0.45 MW, which keeps the flow on Central–Metro exactly where it was. That costs about $112 — more than the offer of any plant that’s
-        actually running.
+        With the line at its full rating, one more megawatt anywhere is met by Mill Creek, the cheapest plant with room to spare, for $42. Now lower the limit to{' '}
+        {mw(PROBE_LIMIT)} and choose Central. Lakeside produces the extra megawatt itself, for {usd(PROBE.lmp.center)} — it’s consumed right where it’s made, so it
+        never has to cross the full line. Choose Metro, and the answer is strange. Mill Creek is already flat out, and the bars show the optimizer raising Eastgate by
+        about {fmt(PROBE_EAST, 2)} MW — more than the one megawatt asked for — while it <i>lowers</i> Lakeside, the cheaper plant, by about{' '}
+        {fmt(-PROBE_LAKESIDE, 2)} MW. One more megawatt-hour in Metro costs {usd(PROBE.lmp.city, 2)}, more than the offer of any plant that’s actually running.
       </P>
       <P>
-        Every other substation lands somewhere in between, depending on how much of its extra megawatt would load the full line. So once a line is congested, the cost of
-        serving one more megawatt is different at every place on the grid. So far these are only the operator’s costs. The <a href={lessonHref('5.3')}>next lesson</a>{' '}
-        turns them into prices, on the smallest grid where the same thing happens.
+        Every other substation gives a number of its own. So once a line is congested, the cost of serving one more megawatt is different at every place on the grid,
+        and in many markets that cost is the price. But why would the cheapest way to serve more demand turn a cheap plant down, and how can a megawatt-hour cost more
+        than any plant charges? The <a href={lessonHref('5.3')}>next lesson</a> answers both on a grid small enough to work out by hand, then comes back to Metro’s{' '}
+        {usd(PROBE.lmp.city, 2)}.
       </P>
     </LessonPage>
   );

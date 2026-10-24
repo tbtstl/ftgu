@@ -45,8 +45,11 @@ export const CAPITAL_CHARGE = 0.08;
 
 export const BUDGET = 700e6;
 
-/** The 8.6 challenge: a valid portfolio earning at least this much, $ per year. */
-export const PROFIT_TARGET = 30e6;
+/**
+ * The 8.6 challenge: a valid portfolio earning within this share of the best one for the reader's
+ * grid (or within $1 million of it, whichever is more).
+ */
+export const TARGET_SLACK = 0.05;
 
 /** Capacity market demand curve, relative to the hot day's peak (the reliability requirement). */
 export const CAPACITY_PRICE = { priceCap: 500, priceAtTarget: 250, lowPoint: 0.97, highPoint: 1.1 };
@@ -95,8 +98,9 @@ export function constrainedLines(run: MarketRun): Array<{ id: string; hours: num
 const candidateCache = new Map<string, Candidate[]>();
 
 /** Cache key for a design, ignoring the 8.6 choices themselves. */
-function planKey(d: CapstoneDesign): string {
-  return JSON.stringify({ ...d, investments: [] });
+export function planKey(d: CapstoneDesign): string {
+  const { baseLoads: _base, ...rest } = d;
+  return JSON.stringify({ ...rest, investments: [] });
 }
 
 /**
@@ -321,3 +325,103 @@ export function evaluate(d: CapstoneDesign, ids: string[]): Evaluation {
   if (evalCache.size > 64) evalCache.delete(evalCache.keys().next().value!);
   return ev;
 }
+
+// ---------------------------------------------------------------------------
+// The best portfolio for the reader's grid, found by trying every one that fits the budget.
+
+export interface BestPortfolio {
+  ids: string[];
+  score: number;
+}
+
+export interface BestSearch {
+  /** Portfolios to try: every one within budget that can cover each day's peak. */
+  total: number;
+  tried: number;
+  /** Valid portfolios found so far. */
+  valid: number;
+  best: BestPortfolio | null;
+  /** Try the next portfolio; true once every one has been tried. */
+  step(): boolean;
+}
+
+/**
+ * Portfolios within budget, largest first, leaving out any that can't cover some day's peak hour
+ * even with every plant, battery and program at full power: those would leave demand unserved, so
+ * can't be valid. Each is a bitmask over the candidates.
+ */
+export function portfolioSpace(d: CapstoneDesign): number[] {
+  const cs = candidates(d);
+  const days = WEATHER_IDS.map((w) => {
+    const sys = futureSystem(d, w);
+    const dem = systemDemand(sys.loads);
+    const h = argmax(dem);
+    return { w, sys, h, peak: dem[h] ?? 0 };
+  });
+  const out: number[] = [];
+  for (let m = 0; m < 1 << cs.length; m++) {
+    const pick = cs.filter((_, i) => m & (1 << i));
+    if (pick.reduce((s, c) => s + c.capital, 0) > BUDGET + 1) continue;
+    const short = days.some(({ w, sys, h, peak }) => {
+      let x = sys;
+      for (const c of pick) x = applyAddition(x, c.addition);
+      const most = x.gens.reduce((a, g) => a + availableAt(g, w, h), 0) + x.batteries.reduce((a, b) => a + b.powerMW, 0) + x.dr.reduce((a, p) => a + p.mw, 0);
+      return most < peak - 0.5;
+    });
+    if (!short) out.push(m);
+  }
+  const size = (m: number) => cs.reduce((n, _c, i) => n + ((m >> i) & 1), 0);
+  return out.sort((a, b) => size(b) - size(a) || a - b);
+}
+
+/**
+ * A search for the best valid portfolio, one evaluation per step (so it can run in slices).
+ * Portfolios are tried largest first, and one whose every project is also in a portfolio already
+ * found unreliable is skipped: taking projects away doesn't make a grid more reliable.
+ */
+export function bestSearch(d: CapstoneDesign): BestSearch {
+  const cs = d.nodes.length ? candidates(d) : [];
+  const space = d.nodes.length ? portfolioSpace(d) : [];
+  const failed: number[] = [];
+  let i = 0;
+  const s: BestSearch = {
+    total: space.length,
+    tried: 0,
+    valid: 0,
+    best: null,
+    step() {
+      while (i < space.length) {
+        const m = space[i++];
+        s.tried = i;
+        if (failed.some((f) => (m & f) === m)) continue;
+        const ids = cs.filter((_, k) => m & (1 << k)).map((c) => c.id);
+        const ev = evaluate(d, ids);
+        if (ev.valid) {
+          s.valid++;
+          if (!s.best || ev.score > s.best.score + 1e-6) s.best = { ids, score: ev.score };
+        } else failed.push(m);
+        break;
+      }
+      return i >= space.length;
+    },
+  };
+  return s;
+}
+
+const bestCache = new Map<string, BestPortfolio | null>();
+
+/** The best valid portfolio for a design (null if none is valid), found by trying them all. */
+export function bestPortfolio(d: CapstoneDesign): BestPortfolio | null {
+  const key = planKey(d);
+  if (bestCache.has(key)) return bestCache.get(key)!;
+  const s = bestSearch(d);
+  while (!s.step());
+  bestCache.set(key, s.best);
+  return s.best;
+}
+
+/** The profit a portfolio needs for the 8.6 challenge, given the best one's. */
+export function profitTarget(best: number): number {
+  return best - Math.max(TARGET_SLACK * Math.abs(best), 1e6);
+}
+

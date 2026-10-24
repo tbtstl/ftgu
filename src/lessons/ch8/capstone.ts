@@ -1,6 +1,8 @@
 // The reader's capstone grid: one design that Chapter 8 builds up lesson by lesson and keeps in
 // the browser. 8.1 sets the network, plants and demand; 8.2 the customer mix and the weather;
 // 8.4 adds renewables and storage; 8.5 a virtual power plant; 8.6 a portfolio of investments.
+// Each lesson owns its own part of the design, so it can be reset alone (resetLesson), and every
+// change can be undone for the rest of the visit (undoCapstone).
 // Storage can be unavailable (private windows, blocked site data), so every access is guarded.
 
 import { useSyncExternalStore } from 'react';
@@ -140,6 +142,11 @@ export interface CapstoneDesign {
   gens: Generator[];
   /** Peak MW of each customer type at each node. */
   loads: Record<string, Record<LoadKind, number>>;
+  /**
+   * The loads as 8.1 left them, kept once 8.2 starts editing the customer mix, so that 8.2 can be
+   * reset on its own. Absent while 8.2 hasn't changed the mix.
+   */
+  baseLoads?: Record<string, Record<LoadKind, number>>;
   weather: WeatherId;
   /** Demand growth applied to every customer, 0–1. */
   growth: number;
@@ -202,18 +209,21 @@ export function sanitize(raw: unknown): CapstoneDesign {
           return { ...base, ...g, capacity, minOutput: num(g.minOutput, 0, capacity, 0), marginalCost: num(g.marginalCost, -100, 1000, base.marginalCost) };
         })
     : d.gens;
-  const loads: CapstoneDesign['loads'] = {};
-  if (r.loads && typeof r.loads === 'object') {
-    for (const [n, m] of Object.entries(r.loads)) {
+  const parseLoads = (raw: unknown): CapstoneDesign['loads'] => {
+    const out: CapstoneDesign['loads'] = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const [n, m] of Object.entries(raw)) {
       if (!built.has(n) || !m || typeof m !== 'object') continue;
-      loads[n] = mix(...(LOAD_KINDS.map((k) => num((m as Record<string, unknown>)[k], 0, 3000, 0)) as [number, number, number, number]));
+      out[n] = mix(...(LOAD_KINDS.map((k) => num((m as Record<string, unknown>)[k], 0, 3000, 0)) as [number, number, number, number]));
     }
-  }
+    return out;
+  };
+  const loads = parseLoads(r.loads);
   const t = { ...d.transition, ...(r.transition ?? {}) };
   const site = (x: unknown, dflt: string) => (typeof x === 'string' && SITE[x] ? x : dflt);
   const vppMw: Record<string, number> = {};
   for (const [n, v] of Object.entries(r.vpp?.mw ?? d.vpp.mw)) if (SITE[n]) vppMw[n] = num(v, 0, 1000, 0);
-  return {
+  const out: CapstoneDesign = {
     v: 1,
     nodes,
     lines,
@@ -233,6 +243,8 @@ export function sanitize(raw: unknown): CapstoneDesign {
     vpp: { mw: vppMw, hours: num(r.vpp?.hours, 1, 4, d.vpp.hours), services: num(r.vpp?.services, 0, 1, d.vpp.services) },
     investments: Array.isArray(r.investments) ? r.investments.filter((x): x is string => typeof x === 'string') : [],
   };
+  if (r.baseLoads && typeof r.baseLoads === 'object') out.baseLoads = parseLoads(r.baseLoads);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,18 +294,137 @@ export function getCapstone(): CapstoneDesign {
   return read();
 }
 
-/** Apply a change to the reader's grid. */
-export function updateCapstone(fn: (d: CapstoneDesign) => CapstoneDesign) {
-  write(fn(read()));
+// Undo: the designs before each change, for this visit only. A run of changes with the same key
+// (a slider being dragged) counts as one step.
+
+/** The lessons that edit the grid, each owning its own part of the design. */
+export type EditingLesson = '8.1' | '8.2' | '8.4' | '8.5' | '8.6';
+
+interface Step {
+  before: CapstoneDesign;
+  /** The lesson that made the change, or 'grid' for a reset of the whole grid. */
+  lesson: EditingLesson | 'grid' | undefined;
+}
+
+const history: Step[] = [];
+let lastKey: string | undefined;
+let lastAt = 0;
+const MERGE_MS = 1200;
+
+function record(before: CapstoneDesign, lesson: Step['lesson'], key?: string) {
+  const now = Date.now();
+  const top = history[history.length - 1];
+  const merge = !!key && key === lastKey && now - lastAt < MERGE_MS && top?.lesson === lesson;
+  if (!merge) {
+    history.push({ before, lesson });
+    if (history.length > 60) history.shift();
+  }
+  lastKey = key;
+  lastAt = now;
+}
+
+/**
+ * Apply a change to the reader's grid. `lesson` says which lesson made it (so that lesson can undo
+ * it); changes with the same `key` in quick succession, like a slider drag, undo as one step.
+ */
+export function updateCapstone(fn: (d: CapstoneDesign) => CapstoneDesign, opts: { lesson?: EditingLesson; key?: string } = {}) {
+  const before = read();
+  const next = fn(before);
+  if (next === before) return;
+  record(before, opts.lesson, opts.key && `${opts.lesson}:${opts.key}`);
+  write(next);
 }
 
 export function setCapstone(d: CapstoneDesign) {
   write(sanitize(d));
 }
 
-/** “Reset my grid”: back to the starting design (saved attempts in 8.6 are kept). */
+/** “Reset your grid”: back to the starting design (saved attempts in 8.6 are kept). Undoable. */
 export function resetCapstone() {
+  record(read(), 'grid');
+  lastKey = undefined;
   write(defaultDesign());
+}
+
+/** Undo the most recent change, if it was made by this lesson (or was a reset of the whole grid). */
+export function undoCapstone(lesson: EditingLesson | '8.3') {
+  const top = history[history.length - 1];
+  if (!top || (top.lesson !== lesson && top.lesson !== 'grid')) return;
+  history.pop();
+  lastKey = undefined;
+  write(top.before);
+}
+
+/** What the lesson's Undo button would undo: nothing, its own last change, or a reset of the grid. */
+export function undoable(lesson: EditingLesson | '8.3'): 'none' | 'change' | 'reset' {
+  const top = history[history.length - 1];
+  if (!top) return 'none';
+  if (top.lesson === 'grid') return 'reset';
+  return top.lesson === lesson ? 'change' : 'none';
+}
+
+export function useUndoable(lesson: EditingLesson | '8.3'): 'none' | 'change' | 'reset' {
+  return useSyncExternalStore(subscribe, () => undoable(lesson), () => 'none' as const);
+}
+
+/** Forget the undo history (for tests). */
+export function clearHistory() {
+  history.length = 0;
+  lastKey = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Resetting one lesson's part of the design.
+
+/** What resetting each lesson puts back, for its confirmation. */
+export const LESSON_RESET: Record<EditingLesson, string> = {
+  '8.1': 'This puts back the starting substations, lines, plants and customer loads.',
+  '8.2': 'This puts back the customer mix you had after 8.1, a typical day and no growth.',
+  '8.4': 'This puts back the starting plan for wind, solar and storage.',
+  '8.5': 'This puts back the starting fleet of home batteries.',
+  '8.6': 'This clears the projects you’ve chosen; saved attempts are kept.',
+};
+
+function cloneLoads(l: CapstoneDesign['loads']): CapstoneDesign['loads'] {
+  return Object.fromEntries(Object.entries(l).map(([n, m]) => [n, { ...m }]));
+}
+
+/**
+ * The design with one lesson's part back at the start, everything else kept. Resetting 8.1 keeps
+ * any change 8.2 made to the customer mix, as a change on top of the starting loads.
+ */
+export function withLessonReset(d: CapstoneDesign, lesson: EditingLesson): CapstoneDesign {
+  const s = defaultDesign();
+  switch (lesson) {
+    case '8.1': {
+      const out: CapstoneDesign = { ...d, nodes: s.nodes, lines: s.lines, gens: s.gens, loads: cloneLoads(s.loads) };
+      delete out.baseLoads;
+      if (d.baseLoads) {
+        for (const n of s.nodes) {
+          if (!d.nodes.includes(n)) continue;
+          for (const k of LOAD_KINDS) out.loads[n][k] = Math.max(0, s.loads[n][k] + (d.loads[n]?.[k] ?? 0) - (d.baseLoads[n]?.[k] ?? 0));
+        }
+        out.baseLoads = cloneLoads(s.loads);
+      }
+      return out;
+    }
+    case '8.2': {
+      const out: CapstoneDesign = { ...d, loads: d.baseLoads ? cloneLoads(d.baseLoads) : d.loads, weather: s.weather, growth: s.growth };
+      delete out.baseLoads;
+      return out;
+    }
+    case '8.4':
+      return { ...d, transition: s.transition };
+    case '8.5':
+      return { ...d, vpp: s.vpp };
+    case '8.6':
+      return { ...d, investments: [] };
+  }
+}
+
+/** Reset one lesson's part of the reader's grid (undoable). */
+export function resetLesson(lesson: EditingLesson) {
+  updateCapstone((d) => withLessonReset(d, lesson), { lesson });
 }
 
 // ---------------------------------------------------------------------------
@@ -309,19 +440,26 @@ export function buildNode(d: CapstoneDesign, node: string): CapstoneDesign {
   return { ...d, nodes: [...d.nodes, node] };
 }
 
+/**
+ * Remove a substation and the lines, plants and customers attached to it. Home batteries enrolled
+ * there in 8.5 are kept but play no part until the substation is rebuilt.
+ */
 export function removeNode(d: CapstoneDesign, node: string): CapstoneDesign {
   const loads = { ...d.loads };
   delete loads[node];
-  const mw = { ...d.vpp.mw };
-  delete mw[node];
-  return {
+  const out: CapstoneDesign = {
     ...d,
     nodes: d.nodes.filter((n) => n !== node),
     lines: d.lines.filter((l) => CORRIDOR[l.id].from !== node && CORRIDOR[l.id].to !== node),
     gens: d.gens.filter((g) => g.node !== node),
     loads,
-    vpp: { ...d.vpp, mw },
   };
+  if (d.baseLoads) {
+    const base = { ...d.baseLoads };
+    delete base[node];
+    out.baseLoads = base;
+  }
+  return out;
 }
 
 /** Build the corridor if it isn't built, remove it if it is. */
@@ -336,18 +474,40 @@ export function setLineLimit(d: CapstoneDesign, id: string, limit: number): Caps
   return { ...d, lines: d.lines.map((l) => (l.id === id ? { ...l, limit } : l)) };
 }
 
-/** Set a node's total peak load, keeping its customer mix (or the site's typical mix if it had none). */
-export function setNodeLoad(d: CapstoneDesign, node: string, total: number): CapstoneDesign {
-  const cur = d.loads[node];
-  const curTotal = nodeLoad(d, node);
+function scaledMix(cur: Record<LoadKind, number> | undefined, node: string, total: number): Record<LoadKind, number> {
+  const curTotal = cur ? LOAD_KINDS.reduce((s, k) => s + cur[k], 0) : 0;
   const shares = curTotal > 0 && cur ? LOAD_KINDS.map((k) => cur[k] / curTotal) : LOAD_KINDS.map((k) => SITE[node]?.mix[k] ?? 0.25);
-  const m = mix(...(shares.map((s) => Math.round(s * total)) as [number, number, number, number]));
-  return { ...d, loads: { ...d.loads, [node]: m } };
+  return mix(...(shares.map((s) => Math.round(s * total)) as [number, number, number, number]));
 }
 
+/** Set a node's total peak load (8.1), keeping its customer mix (or the site's typical mix if it had none). */
+export function setNodeLoad(d: CapstoneDesign, node: string, total: number): CapstoneDesign {
+  const out: CapstoneDesign = { ...d, loads: { ...d.loads, [node]: scaledMix(d.loads[node], node, total) } };
+  if (d.baseLoads) out.baseLoads = { ...d.baseLoads, [node]: scaledMix(d.baseLoads[node], node, total) };
+  return out;
+}
+
+/** Set one customer type's peak at a node (8.2's customer mix). */
 export function setNodeKind(d: CapstoneDesign, node: string, kind: LoadKind, mw: number): CapstoneDesign {
   const cur = d.loads[node] ?? mix(0, 0, 0, 0);
-  return { ...d, loads: { ...d.loads, [node]: { ...cur, [kind]: mw } } };
+  return { ...d, baseLoads: d.baseLoads ?? cloneLoads(d.loads), loads: { ...d.loads, [node]: { ...cur, [kind]: mw } } };
+}
+
+/**
+ * A share of every substation's household demand turned into office and shop demand, the same
+ * megawatts at their peaks (8.2's what-if).
+ */
+export function shiftHomesToOffices(d: CapstoneDesign, share: number): CapstoneDesign {
+  if (share <= 0) return d;
+  let out = d;
+  for (const n of d.nodes) {
+    const m = d.loads[n];
+    if (!m || m.residential <= 0) continue;
+    const moved = m.residential * share;
+    out = setNodeKind(out, n, 'residential', m.residential - moved);
+    out = setNodeKind(out, n, 'commercial', m.commercial + moved);
+  }
+  return out;
 }
 
 export function addGenerator(d: CapstoneDesign, fuel: Fuel, node: string, capacity?: number): CapstoneDesign {

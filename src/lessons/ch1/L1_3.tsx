@@ -12,11 +12,11 @@ import {
   Op,
   P,
   PHASE,
-  Readouts,
   Segmented,
   Slider,
   Sub,
   fmt,
+  lessonHref,
   linePath,
   mix,
   useAnimationFrame,
@@ -30,6 +30,7 @@ const SLOW = 120; // the animation runs 120× slower than real time, as in Lesso
 const WINDOW_S = 0.05; // the traces show the last 50 ms of real time
 const AREA = 0.02; // m² enclosed by each turn of the coil
 const GRID_HZ = 60;
+const CHALLENGE_TURNS = 100; // the challenge keeps the coil at its starting turns, so only the field sets the voltage
 
 // Machine geometry (viewBox units).
 const CX = 134;
@@ -43,8 +44,8 @@ const IRON = '#dadada';
 const X0 = 300;
 const X1 = 620;
 const HALF = 100;
-/** Vertical scales for the voltage trace; the smallest that fits the peak is used. */
-const RANGES = [100, 250, 500, 1000, 2500];
+/** The voltage traces' fixed scale, ±500 V, so doubling a setting visibly doubles the wave. */
+export const TRACE_RANGE_V = 500;
 
 const deg = (rad: number) => (rad * 180) / Math.PI;
 
@@ -150,6 +151,12 @@ function TraceAxes({ range }: { range: number }) {
   );
 }
 
+/** The challenge: 60 Hz at 240 V RMS with the coil held at 100 turns. */
+export function gridVoltageSolved(state: { field: number; rpm: number; turns: number }) {
+  const e = generatorEmf({ turns: state.turns, fieldTesla: state.field, areaM2: AREA, rpm: state.rpm });
+  return state.turns === CHALLENGE_TURNS && Math.abs(e.freqHz - GRID_HZ) < 1e-9 && Math.abs(e.rmsVolts - 240) < 0.5;
+}
+
 export default function Lesson() {
   const play = usePlay(true);
   const g = useScenario('generator', { field: 0.5, rpm: 1800, turns: 100 });
@@ -160,7 +167,6 @@ export default function Lesson() {
   const poles = Number(tp.state.poles);
   const rpm2 = synchronousRpm(GRID_HZ, poles);
   const input2: GeneratorInput = { turns: 100, fieldTesla: 0.5, areaM2: AREA, rpm: rpm2, polePairs: poles / 2 };
-  const e2 = generatorEmf(input2);
 
   // Rotor angles are integrated frame by frame, so changing a speed never makes a rotor jump.
   const [rot, setRot] = useState({ a: 0, b: 0 });
@@ -170,8 +176,8 @@ export default function Lesson() {
   }, play.playing);
 
   // First figure: one coil (phase A, on the teeth at 0° and 180°).
-  const range1 = RANGES.find((r) => r >= e1.peakVolts - 1e-9) ?? RANGES[RANGES.length - 1];
-  const vy1 = (v: number) => CY - (v / range1) * HALF;
+  const vy1 = (v: number) => CY - (v / TRACE_RANGE_V) * HALF;
+  const offScale = e1.peakVolts > TRACE_RANGE_V + 1e-9;
   const fluxY = (phi: number) => CY - (phi / AREA) * 90; // 90 px per tesla of flux density through the coil
   const emfLine = trace((age) => vy1(coilAgo(input1, rot.a, age).emf));
   const fluxLine = trace((age) => fluxY(coilAgo(input1, rot.a, age).flux));
@@ -184,12 +190,10 @@ export default function Lesson() {
 
   const f1 = e1.freqHz;
   const peak1 = Math.round(e1.peakVolts);
-  const rms1 = Math.round(e1.rmsVolts);
-  const solved = Math.abs(f1 - GRID_HZ) < 1e-9 && Math.abs(e1.rmsVolts - 240) < 0.5;
+  const solved = gridVoltageSolved(g.state);
 
   // Second figure: three phases, rotor speed locked to 60 Hz.
-  const range2 = 500;
-  const vy2 = (v: number) => CY - (v / range2) * HALF;
+  const vy2 = (v: number) => CY - (v / TRACE_RANGE_V) * HALF;
   const coils2: Coil[] = statorTeeth(poles / 2).map((t) => ({ angleRad: t.angleRad, color: PHASE[t.phase], turns: 5, label: 'ABC'[t.phase] }));
   const phaseLines = PHASE_OFFSETS_RAD.map((o) => trace((age) => vy2(coilAgo(input2, rot.b, age, o).emf)));
   const phaseNow = PHASE_OFFSETS_RAD.map((o) => coilAgo(input2, rot.b, 0, o).emf);
@@ -220,13 +224,10 @@ export default function Lesson() {
         <Frac top="ΔΦ" bottom="Δt" />
       </Eq>
       <P>
-        Each turn adds its own share, so a coil with 100 turns produces 100 times the voltage of a single loop. And the faster the flux changes, the larger the voltage: a
-        magnet pushed in quickly produces a bigger voltage, for a shorter time, than one pushed in slowly.
-      </P>
-      <P>
         A generator puts this law to work without pause. In the next demonstration, a magnet on a shaft — the <b>rotor</b> — turns inside a stationary iron frame called
         the <b>stator</b>. A coil is wound around the two iron teeth on either side of the rotor, so the magnet’s flux passes straight through it whenever the magnet points
-        sideways. On the right, the solid line traces the <K c="voltage">voltage</K> across the coil, and the dashed line the flux through it. As in the previous lesson,
+        sideways, to the left or right. On the right, the solid line traces the <K c="voltage">voltage</K> across the coil, and the dashed line the flux through it —
+        its shape only, scaled to fit, since flux isn’t measured in volts. As in the previous lesson,
         everything is slowed down 120 times. Change the strength of the magnet, how fast it turns, and the number of turns in the coil:
       </P>
 
@@ -237,24 +238,29 @@ export default function Lesson() {
           role="img"
           aria-label={`A two-pole magnet turning at ${fmt(g.state.rpm)} rpm inside a stator with a ${g.state.turns}-turn coil. The coil’s voltage alternates at ${fmt(f1)} Hz with a peak of ${fmt(peak1)} V.`}
         >
+          <defs>
+            <clipPath id="gen-trace-clip">
+              <rect x={X0 - 6} y={CY - HALF - 3} width={X1 - X0 + 12} height={2 * HALF + 6} />
+            </clipPath>
+          </defs>
           <Machine rotorRad={rot.a} polePairs={1} field={g.state.field} coils={coils1} />
-          <TraceAxes range={range1} />
+          <TraceAxes range={TRACE_RANGE_V} />
           <path d={fluxLine} fill="none" stroke="#9a9a9a" strokeWidth={1.8} strokeDasharray="5 5" />
-          <path d={emfLine} fill="none" stroke="#2f6fb3" strokeWidth={2.5} strokeLinejoin="round" />
+          <g clipPath="url(#gen-trace-clip)">
+            <path d={emfLine} fill="none" stroke="#2f6fb3" strokeWidth={2.5} strokeLinejoin="round" />
+            <circle cx={X0} cy={vy1(now1.emf)} r={4.5} fill="#2f6fb3" />
+          </g>
           <circle cx={X0} cy={fluxY(now1.flux)} r={3.5} fill="#9a9a9a" />
-          <circle cx={X0} cy={vy1(now1.emf)} r={4.5} fill="#2f6fb3" />
+          {offScale && (
+            <text x={X1} y={CY - HALF - 10} textAnchor="end" style={{ fontSize: 13, fontWeight: 500, fill: '#2f6fb3' }}>
+              peak {fmt(peak1)} V, off the scale
+            </text>
+          )}
         </svg>
         <Legend
           items={[
             { label: 'Voltage across the coil', color: '#2f6fb3', kind: 'line' },
-            { label: 'Flux through the coil', color: '#9a9a9a', kind: 'line', dashed: true },
-          ]}
-        />
-        <Readouts
-          items={[
-            { label: 'frequency', value: `${fmt(f1)} Hz`, tone: 'teal' },
-            { label: 'peak voltage', value: `${fmt(peak1)} V`, tone: 'blue' },
-            { label: 'RMS voltage', value: `${fmt(rms1)} V` },
+            { label: 'Flux through the coil (shape, scaled to fit)', color: '#9a9a9a', kind: 'line', dashed: true },
           ]}
         />
         <Slider
@@ -295,16 +301,17 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Watch the timing first. The flux through the coil is greatest when the magnet points straight at it, yet at that moment the voltage is zero: for an instant, the
-        flux isn’t changing. The voltage peaks a quarter of a turn later, when the magnet lies across the coil and the flux, passing through zero, changes fastest. The flux
-        of a steadily turning magnet rises and falls just like the shadow in Lesson 1.2, and the voltage follows it a quarter of a cycle behind. A spinning magnet makes
+        Watch the timing first. The flux through the coil is greatest when the magnet points straight at it, left or right, yet at that moment the voltage is zero: for
+        an instant, the flux isn’t changing. The voltage peaks a quarter of a turn later, when the magnet points straight up or down — across the coil rather than at
+        it — and the flux, passing through zero, changes fastest. The flux of a steadily turning magnet rises and falls just like the shadow in{' '}
+        <a href={lessonHref('1.2')}>Lesson 1.2</a>, and the voltage follows it a quarter of a cycle behind. A spinning magnet makes
         alternating current all by itself.
       </P>
       <P>
-        Now the sliders. A stronger magnet gives the coil more flux to reverse, every extra turn adds its share, and a faster rotor reverses the flux in less time — so all
-        three raise the voltage in proportion. The equation under the demonstration multiplies them together, along with the area of each turn, 0.02 square meters here,
+        Now the sliders. A stronger magnet gives the coil more flux to reverse, each extra turn adds its own share, and a faster rotor reverses the flux in less time —
+        so all three raise the voltage in proportion. The equation in this demonstration multiplies them together, along with the area of each turn, 0.02 square meters here,
         and 2π times the <K c="frequency">frequency</K>, which is how fast the rotor sweeps through angle. At the starting settings, that comes to a peak of 188 volts.
-        (The trace’s vertical scale steps up whenever the voltage outgrows it, so keep an eye on its labels.)
+        The trace’s scale stays fixed, so you can watch this happen: double any one of the three and the wave doubles in height.
       </P>
       <P>
         Only one of the three changes the frequency, though. Each turn of the rotor carries its north pole past the coil once and makes one full cycle, so a rotor turning
@@ -314,16 +321,21 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Make the generator produce exactly 60 Hz at 240 volts RMS — the voltage that the large appliances in an American home run on."
+        question="Keeping the coil at 100 turns, make the generator produce exactly 60 Hz at 240 volts RMS — the voltage that the large appliances in an American home run on."
         solved={solved}
-        status={`Right now it produces ${fmt(f1)} Hz at ${fmt(rms1)} V RMS.`}
-        success={`Solved. ${fmt(g.state.rpm)} rpm is 60 turns a second, which makes 60 Hz, and ${g.state.turns} turns in a ${g.state.field.toFixed(2)}-tesla field give a peak of ${fmt(peak1)} V: ${fmt(rms1)} V RMS.`}
+        status={
+          g.state.turns === CHALLENGE_TURNS
+            ? `Right now it produces ${fmt(f1)} Hz with a peak of ${fmt(peak1)} V.`
+            : `Right now it produces ${fmt(f1)} Hz with a peak of ${fmt(peak1)} V, but the coil has ${g.state.turns} turns. Set it back to 100.`
+        }
+        success={`Solved. ${fmt(g.state.rpm)} rpm is 60 turns a second, which makes 60 Hz. 240 V RMS means a peak of 240 V × √2 ≈ 339 V, and with the coil’s turns fixed, only the field could provide it: ${g.state.field.toFixed(2)} T gives ${fmt(peak1)} V.`}
       />
 
       <H2>Three coils, three phases</H2>
       <P>
         So far the stator has carried a single coil, and most of its iron has done nothing. Wind two more coils around it, each a third of a turn — 120° — further round the
-        stator than the last, and the passing magnet reaches each one in turn. In the next demonstration, the three coils are labeled A, B and C and colored like the phases in Lesson 1.2, and
+        stator than the last, and the passing magnet reaches each one in turn. In the next demonstration, the three coils are labeled A, B and C and colored like the phases in{' '}
+        <a href={lessonHref('1.2')}>Lesson 1.2</a>, and
         the rotor turns at whatever speed makes 60 Hz. Leave it on two poles for now:
       </P>
 
@@ -344,7 +356,7 @@ export default function Lesson() {
           aria-label={`A ${poles}-pole rotor turning at ${fmt(rpm2)} rpm inside a stator with three sets of coils. Each coil produces a 60 Hz voltage, a third of a cycle behind the one before.`}
         >
           <Machine rotorRad={rot.b} polePairs={poles / 2} field={0.5} coils={coils2} />
-          <TraceAxes range={range2} />
+          <TraceAxes range={TRACE_RANGE_V} />
           {[2, 1, 0].map((k) => (
             <path key={k} d={phaseLines[k]} fill="none" stroke={PHASE[k]} strokeWidth={2.5} strokeLinejoin="round" />
           ))}
@@ -357,13 +369,6 @@ export default function Lesson() {
             { label: 'Coil A', color: PHASE[0], kind: 'line' },
             { label: 'Coil B', color: PHASE[1], kind: 'line' },
             { label: 'Coil C', color: PHASE[2], kind: 'line' },
-          ]}
-        />
-        <Readouts
-          items={[
-            { label: 'rotor speed', value: `${fmt(rpm2)} rpm` },
-            { label: 'turns per second', value: fmt(rpm2 / 60) },
-            { label: 'frequency', value: `${fmt(e2.freqHz)} Hz`, tone: 'teal' },
           ]}
         />
         <Eq label="Rotor speed needed for a given frequency">
@@ -392,9 +397,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Three voltages appear, each a third of a cycle behind the one before: exactly the balanced three-phase supply of Lesson 1.2, made with no extra machinery. This is
-        the natural fit that lesson ended on. Three coils make better use of the stator’s iron and copper than one, and because the three phases together deliver a
-        steady total power, the shaft feels a smooth, constant load instead of a pulsing one. Almost every large generator on the grid is built this way.
+        Three voltages appear, each a third of a cycle behind the one before: exactly the balanced three-phase supply of <a href={lessonHref('1.2')}>Lesson 1.2</a>,
+        made with no extra machinery. Three coils make better use of the stator’s iron and copper than one, and because the three phases together deliver a steady total
+        power, the shaft feels a smooth, constant load instead of a pulsing one. Almost every large generator on the grid is built this way.
       </P>
 
       <H2>Why generators turn at fixed speeds</H2>
@@ -406,7 +411,7 @@ export default function Lesson() {
       <P>
         The speed needed depends on the rotor’s poles. Switch <FigRef to="Generator Simulator · three phases">the three-phase demonstration</FigRef> to four poles. The rotor now has two north poles and two south poles, so a north pole
         passes each coil twice every turn, and the rotor only has to turn half as fast — 1,800 rpm — to keep producing 60 Hz. The stator gets twice as many coils to match,
-        but the three waveforms don’t change at all. The equation under the demonstration gives the speed for any number of poles.
+        but the three waveforms don’t change at all. The equation in this demonstration gives the speed for any number of poles.
       </P>
       <P>
         Large steam and gas turbines in North America typically drive two-pole generators at 3,600 rpm, while many nuclear plants, with their larger and slower turbines,
@@ -432,9 +437,9 @@ export default function Lesson() {
         frequency is a running measure of the balance between supply and demand.
       </P>
       <P>
-        Solar panels are the main exception to all of this. They produce direct current with no moving parts, and connect to the grid through power electronics called
-        inverters; batteries connect the same way. Most modern wind turbines connect partly or wholly through power electronics too: their blades turn at a speed that
-        varies with the wind, and the electronics let the generator follow it instead of being locked to the grid’s frequency.
+        Solar panels are the main exception. They produce direct current with no moving parts and connect to the grid through power electronics called inverters, as
+        batteries do. Most modern wind turbines connect partly or wholly through power electronics too, which let their blades turn at whatever speed the wind allows
+        instead of being locked to the grid’s frequency.
       </P>
       <P>
         A generator’s coils can only be insulated for so much voltage, so the large generators in power plants produce somewhere between about 13.8 and 25 kilovolts.

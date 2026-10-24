@@ -3,7 +3,6 @@ import {
   Button,
   Caption,
   Challenge,
-  DataTable,
   FUEL,
   Figure,
   GridY,
@@ -16,9 +15,7 @@ import {
   Segmented,
   Slider,
   SupplyStackChart,
-  Swatch,
   TEXT,
-  Tn,
   areaPath,
   hour,
   lessonHref,
@@ -86,18 +83,13 @@ export default function Lesson() {
     };
   });
 
-  const rows = cmp.market.stack.map((st) => {
-    const p = plants.find((x) => x.id === st.id)!;
-    return { p, planner: cmp.planner.dispatch[p.id] ?? 0, market: cmp.market.dispatch[p.id] ?? 0 };
-  });
-
   // A live sentence about what the planner gets wrong.
   const more = cmp.changed.filter((id) => (cmp.planner.dispatch[id] ?? 0) > (cmp.market.dispatch[id] ?? 0));
   const less = cmp.changed.filter((id) => (cmp.planner.dispatch[id] ?? 0) < (cmp.market.dispatch[id] ?? 0));
   const names = (ids: string[]) => ids.map((id) => NAME[id]).join(' and ');
   let msg: string;
   if (cmp.extra > 0.5) {
-    msg = `The planner runs more of ${names(more)} and less of ${names(less)} than the market would. Measured at true costs, that dispatch costs ${usd(cmp.extra)} more every hour.`;
+    msg = `The planner runs more of ${names(more)} and less of ${names(less)} than the market would, and pays for every megawatt-hour at true costs.`;
   } else if (cmp.misranked.length > 0) {
     const [a, b] = cmp.misranked[0];
     msg = `The planner has ${NAME[a]} and ${NAME[b]} in the wrong order, but at ${hour(h)} that doesn’t change which plants run, so the mistake costs nothing.`;
@@ -153,8 +145,9 @@ export default function Lesson() {
       <P>
         There are two broad ways to organize the decision. A <b>central planner</b> collects the best estimates it can of each plant’s cost and dispatches on those. A{' '}
         <b>market</b> asks each owner to state the price at which it’s willing to run — its <K c="price">offer</K> — and accepts the cheapest offers. In the next demonstration, both schedule the region on
-        the reference day. The planner’s estimates are off by a random amount whose typical size you can set, and each press of New estimates draws a fresh set of
-        errors; the owners offer their true costs. Drag through the hours and change the size of the planner’s errors:
+        the reference day. The planner’s estimates are off by random amounts, and you set their <b>typical error</b>: one standard deviation, so about two-thirds of
+        the estimates land within that percentage of the true cost and the rest further out. Each press of New estimates draws a fresh set of errors; the owners offer
+        their true costs. Drag through the hours and change the size of the planner’s errors:
       </P>
 
       <Figure
@@ -188,30 +181,8 @@ export default function Lesson() {
         <Slider label="Typical error in the planner’s estimates" value={error} min={0} max={40} onChange={(v) => s1.set({ error: v })} display={`±${error}%`} />
         <Readouts
           items={[
-            { label: 'planner’s dispatch, true cost per hour', value: usd(cmp.plannerCost), tone: 'green' },
             { label: 'market’s dispatch, true cost per hour', value: usd(cmp.marketCost), tone: 'green' },
-            { label: 'cost of the planner’s mistakes', value: usd(cmp.extra), tone: 'green' },
-          ]}
-        />
-        <DataTable
-          caption="Each plant’s true cost, the planner’s estimate, and what each dispatch runs"
-          rows={rows}
-          rowKey={(r) => r.p.id}
-          rowClass={(r) => (cmp.changed.includes(r.p.id) ? 'hl' : r.planner <= 0 && r.market <= 0 ? 'dim' : '')}
-          columns={[
-            {
-              label: 'Plant',
-              cell: (r) => (
-                <>
-                  <Swatch color={COLOR[r.p.id]} />
-                  {NAME[r.p.id]}
-                </>
-              ),
-            },
-            { label: 'True cost', cell: (r) => usd(r.p.cost, 2) },
-            { label: 'Planner’s estimate', cell: (r) => <Tn tone={Math.abs(est[r.p.id] - r.p.cost) > 0.005 ? 'ink' : 'gray'}>{usd(est[r.p.id], 2)}</Tn> },
-            { label: 'Planner runs', cell: (r) => (r.planner > 0 ? mw(r.planner) : '—') },
-            { label: 'Market runs', cell: (r) => (r.market > 0 ? mw(r.market) : '—') },
+            { label: 'extra cost of the planner’s mistakes', value: usd(cmp.extra), tone: 'green' },
           ]}
         />
         <Caption>{msg}</Caption>
@@ -227,6 +198,11 @@ export default function Lesson() {
         Now drag through the day. At some hours, the very same wrong estimates cost nothing at all. Errors that rearrange plants on the same side of the demand line —
         plants that run flat out either way, or that aren’t needed either way — change nothing that happens. A mistake only costs money when it moves a plant across
         the <b>margin</b>, the point where the stack meets demand.
+      </P>
+      <P>
+        The plant sitting at the margin, the last one needed to meet demand, is the <b>marginal plant</b>. In the market’s ranking, the horizontal line running across
+        to the demand line is drawn at its offer. That offer is the <K c="price">clearing price</K>: since the marginal plant normally has room to run a little
+        harder, it’s also what serving one more megawatt-hour of demand would cost. In most electricity markets, every plant that runs is paid it, and <a href={lessonHref('4.4')}>Lesson 4.4</a> shows why.
       </P>
 
       <Challenge
@@ -286,7 +262,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'average extra cost per day', value: usd(pt.mean * marketDay), tone: 'green' },
-            { label: 'average extra cost per year', value: usd(pt.mean * marketDay * 365), tone: 'green' },
+            { label: 'average per year, if every day were like the reference day', value: usd(pt.mean * marketDay * 365), tone: 'green' },
             { label: 'planners with a perfect day', value: pct(pt.perfect) },
           ]}
         />
@@ -316,8 +292,9 @@ export default function Lesson() {
       <P>
         Notice what restructuring didn’t remove. An ISO still runs a central optimization every few minutes, much like the planner’s. What changed is where the numbers
         come from: the operator ranks offers submitted by owners who know their own costs and have a reason to keep them low, instead of estimates it has to make itself.
-        Whether owners have a reason to offer their <i>true</i> costs depends on how the market pays them, which is the subject of Lesson 4.4 — and because some owners
-        could profit by offering high, every ISO also has a market monitor watching for it.
+        Whether owners have a reason to offer their <i>true</i> costs depends on how the market pays them, which is the subject of{' '}
+        <a href={lessonHref('4.4')}>Lesson 4.4</a>. Even under the best rules, an owner whose plant sets the price can sometimes profit by offering above its cost — that’s
+        market power — so every ISO also has a market monitor watching for it.
       </P>
       <P>
         A market also has more players than a planner’s spreadsheet. Before we look at how offers are built, the{' '}

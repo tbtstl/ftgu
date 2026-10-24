@@ -36,13 +36,15 @@ import { THREE_NODE } from '../../model/networks';
 const A_OFFER = 20;
 const B_OFFER = 50;
 const AUCTION_LIMIT = 250;
+const A_CAP = 700;
+const B_CAP = 600;
 
 function solve(demand: number, limit: number) {
   return dcopf(
     THREE_NODE,
     [
-      { id: 'gA', node: 'A', capacity: 500, offer: A_OFFER },
-      { id: 'gB', node: 'B', capacity: 600, offer: B_OFFER },
+      { id: 'gA', node: 'A', capacity: A_CAP, offer: A_OFFER },
+      { id: 'gB', node: 'B', capacity: B_CAP, offer: B_OFFER },
     ],
     { C: demand },
     { limits: { AC: limit } },
@@ -56,6 +58,9 @@ const D0_PAID_B = D0.dispatch.gB * D0.lmp.B;
 const D0_SPREAD = D0.lmp.C - D0.lmp.A;
 const D0_SHADOW = D0.cost - solve(450, 251).cost;
 const D200 = solve(450, 200);
+// At the top of the demand slider, line A–B carries power from B to A, against the price difference.
+const D600 = solve(600, 250);
+const D600_AB = rentByLine(THREE_NODE, D600.flows, D600.lmp).find((l) => l.id === 'AB')!;
 
 const NODE_COLOR = { A: '#2f6fb3', B: '#8e4fa0', C: '#ad5310' } as const;
 const PAY = { A: '#4590ce', B: '#ab70b6', rent: '#6d9c37' };
@@ -147,6 +152,21 @@ const CONTRACT_PRICE = 25;
 const HEDGE_LIMIT = 250;
 const DEMANDS: number[] = [];
 for (let d = 100; d <= 600; d += 5) DEMANDS.push(d);
+const HEDGE_PRICES = DEMANDS.map((d) => solve(d, HEDGE_LIMIT).lmp);
+
+/** The retailer's cost per MWh of its contract in each hour on the chart, holding `ftr` MW of rights from A to C. */
+export function hedgeCosts(ftr: number): number[] {
+  return HEDGE_PRICES.map((l) => hedgedCostPerMWh(CONTRACT_PRICE, CONTRACT_MW, ftr, l.A, l.C));
+}
+
+// The challenge: the retailer resells at a fixed price, and rights cost money, so it wants the fewest that keep it from losing.
+export const RETAIL_PRICE = 40;
+export const FTR_STEP = 10;
+export const HEDGE_DEFAULTS = { ftr: 0, demand: 450 };
+const neverLoses = (ftr: number) => Math.max(...hedgeCosts(ftr)) <= RETAIL_PRICE + 1e-6;
+export function hedgeSolved(ftr: number): boolean {
+  return neverLoses(ftr) && !neverLoses(ftr - FTR_STEP);
+}
 
 /** A line through the points that jumps vertically wherever the value changes (prices move in steps). */
 function stepLine(xs: number[], ys: number[]): string {
@@ -181,16 +201,14 @@ export default function Lesson() {
   const shadow = congested ? r.cost - solve(demand, limit + 1).cost : 0;
 
   // ---- Figure 2: hedging with an FTR.
-  const h = useScenario('hedge', { ftr: 0, demand: 450 });
-  const sweep = useMemo(() => DEMANDS.map((d) => solve(d, HEDGE_LIMIT).lmp), []);
-  const hedged = (l: Record<string, number>, f: number) => hedgedCostPerMWh(CONTRACT_PRICE, CONTRACT_MW, f, l.A, l.C);
-  const costs = sweep.map((l) => hedged(l, h.state.ftr));
-  const bare = sweep.map((l) => hedged(l, 0));
+  const h = useScenario('hedge', HEDGE_DEFAULTS);
+  const costs = useMemo(() => hedgeCosts(h.state.ftr), [h.state.ftr]);
+  const bare = useMemo(() => hedgeCosts(0), []);
   const hr = solve(h.state.demand, HEDGE_LIMIT);
-  const hCost = hedged(hr.lmp, h.state.ftr);
+  const hCost = hedgedCostPerMWh(CONTRACT_PRICE, CONTRACT_MW, h.state.ftr, hr.lmp.A, hr.lmp.C);
   const ftrPay = ftrPayoff(h.state.ftr, hr.lmp.A, hr.lmp.C);
-  const range = Math.max(...costs) - Math.min(...costs);
-  const hedgeSolved = range < 0.01;
+  const worstCost = Math.max(...costs);
+  const hedgeOk = hedgeSolved(h.state.ftr);
   const HX = scale(100, 600, 60, 580);
   const HY = scale(-40, 100, 220, 36);
 
@@ -216,9 +234,9 @@ export default function Lesson() {
   return (
     <LessonPage id="5.4">
       <P>
-        The previous lesson ended with a loose end. Once line A–C is full, consumers at C pay more for each megawatt-hour than either generator receives, and the grid
-        operator, which settles every trade, ends up holding the difference. That money is the <K c="price">congestion rent</K>. In this lesson we’ll find out where
-        exactly it comes from, who it belongs to, and how it lets a buyer at one end of a congested line lock in a price at the other.
+        The previous lesson left the grid operator holding money. Once line A–C is full, consumers at C pay more for each megawatt-hour than either generator receives,
+        and the operator, which settles every trade, collects the difference: the <K c="price">congestion rent</K>. In this lesson we’ll find out where exactly it
+        comes from, who it belongs to, and how it lets a buyer at one end of a congested line lock in a price at the other.
       </P>
       <P>
         Here’s the three-node grid again, with B’s offer fixed at ${B_OFFER}. The bar below the map is everything the loads at C pay in an hour, split into what each
@@ -234,8 +252,8 @@ export default function Lesson() {
         <MoneyBar paidA={paidA} paidB={paidB} rent={Math.max(0, loadPays - paidA - paidB)} />
         <Legend
           items={[
-            { label: `paid to A: ${fmt(r.dispatch.gA)} MW × ${usd(lmp('A'))}`, color: PAY.A },
-            { label: `paid to B: ${fmt(r.dispatch.gB)} MW × ${usd(lmp('B'))}`, color: PAY.B },
+            { label: 'paid to A', color: PAY.A },
+            { label: 'paid to B', color: PAY.B },
             { label: 'congestion rent', color: PAY.rent },
           ]}
         />
@@ -258,14 +276,17 @@ export default function Lesson() {
 
       <P>
         With the line limited to 250 MW, it isn’t full below about 375 MW of demand: every node has the same price, and loads pay exactly what generators receive. Push
-        demand past that point and a gap opens. At the starting values, loads pay {usd(450 * D0.lmp.C)} an hour, A receives {usd(D0_PAID_A)} and B {usd(D0_PAID_B)},
-        and {usd(D0.congestionRent)} is left over.
+        demand past that point and a gap opens. The starting values are the hour we settled in <a href={lessonHref('5.3')}>Lesson 5.3</a>: loads pay{' '}
+        {usd(450 * D0.lmp.C)} an hour, A receives {usd(D0_PAID_A)} and B {usd(D0_PAID_B)}, and {usd(D0.congestionRent)} is left over.
       </P>
       <P>
         The table shows where it comes from. Think of each line as buying power at the node it leaves and selling it at the node it arrives at. Every megawatt that flows
-        from a cheap node to an expensive one earns the price difference, and the three lines’ earnings add up exactly to the rent. All of it traces back to the one full
-        line. Its <b>shadow price</b> — how much the cheapest dispatch would save each hour with one more megawatt of capacity on A–C — is {usd(D0_SHADOW)} at the
-        starting values, and the rent is the shadow price times the line’s limit:
+        from a cheap node to an expensive one earns the price difference, and the three lines’ earnings add up exactly to the rent. A line’s share can even be negative.
+        Keep the limit at 250 MW and push demand above 500 MW: B now produces more than A, so more of B’s output takes the long way to C, through A, than A’s takes
+        through B, and line A–B carries power from B’s ${B_OFFER} node to A’s ${A_OFFER} one. It buys high and sells low, and at {mw(600)} its share is{' '}
+        {usd(D600_AB.rent)} an hour. The total doesn’t change, though: whatever A–B loses, B–C, now carrying more of B’s output, gains. All of it traces back to the one full
+        line. Its shadow price μ, from Lesson 5.3, is how much the cheapest dispatch would save each hour with one more megawatt of capacity on A–C:{' '}
+        {usd(D0_SHADOW)} at the starting values. The rent is the shadow price times the line’s limit:
       </P>
       <Eq label="Congestion rent equals the shadow price of the full line times its limit">
         <K c="price">rent</K>
@@ -317,7 +338,8 @@ export default function Lesson() {
         cancels congestion risk. Suppose a retailer serves customers at C and has a contract with the
         owner of generator A: {CONTRACT_MW} MW at ${CONTRACT_PRICE} per megawatt-hour, settled against A’s market price. That fixes what the retailer pays for power at A.
         But its customers are at C, and in a nodal market it has to buy their power at C’s price. Whenever A–C is congested, the retailer pays the difference between C and
-        A on top of its contract price. Choose how many megawatts of FTRs from A to C it should hold:
+        A on top of its contract price. The retailer’s {CONTRACT_MW} MW stays the same in every hour; in the next chart, the total demand at C stands in for how
+        congested the hour turns out. Choose how many megawatts of FTRs from A to C it should hold:
       </P>
 
       <Figure name="Congestion Rights Simulator · hedging" scenario={h}>
@@ -347,6 +369,10 @@ export default function Lesson() {
           </text>
           <path d={stepLine(DEMANDS.map(HX), bare.map(HY))} fill="none" stroke="#9a9a9a" strokeWidth={2} strokeDasharray="7 5" />
           <path d={stepLine(DEMANDS.map(HX), costs.map(HY))} fill="none" stroke="#6d9c37" strokeWidth={4} strokeLinejoin="round" />
+          <line x1={60} x2={580} y1={HY(RETAIL_PRICE)} y2={HY(RETAIL_PRICE)} stroke="#3f7a1e" strokeWidth={1.5} strokeDasharray="2 4" />
+          <text x={64} y={HY(RETAIL_PRICE) - 6} style={{ fontSize: 12, fill: '#3f7a1e', fontWeight: 500 }}>
+            retail price ${RETAIL_PRICE}
+          </text>
           <line className="cur" x1={HX(h.state.demand)} x2={HX(h.state.demand)} y1={36} y2={220} />
           <circle cx={HX(h.state.demand)} cy={HY(hCost)} r={6} fill="#6d9c37" stroke="#f8f8f8" strokeWidth={2} />
         </svg>
@@ -364,16 +390,22 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Choose an FTR quantity that makes the retailer’s cost per megawatt-hour the same whatever the demand at C."
-        solved={hedgeSolved}
-        status={`With ${mw(h.state.ftr)} of FTRs, the retailer’s cost ranges from ${usd(Math.min(...costs), 2)} to ${usd(Math.max(...costs), 2)} per megawatt-hour.`}
-        success={`Solved. ${mw(CONTRACT_MW)} of FTRs pay ${CONTRACT_MW} × (LMP at C − LMP at A) every hour — exactly the extra the retailer pays for buying its ${CONTRACT_MW} MW at C rather than A. Its cost is ${usd(CONTRACT_PRICE)} whatever happens on the line.`}
+        question={`The retailer sells to its customers at a fixed $${RETAIL_PRICE} per megawatt-hour. Rights cost money at auction, so it wants as few as it can get away with. What is the smallest number of FTRs from A to C that guarantees it never pays more than $${RETAIL_PRICE}, whatever the demand? Work it out from the payout formula, then set it to check.`}
+        solved={hedgeOk}
+        status={
+          worstCost > RETAIL_PRICE + 1e-6
+            ? `With ${mw(h.state.ftr)} of FTRs, the retailer pays up to ${usd(worstCost, 2)} per megawatt-hour: more than its customers pay.`
+            : `With ${mw(h.state.ftr)} of FTRs, the retailer never pays more than ${usd(RETAIL_PRICE)}, but fewer rights would do.`
+        }
+        success={`Solved. In a congested hour C’s price is ${usd(D0_SPREAD)} above A’s, and each megawatt of rights pays that ${usd(D0_SPREAD)}. The retailer can afford to leave (${usd(RETAIL_PRICE)} − ${usd(CONTRACT_PRICE)}) × ${CONTRACT_MW} ÷ ${usd(D0_SPREAD)} = ${mw(((RETAIL_PRICE - CONTRACT_PRICE) * CONTRACT_MW) / D0_SPREAD)} of its contract unhedged, so it needs ${mw(h.state.ftr)} of rights.`}
       />
 
       <P>
-        Without rights, the retailer’s cost jumps from ${CONTRACT_PRICE} to ${CONTRACT_PRICE + D0_SPREAD} the moment the line fills. With fewer FTRs than its contract, it’s
-        partly exposed. With more, it’s no longer hedging but betting: it profits from congestion and its cost falls below its contract price. FTRs are usually
-        obligations, so a right whose sink ends up cheaper than its source pays out a negative amount, and the holder owes the difference.
+        Without rights, the retailer’s cost jumps from ${CONTRACT_PRICE} to ${CONTRACT_PRICE + D0_SPREAD} the moment the line fills. Hold exactly its {mw(CONTRACT_MW)},
+        and its cost is ${CONTRACT_PRICE} whatever happens on the line: the rights pay {CONTRACT_MW} × (LMP at C − LMP at A) every hour, exactly the extra it pays for
+        buying its {mw(CONTRACT_MW)} at C rather than at A. With fewer FTRs than its contract, it’s partly exposed. With more, it’s no longer hedging but betting: it
+        profits from congestion and its cost falls below its contract price. FTRs are usually obligations, so a right whose sink ends up cheaper than its source pays
+        out a negative amount, and the holder owes the difference.
       </P>
       <P>
         A retailer that hasn’t been allocated rights has to buy them. They’re sold in
@@ -469,8 +501,8 @@ export default function Lesson() {
           {!dayCongested
             ? 'A–C isn’t full on the day, so all three prices are equal: there is no rent, and the rights pay nothing.'
             : fits
-              ? `The rights fit within the day’s grid, so the rent covers them${settle.surplus > 0.5 ? `, with ${usd(settle.surplus)} to spare` : ' exactly'}.`
-              : `The rights would put ${fmt(implied)} MW on a line that can carry ${q.state.dayLimit}. They’re owed ${usd(settle.totalPayout)}, but the rent is only ${usd(settle.rent)}.`}
+              ? `The rights fit within the day’s grid, so the rent covers them${settle.surplus > 0.5 ? ', with money to spare' : ' exactly'}.`
+              : 'The rights would put more on A–C than it can carry on the day, so they’re owed more than the rent can pay.'}
         </Caption>
       </Figure>
 

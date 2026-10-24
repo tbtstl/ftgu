@@ -1,8 +1,8 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
 import {
   Caption,
   Challenge,
-  Checkbox,
+  FigRef,
   Figure,
   FUEL,
   GRAPHIC,
@@ -11,6 +11,7 @@ import {
   Legend,
   LessonPage,
   P,
+  lessonHref,
   Readouts,
   Segmented,
   Slider,
@@ -28,6 +29,7 @@ import {
 import {
   EV_FLEET,
   FLEX_BLOCKS,
+  allowedStarts,
   baseLoad,
   blockCost,
   clampStart,
@@ -47,18 +49,34 @@ const BASE_PEAK = Math.max(...BASE);
 const PRICES = referencePrices().prices;
 const USUAL = usualStarts();
 const USUAL_LOAD = systemLoad(BASE, FLEX_BLOCKS, USUAL);
+/** The lowest peak the blocks allow (the inflexible load's own), and among those placements, the cheapest. */
 const BEST = flatten(BASE, FLEX_BLOCKS, PRICES);
-const BEST_LOAD = systemLoad(BASE, FLEX_BLOCKS, BEST);
 const BASE_COLOR = '#d4d4d4';
 const COLORS: Record<string, string> = { ev: FUEL.demandResponse, water: GRAPHIC.blue, batch: FUEL.coal, cool: GRAPHIC.teal };
-const cost = (st: Starts) => FLEX_BLOCKS.reduce((s, b) => s + blockCost(b, clampStart(b, st[b.id]), PRICES), 0);
+export const cost = (st: Starts) => FLEX_BLOCKS.reduce((s, b) => s + blockCost(b, clampStart(b, st[b.id]), PRICES), 0);
 const USUAL_COST = cost(USUAL);
-const BEST_COST = cost(BEST);
+export const BEST_COST = cost(BEST);
 const TOTAL_MWH = FLEX_BLOCKS.reduce((s, b) => s + b.mw * b.hours, 0);
+/** Every block in its own cheapest hours, ignoring the peak. */
+const CHEAPEST: Starts = Object.fromEntries(
+  FLEX_BLOCKS.map((b) => [b.id, allowedStarts(b).reduce((x, st) => (blockCost(b, st, PRICES) < blockCost(b, x, PRICES) - 1e-9 ? st : x))]),
+);
+const CHEAPEST_LOAD = systemLoad(BASE, FLEX_BLOCKS, CHEAPEST);
+const CHEAPEST_PEAK = Math.max(...CHEAPEST_LOAD);
+
+/** The challenge: the cheapest placement that keeps the system peak at the inflexible load's own. */
+export function shiftSolves(st: Starts): boolean {
+  return Math.max(...systemLoad(BASE, FLEX_BLOCKS, st)) <= BASE_PEAK + 1e-6 && cost(st) <= BEST_COST + 0.5;
+}
 const X0 = 52;
 const X1 = 628;
 const SLOT = (X1 - X0) / 24;
 const ROW = 46;
+
+/** "a", "a and b", "a, b and c". */
+function listOf(items: string[]): string {
+  return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
 
 /** Hour ranges [from, to) within one day for a span that may cross midnight. */
 function spans(from: number, len: number): Array<[number, number]> {
@@ -176,21 +194,18 @@ function Lanes({ starts, onMove }: { starts: Starts; onMove: (id: string, start:
 }
 
 function ShiftFigure({ starts, onMove, scenario }: { starts: Starts; onMove: (id: string, s: number) => void; scenario: Scenario<Starts> }) {
-  const [compare, setCompare] = useState(false);
   const load = systemLoad(BASE, FLEX_BLOCKS, starts);
   const peak = Math.max(...load);
   const peakAt = load.indexOf(peak);
   const bill = cost(starts);
+  const inPeak = FLEX_BLOCKS.filter((b) => systemLoad(Array(24).fill(0), [b], starts)[peakAt] > 0).map((b) => b.name.replace(/^[A-Z][a-z]/, (m) => m.toLowerCase()));
   const stack = [{ values: BASE, color: BASE_COLOR }, ...FLEX_BLOCKS.map((b) => ({ values: systemLoad(Array(24).fill(0), [b], starts), color: COLORS[b.id] }))];
   return (
     <Figure name="Load Shifting Lab" scenario={scenario}>
       <TimeChart
         ariaLabel={`System load with the flexible loads placed as shown below. Peak ${Math.round(peak)} MW at ${hour(peakAt)}.`}
         stack={stack}
-        series={[
-          { values: USUAL_LOAD, color: '#333', width: 1.5, dash: '6 5' },
-          ...(compare ? [{ values: BEST_LOAD, color: GRAPHIC.green, width: 2.5, dash: '2 3' }] : []),
-        ]}
+        series={[{ values: USUAL_LOAD, color: '#333', width: 1.5, dash: '6 5' }]}
         refLines={[{ y: peak, color: '#333', dash: '2 4', label: `peak ${mw(peak)}` }]}
         yMin={0}
         yMax={1600}
@@ -204,14 +219,13 @@ function ShiftFigure({ starts, onMove, scenario }: { starts: Starts; onMove: (id
           { label: 'Inflexible load', color: BASE_COLOR },
           ...FLEX_BLOCKS.map((b) => ({ label: b.name, color: COLORS[b.id] })),
           { label: 'At their usual times', color: '#333', kind: 'line' as const, dashed: true },
-          ...(compare ? [{ label: 'Best placement', color: GRAPHIC.green, kind: 'line' as const, dashed: true }] : []),
         ]}
       />
       <Lanes starts={starts} onMove={onMove} />
       <TimeChart
-        ariaLabel="Hourly day-ahead prices on the reference day."
+        ariaLabel={`Hourly day-ahead prices on the reference day, from ${usd(Math.min(...PRICES))} to ${usd(Math.max(...PRICES), 2)} per MWh.`}
         series={[{ values: PRICES, color: GRAPHIC.green, kind: 'step', width: 2.5 }]}
-        yMin={0}
+        yMin={20}
         yMax={50}
         yLabel="Price, $ per MWh"
         yFormat={(v) => '$' + v}
@@ -220,23 +234,14 @@ function ShiftFigure({ starts, onMove, scenario }: { starts: Starts; onMove: (id
       />
       <Readouts
         items={[
-          { label: `system peak, at ${hour(peakAt)}`, value: mw(peak) },
-          { label: 'energy of the flexible loads', value: mwh(TOTAL_MWH), tone: 'gold' },
-          { label: 'what it costs at hourly prices', value: usd(bill), tone: 'green' },
+          { label: 'the four loads’ bill at hourly prices', value: usd(bill), tone: 'green' },
           { label: 'saved against the usual times', value: usd(USUAL_COST - bill), tone: 'green' },
         ]}
       />
-      <div className="ctl">
-        <Checkbox label="Compare with the best placement" checked={compare} onChange={setCompare} />
-      </div>
       <Caption>
-        {compare
-          ? `The best placement holds the peak to ${mw(Math.max(...BEST_LOAD))} and costs ${usd(BEST_COST)}.`
-          : peak > BASE_PEAK + 0.5
-            ? `${FLEX_BLOCKS.filter((b) => systemLoad(Array(24).fill(0), [b], starts)[peakAt] > 0)
-                .map((b) => b.name)
-                .join(' and ')} ${FLEX_BLOCKS.filter((b) => systemLoad(Array(24).fill(0), [b], starts)[peakAt] > 0).length > 1 ? 'are' : 'is'} running in the peak hour.`
-            : `No flexible load is left in the peak: what remains is the inflexible load’s own peak, ${mw(BASE_PEAK)} at ${hour(BASE.indexOf(BASE_PEAK))}.`}
+        {peak > BASE_PEAK + 0.5
+          ? `The system peaks at ${mw(peak)} at ${hour(peakAt)}, with ${listOf(inPeak)} running in that hour.`
+          : `No flexible load is left in the peak: what remains is the inflexible load’s own peak, ${mw(BASE_PEAK)} at ${hour(BASE.indexOf(BASE_PEAK))}.`}
       </Caption>
     </Figure>
   );
@@ -252,7 +257,9 @@ const POLICIES: Array<{ value: ChargePolicy; label: string }> = [
 ];
 const EV_COLOR = FUEL.demandResponse;
 const REF_PEAK = Math.max(...SYSTEM_DEMAND);
+/** Fleet size beyond which the timer's spike at its start hour rises above the evening peak without the cars. */
 const REBOUND_CARS = ((REF_PEAK - SYSTEM_DEMAND[EV_FLEET.timerStart]) / EV_FLEET.chargerKW) * 1000;
+const EV_BLOCK = FLEX_BLOCKS.find((b) => b.id === 'ev')!;
 
 function EvFigure() {
   const sc = useScenario('ev', { cars: 40, policy: 'arrival' as ChargePolicy });
@@ -310,7 +317,8 @@ export default function Lesson() {
   const starts = sc.state;
   const load = systemLoad(BASE, FLEX_BLOCKS, starts);
   const peak = Math.max(...load);
-  const solved = peak <= BASE_PEAK + 1e-6;
+  const bill = cost(starts);
+  const solved = shiftSolves(starts);
   const usualPeak = Math.max(...USUAL_LOAD);
   const arrival40 = evLoad(EV_FLEET, 'arrival');
   const timer40 = evLoad(EV_FLEET, 'timer');
@@ -342,29 +350,33 @@ export default function Lesson() {
       <P>
         The four loads use {mwh(TOTAL_MWH)} between them wherever you put them; the area of each block never changes, only its position. What changes is the shape of the system
         load, and in particular its peak. At their usual times, the electric cars and water heaters come on just as people get home, stacking on top of the evening peak. Moved
-        into the night, they fill the trough instead.
+        out of the evening — the cars into the night, the water heating into the middle of the day — they fill quieter hours instead.
       </P>
       <P>
-        The windows are what makes each load more or less useful. The cars carry the most energy and can charge any time between the evening and the next morning, so they
-        can go almost anywhere. Pre-cooling can only move earlier in the afternoon, because its whole point is to chill a building before the evening, so the cooling can
-        coast through the peak. (In a real building some of that coolness leaks away, so pre-cooling uses a little more energy than it saves; our blocks keep the energy
+        The windows are what makes each load more or less useful. The cars’ window is one of the widest, and the only one that takes in the night: they can charge any time
+        between {hour(EV_BLOCK.earliest)} and {hour(EV_BLOCK.latest)} the next morning, so they can drop into the overnight trough. Pre-cooling can only move earlier in the
+        afternoon, because its whole point is to chill a building before the evening, so the cooling can coast through the peak. (In a real building some of that coolness leaks away, so pre-cooling uses a little more energy than it saves; our blocks keep the energy
         fixed.) And the batch process can run in any staffed shift but not in the small hours. A narrow window is the price a customer pays for flexibility, and it’s what the
         grid has to work around.
       </P>
       <P>
         The lower chart shows the <K c="price">day-ahead price</K> of each hour on a typical weekday in the region’s history: {usd(lowPrice)} per MWh overnight and around midday,
         when demand is low or solar is plentiful, and up to {usd(highPrice, 2)} in the evening. The price signal points the same way as the grid’s needs. Customers who move their
-        flexible loads into cheap hours save money, and the hours they leave behind are the ones that would otherwise need the most expensive plants. The best placement, which you
-        can overlay with the checkbox, holds the peak as low as the inflexible load allows and cuts the four loads’ energy bill by {usd(saved)}, or{' '}
-        {pct(saved / USUAL_COST)}.
+        flexible loads into cheap hours save money, and the hours they leave behind are the ones that would otherwise need the most expensive plants. But cheap hours can fill
+        up. Put each load in its own cheapest hours and the middle of the day grows a new peak: {mw(CHEAPEST_PEAK)} at {hour(CHEAPEST_LOAD.indexOf(CHEAPEST_PEAK))}, higher than
+        anything the inflexible load reaches on its own.
       </P>
 
       <Challenge
         id="a"
-        question={`Move the flexible loads, within their windows, so the system peak is no higher than ${mw(BASE_PEAK)} — the peak of the inflexible load on its own.`}
+        question={`Find the cheapest way to run the four loads at these prices without letting the system peak rise above ${mw(BASE_PEAK)}, the inflexible load’s own peak.`}
         solved={solved}
-        status={`The system peak is ${mw(peak)} at ${hour(load.indexOf(peak))}.`}
-        success="Solved. Nothing flexible runs at 19:00 any more, and nothing you moved created a new peak somewhere else."
+        status={
+          peak > BASE_PEAK + 1e-6
+            ? `The system peak is ${mw(peak)} at ${hour(load.indexOf(peak))}, above the inflexible load’s ${mw(BASE_PEAK)}.`
+            : `The peak holds at ${mw(BASE_PEAK)}, and the four loads cost ${usd(bill)}. Can they cost less?`
+        }
+        success={`Solved: ${usd(BEST_COST)}, ${pct(saved / USUAL_COST)} less than at their usual times. The cars charge in the night, when every hour costs ${usd(lowPrice)} per MWh; the water heating and the batch process take the cheap midday hours; and pre-cooling, which would make a new midday peak if it joined them, starts at ${hour(BEST.cool)} and pays more for its last hour.`}
       />
 
       <P>
@@ -372,13 +384,14 @@ export default function Lesson() {
         its thermostat for an hour. Others face prices that vary by hour, or by time of day, and shift on their own. More and more of it is automatic: a water heater or a car
         charger that a utility or an aggregator can nudge without anyone noticing. And because a megawatt of demand that can be switched off when needed is worth almost as
         much to the grid as a megawatt of generation that can be switched on, many markets let demand response compete with power plants to provide reserves and capacity — a
-        topic we’ll return to in Lesson 4.6.
+        topic we’ll return to in <a href={lessonHref('4.6')}>Lesson 4.6</a>.
       </P>
 
       <H2>When everyone shifts at once</H2>
       <P>
         A price signal works because people respond to it. That’s also its danger. Here are {fmt(EV_FLEET.cars)} electric cars, each needing {EV_FLEET.kWhEach} kWh a night —
-        about 40 miles of driving — from a {EV_FLEET.chargerKW} kW home charger, on top of the reference day’s demand. Try the three charging policies:
+        about 40 miles of driving — from a {EV_FLEET.chargerKW} kW home charger, on top of the reference day’s demand. They’re new cars: the {fmt(EV_BLOCK.mw)} MW of EV
+        charging in <FigRef to="Load Shifting Lab">the first demonstration</FigRef> is already part of that demand. Try the three charging policies:
       </P>
 
       <EvFigure />
@@ -388,13 +401,13 @@ export default function Lesson() {
         {hour(EV_FLEET.timerStart)} fixes that, as long as the owners respond. But if they all set their chargers to start at exactly {hour(EV_FLEET.timerStart)}, every car
         switches on at once and draws full power together: a spike of {mw(Math.max(...timer40))} out of nowhere. With these {fmt(EV_FLEET.cars)} cars the spike still fits under
         the evening peak. Add more cars and it doesn’t: beyond about {fmt(Math.round(REBOUND_CARS / 1000) * 1000)}, the timer creates a new system peak at{' '}
-        {hour(EV_FLEET.timerStart)}, worse than the one it was meant to avoid.
+        {hour(EV_FLEET.timerStart)}, higher than the evening peak without the cars.
       </P>
       <P>
         Smart charging spreads the same {mwh(evMWh)} evenly across the night — {mw(Math.max(...smart40))} at a time — so the cars are full by morning and the grid barely notices.
         That takes coordination: a signal that tells each charger not just that power is cheap, but when its turn is. Coordinating thousands of small devices like this — cars,
         batteries, heat pumps — so that together they act like one controllable plant is the idea behind the virtual power plants of Chapter 7. Before that, the last lesson of
-        this chapter steps into the control room, where all of these tools come together.
+        this chapter steps into the control room, where an operator has to keep the whole system in view at once.
       </P>
     </LessonPage>
   );

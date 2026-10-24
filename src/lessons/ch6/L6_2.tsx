@@ -13,6 +13,7 @@ import {
   Segmented,
   Slider,
   hour as fmtHour,
+  lessonHref,
   linePath,
   niceDomain,
   niceTicks,
@@ -31,6 +32,10 @@ const DAYS = standardHistory();
 const BY_HOUR = spreadsByHour(DAYS);
 const STATS = BY_HOUR.map(describe);
 const MW = 10;
+/** Days 73 and 120 (indices 72 and 119): the two evenings when the real-time price passed $2,000. */
+const SPIKE_DAYS = [72, 119];
+/** The challenge: at least this much profit after costs once the rule's two best days are removed. */
+const ROBUST = 10000;
 
 type FilterKind = 'all' | 'demand' | 'gas';
 const FILTERS: Record<FilterKind, ((d: MarketDay) => boolean) | undefined> = {
@@ -268,8 +273,9 @@ export default function Lesson() {
   const s2 = useScenario('backtest', { rule: 'median' as ForecastRule, filter: 'all' as FilterKind, window: 10, threshold: 1, cost: 0.5 });
   const { hour } = s1.state;
   const { rule, filter, window, threshold, cost } = s2.state;
-  const st = STATS[hour];
   const within5 = BY_HOUR[hour].filter((v) => Math.abs(v) <= 5).length / BY_HOUR[hour].length;
+  const calm = BY_HOUR[hour].filter((_, i) => !SPIKE_DAYS.includes(i));
+  const calmMean = calm.reduce((a, v) => a + v, 0) / calm.length;
 
   const bt = useMemo(() => backtestVirtuals(DAYS, { rule, window, threshold, mw: MW, costPerMWh: cost, filter: FILTERS[filter] }), [rule, filter, window, threshold, cost]);
   const sum = summarize(bt.pnl);
@@ -278,7 +284,7 @@ export default function Lesson() {
   const withoutBest = sum.total - best2.reduce((a, r) => a + r.v, 0);
   const tradedPnl = bt.positions.map((p, i) => ({ p, v: bt.pnl[i] })).filter((r) => r.p.some((x) => x !== 0));
   const wins = tradedPnl.filter((r) => r.v > 0).length;
-  const solved = cost >= 1 && bt.tradedDays >= 20 && sum.total > 0 && withoutBest > 0;
+  const solved = cost >= 1 && bt.tradedDays >= 20 && sum.total > 0 && withoutBest >= ROBUST;
   const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
 
   return (
@@ -286,8 +292,9 @@ export default function Lesson() {
       <P>
         At the end of the last lesson, a trader held an inc on its own. That position is a bet on a single number: the difference between the real-time and day-ahead
         prices in an hour. We’ll call it the <K c="price">spread</K> and measure it as real-time minus day-ahead, so a positive spread is what a dec earns per
-        megawatt-hour and a negative one is what an inc earns. To bet on it sensibly, a trader needs some idea of what it will be tomorrow — and the obvious place to
-        look is what it has been.
+        megawatt-hour and a negative one is what an inc earns. That’s the opposite sign from the bottom row of Lesson 6.1’s chart, which counted what an inc
+        earns; every chart in this lesson is real-time minus day-ahead. To bet on the spread sensibly, a trader needs some idea of what it will be tomorrow — and
+        the obvious place to look is what it has been.
       </P>
       <P>
         The simulated history has 120 days of 24 hours each, so 2,880 spreads. The next demonstration arranges them by hour of the day. Each box spans the middle half
@@ -309,10 +316,8 @@ export default function Lesson() {
         <Slider label="Hour" value={hour} min={0} max={23} onChange={(v) => s1.set({ hour: v })} display={fmtHour(hour)} />
         <Readouts
           items={[
-            { label: 'median spread', value: usd(st.median, 2), tone: 'green' },
-            { label: 'mean spread', value: usd(st.mean, 2), tone: 'green' },
             { label: 'days within ±$5', value: pct(within5) },
-            { label: 'largest', value: usd(st.max) },
+            { label: 'mean without days 73 and 120', value: usd(calmMean, 2), tone: 'green' },
           ]}
         />
       </Figure>
@@ -323,32 +328,38 @@ export default function Lesson() {
         expected, and the real-time price lands a few dollars above or below the day-ahead one. In an ordinary hour, the day-ahead price is a good, unbiased forecast.
       </P>
       <P>
-        The evening is different. Select 19:00. Its median is $0.46, but its mean is $47.97. Eighteen of its 120 days are off the scale to the right,
-        up to $2,022, and five to the left, down to −$161: the tails are wide on both sides, and far longer on the right. Across the whole history, the 29 spreads furthest from zero, just 1% of the hours, add up to $16,759 out of a total of
-        $17,298. Without them, the average spread is
-        $0.19. Every one of those 29 hours falls between 17:00 and 22:00, and they come from only 11 days.
+        The evening is different. Select 19:00. Its median is $0.46, but its mean is $47.97 — and without days 73 and 120 the mean is $14.88, so two of the
+        120 days supply more than two-thirds of the hour’s total. Eighteen of its 120 days are off the scale to the right,
+        up to $2,022, and five to the left, down to −$161: the tails are wide on both sides, and far longer on the right. Across the whole history, a 1 MW dec held
+        in every hour would have made $17,298 before costs, and $16,759 of that came from the 29 spreads furthest from zero, just 1% of the hours. Without them, the
+        average spread is $0.19. Every one of those 29 hours falls between 17:00 and 22:00, and they come from only 11 days.
       </P>
       <P>
-        Lesson 5.5 explained where such prices come from: as spare capacity runs out at the evening peak, the scarcity part of the price climbs steeply. The day-ahead
-        market clears on a forecast in which every plant is available. Real time is less kind. On 15 of the 120 days, a plant tripped, and on a hot evening with little capacity to
-        spare, demand coming in even slightly above its forecast is enough to send the price up. At 19:00 on a tight day, a few percent more demand or one plant fewer can multiply the price several times over. A distribution
-        like this one — almost always small, occasionally enormous — is said to have <b>fat tails</b>, and it’s the most important fact about electricity spreads.
+        <a href={lessonHref('4.6')}>Lesson 4.6</a> explained where such prices come from: as spare capacity runs out at the evening peak, the scarcity part of the
+        price climbs steeply. The day-ahead market clears on a forecast in which every plant is available. Real time is less kind: on 15 of the 120 days a plant
+        tripped, and those trips account for almost the whole tail. Nine of the 11 days behind the 29 extreme hours had an outage, among them both evenings above
+        $2,000, when Mill Creek tripped. At 19:00 on a tight day, one plant fewer can multiply the price several times over. The other two days were hot ones with
+        little capacity to spare, on which demand missed its evening forecast by 2% and 6% and moved the price by more than $100. A distribution like this one —
+        almost always small, occasionally enormous — is said to have <b>fat tails</b>, and it’s the most important fact about electricity spreads.
       </P>
 
       <H2>A backtest</H2>
       <P>
-        Here is a simple trading rule. Each day, forecast every hour’s spread from the last few weeks of history: either the average spread in that hour or its median.
+        Here is a simple trading rule. Each day, forecast every hour’s spread from the last few days or weeks of history: either the average spread in that hour or its median.
         Where the forecast is above a threshold, place a 10 MW dec; where it’s below minus the threshold, a 10 MW inc. Pay a transaction cost on every virtual
         megawatt-hour — the fees and uplift charges that operators allocate to virtual bids. Then settle at the day’s actual prices, and move on to the
         next day.
       </P>
       <P>
-        Each day’s positions come only from days before it, so every day of the backtest is <b>out of sample</b>: the rule never sees the outcome it’s being judged
-        on. That’s called a <b>walk-forward</b> test. (It’s still slightly generous. In a real market, bids for tomorrow are due before today’s real-time prices are
-        known, so the most recent day wouldn’t be available yet.) Choose a rule and see what it would have made:
+        Each day’s positions come only from days before it, so every day of the backtest is <b>out of sample</b>: the rule’s forecast never sees the outcome it’s
+        being judged on. We’ll call that a <b>rolling out-of-sample test</b>. (It’s still slightly generous. In a real market, bids for tomorrow are due before
+        today’s real-time prices are known, so the most recent day wouldn’t be available yet.) The <b>lookback window</b> is how many past days each forecast
+        uses. <b>Days traded</b> can confine the rule to days whose demand forecast peaks at 1,500 MW or more, or to days of expensive gas, whose gas multiplier
+        from <a href={lessonHref('6.1')}>Lesson 6.1</a> is at least 1.2. Both are known before bids are due, and on those settings the forecast, too, uses only
+        past days of the same kind. Choose a rule and see what it would have made:
       </P>
 
-      <Figure name="Virtual Trading Backtester · walk-forward" scenario={s2}>
+      <Figure name="Virtual Trading Backtester · rolling backtest" scenario={s2}>
         <Segmented
           label="Forecast"
           value={rule}
@@ -396,12 +407,12 @@ export default function Lesson() {
       <P>
         The <b>threshold</b> is how the rule pays for its costs. With a threshold of zero, it trades almost every hour, and most of those hours are the noise we saw
         earlier: on average they earn nothing and pay the transaction cost every time. Raising the threshold confines the rule to hours where the forecast is large enough
-        to be worth the cost.
+        to be worth the cost. Before you search, decide which forecast should do better, and why.
       </P>
 
       <Challenge
         id="a"
-        question="Find a rule that would have made money after transaction costs of at least $1 per MWh — and would still have made money without its two best days."
+        question="Find a rule that would have made money after transaction costs of at least $1 per MWh — and would still have made at least $10,000 without its two best days."
         solved={solved}
         status={
           cost < 1
@@ -410,15 +421,16 @@ export default function Lesson() {
               ? `This rule trades on only ${bt.tradedDays} days; it needs a bigger sample.`
               : `Right now the rule makes ${usd(sum.total)} after costs, and ${usd(withoutBest)} without its two best days.`
         }
-        success={`Solved. This rule made ${usd(sum.total)} — but it lost money on ${bt.tradedDays - wins} of the ${bt.tradedDays} days it traded, and its two best days contributed ${usd(sum.total - withoutBest)}.`}
+        success={`Solved. Only the trailing mean can do this: it’s the summary that counts the evening’s tail, which the median ignores. Even so, this rule lost money on ${bt.tradedDays - wins} of the ${bt.tradedDays} days it traded, and its two best days contributed ${usd(sum.total - withoutBest)} of its ${usd(sum.total)}.`}
       />
 
       <H2>What the backtest found</H2>
       <P>
         Try the trailing mean over 30 days, a $2 threshold and a $1 cost. It makes $127,343 — and $107,633 of it comes from day 120 and day 73, the two evenings when
-        the real-time price passed $2,000. Without them it makes $19,710, and all but $22 of that comes from the nine other days in the tail. It traded on 90 days and won on 37. Its
-        profit is real, in the sense that it was out of sample, but it isn’t a steady income. It’s the payoff of insurance: the rule decs the evening peak, loses a
-        little on most days, and collects when a plant trips.
+        the real-time price passed $2,000. Without them it makes $19,710, and all but $22 of that comes from the nine other days in the tail. It traded on 90 days
+        and won on 37. Its forecasts were out of sample, but its settings weren’t: we chose the trailing mean, the 30 days and the $2 threshold after seeing the
+        whole history, which is exactly the overfitting that <a href={lessonHref('6.6')}>Lesson 6.6</a> warns about. And even taken at face value, it isn’t a steady
+        income. It’s the payoff of insurance: the rule decs the evening peak, loses a little on most days, and collects when a plant trips.
       </P>
       <P>
         Why does the mean find this when the median doesn’t? Because the average spread in the evening isn’t zero, and the mean is the summary that counts the tail.

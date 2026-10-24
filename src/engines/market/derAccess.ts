@@ -59,7 +59,7 @@ export const DER_RULES: DerRuleSet[] = [
     headroomMW: { energy: 207, reserves: 32 },
     settlement: 'zonal',
     notes:
-      'Dispatched with load-zone shift factors and settled at the load-zone price. Energy, plus Non-Spin and ECRS reserves. Pilot-wide limits: 500 MW for energy (293 MW qualified by Sept. 2026) and 100 MW for Non-Spin and ECRS (ECRS fully subscribed, about 68% of Non-Spin used), and 90% for any one QSE. Each aggregation had to reach 100 kW at the 2023 launch.',
+      'Dispatched with load-zone shift factors and settled at the load-zone price. Energy, plus Non-Spin (30-minute) and ECRS (10-minute) reserves. Pilot-wide limits: 500 MW for energy and 100 MW for Non-Spin and ECRS, and 90% for any one QSE. As of ERCOT’s October 2026 pilot update: 293 MW qualified across nine aggregations, ECRS fully subscribed, about 68% of Non-Spin used. Each aggregation had to reach 100 kW at the 2023 launch.',
     source: 'ERCOT ADER pilot updates (April and October 2026); PUCT announcement of the pilot launch (2023)',
   },
   {
@@ -75,7 +75,7 @@ export const DER_RULES: DerRuleSet[] = [
     services: { energy: 'node' },
     settlement: 'zonal',
     notes:
-      'Distribution-connected storage behind one substation transformer, at least 1 MW, dispatched nodally with state-of-charge visibility and device-level telemetry. Real-time energy only (no reserves, not biddable day-ahead), still settled at the load-zone price on existing interval meters. No pilot-wide MW limit.',
+      'Distribution-connected storage behind one substation transformer, at least 1 MW, dispatched nodally with state-of-charge visibility and device-level telemetry. Real-time energy only (no reserves, not biddable day-ahead), still settled at the load-zone price on existing interval meters. No pilot-wide MW limit. ERCOT’s Board is scheduled to vote on it on Dec. 7, 2026.',
     source: 'ERCOT, “ADER Pilot Phase 4 – ADESR” (WMWG Sept. 25 and WMS Oct. 7, 2026)',
   },
   {
@@ -105,7 +105,7 @@ export const DER_RULES: DerRuleSet[] = [
     services: { energy: 'node', reserves: 'node', capacity: 'zone' },
     settlement: 'nodal',
     notes:
-      'Each aggregation sits at one pricing node, with exceptions: reserve-only aggregations up to 5 MW, capacity aggregations within a zone, and a limited multi-node option capped at 167 MW across PJM. The utility has 60 days to review each aggregation. Enrollment opens Nov. 2027.',
+      'Each aggregation sits at one pricing node, with exceptions: reserve-only aggregations up to 5 MW, capacity aggregations within a zone, and a limited multi-node option capped at 167 MW across PJM. The utility has 60 days to review each aggregation. Takes effect Feb. 1, 2028 (first planned for Feb. 2026); PJM’s schedule as of Oct. 22, 2026 opens enrollment in Nov. 2027.',
     source: 'PJM, “2222: Aggregate PNODE Creation” (DISRS, Sept. 1, 2026); PJM Order 2222 clean-up filing (Oct. 2025)',
   },
   {

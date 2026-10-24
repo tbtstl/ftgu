@@ -11,12 +11,11 @@ import {
   LessonPage,
   Op,
   P,
-  Readouts,
   Segmented,
   Slider,
   Sub,
-  Tn,
   fmt,
+  lessonHref,
   mix,
   pct,
   si,
@@ -42,7 +41,7 @@ function volts(v: number) {
 }
 
 function amps(a: number) {
-  return (a < 100 ? fmt(a, 1) : fmt(a)) + ' A';
+  return (a < 1 ? fmt(a, 2) : a < 100 ? fmt(a, 1) : fmt(a)) + ' A';
 }
 
 function watts(w: number) {
@@ -121,12 +120,32 @@ function Pole({ x }: { x: number }) {
   return <path d={`M${x} 120 L${x} 158 M${x - 9} 124 L${x + 9} 124`} fill="none" stroke="#8d7b6a" strokeWidth={3} />;
 }
 
+export interface TransformerState {
+  supply: 'ac' | 'dc';
+  n1: number;
+  n2: number;
+  load: number;
+  losses: boolean;
+}
+
+export const TRANSFORMER_DEFAULTS: TransformerState = { supply: 'ac', n1: 200, n2: 100, load: 12, losses: false };
+/** The challenge holds the primary at its starting 200 turns and asks for a five-fold current ratio. */
+export const CHALLENGE_PRIMARY = 200;
+export const CURRENT_RATIO = 5;
+
+/** The challenge: with the ideal transformer, the load draws five times the current the supply provides. */
+export function currentRatioSolved(s: TransformerState) {
+  if (s.supply !== 'ac' || s.losses || s.n1 !== CHALLENGE_PRIMARY) return false;
+  const t = transformer({ primaryVolts: SUPPLY_V, primaryTurns: s.n1, secondaryTurns: s.n2, loadOhms: s.load });
+  return t.primaryAmps > 0 && Math.abs(t.secondaryAmps / t.primaryAmps - CURRENT_RATIO) < 1e-9;
+}
+
 export default function Lesson() {
   const play = usePlay(true);
   const [time, setTime] = useState(0); // simulated seconds
   useAnimationFrame((dt) => setTime((x) => x + dt / SLOW), play.playing);
 
-  const s = useScenario('transformer', { supply: 'ac' as 'ac' | 'dc', n1: 200, n2: 100, load: 12, losses: false });
+  const s = useScenario('transformer', TRANSFORMER_DEFAULTS);
   const { supply, n1, n2, load, losses } = s.state;
   const ac = supply === 'ac';
   const t = transformer({
@@ -140,7 +159,6 @@ export default function Lesson() {
   const v2 = ac ? t.secondaryVolts : 0;
   const i2 = ac ? t.secondaryAmps : 0;
   const pOut = ac ? t.outputWatts : 0;
-  const openCircuit = SUPPLY_V * t.ratio;
 
   // Animation: in AC the charges and the flux swing back and forth; in DC the primary current
   // flows steadily, the flux is constant and the secondary is still.
@@ -152,7 +170,7 @@ export default function Lesson() {
   const glow = Math.sqrt(Math.min(1, pOut / 2000));
   const lampFill = mix('#e2e2e2', '#f6c453', glow);
 
-  const solved = ac && losses && load === 12 && fmt(v2) === '120' && fmt(i2, 1) === '10.0';
+  const solved = currentRatioSolved(s.state);
 
   let caption: string;
   if (!ac) {
@@ -161,13 +179,12 @@ export default function Lesson() {
     const how = n2 < n1 ? `steps ${SUPPLY_V} V down to ${volts(v2)}` : n2 > n1 ? `steps ${SUPPLY_V} V up to ${volts(v2)}` : `passes ${SUPPLY_V} V through unchanged`;
     caption = `The transformer ${how}. The load draws ${amps(i2)} and the supply provides ${amps(t.primaryAmps)}: ${watts(t.inputWatts)} goes in, and the same ${watts(pOut)} comes out.`;
   } else {
-    caption = `Of the ${watts(t.inputWatts)} taken from the supply, ${watts(pOut)} reaches the load. The windings turn ${watts(t.copperLossWatts)} into heat and the core ${watts(t.coreLossWatts)}.`;
+    caption = `Of the ${watts(t.inputWatts)} taken from the supply, ${watts(pOut)} reaches the load, an efficiency of ${pct(t.efficiency, 1)}. The windings turn ${watts(t.copperLossWatts)} into heat and the core ${watts(t.coreLossWatts)}.`;
   }
 
   const c = useScenario('chain', { power: '1' as '0.01' | '1' | '100', kv: '345' as '230' | '345' | '500' | '765' });
   const powerMW = Number(c.state.power);
   const chain = deliveryChain(powerMW, { transmissionKV: Number(c.state.kv) });
-  const byId = Object.fromEntries(chain.map((st) => [st.id, st])) as Record<DeliveryStage['id'], DeliveryStage>;
   const powerLabel = powerMW < 1 ? `${fmt(powerMW * 1000)} kW` : `${fmt(powerMW)} MW`;
   const voltLabel = (st: DeliveryStage) => (st.id === 'service' ? '240 / 120 V' : `${fmt(st.volts / 1000, st.volts < 20_000 ? 1 : 0)} kV`);
 
@@ -272,65 +289,11 @@ export default function Lesson() {
             {n2} turns
           </text>
         </svg>
-        <Readouts
-          items={[
-            { label: 'voltage at the load', value: volts(v2), tone: 'blue' },
-            { label: 'current in the load', value: amps(i2), tone: 'orange' },
-            { label: 'power delivered', value: watts(pOut), tone: 'red' },
-            { label: 'efficiency', value: ac ? pct(t.efficiency, 1) : '—' },
-          ]}
-        />
         <Slider label="Turns on the primary" value={n1} min={20} max={400} onChange={(v) => s.set({ n1: v })} display={`${n1} turns`} />
         <Slider label="Turns on the secondary" value={n2} min={20} max={400} onChange={(v) => s.set({ n2: v })} display={`${n2} turns`} />
         <Slider label="Load resistance" tone="violet" value={load} min={2} max={48} onChange={(v) => s.set({ load: v })} display={`${load} Ω`} />
         <div style={{ maxWidth: 400, margin: '0 auto' }}>
           <Checkbox label="Include losses" checked={losses} onChange={(v) => s.set({ losses: v })} />
-        </div>
-        <div className="tbwrap" style={{ maxWidth: 480, margin: '4px auto 0' }}>
-          <table className="tb">
-            <thead>
-              <tr>
-                <th scope="col">
-                  <span className="sr-only">Coil</span>
-                </th>
-                <th scope="col">Turns</th>
-                <th scope="col">
-                  <Tn tone="blue">Voltage</Tn>
-                </th>
-                <th scope="col">
-                  <Tn tone="orange">Current</Tn>
-                </th>
-                <th scope="col">
-                  <Tn tone="red">Power</Tn>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Primary</td>
-                <td>{n1}</td>
-                <td>{volts(SUPPLY_V)}</td>
-                <td>{ac ? amps(t.primaryAmps) : '—'}</td>
-                <td>{ac ? watts(t.inputWatts) : '—'}</td>
-              </tr>
-              <tr>
-                <td>Secondary</td>
-                <td>{n2}</td>
-                <td>{volts(v2)}</td>
-                <td>{amps(i2)}</td>
-                <td>{watts(pOut)}</td>
-              </tr>
-              {ac && losses && (
-                <tr className="tot">
-                  <td>Lost as heat</td>
-                  <td />
-                  <td />
-                  <td />
-                  <td>{watts(t.copperLossWatts + t.coreLossWatts)}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
         </div>
         <Eq label="Voltage ratio compared with turns ratio">
           <Frac
@@ -373,7 +336,7 @@ export default function Lesson() {
       <P>
         Because the same flux passes through both coils, it induces the same voltage in every turn of either one, so each coil’s <K c="voltage">voltage</K> is
         proportional to its number of turns. With 200 turns on the primary and 100 on the secondary, the 240 V supply becomes 120 V. That is the transformer’s defining
-        rule, and the equation under the demonstration checks it: the voltages divide in the same ratio as the turns.
+        rule, and the equation in this demonstration checks it: the voltages divide in the same ratio as the turns.
       </P>
       <P>
         Now look at the currents. The 12 Ω load draws 120 V ÷ 12 Ω = 10 A from the secondary, yet the supply provides only 5 A. A transformer can’t create energy, so
@@ -386,6 +349,22 @@ export default function Lesson() {
         current falls with it. A transformer simply passes along whatever power its load asks for.
       </P>
 
+      <Challenge
+        id="a"
+        question="Keep the primary at 200 turns, with losses switched off. How many turns on the secondary make the load draw five times as much current as the supply provides?"
+        solved={solved}
+        status={
+          !ac
+            ? 'Switch the supply back to AC.'
+            : losses
+              ? 'Switch the losses off for this one: they take a share of the power on its way through.'
+              : n1 !== CHALLENGE_PRIMARY
+                ? `Set the primary back to ${CHALLENGE_PRIMARY} turns.`
+                : `Right now the load draws ${amps(i2)} and the supply provides ${amps(t.primaryAmps)}.`
+        }
+        success={`Solved. ${n2} turns against ${n1} steps the voltage down five-fold, to ${volts(v2)}. The power can’t change on its way through, so the current goes up five-fold: the load draws ${amps(i2)} while the supply provides only ${amps(t.primaryAmps)}, and ${watts(pOut)} passes through.`}
+      />
+
       <H2>Why direct current won’t do</H2>
       <P>
         Switch the supply to DC. A steady voltage drives a steady current through the primary, which makes a steady flux in the core — and a flux that doesn’t change
@@ -395,14 +374,14 @@ export default function Lesson() {
       <P>
         Worse, the primary loses the thing that held its current back. On AC, the changing flux also induces a voltage in the primary itself, opposing the supply, so the
         primary draws only the current its load needs. On DC there’s no such opposition, and the current is limited only by the small resistance of the copper — enough
-        to overheat a real transformer quickly. This is what Lesson 1.2 meant when it said that a transformer does nothing to a steady voltage, and it’s the main reason
+        to overheat a real transformer quickly. This is what <a href={lessonHref('1.2')}>Lesson 1.2</a> meant when it said that a transformer does nothing to a steady voltage, and it’s the main reason
         the grid alternates.
       </P>
 
       <H2>Real transformers lose a little</H2>
       <P>
         Switch back to AC and tick “Include losses.” Two things happen in a real transformer that our ideal one ignored. Its windings have resistance, so the current
-        through them turns some power into heat — the <K c="current">I</K>²<K c="resistance">R</K> loss from Lesson 1.1, here called the copper loss. And the iron core
+        through them turns some power into heat — the <K c="current">I</K>²<K c="resistance">R</K> loss from <a href={lessonHref('1.1')}>Lesson 1.1</a>, here called the copper loss. And the iron core
         warms up as its magnetism is reversed 120 times a second, partly because reversing the iron’s magnetism takes energy and partly because the changing flux induces
         small currents in the iron itself. That’s the core loss, and it’s why cores are built from stacks of thin, insulated steel sheets rather than solid iron.
       </P>
@@ -413,22 +392,8 @@ export default function Lesson() {
       </P>
       <P>
         The winding resistance costs voltage as well as power. Almost 4 V of the 120 V is dropped inside the transformer itself, and the load gets only 116 V. Designers
-        allow for this by giving the secondary a few extra turns:
+        allow for this by giving the secondary a few extra turns: with losses on, 103 turns instead of 100 bring the load back to 120 V.
       </P>
-
-      <Challenge
-        id="a"
-        question="With losses switched on, choose windings that deliver 120 volts to the load while it draws 10.0 amperes."
-        solved={solved}
-        status={
-          !ac
-            ? 'Switch the supply back to AC.'
-            : !losses
-              ? `Losses are switched off. The load gets ${volts(v2)} and draws ${amps(i2)}.`
-              : `The load gets ${volts(v2)} and draws ${amps(i2)}.`
-        }
-        success={`Solved. ${n2} turns against ${n1} would give ${volts(openCircuit)} with no load. The windings drop ${fmt(openCircuit - v2, 1)} V of it, leaving 120 V across the 12 Ω load.`}
-      />
 
       <H2>From power plant to wall socket</H2>
       <P>
@@ -501,10 +466,6 @@ export default function Lesson() {
             </text>
           ))}
         </svg>
-        <Caption>
-          Carrying {powerLabel}, each {fmt(Number(c.state.kv))} kV conductor needs {stageAmps(byId.transmission.amps)}; delivering the same power at 240 V would take{' '}
-          {stageAmps(byId.service.amps)}.
-        </Caption>
       </Figure>
 
       <P>
@@ -514,10 +475,18 @@ export default function Lesson() {
         divided by √3 times the voltage; the next lesson explains why.)
       </P>
       <P>
-        The last transformer, on a pole or in a green metal box on the ground, connects to just one of the feeder’s three phases — 7,967 V measured to the neutral wire —
-        and steps it down 33-fold to 240 V. Delivering a whole megawatt at 240 V would take 4,167 A, which is why this final stage is kept short: each of these
-        transformers serves only a few nearby homes, and each home draws only its own modest share. Inside the home, the 240 V is split into two halves, giving 120 V at
-        the outlets while large appliances use the full 240 V.
+        The voltages quoted for three-phase equipment — 20 kV, 345 kV, 13.8 kV — are <b>line-to-line</b> voltages, measured between two of the three conductors.
+        Measured instead from one conductor to the neutral — the common point of the three phases, which a distribution feeder carries as a fourth wire — the{' '}
+        <b>line-to-neutral</b> voltage is smaller by a factor of √3, about 1.73: on a 13.8 kV feeder, 13,800 V ÷ √3 = 7,967 V. Feeders need that neutral wire, unlike
+        the balanced lines of <a href={lessonHref('1.2')}>Lesson 1.2</a>, because the single-phase loads tapped off them along the way never balance perfectly, and the
+        neutral carries the difference back.
+      </P>
+      <P>
+        The last transformer, on a pole or in a green metal box on the ground, connects between just one of the feeder’s phases and the neutral — those 7,967 V — and
+        steps it down 33-fold to 240 V. Delivering a whole megawatt at 240 V would take 4,167 A, which is why this final stage is kept short: each of these
+        transformers serves only a few nearby homes, and each home draws only its own modest share. The 120 V comes from this transformer too. Its secondary coil has
+        an extra connection at its midpoint, the center tap, which becomes the home’s neutral wire: from either end of the coil to the middle is 120 V, for the
+        outlets, and from end to end is the full 240 V, for large appliances such as ovens and dryers.
       </P>
       <P>
         Every transformer along the way loses a little of the power it handles, and so does every stretch of wire. How much the wires lose, and why the high-voltage stage

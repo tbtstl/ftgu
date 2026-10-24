@@ -210,6 +210,22 @@ export function inBandShare(s: GameState): number {
   return s.elapsed > 0 ? s.inBand / s.elapsed : 0;
 }
 
+/**
+ * The late-evening fall, minutes since midnight: the two hours around the forecast's steepest
+ * hour (21:30–22:30), when demand falls faster than any one gas plant can ramp down.
+ */
+export const EVENING_FALL = { from: 21 * 60, to: 23 * 60 };
+
+/**
+ * Share of the samples between `fromMin` and `toMin` (two simulated minutes apart) that sit
+ * inside the tolerance band, or null if the day hasn't reached the window yet.
+ */
+export function inBandShareBetween(s: GameState, fromMin: number, toMin: number, cfg: GameConfig = GAME): number | null {
+  const h = s.hist.filter((p) => p.t > fromMin + 1e-9 && p.t <= toMin + 1e-9);
+  if (!h.length) return null;
+  return h.filter((p) => Math.abs(p.f - cfg.f0) <= cfg.band + 1e-12).length / h.length;
+}
+
 // ---------------------------------------------------------------------------
 // The island's response to a sudden load step, across time scales.
 

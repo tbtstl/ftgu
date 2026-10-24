@@ -1,10 +1,18 @@
-// Chapter 1: the engines behind lessons 1.3–1.5, and the numbers their prose quotes.
+// Chapter 1: the engines behind lessons 1.1–1.5, and the numbers their prose quotes.
 
 import { describe, expect, it } from 'vitest';
 import { generatorAt, generatorEmf, synchronousRpm, transformer } from '../src/engines/physics/machines';
 import { lineLoss, TYPICAL_OHM_PER_KM } from '../src/engines/physics/losses';
 import { PHASE_OFFSETS_RAD, advanceRotor, coilAgo, coilAt, statorTeeth } from '../src/engines/physics/stator';
 import { conductorAmps, deliveryChain } from '../src/engines/physics/delivery';
+import { HOME_LOAD_KW, SYSTEM_DEMAND, energy } from '../src/model/profiles';
+import { parallelCircuit, seriesCircuit } from '../src/engines/physics/circuits';
+import { rmsFromPeak } from '../src/engines/physics/ac';
+import { LAMP_OHMS, LAMP_VOLTS, mostHeatSolved } from '../src/lessons/ch1/L1_1';
+import { europeSolved, threePhaseSumPeak } from '../src/lessons/ch1/L1_2';
+import { TRACE_RANGE_V, gridVoltageSolved } from '../src/lessons/ch1/L1_3';
+import { CHALLENGE_PRIMARY, TRANSFORMER_DEFAULTS, currentRatioSolved } from '../src/lessons/ch1/L1_4';
+import { LINE_DEFAULTS, reachSolved, startingLossMW, thermalRatingAmps } from '../src/lessons/ch1/L1_5';
 
 const TAU = 2 * Math.PI;
 
@@ -60,6 +68,83 @@ describe('stator', () => {
   });
 });
 
+describe('lesson 1.1 numbers', () => {
+  it('power and energy: toaster, kettle, a home and the region', () => {
+    // A 1,200 W toaster for 30 minutes, and a kettle at twice the power for half as long.
+    expect(1200 * 0.5).toBe(600);
+    expect(2400 * 0.25).toBe(600);
+    // At the illustrative 15 cents per kWh, the toast costs 9 cents.
+    expect((0.6 * 0.15).toFixed(2)).toBe('0.09');
+    // A typical home: between about 0.55 and 2.4 kW through the day, about 29 kWh in all.
+    expect(Math.min(...HOME_LOAD_KW)).toBe(0.55);
+    expect(Math.max(...HOME_LOAD_KW)).toBe(2.4);
+    expect(energy(HOME_LOAD_KW)).toBeCloseTo(28.75, 9);
+    expect(Math.round(energy(HOME_LOAD_KW))).toBe(29);
+    // The region: 1,440 MW at its evening peak, about 26,000 MWh over the reference day.
+    expect(Math.max(...SYSTEM_DEMAND)).toBe(1440);
+    expect(SYSTEM_DEMAND.indexOf(1440)).toBe(19);
+    expect(energy(SYSTEM_DEMAND)).toBe(25952);
+    expect(Math.round(energy(SYSTEM_DEMAND) / 1000) * 1000).toBe(26000);
+  });
+
+  it('the most-heat challenge: unsolved at the start, one answer on the sliders, 24 V and 8 Ω', () => {
+    expect(mostHeatSolved(12, 24)).toBe(false);
+    expect(mostHeatSolved(24, 8)).toBe(true);
+    // Every slider setting: voltage 0–24 V in half volts, resistance 2–100 Ω.
+    const answers: Array<[number, number]> = [];
+    for (let v2 = 0; v2 <= 48; v2++) for (let r = 2; r <= 100; r++) if (mostHeatSolved(v2 / 2, r)) answers.push([v2 / 2, r]);
+    expect(answers).toEqual([[24, 8]]);
+    // The success message: 24 V ÷ 3 A = 8 Ω, and 24 V × 3 A = 72 W.
+    expect(24 / 8).toBe(3);
+    expect(24 * 3).toBe(72);
+    // Going past the limit makes more heat but breaks it: 24 V across 7 Ω is 3.43 A.
+    expect(mostHeatSolved(24, 7)).toBe(false);
+  });
+
+  it('two lamps on 12 V: 6 W each in series, 24 W each in parallel', () => {
+    const s = seriesCircuit(LAMP_VOLTS, LAMP_OHMS);
+    const p = parallelCircuit(LAMP_VOLTS, LAMP_OHMS);
+    expect(LAMP_VOLTS).toBe(12);
+    expect(s.branches[0]).toMatchObject({ volts: 6, amps: 1, watts: 6 });
+    expect(p.branches[0]).toMatchObject({ volts: 12, amps: 2, watts: 24 });
+    expect(p.branches[0].watts / s.branches[0].watts).toBe(4);
+    expect(s.totalAmps).toBe(1);
+    expect(p.totalAmps).toBe(4);
+  });
+});
+
+describe('lesson 1.2 numbers', () => {
+  it('a 60 Hz cycle lasts about 16.7 ms; a 170 V peak is 120 V RMS', () => {
+    expect((1000 / 60).toFixed(1)).toBe('16.7');
+    expect(Math.round(rmsFromPeak(170))).toBe(120);
+  });
+
+  it('the European-supply challenge: unsolved at the start, solved only by 325 V at 50 Hz', () => {
+    expect(europeSolved(60, 170)).toBe(false);
+    expect(europeSolved(50, 325)).toBe(true);
+    const answers: Array<[number, number]> = [];
+    for (let f = 10; f <= 120; f++) for (let amp = 0; amp <= 340; amp++) if (europeSolved(f, amp)) answers.push([f, amp]);
+    expect(answers).toEqual([[50, 325]]);
+    // The success message: 230 × √2 ≈ 325, and a 50 Hz cycle lasts 20 ms.
+    expect(Math.round(230 * Math.SQRT2)).toBe(325);
+    expect(1000 / 50).toBe(20);
+    // 230 V is not reachable by setting the peak to 230.
+    expect(europeSolved(50, 230)).toBe(false);
+  });
+
+  it('three phases: zero sum only at 120°, one phase at 180°, and the sum stays on the ±340 V scale', () => {
+    expect(threePhaseSumPeak(120)).toBeCloseTo(0, 12);
+    expect(threePhaseSumPeak(180)).toBeCloseTo(1, 12);
+    let max = 0;
+    for (let s = 60; s <= 180; s++) {
+      const m = threePhaseSumPeak(s);
+      max = Math.max(max, m);
+      if (s !== 120) expect(Math.round(170 * m)).toBeGreaterThan(0);
+    }
+    expect(170 * max).toBeLessThanOrEqual(340 + 1e-9);
+  });
+});
+
 describe('lesson 1.3 numbers', () => {
   const g = (turns: number, fieldTesla: number, rpm: number) => generatorEmf({ turns, fieldTesla, areaM2: 0.02, rpm });
 
@@ -70,17 +155,41 @@ describe('lesson 1.3 numbers', () => {
     expect(Math.round(g(100, 0.5, 3600).peakVolts)).toBe(377);
   });
 
-  it('the 60 Hz, 240 V challenge is reachable on the sliders', () => {
+  it('the trace’s fixed scale fits the start doubled in any one setting', () => {
+    expect(TRACE_RANGE_V).toBe(500);
+    const start = g(100, 0.5, 1800).peakVolts;
+    for (const doubled of [g(200, 0.5, 1800), g(100, 1, 1800), g(100, 0.5, 3600)]) {
+      expect(doubled.peakVolts).toBeCloseTo(2 * start, 9);
+      expect(doubled.peakVolts).toBeLessThan(TRACE_RANGE_V);
+    }
+    expect(g(100, 0.45, 3600).peakVolts).toBeLessThan(TRACE_RANGE_V);
+  });
+
+  it('the challenge predicate: unsolved at the start, solved at 0.45 T and 3,600 rpm, and only with 100 turns', () => {
+    expect(gridVoltageSolved({ field: 0.5, rpm: 1800, turns: 100 })).toBe(false);
+    expect(gridVoltageSolved({ field: 0.45, rpm: 3600, turns: 100 })).toBe(true);
+    // 90 turns at 0.5 T would also give 240 V RMS, but the challenge holds the coil at 100 turns.
+    expect(Math.abs(g(90, 0.5, 3600).rmsVolts - 240)).toBeLessThan(0.5);
+    expect(gridVoltageSolved({ field: 0.5, rpm: 3600, turns: 90 })).toBe(false);
+    // The success message: 240 V × √2 ≈ 339 V.
+    expect(Math.round(240 * Math.SQRT2)).toBe(339);
+  });
+
+  it('the 60 Hz, 240 V challenge at 100 turns needs the field slider: 0.45 T at 3,600 rpm', () => {
+    // Every slider setting with the coil at 100 turns (two poles, as in the figure).
     const solutions: Array<[number, number]> = [];
-    for (let turns = 10; turns <= 200; turns += 10) {
+    for (let rpm = 0; rpm <= 4800; rpm += 60) {
       for (let k = 0; k <= 20; k++) {
-        const B = k * 0.05;
-        if (Math.abs(g(turns, B, 3600).rmsVolts - 240) < 0.5) solutions.push([turns, B]);
+        const B = Number((k * 0.05).toFixed(2));
+        const e = g(100, B, rpm);
+        if (Math.abs(e.freqHz - 60) < 1e-9 && Math.abs(e.rmsVolts - 240) < 0.5) solutions.push([rpm, B]);
       }
     }
-    expect(solutions.length).toBeGreaterThan(3);
-    expect(solutions.some(([n, b]) => n === 90 && Math.abs(b - 0.5) < 1e-9)).toBe(true);
-    // At the starting settings it isn't already solved.
+    expect(solutions).toEqual([[3600, 0.45]]);
+    expect(Math.round(g(100, 0.45, 3600).peakVolts)).toBe(339);
+    expect(Math.round(g(100, 0.45, 3600).rmsVolts)).toBe(240);
+    // The starting field (0.5 T) at 3,600 rpm is too high, so the field slider has to move.
+    expect(Math.abs(g(100, 0.5, 3600).rmsVolts - 240)).toBeGreaterThan(0.5);
     expect(Math.abs(g(100, 0.5, 1800).rmsVolts - 240)).toBeGreaterThan(0.5);
   });
 
@@ -115,13 +224,30 @@ describe('lesson 1.4 numbers', () => {
     expect(120 - t.secondaryVolts).toBeLessThan(4);
   });
 
-  it('the 120 V, 10.0 A challenge is reachable with whole turns', () => {
-    const ok = (n1: number, n2: number) => {
-      const t = lossy(n1, n2);
-      return Math.round(t.secondaryVolts) === 120 && (Math.round(t.secondaryAmps * 10) / 10).toFixed(1) === '10.0';
-    };
-    expect(ok(200, 103)).toBe(true);
-    expect(ok(200, 100)).toBe(false);
+  it('with losses, 103 turns instead of 100 bring the load back to 120 V', () => {
+    expect(Math.round(lossy(200, 103).secondaryVolts)).toBe(120);
+    expect(Math.round(lossy(200, 100).secondaryVolts)).toBe(116);
+  });
+
+  it('the five-fold current challenge: unsolved at the start, solved only by 40 turns', () => {
+    expect(currentRatioSolved(TRANSFORMER_DEFAULTS)).toBe(false);
+    expect(currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n2: 40 })).toBe(true);
+    const answers: number[] = [];
+    for (let n2 = 20; n2 <= 400; n2++) if (currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n2 })) answers.push(n2);
+    expect(answers).toEqual([40]);
+    // Only the turns ratio matters, not the load.
+    for (let load = 2; load <= 48; load++) expect(currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n2: 40, load })).toBe(true);
+    // Not with losses, on DC, or with a different primary.
+    expect(currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n2: 40, losses: true })).toBe(false);
+    expect(currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n2: 40, supply: 'dc' })).toBe(false);
+    expect(currentRatioSolved({ ...TRANSFORMER_DEFAULTS, n1: 400, n2: 80 })).toBe(false);
+    expect(CHALLENGE_PRIMARY).toBe(200);
+    // The success message at the 12 Ω load: 48 V, 4.0 A out, 0.8 A in, 192 W.
+    const t = transformer({ primaryVolts: 240, primaryTurns: 200, secondaryTurns: 40, loadOhms: 12 });
+    expect(t.secondaryVolts).toBeCloseTo(48, 9);
+    expect(t.secondaryAmps).toBeCloseTo(4, 9);
+    expect(t.primaryAmps).toBeCloseTo(0.8, 9);
+    expect(t.outputWatts).toBeCloseTo(192, 9);
   });
 
   it('the chain from generator to home', () => {
@@ -136,6 +262,7 @@ describe('lesson 1.4 numbers', () => {
     expect(c[3].ratio).toBeCloseTo(0.2);
     expect(1 / c[4].ratio!).toBeCloseTo(33.2, 1);
     expect(Math.round(13800 / Math.sqrt(3))).toBe(7967);
+    expect(Math.sqrt(3).toFixed(2)).toBe('1.73');
     expect(conductorAmps(1e6, 240, false)).toBeCloseTo(4166.67, 1);
   });
 });
@@ -157,6 +284,10 @@ describe('lesson 1.5 numbers', () => {
     expect(at(345).lossMW.toFixed(1)).toBe('1.3');
     expect(at(69).lossMW / at(345).lossMW).toBeCloseTo(25);
     expect(at(69, 0.15, 100, 200).lossMW / at(69).lossMW).toBeCloseTo(2);
+    // Twice the power at the same voltage: four times the loss, twice the share.
+    expect((at(69).lossShare * 100).toFixed(1)).toBe('31.5');
+    expect((at(69, 0.15, 200).lossShare * 100).toFixed(0)).toBe('63');
+    expect(at(69, 0.15, 200).lossMW / at(69).lossMW).toBeCloseTo(4);
   });
 
   it('500 MW over 300 km with typical conductors', () => {
@@ -170,11 +301,50 @@ describe('lesson 1.5 numbers', () => {
     expect((share(765).lossShare * 100).toFixed(1)).toBe('0.3');
   });
 
-  it('the under-2% challenge is reachable on the sliders, but not at 230 kV', () => {
-    const resistances = Array.from({ length: 59 }, (_, i) => 0.01 + i * 0.005);
-    const best = (kV: number) => Math.min(...resistances.map((r) => lineLoss({ sendMW: 500, kV, lengthKm: 300, ohmPerKm: r }).lossShare));
-    expect(best(230)).toBeGreaterThan(0.02);
-    expect(best(345)).toBeLessThan(0.02);
-    expect(lineLoss({ sendMW: 500, kV: 500, lengthKm: 300, ohmPerKm: 0.03 }).lossShare).toBeLessThan(0.02);
+  it('the voltage-class chart marks losses above 20% impractical', () => {
+    const IMPRACTICAL = 0.2;
+    const row = (kV: number, ohmPerKm: number) => lineLoss({ sendMW: 500, kV, lengthKm: 300, ohmPerKm });
+    const typical = [69, 138, 230, 345, 500, 765].map((kV) => row(kV, TYPICAL_OHM_PER_KM[kV]).lossShare);
+    // 69 kV can't be done, 138 kV (63%) is impractical, 230 kV (14%) and up are drawn.
+    expect(typical[0]).toBe(1);
+    expect(typical[1]).toBeGreaterThan(IMPRACTICAL);
+    expect(typical.slice(2).every((x) => x <= IMPRACTICAL)).toBe(true);
+    // With the same 0.03 Ω/km conductor everywhere, 69 and 138 kV are impractical and the loss falls with the square of the voltage.
+    const same = [69, 138, 230, 345, 500, 765].map((kV) => row(kV, 0.03).lossShare);
+    expect(same[0]).toBeGreaterThan(IMPRACTICAL);
+    expect(same[0]).toBeLessThan(1);
+    expect(same[1]).toBeGreaterThan(IMPRACTICAL);
+    expect(same.slice(2).every((x) => x <= IMPRACTICAL)).toBe(true);
+    expect(row(230, 0.03).lossMW / row(460, 0.03).lossMW).toBeCloseTo(4);
+  });
+
+  it('thermal rating: 600 A for the starting conductor; 837 A is over it, 418 A within it', () => {
+    expect(thermalRatingAmps(0.15)).toBeCloseTo(600, 9);
+    expect(at(69).amps).toBeGreaterThan(thermalRatingAmps(0.15));
+    expect(at(138).amps).toBeLessThan(thermalRatingAmps(0.15));
+    // Thicker conductors (less resistance) are rated for more current.
+    expect(thermalRatingAmps(0.03)).toBeGreaterThan(thermalRatingAmps(0.15));
+    expect(thermalRatingAmps(0.3)).toBeLessThan(thermalRatingAmps(0.15));
+  });
+
+  it('the reach challenge: unsolved at the start, solved only by 400 km at 138 kV', () => {
+    expect(startingLossMW().toFixed(1)).toBe('31.5');
+    expect(reachSolved(LINE_DEFAULTS)).toBe(false);
+    expect(reachSolved({ ...LINE_DEFAULTS, kvIdx: 1, lengthKm: 400 })).toBe(true);
+    // Every length on the slider (10–500 km) at 138 kV.
+    const answers: number[] = [];
+    for (let km = 10; km <= 500; km += 10) if (reachSolved({ ...LINE_DEFAULTS, kvIdx: 1, lengthKm: km })) answers.push(km);
+    expect(answers).toEqual([400]);
+    // Doubling the power instead also matches the loss, but the challenge holds it at 100 MW.
+    expect(at(138, 0.15, 200).lossMW).toBeCloseTo(startingLossMW(), 9);
+    expect(reachSolved({ ...LINE_DEFAULTS, kvIdx: 1, sendMW: 200 })).toBe(false);
+    expect(reachSolved({ ...LINE_DEFAULTS, kvIdx: 1, lengthKm: 400, ohmPerKm: 0.2 })).toBe(false);
+    // At 138 kV the starting line loses 7.9 MW, a quarter, so it takes four times the length.
+    expect(at(138).lossMW * 4).toBeCloseTo(startingLossMW(), 9);
+  });
+
+  it('the voltage-class caption: at 500 MW over 300 km, 500 kV is the lowest under 2%', () => {
+    const share = (kV: number) => lineLoss({ sendMW: 500, kV, lengthKm: 300, ohmPerKm: TYPICAL_OHM_PER_KM[kV] }).lossShare;
+    expect([69, 138, 230, 345, 500, 765].find((kV) => share(kV) < 0.02)).toBe(500);
   });
 });

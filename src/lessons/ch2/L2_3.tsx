@@ -33,8 +33,15 @@ const LOAD_COLOR: Record<LoadKind, string> = {
   dataCenter: '#9f86c9',
 };
 const RANGE: Record<Exclude<LoadKind, 'dataCenter'>, number> = { residential: 25, commercial: 20, industrial: 15 };
-const FEEDER_AMPS = 600;
-type FeederKV = '4.16' | '13.8' | '34.5';
+/** Each feeder's current limit, and the distribution voltage, so each feeder carries about 14 MVA. */
+export const FEEDER_AMPS = 600;
+export const FEEDER_KV = 13.8;
+export const FEEDER_MVA = circuitMVA(FEEDER_KV, FEEDER_AMPS);
+
+/** Feeders each kind of customer needs at its own peak. */
+export function feederCount(peakMW: number): number {
+  return peakMW > 0 ? Math.ceil(peakMW / FEEDER_MVA - 1e-9) : 0;
+}
 
 export interface SubstationState {
   residential: number;
@@ -44,26 +51,34 @@ export interface SubstationState {
   count: number;
   rating: number;
   outage: 'all' | 'one';
-  feederKV: FeederKV;
 }
 
 export const SUBSTATION_DEFAULTS: SubstationState = {
   residential: 16,
   commercial: 12,
   industrial: 6,
-  dataCenter: 0,
+  dataCenter: 20,
   count: 2,
   rating: 40,
   outage: 'all',
-  feederKV: '13.8',
 };
 export const COUNT_RANGE = [1, 4] as const;
 export const RATING_RANGE = [10, 60, 5] as const;
 export const DATA_CENTER_MW = 20;
 
-function peaks(s: SubstationState): LoadMix {
-  return { residential: s.residential, commercial: s.commercial, industrial: s.industrial, dataCenter: s.dataCenter };
+/**
+ * The substation's existing customers: the first figure's opening peaks. The transformer figure always serves these (plus the
+ * data center), so its numbers match the prose whatever the first figure has been set to.
+ */
+export const EXISTING_PEAKS = { residential: SUBSTATION_DEFAULTS.residential, commercial: SUBSTATION_DEFAULTS.commercial, industrial: SUBSTATION_DEFAULTS.industrial };
+
+function peaks(s: Pick<SubstationState, 'dataCenter'>): LoadMix {
+  return { ...EXISTING_PEAKS, dataCenter: s.dataCenter };
 }
+
+/** The substation before the data center: the existing customers on the default two 40 MVA transformers (the prose's 37% and 73%). */
+export const EXISTING_LOAD = substationLoad({ ...EXISTING_PEAKS, dataCenter: 0 });
+export const EXISTING_CHECK = checkTransformers(EXISTING_LOAD.total, SUBSTATION_DEFAULTS.count, SUBSTATION_DEFAULTS.rating);
 
 /** The smallest installed transformer capacity (count × rating on the sliders' grid) that passes N-1 for these loads. */
 export function minimumInstalled(s: SubstationState): { installed: number; count: number; rating: number } | null {
@@ -122,12 +137,7 @@ export default function Lesson() {
   const uNow = inService > 0 ? perXfmr / s.rating : L2.peak > 0 ? Infinity : 0;
   const over = L2.total.map((v, h) => (v > capNow + 1e-9 ? h : -1)).filter((h) => h >= 0);
   const bands = over.map((h) => ({ from: h, to: h + 1, color: 'rgba(231, 91, 85, 0.14)' }));
-  const feederMVA = circuitMVA(Number(s.feederKV), FEEDER_AMPS);
-  const feeders = LOAD_KINDS.map((k) => {
-    const pk = all[k];
-    const n = pk > 0 ? Math.ceil(pk / feederMVA - 1e-9) : 0;
-    return { k, n, u: n > 0 ? pk / (n * feederMVA) : 0 };
-  });
+  const feeders = LOAD_KINDS.map((k) => ({ k, n: feederCount(all[k]) }));
   const totalFeeders = feeders.reduce((t, f) => t + f.n, 0);
   const best = minimumInstalled(s);
   const solved = substationSolved(s);
@@ -160,7 +170,7 @@ export default function Lesson() {
     <LessonPage id="2.3">
       <P>
         Every customer in the previous lesson hung from a feeder, and every feeder from a substation. A distribution substation is a fenced yard of equipment: a{' '}
-        <b>bus</b> — a set of heavy conductors — at transmission voltage, the transformers that step the voltage down, a second bus at distribution voltage, and a circuit
+        <b>bus</b> — a set of heavy conductors — at the voltage of the line that feeds it, the transformers that step the voltage down, a second bus at distribution voltage, and a circuit
         breaker for each feeder leaving the yard. Designing one comes down to a single question: how much transformer capacity does it need?
       </P>
       <P>
@@ -180,7 +190,7 @@ export default function Lesson() {
         <TimeChart
           ariaLabel={`Substation load over the day. Combined peak ${mw(L1.peak, 1)} at ${hour(L1.peakHour)}; the three customer types’ own peaks add up to ${mw(L1.sumOfPeaks)}.`}
           stack={types1.map((k) => ({ values: by1[k], color: LOAD_COLOR[k] }))}
-          refLines={L1.sumOfPeaks > 0 ? [{ y: L1.sumOfPeaks, color: '#333', dash: '6 4', label: `sum of peaks ${mw(L1.sumOfPeaks)}` }] : []}
+          refLines={L1.sumOfPeaks > 0 ? [{ y: L1.sumOfPeaks, color: '#333', dash: '6 4' }] : []}
           yMin={0}
           yMax={60}
           yLabel="MW"
@@ -211,8 +221,8 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Homes peak at 7 p.m., businesses in the late morning, and industry is busiest from mid-morning to mid-afternoon. Because they don’t peak together, the combined load
-        peaks at 29.4 MW at 5 p.m., well below the 34 MW that the three peaks add up to. The ratio between the two is the <b>diversity factor</b>, 1.16 here, and it is one
+        Homes peak at 19:00, businesses in the late morning, and industry is busiest from mid-morning to mid-afternoon. Because they don’t peak together, the combined load
+        peaks at 29.4 MW at 17:00, well below the 34 MW that the three peaks add up to. The ratio between the two is the <b>diversity factor</b>, 1.16 here, and it is one
         of the most useful numbers in distribution planning: the equipment has to be sized for the combined peak, not for the sum of everyone’s peaks. Set the substation to
         serve nothing but homes and the diversity factor drops to 1, because there’s nothing to offset their evening peak.
       </P>
@@ -230,7 +240,7 @@ export default function Lesson() {
         load uses one MVA of transformer capacity.
       </P>
       <P>
-        Our substation has two 40 MVA transformers sharing the load. At the 5 p.m. peak each carries 14.7 MVA, only 37% of its rating. That looks wasteful until you ask
+        Our substation has two 40 MVA transformers sharing the load. At the 17:00 peak each carries 14.7 MVA, only 37% of its rating. That looks wasteful until you ask
         what happens when one of them fails. A large transformer can take weeks or months to repair or replace, so planners insist that the substation must still carry its
         peak with any one transformer out of service. This is the <b>N-1 rule</b>: with N pieces of equipment, the system must work on N − 1 of them. With one transformer
         out, the other carries everything — 73% of its rating:
@@ -240,13 +250,16 @@ export default function Lesson() {
         <Op>=</Op>
         <Frac top="peak load" bottom={<>(N − 1) × rating</>} />
         <Op>=</Op>
-        <Frac top={mw(L2.peak, 1)} bottom={<>{Math.max(0, s.count - 1)} × {s.rating} MVA</>} />
+        <Frac top={mw(EXISTING_LOAD.peak, 1)} bottom={<>{SUBSTATION_DEFAULTS.count - 1} × {SUBSTATION_DEFAULTS.rating} MVA</>} />
         <Op>=</Op>
-        <K tone={chk.n1Secure ? 'ink' : 'red'}>{Number.isFinite(chk.n1Utilization) ? pct(chk.n1Utilization) : '—'}</K>
+        <K tone={EXISTING_CHECK.n1Secure ? 'ink' : 'red'}>{pct(EXISTING_CHECK.n1Utilization)}</K>
       </Eq>
       <P>
         Now a developer asks to connect a 20 MW data center — modest, as data centers go, since the largest draw hundreds of megawatts. The next demonstration shows the
-        whole substation, from the 138 kV bus at the top to the feeders at the bottom, with the data center added. Switch a transformer out to test the N-1 rule:
+        whole substation, serving the customers we started with plus the data center, from the 138 kV bus at the top to the feeders at the bottom. That bus isn’t connected to the region’s 345 and
+        230 kV lines directly. Like many distribution substations, ours is fed by <b>subtransmission</b>: lines at 69–138 kV, a step between the main transmission grid and
+        distribution, that carry power from a larger transmission substation out to the distribution substations around a city. Switch a transformer out to test the
+        N-1 rule:
       </P>
 
       <Figure name="Substation Designer · transformers" scenario={sc}>
@@ -261,9 +274,9 @@ export default function Lesson() {
         />
         <svg
           className="diagram"
-          viewBox="0 0 640 274"
+          viewBox="0 0 640 250"
           role="img"
-          aria-label={`Substation with ${s.count} transformers of ${s.rating} MVA${s.outage === 'one' ? ', one out of service' : ''}. Peak load ${mw(L2.peak, 1)}; ${inService > 0 ? `each transformer in service carries ${pct(uNow)} of its rating` : 'no transformer in service'}. ${totalFeeders} feeders at ${s.feederKV} kV.`}
+          aria-label={`Substation with ${s.count} transformers of ${s.rating} MVA${s.outage === 'one' ? ', one out of service' : ''}. Peak load ${mw(L2.peak, 1)}; ${inService > 0 ? `each transformer in service carries ${pct(uNow)} of its rating` : 'no transformer in service'}. ${totalFeeders} feeders at ${FEEDER_KV} kV.`}
         >
           <text className="ax" x={30} y={28}>
             138 kV bus
@@ -287,13 +300,13 @@ export default function Lesson() {
             );
           })}
           <text className="ax" x={30} y={142}>
-            {s.feederKV} kV bus
+            {FEEDER_KV} kV bus
           </text>
           <line x1={30} y1={150} x2={610} y2={150} stroke="#555" strokeWidth={5} strokeLinecap="round" />
           {feederXs.map((f, i) => (
             <g key={i}>
-              <line x1={f.x} y1={150} x2={f.x} y2={226} stroke={LOAD_COLOR[f.k]} strokeWidth={5} />
-              <path d={`M${f.x} 226 L${f.x - 6} 216 M${f.x} 226 L${f.x + 6} 216`} stroke={LOAD_COLOR[f.k]} strokeWidth={2.5} fill="none" />
+              <line x1={f.x} y1={150} x2={f.x} y2={206} stroke={LOAD_COLOR[f.k]} strokeWidth={5} />
+              <path d={`M${f.x} 206 L${f.x - 6} 196 M${f.x} 206 L${f.x + 6} 196`} stroke={LOAD_COLOR[f.k]} strokeWidth={2.5} fill="none" />
               <rect x={f.x - 6} y={162} width={12} height={12} fill="#444" />
             </g>
           ))}
@@ -302,19 +315,16 @@ export default function Lesson() {
             if (mid === undefined) return null;
             return (
               <g key={f.k}>
-                <text className="lab" x={mid} y={248} textAnchor="middle">
+                <text className="lab" x={mid} y={226} textAnchor="middle">
                   {f.k === 'dataCenter' ? 'Data center' : LOAD_LABEL[f.k]}
                 </text>
-                <text className="ax ax-m" x={mid} y={266}>
+                <text className="ax ax-m" x={mid} y={243}>
                   {f.n} feeder{f.n > 1 ? 's' : ''}
-                  {f.n > 8 ? ' (8 drawn)' : ''} · {pct(f.u)} at peak
+                  {f.n > 8 ? ' (8 drawn)' : ''}
                 </text>
               </g>
             );
           })}
-          <text className="ax ax-e" x={610} y={142}>
-            each feeder rated {fmt(feederMVA, 1)} MVA
-          </text>
         </svg>
         <Legend
           items={[
@@ -327,17 +337,17 @@ export default function Lesson() {
           ariaLabel={`Load over the day against ${fmt(capNow)} MVA of transformer capacity in service; ${over.length} hours over.`}
           stack={LOAD_KINDS.map((k) => ({ values: by2[k], color: LOAD_COLOR[k] }))}
           refLines={[
-            ...(chk.installed <= 100 ? [{ y: chk.installed, color: '#6b6b6b', dash: '6 4', label: `all transformers ${fmt(chk.installed)} MVA` }] : []),
-            ...(chk.firm <= 100 && chk.firm !== chk.installed ? [{ y: chk.firm, color: '#c4382f', dash: '3 4', label: `one out ${fmt(chk.firm)} MVA` }] : []),
+            ...(chk.installed <= 100 ? [{ y: chk.installed, color: '#6b6b6b', dash: '6 4' }] : []),
+            ...(chk.firm <= 100 && chk.firm !== chk.installed ? [{ y: chk.firm, color: '#c4382f', dash: '3 4' }] : []),
           ]}
           bands={bands}
           yMin={0}
           yMax={100}
           yLabel="MW"
-          height={220}
+          height={210}
         />
         <Caption>{cap2}</Caption>
-        <Controls columns={2}>
+        <Controls>
           <Slider label="Data center" value={s.dataCenter} min={0} max={40} step={5} onChange={(v) => sc.set({ dataCenter: v })} display={mw(s.dataCenter)} />
           <Slider label="Transformers" value={s.count} min={COUNT_RANGE[0]} max={COUNT_RANGE[1]} onChange={(v) => sc.set({ count: v })} display={String(s.count)} />
           <Slider
@@ -350,29 +360,23 @@ export default function Lesson() {
             display={`${s.rating} MVA`}
           />
         </Controls>
-        <Segmented
-          label="Distribution voltage"
-          value={s.feederKV}
-          onChange={(v) => sc.set({ feederKV: v })}
-          options={(['4.16', '13.8', '34.5'] as FeederKV[]).map((v) => ({ value: v, label: `${v} kV feeders` }))}
-        />
         <Readouts
           items={[
             { label: `peak load, at ${hour(L2.peakHour)}`, value: mw(L2.peak, 1) },
             { label: 'installed', value: `${fmt(chk.installed)} MVA` },
-            { label: 'left with one out', value: `${fmt(chk.firm)} MVA`, tone: chk.n1Secure ? undefined : 'red' },
-            { label: 'passes N-1', value: chk.n1Secure ? 'yes' : 'no', tone: chk.n1Secure ? 'green' : 'red' },
+            { label: chk.n1Secure ? 'left with one out: passes N-1' : 'left with one out: fails N-1', value: `${fmt(chk.firm)} MVA`, tone: chk.n1Secure ? 'green' : 'red' },
           ]}
         />
       </Figure>
 
       <P>
-        The data center adds almost its full 20 MW to every hour, because it runs flat out day and night; diversity does nothing to soften it. The peak rises to 49.0 MW
-        at 5 p.m., and with one of the two 40 MVA transformers out, the other would have to carry 122% of its rating. The substation fails the N-1 test.
+        The data center adds almost its full 20 MW to every hour — slide it to zero and back to see — because it runs flat out day and night;
+        diversity does nothing to soften it. The peak rises to 49.0 MW
+        at 17:00, and with one of the two 40 MVA transformers out, the other would have to carry 122% of its rating. The substation fails the N-1 test.
       </P>
       <Challenge
         id="a"
-        question={`Connect the ${DATA_CENTER_MW} MW data center, and choose the number and rating of the transformers so that the substation passes the N-1 test with as little installed transformer capacity as possible.`}
+        question={`With the ${DATA_CENTER_MW} MW data center connected, choose the number and rating of the transformers so that the substation passes the N-1 test with as little installed transformer capacity as possible.`}
         solved={solved}
         status={
           s.dataCenter !== DATA_CENTER_MW
@@ -390,13 +394,13 @@ export default function Lesson() {
       <P>
         More, smaller transformers make the N-1 rule cheaper to satisfy, though each one brings its own foundation, breakers and maintenance, and many substations have
         two or three. Planners have other ways to pass the test, too. A transformer can carry somewhat more than its nameplate rating for a few hours if it cools down
-        afterwards, and part of the load can often be moved to a neighboring substation through feeder ties like the one in Lesson 2.2. The same logic shapes the feeders. Each feeder out of the substation can carry only so much current — we’ve assumed 600 A —
-        so the feeders’ capacity in MVA depends on the distribution voltage. At 13.8 kV a feeder carries about 14 MVA, and the data center needs two of its own. Switch to
-        4.16 kV and each feeder carries less than a third as much, so the same customers need more than twice as many feeders.
+        afterwards, and part of the load can often be moved to a neighboring substation through feeder ties like the one in <a href={lessonHref('2.2')}>Lesson 2.2</a>.
+        The feeders have their own limits. Each one leaving the substation can carry only so much current — we’ve assumed {FEEDER_AMPS} A, about{' '}
+        {fmt(FEEDER_MVA)} MVA at {FEEDER_KV} kV — which is why the diagram gives the {DATA_CENTER_MW} MW data center two feeders of its own.
       </P>
       <P>
-        Seen from the transmission grid, the whole yard is just a single number: its demand. Add up all of Metro’s substations and you get the 55% of the region’s
-        demand that sits at the Metro node of our transmission map. In the next lesson we’ll stop following single paths and ask how power finds its way across
+        Seen from the transmission grid, the whole yard is just a single number: its demand. Add up all of Metro’s substations and you get Metro’s demand, 55% of the
+        region’s, which the transmission grid delivers over the three lines into Metro we met in <a href={lessonHref('2.2')}>Lesson 2.2</a>. In the next lesson we’ll stop following single paths and ask how power finds its way across
         that whole map, where — unlike on the radial feeders of <a href={lessonHref('2.2')}>Lesson 2.2</a> — it always has more than one way to go, and nobody gets
         to choose which.
       </P>

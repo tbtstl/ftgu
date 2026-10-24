@@ -51,9 +51,35 @@ const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 const GRID = '#8a8a8a';
 const EXPORT = '#c99a1e';
 
+/** The home battery's power rating, kW: a common home unit stores about 13.5 kWh and delivers 5 kW. */
+const BATTERY_KW = 5;
+/** The backup reserve used in the bill demonstration and the prose, share of capacity. */
+const RESERVE = 0.2;
+
 // Reference cases quoted in the prose: 6 kW of panels, with and without a 13.5 kWh / 5 kW battery.
-const home = (pvKW: number, batteryKWh: number, strategy: HomeStrategy = 'self') =>
-  simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW, batteryKW: batteryKWh > 0 ? 5 : 0, batteryKWh, efficiency: EFFICIENCY, reserve: 0.2, strategy });
+const home = (pvKW: number, batteryKWh: number, strategy: HomeStrategy = 'self', reserve = RESERVE, efficiency = EFFICIENCY) =>
+  simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW, batteryKW: batteryKWh > 0 ? BATTERY_KW : 0, batteryKWh, efficiency, reserve, strategy });
+
+/** Challenge 7.1a: meet at least 90% of the house’s use on site and use at least 80% of the solar at home. */
+export const SIZING_GOAL = { sufficiency: 0.9, consumption: 0.8 };
+export function sizingSolved(pv: number, batteryKWh: number, reserve: number): boolean {
+  if (!(batteryKWh > 0) || !(pv > 0)) return false;
+  const d = home(pv, batteryKWh, 'self', reserve);
+  return d.selfSufficiency >= SIZING_GOAL.sufficiency - 1e-9 && d.selfConsumption >= SIZING_GOAL.consumption - 1e-9;
+}
+/**
+ * The panel sizes, on the slider's 0.5 kW steps, for which some battery on the slider (with no
+ * backup reserve, the most favorable case) meets the sizing goal: quoted in the challenge’s answer.
+ */
+export const SIZING_PV = (() => {
+  const ok: number[] = [];
+  for (let pv = 0.5; pv <= 12 + 1e-9; pv += 0.5) {
+    let any = false;
+    for (let k = 0.5; k <= 30 + 1e-9 && !any; k += 0.5) any = sizingSolved(pv, k, 0);
+    if (any) ok.push(pv);
+  }
+  return { min: Math.min(...ok), max: Math.max(...ok) };
+})();
 const REF_GRID = home(0, 0);
 const REF_PV = home(6, 0);
 const REF_BAT = home(6, 13.5);
@@ -65,6 +91,10 @@ const REF = {
   touGrid: homeBill(REF_GRID, tariff('tou', 'nem')).net,
   touNemPv: homeBill(REF_PV, tariff('tou', 'nem')).net,
   touRateSaving: homeBill(REF_PV, tariff('tou', 'rate')).net - homeBill(REF_BAT, tariff('tou', 'rate')).net,
+  // Largest gap between the two battery strategies' bills under time-of-use rates (either export credit).
+  strategyGap: Math.max(
+    ...(['nem', 'rate'] as const).map((exp) => Math.abs(homeBill(REF_BAT, tariff('tou', exp)).net - homeBill(home(6, 13.5, 'tou'), tariff('tou', exp)).net)),
+  ),
 };
 
 function cents(x: number) {
@@ -72,43 +102,31 @@ function cents(x: number) {
 }
 
 export default function Lesson() {
-  const s = useScenario('home', {
-    pv: 6,
-    kwh: 0,
-    kw: 5,
-    reserve: 0.2,
-    imp: 'tou' as ImportPlan,
-    exp: 'nem' as ExportPlan,
-    strategy: 'self' as HomeStrategy,
-    eff: EFFICIENCY,
-    at: 13,
-  });
-  const { pv, kwh: cap, kw: power, reserve, imp, exp, strategy, eff, at } = s.state;
+  const s = useScenario('home', { pv: 6, kwh: 0, reserve: RESERVE, at: 13 });
+  const { pv, kwh: cap, reserve, at } = s.state;
 
-  const day = useMemo(
-    () => simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW: pv, batteryKW: power, batteryKWh: cap, efficiency: eff, reserve, strategy: 'self' }),
-    [pv, power, cap, reserve, eff],
-  );
+  const day = useMemo(() => home(pv, cap, 'self', reserve), [pv, cap, reserve]);
   const made = sum(day.pv);
   const used = sum(day.load);
   const exported = sum(day.gridExport);
   const imported = sum(day.gridImport);
   const battery = day.discharge.map((d, h) => d - day.charge[h]);
   const grid = day.gridImport.map((v, h) => v - day.gridExport[h]);
-  const solved = cap > 0 && day.selfSufficiency >= 0.9 && exported < 1;
+  const solved = sizingSolved(pv, cap, reserve);
 
-  // Second figure: the same home under the chosen tariff and battery strategy.
+  // Second figure: its own house, starting from the prose’s 6 kW and 13.5 kWh, under the chosen tariff and battery strategy.
+  const b = useScenario('bill', { pv: 6, kwh: 13.5, eff: EFFICIENCY, imp: 'tou' as ImportPlan, exp: 'nem' as ExportPlan, strategy: 'self' as HomeStrategy });
+  const { imp, exp, strategy, eff } = b.state;
+  const pv2 = b.state.pv;
+  const cap2 = b.state.kwh;
   const t = useMemo(() => tariff(imp, exp), [imp, exp]);
   const bills = useMemo(() => {
-    const none = simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW: 0, batteryKW: 0, batteryKWh: 0, efficiency: eff, reserve, strategy });
-    const solar = simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW: pv, batteryKW: 0, batteryKWh: 0, efficiency: eff, reserve, strategy });
-    const both = simulateHome(HOME_LOAD_KW, SOLAR_CF, { pvKW: pv, batteryKW: power, batteryKWh: cap, efficiency: eff, reserve, strategy });
     const row = (name: string, d: HomeDay) => ({ name, d, bill: homeBill(d, t) });
-    return [row('Grid only', none), row('Solar', solar), row('Solar + battery', both)];
-  }, [pv, power, cap, reserve, strategy, eff, t]);
+    return [row('Grid only', home(0, 0, strategy, RESERVE, eff)), row('Solar', home(pv2, 0, strategy, RESERVE, eff)), row('Solar + battery', home(pv2, cap2, strategy, RESERVE, eff))];
+  }, [pv2, cap2, strategy, eff, t]);
   const solarSaves = bills[0].bill.net - bills[1].bill.net;
   const batterySaves = bills[1].bill.net - bills[2].bill.net;
-  const solved2 = cap > 0 && pv > 0 && batterySaves < -0.005;
+  const solved2 = cap2 > 0 && pv2 > 0 && batterySaves < -0.005;
   const shiftValue = t.importPrice[19] - t.exportCredit[12] / eff;
 
   const h = Math.min(23, Math.max(0, at));
@@ -171,14 +189,13 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'solar made', value: kwh(made), tone: 'gold' },
-            { label: 'exported', value: kwh(exported) },
             { label: 'imported', value: kwh(imported) },
+            { label: 'of the solar used at home', value: pct(day.selfConsumption) },
             { label: 'of the home’s use met on site', value: pct(day.selfSufficiency) },
           ]}
         />
         <Slider label="Solar panels" tone="gold" value={pv} min={0} max={12} step={0.5} onChange={(v) => s.set({ pv: v })} display={kw(pv)} />
-        <Slider label="Battery capacity" tone="gold" value={cap} min={0} max={30} step={0.5} onChange={(v) => s.set({ kwh: v })} display={kwh(cap)} />
-        <Slider label="Battery power rating" tone="red" value={power} min={0} max={10} step={0.5} onChange={(v) => s.set({ kw: v })} display={kw(power)} />
+        <Slider label="Battery capacity (5 kW)" tone="gold" value={cap} min={0} max={30} step={0.5} onChange={(v) => s.set({ kwh: v })} display={kwh(cap)} />
         <Slider
           label="Backup reserve"
           value={reserve}
@@ -197,47 +214,49 @@ export default function Lesson() {
         That share is the house’s <K>self-consumption</K>.
       </P>
       <P>
-        Now give the house a battery — a common home unit stores about 13.5 kWh and delivers 5 kW. The midday surplus fills the battery before anything is exported, and
-        the battery carries the house through the evening. Imports fall from {kwh(REF.importsPv)} to {kwh(REF.importsBat)}, self-consumption rises to{' '}
-        {pct(REF_BAT.selfConsumption)}, and the house meets {pct(REF_BAT.selfSufficiency)} of its own use. The battery never empties completely, though: the backup reserve
-        is energy the owner keeps for an outage, and the battery won’t dip into it for everyday use.
+        Now give the house a battery — a common home unit stores about 13.5 kWh and delivers 5 kW, and the battery in this demonstration keeps that 5 kW rating at
+        every size. The midday surplus fills the battery before anything is exported, and the battery carries the house through the evening. Imports fall from{' '}
+        {kwh(REF.importsPv)} to {kwh(REF.importsBat)}, self-consumption rises to {pct(REF_BAT.selfConsumption)}, and the house meets{' '}
+        {pct(REF_BAT.selfSufficiency)} of its own use — its <K>self-sufficiency</K>. The battery never empties completely, though: the backup reserve is energy the owner
+        keeps for an outage, and the battery won’t dip into it for everyday use. Drag the reserve up and the evening imports come back.
       </P>
 
       <Challenge
         id="a"
-        question="Size the system so the house meets at least 90% of its own electricity use on site while exporting less than 1 kWh over the day."
+        question={`Size a system — panels and battery — that meets at least ${pct(SIZING_GOAL.sufficiency)} of the house’s own use on site and uses at least ${pct(SIZING_GOAL.consumption)} of its solar output at home.`}
         solved={solved}
-        status={`Right now the house meets ${pct(day.selfSufficiency)} of its use on site and exports ${kwh(exported)}.`}
-        success={`Solved. ${kw(pv)} of panels and ${kwh(cap)} of storage: the panels make only a little more than the house uses, and the battery is large enough to hold the midday surplus for the evening.`}
+        status={`Right now the house meets ${pct(day.selfSufficiency)} of its use on site and uses ${pct(day.selfConsumption)} of its solar output at home.`}
+        success={`Solved: ${kw(pv)} of panels and ${kwh(cap)} of storage. No battery gets panels smaller than ${kw(SIZING_PV.min)} to ${pct(SIZING_GOAL.sufficiency)} of the house’s use, and above ${kw(SIZING_PV.max)} the panels make more than the house can use even after the battery has carried it through the night, so too much of their output still flows out at midday.`}
       />
 
       <P>
-        The challenge shows the tension in sizing a home system: bigger panels make more energy, but past a point the extra mostly leaves the house at midday. Remember, too,
-        that this is one clear spring day repeated. On cloudy days and in winter, the same house imports much more.
+        The two goals pull against each other, and that is the tension in sizing a home system: bigger panels cover more of the house’s use, but past a point the extra
+        leaves the house at midday, battery or not. Remember, too, that this is one clear spring day repeated. On cloudy days and in winter, the same house imports much
+        more.
       </P>
 
       <H2>The midday glut</H2>
       <P>
         One house exporting four kilowatts at noon is invisible to the grid. A city where tens of thousands of houses do it at the same moment is not. Rooftop output peaks
         everywhere at once, so it arrives as a wave: it lowers the demand that power plants must meet in the middle of the day, then disappears just as evening demand
-        climbs. In regions with a lot of solar, such as California, the shape of the remaining demand has a name — the “duck curve” — and midday wholesale prices are
-        often near zero or negative in spring. On the distribution network, exports flowing backward along feeders built for one-way flow raise local voltages, and some
+        climbs. In regions with a lot of solar, such as California, the remaining demand takes the shape of the duck curve from{' '}
+        <a href={lessonHref('3.3')}>Lesson 3.3</a>, and midday wholesale prices are often near zero or negative in spring. On the distribution network, exports flowing backward along feeders built for one-way flow raise local voltages, and some
         utilities cap how much a new system may export.
       </P>
       <P>
         So a kilowatt-hour exported at noon is worth little to the grid, while one supplied at 19:00 is worth a lot. Whether the household feels that difference depends
         entirely on how its tariff pays for exports. In the next demonstration, the same house is billed under different (illustrative) tariffs. <b>Net metering</b> credits each exported
         kilowatt-hour at the same retail price as an imported one. An <b>export rate</b> pays a fixed {cents(EXPORT_RATE)} per exported kWh instead. The import price is
-        either flat, at {cents(FLAT)} per kWh, or <K c="price">time-of-use</K>: {cents(OFF_PEAK)} most of the day and {cents(PEAK)} from 16:00 to 21:00. The house
-        keeps the panels and battery you gave it in <FigRef to="Home Energy Simulator">the first demonstration</FigRef> (to follow the numbers in the next few paragraphs,
-        use 6 kW of panels and a 13.5 kWh battery):
+        either flat, at {cents(FLAT)} per kWh, or <K c="price">time-of-use</K>: {cents(OFF_PEAK)} most of the day and {cents(PEAK)} from 16:00 to 21:00. This
+        demonstration has a house of its own, separate from the one you sized in <FigRef to="Home Energy Simulator">the first demonstration</FigRef>. It starts with 6 kW
+        of panels and the 13.5 kWh battery, the numbers the next few paragraphs use, and its sliders resize them:
       </P>
 
-      <Figure name="Home Energy Simulator · the bill" scenario={s}>
+      <Figure name="Home Energy Simulator · the bill" scenario={b}>
         <Segmented
           label="Import price"
           value={imp}
-          onChange={(v) => s.set({ imp: v })}
+          onChange={(v) => b.set({ imp: v })}
           options={[
             { value: 'flat', label: 'Flat rate' },
             { value: 'tou', label: 'Time-of-use' },
@@ -246,7 +265,7 @@ export default function Lesson() {
         <Segmented
           label="Export credit"
           value={exp}
-          onChange={(v) => s.set({ exp: v })}
+          onChange={(v) => b.set({ exp: v })}
           options={[
             { value: 'nem', label: 'Net metering' },
             { value: 'rate', label: `Export rate (${cents(EXPORT_RATE)})` },
@@ -255,7 +274,7 @@ export default function Lesson() {
         <Segmented
           label="Battery strategy"
           value={strategy}
-          onChange={(v) => s.set({ strategy: v })}
+          onChange={(v) => b.set({ strategy: v })}
           options={[
             { value: 'self', label: 'Self-consumption' },
             { value: 'tou', label: 'Save for the peak' },
@@ -308,9 +327,9 @@ export default function Lesson() {
           <Op>=</Op>
           <Tn tone={shiftValue >= 0 ? 'green' : 'red'}>{shiftValue < 0 ? '−' : ''}{(Math.abs(shiftValue) * 100).toFixed(1)}¢</Tn>
         </Eq>
-        <Slider label="Solar panels" tone="gold" value={pv} min={0} max={12} step={0.5} onChange={(v) => s.set({ pv: v })} display={kw(pv)} />
-        <Slider label="Battery capacity" tone="gold" value={cap} min={0} max={30} step={0.5} onChange={(v) => s.set({ kwh: v })} display={kwh(cap)} />
-        <Slider label="Round-trip efficiency" value={eff} min={0.7} max={1} step={0.01} onChange={(v) => s.set({ eff: v })} display={pct(eff)} />
+        <Slider label="Solar panels" tone="gold" value={pv2} min={0} max={12} step={0.5} onChange={(v) => b.set({ pv: v })} display={kw(pv2)} />
+        <Slider label="Battery capacity" tone="gold" value={cap2} min={0} max={30} step={0.5} onChange={(v) => b.set({ kwh: v })} display={kwh(cap2)} />
+        <Slider label="Round-trip efficiency" value={eff} min={0.7} max={1} step={0.01} onChange={(v) => b.set({ eff: v })} display={pct(eff)} />
       </Figure>
 
       <P>
@@ -330,8 +349,8 @@ export default function Lesson() {
         id="b"
         question="With solar and a battery installed, find tariff settings under which the battery makes the daily bill higher than solar alone."
         solved={solved2}
-        status={cap > 0 && pv > 0 ? `Under these settings the battery changes the daily bill by ${usd(-batterySaves, 2)}.` : 'Give the house both solar panels and a battery.'}
-        success="Solved. With a flat rate and net metering, storing solar for later earns nothing — an exported kilowatt-hour is already worth as much as an imported one — and every round trip through the battery loses about 10% of the energy."
+        status={cap2 > 0 && pv2 > 0 ? `Under these settings the battery changes the daily bill by ${usd(-batterySaves, 2)}.` : 'Give the house both solar panels and a battery.'}
+        success={`Solved. With a flat rate and net metering, storing solar for later earns nothing — an exported kilowatt-hour is already worth as much as an imported one — and every round trip through the battery loses ${pct(1 - eff)} of the energy.`}
       />
 
       <P>
@@ -342,7 +361,10 @@ export default function Lesson() {
       </P>
       <P>
         Notice what the battery was doing all along, though. With self-consumption, it waits for the house to need power; with “save for the peak,” it holds its charge
-        until 16:00. Either way it works for one household, using one meter’s prices. A grid operator facing a shortage at 19:00 would happily pay for more from it — but a
+        until 16:00. On this house, with 6 kW of panels and the 13.5 kWh battery, the choice barely matters: under time-of-use rates the two bills are within{' '}
+        {cents(REF.strategyGap)} a day of each other. The panels cover the house’s use until about 17:00, after the peak window has opened, so under either strategy
+        the battery starts discharging only once the peak is under way. The two differ only after 21:00, when “save for the peak” holds on to the charge that
+        self-consumption spends on the late evening. Either way the battery works for one household, using one meter’s prices. A grid operator facing a shortage at 19:00 would happily pay for more from it — but a
         5 kW battery can’t bid into a wholesale market on its own. In the{' '}
         <a href={lessonHref('7.2')}>next lesson</a>, we’ll gather hundreds of them together and see what kind of power plant they make.
       </P>

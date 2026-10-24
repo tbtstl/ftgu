@@ -5,6 +5,7 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { FUEL } from '../../framework';
 import { FUEL_LABEL, STANDARD_FLEET } from '../../model/fleet';
+import { REGION, nodeName } from '../../model/networks';
 import type { Generator } from '../../model/types';
 
 const LAND = '#f2f0e9';
@@ -15,15 +16,15 @@ const ROAD = '#e3ddd1';
 const CITY = '#e7e1d8';
 const TOWN = '#6b6b6b';
 
-/** Where each plant's marker sits, and where its two-line label goes. */
+/** Where each plant's marker sits, and where its two-line label goes. Each plant sits beside its REGION substation, clear of the square the network overlay draws there. */
 const SITES: Record<string, { x: number; y: number; lx: number; ly: number; anchor: 'start' | 'end' | 'middle' }> = {
-  nuc: { x: 100, y: 226, lx: 122, ly: 222, anchor: 'start' },
-  coal: { x: 214, y: 330, lx: 192, ly: 326, anchor: 'end' },
-  cc1: { x: 292, y: 186, lx: 270, ly: 182, anchor: 'end' },
+  nuc: { x: 100, y: 226, lx: 100, ly: 186, anchor: 'middle' },
+  coal: { x: 192, y: 352, lx: 170, ly: 350, anchor: 'end' },
+  cc1: { x: 318, y: 166, lx: 342, ly: 162, anchor: 'start' },
   cc2: { x: 478, y: 254, lx: 456, ly: 250, anchor: 'end' },
   ct: { x: 528, y: 74, lx: 528, ly: 104, anchor: 'middle' },
   oil: { x: 548, y: 322, lx: 548, ly: 356, anchor: 'middle' },
-  hydro: { x: 136, y: 70, lx: 158, ly: 66, anchor: 'start' },
+  hydro: { x: 150, y: 62, lx: 170, ly: 46, anchor: 'start' },
   wind: { x: 100, y: 64, lx: 76, ly: 60, anchor: 'end' },
   solar: { x: 430, y: 94, lx: 408, ly: 90, anchor: 'end' },
 };
@@ -60,10 +61,16 @@ const ROLE: Record<string, string> = {
   cc2: 'Older and less efficient than Lakeside, so it runs when Lakeside isn’t enough. It sits in the city itself.',
   ct: 'It can start in minutes, but its fuel is expensive, so it runs only when demand is near its peak.',
   oil: 'The most expensive plant in the region to run: a last resort for the hottest evenings.',
-  hydro: 'Water costs nothing, but the reservoir holds only so much, so its output is saved for the hours it’s worth most.',
+  hydro: 'Water costs nothing, but the reservoir holds only so much. Our model stands in for that limit by pricing the water at $20 per MWh, its value if saved for later, and otherwise lets Falls run whenever it’s needed.',
   wind: 'Free to run once built, but its output follows the wind, which on the reference day blows hardest at night.',
   solar: 'Free to run once built, but it produces only in daylight, peaking around midday.',
 };
+
+/**
+ * The scale bar. Central (300, 190) and Metro (510, 280) are about 228 map units apart, and the
+ * line between them is 100 km long (REGION's center-city), so 50 km is about 114 units.
+ */
+export const SCALE_BAR = { km: 50, units: 114 };
 
 function markerRadius(mw: number) {
   return 4 + Math.sqrt(mw) * 0.75;
@@ -103,11 +110,76 @@ function SolarField({ x, y }: { x: number; y: number }) {
   return <g aria-hidden="true">{panels}</g>;
 }
 
+/** How the network overlay draws a transmission line, by voltage. */
+export const LINE_STYLE: Record<number, { width: number; color: string }> = {
+  345: { width: 3.4, color: '#4a4a4a' },
+  230: { width: 2, color: '#8c8c8c' },
+};
+
+/** The transmission network drawn over the map: thin lines between the REGION substations. */
+export interface MapNetwork {
+  /** Lines out of service, drawn dashed. */
+  out?: string[];
+  /** Makes each line clickable (and keyboard-operable) to take it out or put it back. */
+  onToggle?: (id: string) => void;
+}
+
+function NetworkOverlay({ out = [], onToggle }: MapNetwork) {
+  const at = (id: string) => REGION.nodes.find((n) => n.id === id)!;
+  return (
+    <g>
+      {REGION.lines.map((l) => {
+        const a = at(l.from);
+        const b = at(l.to);
+        const isOut = out.includes(l.id);
+        const name = `${nodeName(REGION, l.from)}–${nodeName(REGION, l.to)} ${l.kV} kV line`;
+        const toggle = onToggle ? () => onToggle(l.id) : undefined;
+        return (
+          <g
+            key={l.id}
+            role={toggle ? 'button' : undefined}
+            tabIndex={toggle ? 0 : undefined}
+            aria-label={toggle ? `${name}: ${isOut ? 'out of service' : 'in service'}. Toggle.` : undefined}
+            onClick={toggle}
+            onKeyDown={
+              toggle
+                ? (e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggle();
+                    }
+                  }
+                : undefined
+            }
+            style={toggle ? { cursor: 'pointer', outline: 'none' } : undefined}
+          >
+            {toggle && <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={18} />}
+            <line
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              stroke={isOut ? '#bdbdbd' : LINE_STYLE[l.kV ?? 230].color}
+              strokeWidth={isOut ? 1.6 : LINE_STYLE[l.kV ?? 230].width}
+              strokeDasharray={isOut ? '5 5' : undefined}
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      })}
+      {REGION.nodes.map((n) => (
+        <rect key={n.id} x={n.x - 5} y={n.y - 5} width={10} height={10} fill="#fff" stroke="#4a4a4a" strokeWidth={1.8} aria-hidden="true" />
+      ))}
+    </g>
+  );
+}
+
 /**
  * The region map. `selected` highlights a plant; `onSelect` makes plants clickable (and
- * keyboard-operable) so a figure can show details of the chosen one.
+ * keyboard-operable) so a figure can show details of the chosen one. `network` draws the
+ * transmission lines and substations over the map.
  */
-export function RegionMap({ selected, onSelect }: { selected?: string | null; onSelect?: (id: string | null) => void }) {
+export function RegionMap({ selected, onSelect, network }: { selected?: string | null; onSelect?: (id: string | null) => void; network?: MapNetwork }) {
   const spin = !useReducedMotion();
   const key = (id: string) => (e: KeyboardEvent) => {
     if (onSelect && (e.key === 'Enter' || e.key === ' ')) {
@@ -117,7 +189,12 @@ export function RegionMap({ selected, onSelect }: { selected?: string | null; on
   };
 
   return (
-    <svg className="diagram" viewBox="0 0 600 400" role="group" aria-label="Map of the course region: the city of Metro, its towns, and the nine power plants at their sites">
+    <svg
+      className="diagram"
+      viewBox="0 0 600 400"
+      role="group"
+      aria-label={`Map of the course region: the city of Metro, its towns, and the nine power plants at their sites${network ? `, with the ${REGION.lines.length} transmission lines between its six substations${network.out?.length ? `, ${network.out.length} of them out of service` : ''}` : ''}`}
+    >
       <defs>
         <pattern id="region-streets" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(12)">
           <path d="M0 0 H9 M0 0 V9" stroke="#d8d0c4" strokeWidth={0.8} />
@@ -184,7 +261,7 @@ export function RegionMap({ selected, onSelect }: { selected?: string | null; on
       ].map(([x, y]) => (
         <Turbine key={x} x={x} y={y} spin={spin} />
       ))}
-      <SolarField x={404} y={46} />
+      <SolarField x={404} y={38} />
 
       {/* Compass and scale. */}
       <g aria-hidden="true" transform="translate(572 24)">
@@ -193,14 +270,16 @@ export function RegionMap({ selected, onSelect }: { selected?: string | null; on
           N
         </text>
       </g>
-      <g aria-hidden="true" transform="translate(470 384)">
-        <line x1={0} y1={0} x2={45} y2={0} stroke="#8a8a8a" strokeWidth={2} />
+      <g aria-hidden="true" transform={`translate(${558 - SCALE_BAR.units} 384)`}>
+        <line x1={0} y1={0} x2={SCALE_BAR.units} y2={0} stroke="#8a8a8a" strokeWidth={2} />
         <line x1={0} y1={-4} x2={0} y2={4} stroke="#8a8a8a" strokeWidth={1.4} />
-        <line x1={45} y1={-4} x2={45} y2={4} stroke="#8a8a8a" strokeWidth={1.4} />
-        <text x={52} y={4} style={{ fontSize: 10.5, fill: TOWN }}>
-          30 km
+        <line x1={SCALE_BAR.units} y1={-4} x2={SCALE_BAR.units} y2={4} stroke="#8a8a8a" strokeWidth={1.4} />
+        <text x={SCALE_BAR.units + 7} y={4} style={{ fontSize: 10.5, fill: TOWN }}>
+          {SCALE_BAR.km} km
         </text>
       </g>
+
+      {network && <NetworkOverlay {...network} />}
 
       {/* The plants. */}
       {STANDARD_FLEET.map((g: Generator) => {

@@ -6,18 +6,41 @@ import { createElement, type ComponentType } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { MIX_FUELS, STANDARD_MIX, crossoverHours, evaluateMix, MIX_TECH, type Mix } from '../src/engines/ops/genmix';
 import { energizeFeeders } from '../src/engines/ops/feeder';
+import { lineLoss } from '../src/engines/physics/losses';
 import { checkTransformers, substationLoad } from '../src/engines/ops/substation';
 import { islandFlows, overloadedLines, runCascade, scanContingencies, type GridUnit } from '../src/engines/ops/cascade';
 import { regionCase } from '../src/engines/ops/regionGrid';
 import { THREE_NODE, REGION } from '../src/model/networks';
 import type { Network } from '../src/model/types';
 import { SOLAR_CF, SYSTEM_DEMAND, WIND_CF } from '../src/model/profiles';
-import { BUILDER_RANGE, NUCLEAR_CARBON, builderSolved, cheapestAt } from '../src/lessons/ch2/L2_1';
-import { CIRCUITS_AT_138, SECTIONS, chain, feederState, restorationSolved } from '../src/lessons/ch2/L2_2';
-import { SUBSTATION_DEFAULTS, minimumInstalled, substationSolved } from '../src/lessons/ch2/L2_3';
-import { WM_RANGE, transferFlows, triangleFlows, zeroFlowSolved } from '../src/lessons/ch2/L2_4';
-import { PLAYGROUND_DEFAULTS, playground, twoOverloadsSolved } from '../src/lessons/ch2/L2_5';
-import { MERIT_COST, SECURE_COST, STORM, cascadeCase, securityCase, stormSolved } from '../src/lessons/ch2/L2_6';
+import {
+  BUILDER_RANGE,
+  CC_AT_BASELOAD,
+  NUCLEAR_CARBON,
+  NUC_AT_BASELOAD,
+  SCREENING_DEFAULTS,
+  builderSolved,
+  carbonSolved,
+  cheapestAt,
+} from '../src/lessons/ch2/L2_1';
+import { CHAIN_DEFAULTS, CIRCUITS_AT_138, SECTIONS, chain, circuitsSolved, cutOff, feederState, restorationSolved } from '../src/lessons/ch2/L2_2';
+import { DATA_CENTER_MW, EXISTING_CHECK, EXISTING_LOAD, FEEDER_MVA, SUBSTATION_DEFAULTS, feederCount, minimumInstalled, substationSolved } from '../src/lessons/ch2/L2_3';
+import { SCALE_BAR } from '../src/lessons/shared/RegionMap';
+import { DEFAULT_ANGLES, DEG_PER_MW, STIFF_ANGLES, WM_RANGE, transferFlows, triangleAngles, triangleFlows, zeroFlowSolved } from '../src/lessons/ch2/L2_4';
+import {
+  INTO_METRO,
+  LOWEST_SAFE_RATING,
+  PLAYGROUND_DEFAULTS,
+  RATING_RANGE,
+  REFERENCE_IMPORTS,
+  TANK_RATING,
+  TANK_SHARE,
+  heatWaveSolved,
+  limitsAt,
+  metroImports,
+  playground,
+} from '../src/lessons/ch2/L2_5';
+import { MERIT_COST, SECURE_COST, STORM, STORM_LOST_LOAD, cascadeCase, securityCase, stormSolved } from '../src/lessons/ch2/L2_6';
 
 const WEATHER = { demand: SYSTEM_DEMAND, wind: WIND_CF, solar: SOLAR_CF };
 
@@ -75,6 +98,25 @@ describe('genmix engine and lesson 2.1', () => {
     expect(builderSolved(evaluateMix(answer, WEATHER))).toBe(true);
   });
 
+  it('fleets that pass the builder challenge can cost nearly a quarter less than the region’s', () => {
+    // Found by a local search over the sliders' 10 MW grid; the cheapest it found.
+    const cheap: Mix = { nuclear: 0, coal: 0, gasCC: 610, gasCT: 510, oil: 500, hydro: 0, wind: 1980, solar: 810 };
+    for (const f of MIX_FUELS) expect(cheap[f]).toBeLessThanOrEqual(BUILDER_RANGE[f]);
+    const r = evaluateMix(cheap, WEATHER);
+    expect(builderSolved(r)).toBe(true);
+    const saving = 1 - r.totalCost / base.totalCost;
+    expect(saving).toBeGreaterThan(0.23);
+    expect(saving).toBeLessThan(0.25);
+  });
+
+  it('the map’s scale bar puts Central and Metro about 100 km apart, like the line between them', () => {
+    const c = REGION.nodes.find((n) => n.id === 'center')!;
+    const m = REGION.nodes.find((n) => n.id === 'city')!;
+    const km = Math.hypot(m.x - c.x, m.y - c.y) * (SCALE_BAR.km / SCALE_BAR.units);
+    expect(REGION.lines.find((l) => l.id === 'center-city')!.lengthKm).toBe(100);
+    expect(Math.abs(km - 100)).toBeLessThan(1);
+  });
+
   it('stays finite at the sliders’ extremes', () => {
     const none = evaluateMix({}, WEATHER);
     const max = evaluateMix(BUILDER_RANGE, WEATHER);
@@ -94,11 +136,25 @@ describe('genmix engine and lesson 2.1', () => {
     expect(MIX_TECH.solar.fixedCost / ((SOLAR_CF.reduce((s, v) => s + v, 0) / 24) * 8760)).toBeCloseTo(34.6, 1);
   });
 
-  it('the carbon-price challenge has a unique whole-dollar answer in range', () => {
+  it('the carbon-price challenge has a unique whole-dollar answer in range, and the question gives what’s needed to work it out', () => {
     expect(NUCLEAR_CARBON).toBe(94);
     expect(cheapestAt(7000, 93)).toBe('gasCC');
     expect(cheapestAt(7000, 94)).toBe('nuclear');
     expect(cheapestAt(8000, 0)).toBeDefined();
+    expect(carbonSolved(SCREENING_DEFAULTS.carbon)).toBe(false);
+    expect(SCREENING_DEFAULTS.hours).toBe(7000);
+    expect(carbonSolved(94)).toBe(true);
+    expect(carbonSolved(95)).toBe(false);
+    // The question's numbers: the gap divided by gas's emissions, rounded up, is the answer.
+    expect(CC_AT_BASELOAD.toFixed(2)).toBe('53.14');
+    expect(NUC_AT_BASELOAD.toFixed(2)).toBe('87.57');
+    expect(MIX_TECH.gasCC.emissions).toBe(0.37);
+    expect(MIX_TECH.nuclear.emissions).toBe(0);
+    expect(Math.ceil((NUC_AT_BASELOAD - CC_AT_BASELOAD) / MIX_TECH.gasCC.emissions)).toBe(NUCLEAR_CARBON);
+  });
+
+  it('the builder shows the cost of the day as 79% fixed', () => {
+    expect(Math.round((base.fixedCost / base.totalCost) * 100)).toBe(79);
   });
 });
 
@@ -112,17 +168,48 @@ describe('lesson 2.2: the voltage ladder and radial feeders', () => {
     expect(chain(69, 1, 13.8).tx.share).toBeCloseTo(0.189, 3);
     expect(chain(345, 1, 4.16).fd.lossShare).toBeCloseTo(0.26, 2);
     expect(c.fd.lossShare / c.tx.share).toBeCloseTo(3.1, 1);
+    // Loss share = P·R/V²: a sixtieth of the power, 0.9 Ω against 3 Ω, and 625 times the 1/V².
+    expect(c.fd.ohms).toBeCloseTo(0.9);
+    expect(lineLoss({ sendMW: 300, kV: 345, lengthKm: 100, ohmPerKm: 0.03 }).ohms).toBeCloseTo(3);
+    expect((345 / 13.8) ** 2).toBeCloseTo(625);
+    expect(c.fd.lossShare / c.tx.share).toBeCloseTo((5 / 300) * (0.9 / 3) * 625, 6);
+    expect(chain(69, 1, 13.8).tx.share / c.tx.share).toBeCloseTo(25, 6);
   });
 
-  it('needs five 138 kV circuits to beat 1%', () => {
+  it('needs five 138 kV circuits to beat 1%, as the challenge’s reasoning says', () => {
     expect(CIRCUITS_AT_138).toBe(5);
     expect(chain(138, 4, 13.8).tx.share).toBeGreaterThan(0.01);
+    // One circuit at 138 kV loses 2.5² = 6.25 times the share at 345 kV, 4.73%; five circuits divide it by five.
+    expect(chain(138, 1, 13.8).tx.share / chain(345, 1, 13.8).tx.share).toBeCloseTo(6.25, 6);
+    expect(chain(138, 1, 13.8).tx.share).toBeCloseTo(0.0473, 4);
+    expect(chain(138, 5, 13.8).tx.share).toBeCloseTo(0.00945, 5);
+    expect(circuitsSolved(CHAIN_DEFAULTS)).toBe(false);
+    expect(circuitsSolved({ txKV: '138', circuits: 4 })).toBe(false);
+    expect(circuitsSolved({ txKV: '138', circuits: 5 })).toBe(true);
+  });
+
+  it('the map’s transmission grid is meshed: no single outage cuts anyone off, and no two cut off Metro', () => {
+    expect(cutOff([])).toEqual([]);
+    for (const l of REGION.lines) expect(cutOff([l.id])).toEqual([]);
+    for (const n of REGION.nodes) expect(REGION.lines.filter((l) => l.from === n.id || l.to === n.id).length).toBeGreaterThanOrEqual(2);
+    expect(cutOff(['north-center', 'north-east'])).toEqual(['north']);
+    expect(cutOff(['north-east', 'east-city'])).toEqual(['east']);
+    expect(cutOff(['harbor-center', 'harbor-west'])).toEqual(['harbor']);
+    for (const a of REGION.lines) for (const b of REGION.lines) if (a.id < b.id) expect(cutOff([a.id, b.id])).not.toContain('city');
+    // Metro is fed by three lines: 345 kV from Central, 230 kV from East and West.
+    const metro = REGION.lines.filter((l) => l.to === 'city' || l.from === 'city');
+    expect(metro.map((l) => [l.id, l.kV])).toEqual([
+      ['center-city', 345],
+      ['east-city', 230],
+      ['west-city', 230],
+    ]);
   });
 
   it('a fault trips the whole feeder; isolation and the tie restore everyone else', () => {
     const start = feederState({ out: [], faults: ['F1-2'], flipped: [] });
     expect(start.tripped).toEqual(['B1']);
     expect(start.customersOff).toBe(2000);
+    expect(restorationSolved({ out: [], faults: ['F1-2'], flipped: [] })).toBe(false);
     const restored = { out: [], faults: ['F1-2'], flipped: ['S1a', 'S1b', 'TIE'] };
     expect(feederState(restored).customersOff).toBe(480);
     expect(restorationSolved(restored)).toBe(true);
@@ -176,6 +263,25 @@ describe('lesson 2.3: substation design', () => {
     expect(checkTransformers(dc.total, 1, 60).n1Secure).toBe(false);
   });
 
+  it('the transformer figure starts with the data center connected, and the equation shows the substation before it', () => {
+    expect(SUBSTATION_DEFAULTS.dataCenter).toBe(DATA_CENTER_MW);
+    const { residential, commercial, industrial, dataCenter } = SUBSTATION_DEFAULTS;
+    const d = substationLoad({ residential, commercial, industrial, dataCenter });
+    expect(d.peak).toBeCloseTo(48.98, 2);
+    expect(checkTransformers(d.total, SUBSTATION_DEFAULTS.count, SUBSTATION_DEFAULTS.rating).n1Utilization).toBeCloseTo(1.22, 2);
+    expect(EXISTING_LOAD.peak).toBeCloseTo(29.38, 2);
+    expect(EXISTING_LOAD.peak / 2).toBeCloseTo(14.7, 1);
+    expect(EXISTING_CHECK.peakUtilization).toBeCloseTo(0.367, 3);
+    expect(EXISTING_CHECK.n1Utilization).toBeCloseTo(0.734, 3);
+    expect(EXISTING_CHECK.n1Secure).toBe(true);
+  });
+
+  it('gives the data center two 14 MVA feeders', () => {
+    expect(Math.round(FEEDER_MVA)).toBe(14);
+    expect(feederCount(DATA_CENTER_MW)).toBe(2);
+    expect(feederCount(0)).toBe(0);
+  });
+
   it('the data-center challenge has a unique cheapest design', () => {
     const s = { ...SUBSTATION_DEFAULTS, dataCenter: 20 };
     expect(minimumInstalled(s)).toEqual({ installed: 75, count: 3, rating: 25 });
@@ -183,6 +289,9 @@ describe('lesson 2.3: substation design', () => {
     expect(substationSolved({ ...s, count: 4, rating: 20 })).toBe(false);
     expect(substationSolved({ ...s, count: 2, rating: 50 })).toBe(false);
     expect(substationSolved(SUBSTATION_DEFAULTS)).toBe(false);
+    // The transformer figure serves the existing customers whatever the first figure is set to.
+    expect(substationSolved({ ...s, residential: 0, commercial: 20, industrial: 15, count: 3, rating: 25 })).toBe(true);
+    expect(minimumInstalled({ ...s, residential: 25 })).toEqual({ installed: 75, count: 3, rating: 25 });
   });
 });
 
@@ -197,6 +306,27 @@ describe('lesson 2.4: power flow', () => {
     // Line A–B is empty when pA·xAC = pB·xBC.
     expect(triangleFlows(200, 400, 2).AB).toBeCloseTo(0);
     expect(triangleFlows(0, 0, 1).AC).toBe(0);
+  });
+
+  it('draws phase angles consistent with the flows, as the prose describes', () => {
+    expect(100 * DEG_PER_MW).toBe(5);
+    expect(DEFAULT_ANGLES.A).toBeCloseTo(10);
+    expect(DEFAULT_ANGLES.B).toBeCloseTo(5);
+    expect(DEFAULT_ANGLES.C).toBe(0);
+    expect(STIFF_ANGLES.A).toBeCloseTo(20);
+    // On every line, flow = angle difference ÷ (reactance × degrees per MW).
+    for (const [pA, pB, x] of [
+      [300, 0, 1],
+      [120, 340, 2.5],
+      [400, 400, 4],
+      [0, 0, 0.25],
+    ]) {
+      const f = triangleFlows(pA, pB, x);
+      const a = triangleAngles(pA, pB, x);
+      expect(f.AC).toBeCloseTo((a.A - a.C) / (x * DEG_PER_MW), 6);
+      expect(f.AB).toBeCloseTo((a.A - a.B) / DEG_PER_MW, 6);
+      expect(f.BC).toBeCloseTo((a.B - a.C) / DEG_PER_MW, 6);
+    }
   });
 
   it('spreads a Harbor transfer as the prose says', () => {
@@ -233,12 +363,9 @@ describe('lesson 2.5: congestion', () => {
     expect(rc.output.cc2 + rc.output.oil).toBeCloseTo(50);
   });
 
-  it('only the Central–Metro outage overloads two lines', () => {
+  it('losing Central–Metro overloads West–Metro and North–East', () => {
     const results = REGION.lines.map((l) => ({ id: l.id, n: playground({ ...PLAYGROUND_DEFAULTS, out: [l.id] }).overloads.length }));
     expect(results.filter((r) => r.n >= 2).map((r) => r.id)).toEqual(['center-city']);
-    expect(results.filter((r) => r.n === 1).map((r) => r.id).sort()).toEqual(['harbor-center', 'north-east', 'west-city']);
-    expect(twoOverloadsSolved({ ...PLAYGROUND_DEFAULTS, out: ['center-city'] })).toBe(true);
-    expect(twoOverloadsSolved({ ...PLAYGROUND_DEFAULTS, out: ['north-east'] })).toBe(false);
     const o = playground({ ...PLAYGROUND_DEFAULTS, out: ['center-city'] }).overloads;
     expect(o.map((x) => [x.line, Math.round(x.loading * 100)])).toEqual([
       ['west-city', 172],
@@ -246,14 +373,47 @@ describe('lesson 2.5: congestion', () => {
     ]);
   });
 
+  it('the tanks: Metro imports 742 MW over lines rated 1,250 MW, one nearly full and one under a fifth full', () => {
+    const { st } = playground(PLAYGROUND_DEFAULTS);
+    expect(INTO_METRO.every((id) => REGION.lines.find((l) => l.id === id)!.to === 'city')).toBe(true);
+    expect(REFERENCE_IMPORTS.imported).toBeCloseTo(742, 6);
+    expect(REFERENCE_IMPORTS.rated).toBe(1250);
+    expect(Math.round(st.loading['west-city'] * 100)).toBe(85);
+    expect(st.loading['east-city']).toBeLessThan(0.2);
+    expect(Math.round(TANK_SHARE * 100)).toBe(59);
+    expect(TANK_RATING).toBe(60);
+  });
+
+  it('the heat-wave challenge: the ratings can fall only to 85%, while Metro imports 70% of what its lines are rated for', () => {
+    expect(LOWEST_SAFE_RATING).toBe(85);
+    expect((LOWEST_SAFE_RATING - RATING_RANGE[0]) % RATING_RANGE[2]).toBe(0);
+    expect(heatWaveSolved(PLAYGROUND_DEFAULTS)).toBe(false);
+    expect(heatWaveSolved({ ...PLAYGROUND_DEFAULTS, rating: 90 })).toBe(false);
+    expect(heatWaveSolved({ ...PLAYGROUND_DEFAULTS, rating: 80 })).toBe(false);
+    expect(heatWaveSolved({ ...PLAYGROUND_DEFAULTS, rating: 85 })).toBe(true);
+    expect(heatWaveSolved({ ...PLAYGROUND_DEFAULTS, rating: 85, out: ['east-city'] })).toBe(false);
+    expect(heatWaveSolved({ ...PLAYGROUND_DEFAULTS, rating: 85, metro: 100 })).toBe(false);
+    expect(playground({ ...PLAYGROUND_DEFAULTS, rating: 80 }).overloads.map((o) => o.line)).toEqual(['west-city']);
+    const at = playground({ ...PLAYGROUND_DEFAULTS, rating: 85 });
+    expect(at.overloads).toEqual([]);
+    expect(Math.round(Math.abs(at.st.flows['west-city']))).toBe(255);
+    expect(limitsAt(85)['west-city']).toBe(255);
+    expect(Math.round(at.st.loading['center-city'] * 100)).toBe(83);
+    expect(Math.round(at.st.loading['east-city'] * 100)).toBe(21);
+    const imp = metroImports({ out: [], rating: 85 }, at.st.flows);
+    expect(Math.round((imp.imported / imp.rated) * 100)).toBe(70);
+  });
+
   it('extra Metro demand and ratings behave as described', () => {
     const base = playground(PLAYGROUND_DEFAULTS).st.flows;
     const plus200 = playground({ ...PLAYGROUND_DEFAULTS, metro: 200 }).st.flows;
     for (const l of REGION.lines) expect(plus200[l.id]).toBeCloseTo(base[l.id], 6);
-    const hot = playground({ ...PLAYGROUND_DEFAULTS, rating: 85 });
-    expect(hot.overloads).toEqual([]);
-    expect(hot.st.loading['west-city']).toBeGreaterThan(0.99);
-    expect(playground({ ...PLAYGROUND_DEFAULTS, rating: 80 }).overloads.length).toBe(1);
+    // Beyond Mill Creek's 200 MW, Eastgate in the East picks up, mostly along East–Metro.
+    const plus400 = playground({ ...PLAYGROUND_DEFAULTS, metro: 400 });
+    expect(plus400.rc.output.ct).toBeCloseTo(200);
+    const rise = (id: string) => Math.abs(plus400.st.flows[id]) - Math.abs(base[id]);
+    expect(rise('east-city')).toBeGreaterThan(rise('center-city'));
+    expect(rise('east-city')).toBeGreaterThan(rise('west-city'));
   });
 
   it('describes the day correctly', () => {
@@ -325,28 +485,20 @@ describe('cascade engine', () => {
 
 describe('lesson 2.6: reliability', () => {
   it('fails N-1 four times in merit order, and a secure dispatch fixes it at a cost', () => {
-    const merit = securityCase({ out: [], trip: 'none', mode: 'merit' });
+    const merit = securityCase({ out: [], mode: 'merit' });
     expect(merit.scan.filter((r) => !r.ok).map((r) => r.outage).sort()).toEqual(['center-city', 'harbor-center', 'north-east', 'west-city']);
     expect(MERIT_COST).toBeCloseTo(31500);
     expect(Math.round(SECURE_COST)).toBe(42069);
     expect(SECURE_COST / MERIT_COST).toBeCloseTo(1.34, 2);
-    const secure = securityCase({ out: [], trip: 'none', mode: 'secure' });
+    const secure = securityCase({ out: [], mode: 'secure' });
     expect(secure.scan.every((r) => r.ok)).toBe(true);
     expect(secure.st.output.coal).toBeCloseTo(0, 3);
     expect(secure.st.output.cc2).toBeCloseTo(250, 3);
-    expect(securityCase({ out: [], trip: 'none', mode: 'redispatch' }).cost).toBeCloseTo(MERIT_COST);
   });
 
-  it('copes with plant trips and islands as described', () => {
-    const lakeside = securityCase({ out: [], trip: 'cc1', mode: 'merit' });
-    expect(lakeside.shed).toBe(0);
-    expect(lakeside.rc.output.cc2).toBeCloseTo(250);
-    expect(lakeside.rc.output.ct).toBeCloseTo(200);
-    const north = securityCase({ out: ['north-center', 'north-east'], trip: 'none', mode: 'merit' });
-    expect(north.shed).toBe(0);
-    expect(north.st.output.hydro + north.st.output.wind).toBeCloseTo(72);
-    for (const mode of ['merit', 'redispatch', 'secure'] as const) {
-      const metro = securityCase({ out: ['center-city', 'east-city', 'west-city'], trip: 'none', mode });
+  it('cutting all three lines into Metro leaves it 462 MW short in either dispatch', () => {
+    for (const mode of ['merit', 'secure'] as const) {
+      const metro = securityCase({ out: ['center-city', 'east-city', 'west-city'], mode });
       expect(Math.round(metro.shed)).toBe(462);
     }
   });
@@ -356,6 +508,8 @@ describe('lesson 2.6: reliability', () => {
     expect(Math.round(storm.steps[0].loading['center-city'] * 100)).toBe(124);
     expect(storm.steps[0].tripping).toEqual(['center-city']);
     expect(Math.round(storm.final.shedTotal)).toBe(462);
+    expect(storm.final.islands).toContainEqual(['city']);
+    expect(Math.round(STORM_LOST_LOAD)).toBe(462000);
     const cc = cascadeCase({ out: ['center-city'], cc2: 50, oil: 0, ct: 0, stage: 0 });
     expect(cc.steps[0].tripping.sort()).toEqual(['north-east', 'west-city']);
     expect(Math.round(cc.final.shedTotal)).toBe(406);
@@ -384,7 +538,7 @@ describe('lesson 2.6: reliability', () => {
 
   it('stays finite with every line out', () => {
     const all = REGION.lines.map((l) => l.id);
-    const r = securityCase({ out: all, trip: 'coal', mode: 'secure' });
+    const r = securityCase({ out: all, mode: 'secure' });
     expect(Number.isFinite(r.cost)).toBe(true);
     const c = cascadeCase({ out: all, cc2: 250, oil: 80, ct: 200, stage: 0 });
     expect(Number.isFinite(c.final.shedTotal)).toBe(true);

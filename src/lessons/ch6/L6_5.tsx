@@ -13,6 +13,7 @@ import {
   Slider,
   TimeChart,
   hour as fmtHour,
+  lessonHref,
   niceDomain,
   niceTicks,
   scale,
@@ -136,7 +137,7 @@ export default function Lesson() {
         So far the traders in this chapter have chosen their risks. A retailer doesn’t get to. It has signed up customers at a fixed price, and those customers will
         use whatever electricity they use, whenever they use it, whatever the wholesale price happens to be. The retailer in our region serves a fifth of its demand
         and charges <K c="price">$45</K> per megawatt-hour for the energy. (A real bill adds delivery charges and taxes; we’re looking only at the energy.) It buys its
-        customers’ forecast load in the day-ahead market and settles the forecast error in real time, exactly as the two-settlement system of Lesson 4.5 intends.
+        customers’ forecast load in the day-ahead market and settles the forecast error in real time, exactly as the two-settlement system of <a href={lessonHref('4.5')}>Lesson 4.5</a> intends.
       </P>
       <P>
         On average that’s a good business: the wholesale energy costs it about $39 per megawatt-hour, so it earns $32,201 on an average day. But on 18 of the 120 days
@@ -145,14 +146,15 @@ export default function Lesson() {
       </P>
       <P>
         The standard hedge is a <b>forward</b>: an agreement to buy a fixed quantity at a fixed price for a future period. Electricity forwards trade in blocks. In North
-        American markets, the standard on-peak block covers 16 daytime hours on weekdays and off-peak blocks cover the rest; to keep things simple, our blocks run
-        every day, on-peak from 07:00 to 23:00 and off-peak from 23:00 to 07:00. Ours settle financially against the day-ahead price at the hub, so a bought block pays the retailer the
-        day-ahead price minus the forward price in every hour it covers.
+        American markets, the standard on-peak block covers 16 daytime hours — 07:00 to 23:00 on weekdays in eastern markets such as PJM, an hour earlier in the
+        West — and off-peak blocks cover the rest. Ours use the eastern hours but, to keep things simple, run every day: on-peak from 07:00 to 23:00 and off-peak
+        from 23:00 to 07:00. They settle financially against the day-ahead price at the hub, so a bought block pays the retailer the day-ahead price
+        minus the forward price in every hour it covers.
       </P>
       <P>
-        What should the forwards cost? We’ll assume the market forecast the 120 days well on average, and priced each block at its average day-ahead price over the
-        history plus a $2 premium for the seller — <K tone="violet">$42.80</K> on-peak, <K tone="violet">$31.12</K> off-peak. Buy some blocks and see what they do to
-        a single day:
+        What should the forwards cost? A real forward is priced in advance, from what the market expects, and expectations can be far off. To keep the comparison
+        clean, we’ll assume the market forecast the 120 days perfectly on average, and priced each block at its average day-ahead price over the history plus a $2
+        premium for the seller — <K tone="violet">$42.80</K> on-peak, <K tone="violet">$31.12</K> off-peak. Buy some blocks and see what they do to a single day:
       </P>
 
       <Figure name="Power Portfolio Simulator" scenario={s}>
@@ -197,14 +199,14 @@ export default function Lesson() {
 
       <P>
         This is day 117, the worst day in the history for an unhedged retailer. It was 33 °C, and the day-ahead market, seeing the demand forecast, cleared at $250 at
-        18:00 and $461 at 19:00. No plant failed; the market simply expected to be short. The retailer’s customers wanted 342 MW at 19:00, and it paid around that price
+        18:00 and $461 at 19:00. No plant failed; the market simply expected supply to be tight. The retailer’s customers wanted 342 MW at 19:00, and it paid around that price
         for every one of them while collecting $45.
       </P>
       <P>
         The percentage beside each block is its <b>hedge ratio</b>: the block’s size as a share of the average load in its hours, 247 MW on-peak and 168 MW off-peak.
         Buy 250 MW on-peak and 170 MW off-peak — roughly 100% of the average — and day 117 improves to a loss of $41,262. The hedge is the right size on average and
-        the wrong shape for this day. A flat block covers the middle of the day, when the load is lower, too well, and the evening peak not well enough. That mismatch
-        is <b>shape risk</b>.
+        the wrong shape for this day. A flat block over-covers midday, when the load is lower, and under-covers the evening peak. That mismatch is <b>shape
+        risk</b>.
       </P>
       <P>
         It’s made worse by <b>volume risk</b>. The days with the highest prices are the hot ones, and hot days are exactly when customers use the most. On days whose
@@ -217,7 +219,14 @@ export default function Lesson() {
         One day is an anecdote. To judge a hedge, we need every day at once. The next demonstration runs the portfolio across all 120 days and shows how its daily margin is
         distributed, with the unhedged retailer as a dashed outline. It adds a third instrument: a contract for differences on the evening hours, 17:00 to 22:00, with a
         strike of <K tone="violet">$52.64</K> — again the average day-ahead price in those hours plus $2. Bought by the retailer, it pays the day-ahead price minus the
-        strike in each of those hours, so it’s a forward shaped to the peak. Try different mixes of the three:
+        strike in each of those hours, so it’s a forward shaped to the peak. In fact a financially settled forward and a CfD are the same instrument, a swap of a
+        fixed price for a market price, under two names. The CfD of <a href={lessonHref('6.1')}>Lesson 6.1</a> settled against the real-time price; here, like the
+        forwards, it settles against the day-ahead price.
+      </P>
+      <P>
+        Two readouts summarize the bad days. The <b>worst day</b> is the single largest loss in the 120 days. The <b>95% value at risk</b>, or VaR, is the loss that
+        the portfolio exceeded on only 5% of days — here, 6 of the 120 — so it reads $0 when even the seventh-worst day made money. Try different mixes of the
+        three:
       </P>
 
       <Figure name="Power Portfolio Simulator · 120 days" scenario={s}>
@@ -246,13 +255,14 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The <b>value at risk</b> is a single number for the left tail: the loss that the portfolio exceeded on only 5% of days — here, 6 of the 120. Unhedged, it’s
-        $52,011. When it reads $0, even the portfolio’s seventh-worst day was profitable. VaR is one of the most widely reported risk numbers in trading, and one of the
-        most criticized, because it says nothing about how bad the days beyond it are. Here the worst day matters more, so we’ll watch both.
+        Unhedged, the value at risk is $52,011. VaR is one of the most widely reported risk numbers in trading, and one of the most criticized, because it says
+        nothing about how bad the days beyond it are. Here the worst day matters more, so we’ll watch both.
       </P>
       <P>
-        Notice what every hedge does to the mean. Each megawatt-hour of forwards costs, on average, its $2 premium, so 250 MW on-peak and 170 MW off-peak lower the
-        average margin from $32,201 to $21,481 a day. A hedge isn’t a way to make money. It’s insurance, and the premium is what the protection costs.
+        Notice what every hedge does to the mean. Because we priced each block at its own realized average plus $2, each megawatt-hour of forwards costs exactly
+        its $2 premium on average, so 250 MW on-peak and 170 MW off-peak lower the average margin from $32,201 to $21,481 a day. A real hedge is priced before
+        anyone knows how the period will turn out, so in any one season it can gain or lose far more than its premium. But it isn’t a way to make money. It’s
+        insurance, and the premium is what the protection costs.
       </P>
 
       <Challenge
@@ -260,18 +270,19 @@ export default function Lesson() {
         question="Keep the retailer’s worst day better than a $20,000 loss while its mean margin stays at least $24,000 a day."
         solved={solved}
         status={`Right now the worst day is ${usd(st.worst)} and the mean margin ${usd(st.mean)} a day.`}
-        success={`Solved. The worst day is ${usd(st.worst)} and the mean ${usd(st.mean)}. Spending the hedging budget where the risk is — the evening — buys far more protection than spreading it evenly across the day, and the off-peak block, whose prices barely move, is hardly worth its premium.`}
+        success={`Solved. The worst day is ${usd(st.worst)} and the mean ${usd(st.mean)}. Spending the hedging budget where the risk is — the evening — buys far more protection than spreading it evenly across the day.`}
       />
 
       <P>
         Every solution uses the evening CfD, because no flat block can cover the evening peak without also over-buying the rest of the day, and every megawatt-hour of
-        over-buying costs the premium. That’s the essence of hedging a real load: match the hedge to the shape of the exposure, accept that some risk — the extra
-        volume on the hottest days, the hours between the blocks — will remain, and decide how much of the average margin that protection is worth.
+        over-buying costs the premium. Every solution holds an on-peak block too, since the CfD covers only five of the day’s hours. That’s the essence of hedging a
+        real load: match the hedge to the shape of the exposure, accept that some risk — the extra volume on the hottest days, the hours between the blocks — will
+        remain, and decide how much of the average margin that protection is worth.
       </P>
       <P>
         Retailers can also use virtual positions here. One that expects real-time prices to spike can bid more load day-ahead than it forecasts — in effect, a dec on
-        the difference — and one that expects them to collapse can bid less. Those are views, not hedges, and they bring back exactly the fat-tailed risk of Lesson
-        6.2. Every strategy in this chapter, hedges included, has been judged on the same 120 days. The last lesson asks how far a judgment like that can be trusted.
+        the difference — and one that expects them to collapse can bid less. Those are views, not hedges, and they bring back exactly the fat-tailed risk of{' '}
+        <a href={lessonHref('6.2')}>Lesson 6.2</a>. Every strategy in this chapter, hedges included, has been judged on the same 120 days. The last lesson asks how far a judgment like that can be trusted.
       </P>
     </LessonPage>
   );
