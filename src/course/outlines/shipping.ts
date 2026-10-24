@@ -43,7 +43,7 @@ const chapters: ChapterMeta[] = [
     ['Repositioning and optionality', 'Fleet Allocation Optimizer'],
     ['Derivatives, hedging, and backtesting', 'Freight Trading Lab'],
   ]),
-  ch(6, 'Capstone: operate a shipping company', 'Buy a fleet, find it cargo, and hedge what the market might do to it.', 'ink', [
+  ch(6, 'Capstone: operate a shipping company', 'Can the first five chapters run a shipping company? Buy a fleet, find it cargo, schedule it, and hedge what the market might do to it.', 'ink', [
     ['Design a fleet', 'Shipping Company Builder'],
     ['Build a trade network', 'Global Cargo Simulator'],
     ['Schedule voyages', 'Fleet Operations Desk'],
@@ -57,6 +57,6 @@ export const SHIPPING: CourseOutline = {
   title: 'Maritime Shipping & Freight Markets',
   short: 'Shipping & freight',
   lede:
-    'A ship is capacity that moves, slowly. Freight rates soar where ships are scarce and collapse where they pile up, and repositioning takes weeks. This course goes from hull physics to the charter and forward freight markets built on it.',
+    'A ship is capacity that moves, slowly. Freight rates soar where ships are scarce and collapse where they pile up, and repositioning takes weeks. This course goes from hull physics to the charter and forward freight markets built on it, in a simulated world of real ports, canals and trades.',
   chapters,
 };
