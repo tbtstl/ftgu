@@ -57,6 +57,6 @@ export const WEATHER: CourseOutline = {
   title: 'Atmospheric Physics & Weather Derivatives',
   short: 'Weather derivatives',
   lede:
-    'A cold January costs a utility money and earns a gas producer some. This course builds the atmosphere from energy balance up, learns to forecast it with honest uncertainty, and prices contracts that pay on what it does.',
+    'A mild winter costs a gas utility the gas it never sells; a cold snap costs anyone caught buying energy at short notice. This course builds the atmosphere from energy balance up, learns to forecast it with honest uncertainty, and prices contracts that pay on what it does.',
   chapters,
 };

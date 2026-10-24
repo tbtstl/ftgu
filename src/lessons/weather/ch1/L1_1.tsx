@@ -223,7 +223,7 @@ export default function Lesson() {
   return (
     <LessonPage id="weather/1.1">
       <P>
-        A cold January in a port city costs its gas utility money and earns a gas producer some. By the end of this course we’ll price contracts that pay on exactly
+        A mild winter in a port city costs its gas utility millions in gas it never sells; a cold snap costs anyone caught buying energy at short notice. By the end of this course we’ll price contracts that pay on exactly
         that kind of weather, and test whether a forecast can earn money trading them. But a contract on the weather is only as good as our understanding of what
         the weather will do, and that begins a long way from any market — with sunlight arriving at a spinning, partly cloudy planet.
       </P>

@@ -37,6 +37,11 @@ import { beamHeightKm, brightnessTempC, rainFromDbz } from '../src/engines/weath
 import { runModel, truthField, truthWaves } from '../src/engines/weather/nwp';
 import { attractorPoint, separationTime } from '../src/engines/weather/lorenz';
 import { brierScore, crpsNormal } from '../src/engines/weather/verify';
+import { cdd, demandFactor, hdd, indexFromMonthlyMean, indexOf, sendout } from '../src/engines/weather/degreeDays';
+import { REFERENCE_GAS, energyDay, plantCost } from '../src/engines/weather/energyMarket';
+import { capacityFactor, powerCurve } from '../src/engines/weather/renewables';
+import { farmSeason, yieldHistory } from '../src/engines/weather/crops';
+import { regress, utilityWinters, windYear } from '../src/engines/weather/exposure';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
@@ -52,6 +57,11 @@ import { RADAR_DEFAULTS, SAT_DEFAULTS, opaqueSolved, rainBeamSolved } from '../s
 import { FORECAST_DEFAULTS, stepSolved, windSolved } from '../src/lessons/weather/ch3/L3_3';
 import { steadySolved, togetherSolved } from '../src/lessons/weather/ch3/L3_4';
 import { CAL_DEFAULTS, calibrationSolved, climateLeadSolved } from '../src/lessons/weather/ch3/L3_5';
+import { COLDEST_JANUARY, MONTH_DEFAULTS, coldestJanuarySolved, swingSolved } from '../src/lessons/weather/ch4/L4_1';
+import { COLDEST_WINTER, DAY_DEFAULTS, oilSolved, pipelineSolved } from '../src/lessons/weather/ch4/L4_2';
+import { breakevenRainSolved, steadiestSolved as cropSteadiestSolved } from '../src/lessons/weather/ch4/L4_3';
+import { SITE_DEFAULTS, cfSolved, uncertaintySolved } from '../src/lessons/weather/ch4/L4_4';
+import { INDEX_DEFAULTS, RISK_DEFAULTS, bestIndexSolved, variabilitySolved } from '../src/lessons/weather/ch4/L4_5';
 
 describe('the Calder region', () => {
   it('gives Calder Bay a New York–like year', () => {
@@ -397,6 +407,67 @@ describe('fronts and storms', () => {
     expect(climateLeadSolved(8)).toBe(false);
     expect(calibrationSolved({ lead: 5, inflation: 1.65, bias: 0 })).toBe(true);
     expect(calibrationSolved(CAL_DEFAULTS)).toBe(false);
+  });
+  it('turns weather into energy demand, prices, crops and cash (chapter 4 engines)', () => {
+    expect(hdd(40)).toBe(25);
+    expect(cdd(40)).toBe(0);
+    expect(indexOf('HDD', [60, 70, 50])).toBe(20);
+    // Averaging first undercounts: a month swinging around 65 °F has degree days its mean doesn't.
+    expect(indexFromMonthlyMean('HDD', 65, 2)).toBe(0);
+    expect(indexOf('HDD', [55, 75])).toBe(10);
+    expect(sendout(30)).toBe(150_000 + 18_000 * 30);
+    expect(demandFactor(60)).toBeCloseTo(1, 9);
+    // Cold snaps fill the pipelines and lift the city-gate price; heat waves lift the power price.
+    const normal = energyDay({ doy: 20, meanF: 33, windMs: 7.5, cloud: 0.4 });
+    const cold = energyDay({ doy: 20, meanF: 5, windMs: 7.5, cloud: 0.4 });
+    expect(cold.gas).toBeGreaterThan(normal.gas * 3);
+    expect(cold.avgPrice).toBeGreaterThan(normal.avgPrice * 2);
+    const hot = energyDay({ doy: 200, meanF: 85, windMs: 7.5, cloud: 0.4 });
+    expect(hot.peakPrice).toBeGreaterThanOrEqual(165);
+    expect(plantCost('cc1', REFERENCE_GAS)).toBe(36);
+    expect(plantCost('ct', REFERENCE_GAS)).toBe(88);
+    // Wind: the power curve and capacity factors.
+    expect(powerCurve(2)).toBe(0);
+    expect(powerCurve(12)).toBe(1);
+    expect(powerCurve(26)).toBe(0);
+    expect(capacityFactor(7.6, 2.2)).toBeGreaterThan(0.3);
+    expect(capacityFactor(7.6, 2.2)).toBeLessThan(0.4);
+    // Corn: the archive's median is 180 bu/acre; a large share of the national crop softens the blow.
+    const ys = yieldHistory().map((y) => y.bushels).sort((a, b) => a - b);
+    expect(ys[20]).toBeCloseTo(180, -1);
+    expect(farmSeason(130, 0.4).profit).toBeGreaterThan(farmSeason(130, 0.02).profit);
+    // The utility's margin moves about $55,000 per heating degree day, almost but not quite exactly.
+    const w = utilityWinters();
+    const r = regress(
+      w.map((x) => x.hdd),
+      w.map((x) => x.margin),
+    );
+    expect(r.slope).toBeGreaterThan(50_000);
+    expect(r.r2).toBeGreaterThan(0.95);
+    expect(r.r2).toBeLessThan(1);
+    expect(windYear(10).cf).toBeGreaterThan(0.28);
+  });
+  it('chapter 4 challenges', () => {
+    expect(coldestJanuarySolved({ year: COLDEST_JANUARY, month: 0, shift: 0 })).toBe(true);
+    expect(coldestJanuarySolved(MONTH_DEFAULTS)).toBe(false);
+    expect(swingSolved({ mean: 65, swing: 7.5 })).toBe(true);
+    expect(swingSolved({ mean: 65, swing: 7 })).toBe(false);
+    expect(oilSolved({ ...DAY_DEFAULTS, meanF: 12 })).toBe(true);
+    expect(oilSolved({ ...DAY_DEFAULTS, meanF: 13 })).toBe(false);
+    expect(pipelineSolved({ winter: COLDEST_WINTER, pipeline: 1.55, windScale: 1 })).toBe(true);
+    expect(pipelineSolved({ winter: COLDEST_WINTER, pipeline: 1.6, windScale: 1 })).toBe(false);
+    expect(breakevenRainSolved({ heat: 96, rain: 9.7 })).toBe(true);
+    expect(breakevenRainSolved({ heat: 96, rain: 9.6 })).toBe(false);
+    expect(cropSteadiestSolved({ share: 0.39, warm: 0, rainScale: 1 })).toBe(true);
+    expect(cropSteadiestSolved({ share: 0.02, warm: 0, rainScale: 1 })).toBe(false);
+    expect(cfSolved({ mean: 8.3, k: 2.2, tempC: SITE_DEFAULTS.tempC })).toBe(true);
+    expect(cfSolved({ mean: 8.2, k: 2.2, tempC: SITE_DEFAULTS.tempC })).toBe(false);
+    expect(uncertaintySolved({ speed: 10, lead: 3 })).toBe(true);
+    expect(uncertaintySolved({ speed: 9.5, lead: 3 })).toBe(false);
+    expect(variabilitySolved({ ...RISK_DEFAULTS, variability: 1.5 })).toBe(true);
+    expect(variabilitySolved({ ...RISK_DEFAULTS, variability: 1.45 })).toBe(false);
+    expect(bestIndexSolved({ business: 'farm', farmIndex: 'heat' })).toBe(true);
+    expect(bestIndexSolved(INDEX_DEFAULTS)).toBe(false);
   });
   it('places the Hadley cell’s edge with the rotation rate', () => {
     expect(circulation(1, 1 / 3).cells.length).toBe(3);
