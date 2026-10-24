@@ -41,6 +41,9 @@ function usable(l: Lane, closed: Set<Chokepoint>, draft: number | undefined): bo
   return true;
 }
 
+/** Ports that passing routes may run by: Singapore, and the open coasts of Brazil and New South Wales. */
+const THROUGH = new Set(['SIN', 'TUB', 'SAN', 'NEW']);
+
 const ADJ: Record<string, Array<{ lane: Lane; other: string }>> = {};
 for (const p of PLACES) ADJ[p.id] = [];
 for (const l of LANES) {
@@ -48,8 +51,19 @@ for (const l of LANES) {
   ADJ[l.to].push({ lane: l, other: l.from });
 }
 
-/** Shortest sea route between two places (Dijkstra), or null if every way is closed. */
+const ROUTE_CACHE = new Map<string, SeaRoute | null>();
+
+/** Shortest sea route between two places (Dijkstra), or null if every way is closed. Memoized. */
 export function seaRoute(from: string, to: string, opts: RouteOptions = {}): SeaRoute | null {
+  const key = `${from}|${to}|${[...(opts.closed ?? [])].sort().join(',')}|${opts.draft ?? ''}`;
+  if (ROUTE_CACHE.has(key)) return ROUTE_CACHE.get(key)!;
+  const r = findRoute(from, to, opts);
+  if (ROUTE_CACHE.size > 5000) ROUTE_CACHE.clear();
+  ROUTE_CACHE.set(key, r);
+  return r;
+}
+
+function findRoute(from: string, to: string, opts: RouteOptions): SeaRoute | null {
   const closed = new Set(opts.closed ?? []);
   const dist: Record<string, number> = {};
   const prev: Record<string, { lane: Lane; from: string } | undefined> = {};
@@ -61,8 +75,8 @@ export function seaRoute(from: string, to: string, opts: RouteOptions = {}): Sea
     for (const p of PLACES) if (!done.has(p.id) && dist[p.id] < Infinity && (u === null || dist[p.id] < dist[u])) u = p.id;
     if (u === null || u === to) break;
     done.add(u);
-    // Ports other than the endpoints aren't through-routes (ships don't sail through a berth).
-    if (u !== from && PLACE[u].port && u !== 'SIN') continue;
+    // Most ports are destinations only; a few on open coasts double as waypoints for passing ships.
+    if (u !== from && PLACE[u].port && !THROUGH.has(u)) continue;
     for (const { lane, other } of ADJ[u]) {
       if (!usable(lane, closed, opts.draft)) continue;
       const d = dist[u] + LANE_NM[lane.id];

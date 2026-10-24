@@ -401,6 +401,44 @@ export function tripTce(eq: Equilibrium, fromValue: number, toValue: number, day
   return eq.tce + (eq.ballastMileCost * (fromValue - toValue)) / days;
 }
 
+export interface Requirement {
+  tonnes: number;
+  /** Billions of tonne-miles a year. */
+  tonMiles: number;
+  ladenMiles: number;
+  ballastMiles: number;
+  /** Ballast miles per laden mile. */
+  ballastRatio: number;
+  portDays: number;
+  canalDays: number;
+  /** Ships needed to carry the trades at the given speeds, with no ship idle. */
+  ships: number;
+  plan: BallastPlan;
+  routes: Array<{ route: Route; nm: number; open: boolean; voyages: number; tonMiles: number; chokepoints: Chokepoint[] }>;
+}
+
+/**
+ * Demand for ships, before any prices: the trades' tonnes and tonne-miles, the ballast they force,
+ * and how many ships it takes to carry them all at fixed laden and ballast speeds.
+ */
+export function fleetRequirement(id: ClassId, c: MarketConditions = {}, ladenSpeed = 12, ballastSpeed = 13): Requirement {
+  const inp = inputs(id, c);
+  const weather = c.weather ?? 0;
+  const sea = (inp.ladenMiles / (24 * ladenSpeed) + inp.plan.miles / (24 * ballastSpeed)) * (1 + weather);
+  return {
+    tonnes: inp.tonnes,
+    tonMiles: inp.tonMiles / 1e9,
+    ladenMiles: inp.ladenMiles,
+    ballastMiles: inp.plan.miles,
+    ballastRatio: inp.ladenMiles > 0 ? inp.plan.miles / inp.ladenMiles : 0,
+    portDays: inp.portDays,
+    canalDays: inp.canalDays,
+    ships: (inp.portDays + inp.canalDays + sea) / EARNING_DAYS,
+    plan: inp.plan,
+    routes: inp.geo.legs.map((leg, i) => ({ route: leg.route, nm: leg.nm, open: leg.open, voyages: inp.voyages[i], tonMiles: (inp.voyages[i] * inp.cls.cargo * leg.nm) / 1e9, chokepoints: leg.chokepoints })),
+  };
+}
+
 /** The fleet's supply curve: market earnings as demand is scaled, holding everything else. */
 export function supplyCurve(id: ClassId, demands: number[], c: MarketConditions = {}): Array<{ demand: number; eq: Equilibrium }> {
   return demands.map((d) => ({ demand: d, eq: equilibrium(id, { ...c, demand: d }) }));

@@ -30,6 +30,14 @@ import { standardHistory, bunkerPath } from '../src/model/shipping/history';
 import { MARKET_CLASSES, ROUTES, SEASON_BRAZIL_SOY } from '../src/model/shipping/trades';
 import { LANES, PLACE, laneNm } from '../src/model/shipping/geo';
 import { LAST_ORDER, YEARS, returnSolved } from '../src/lessons/shipping/ch2/L2_5';
+import { simulateQueue, expectedWait, erlangC } from '../src/engines/shipping/queue';
+import { bestAssignment, position } from '../src/engines/shipping/positioning';
+import { fleetRequirement } from '../src/engines/shipping/market';
+import { FARTHEST_FROM_QINGDAO, farthestSolved, routeBetween, tradeRows } from '../src/lessons/shipping/ch3/L3_1';
+import { fewestBerthsSolved, CV, CHALLENGE as CHALLENGE32, serviceDays } from '../src/lessons/shipping/ch3/L3_2';
+import { CUT_SLOTS, DETOUR_DAYS, canalState, extraShips, slotCutSolved, tradeStatus } from '../src/lessons/shipping/ch3/L3_3';
+import { cheapestSolved as cheapestSolved34, cheapestPlan, planCost, START_PLAN, ballasters, SHIPS as SHIPS34, type Plan } from '../src/lessons/shipping/ch3/L3_4';
+import { BASE_MT, QIN_TONNES, capeNeeds, sourcingSolved } from '../src/lessons/shipping/ch3/L3_5';
 import { floating, freshLoadSolved, surveyResult } from '../src/lessons/shipping/ch1/L1_1';
 import { CLEAN_14_KW, drag, foulingSolved, shipWavelength } from '../src/lessons/shipping/ch1/L1_2';
 import { twelveDaySolved, voyageAt, PASSAGE_NM } from '../src/lessons/shipping/ch1/L1_3';
@@ -600,5 +608,138 @@ describe('lesson 2.5', () => {
     expect(Math.min(...sols)).toBeGreaterThan(72);
     expect(returnSolved('secondhand', sols[0])).toBe(false);
     expect(YEARS).toHaveLength(12);
+  });
+});
+
+describe('queues and positioning', () => {
+  it('agrees with Erlang C for one server', () => {
+    // M/M/1: P(wait) = ρ.
+    expect(erlangC(1, 0.6)).toBeCloseTo(0.6, 9);
+    expect(expectedWait(1, 0.6, 1, 1)).toBeCloseTo(0.6 / 0.4, 9);
+    expect(expectedWait(2, 3, 1)).toBe(Infinity);
+  });
+
+  it('simulates a queue whose waits grow with utilization', () => {
+    const low = simulateQueue({ berths: 4, arrivalsPerDay: 1.5, serviceDays: 1.25, serviceCv: 0.5, days: 365, seed: 3 });
+    const high = simulateQueue({ berths: 4, arrivalsPerDay: 3, serviceDays: 1.25, serviceCv: 0.5, days: 365, seed: 3 });
+    expect(high.avgWait).toBeGreaterThan(low.avgWait * 5);
+    for (const s of high.ships) expect(s.start).toBeGreaterThanOrEqual(s.arrive);
+  });
+
+  it('finds the cheapest positioning', () => {
+    const o = { speed: 12, bunker: 600, dayValue: 15_000 };
+    const ships = [
+      { id: 'a', name: 'A', at: 'QIN', openDay: 0 },
+      { id: 'c', name: 'C', at: 'ROT', openDay: 5 },
+    ];
+    const cargoes = [{ id: 'x', port: 'TUB', from: 30, to: 40, label: '' }];
+    expect(position(ALBATROSS, ships[0], cargoes[0], o).ok).toBe(true);
+    expect(bestAssignment(ALBATROSS, ships, cargoes, o).pairs.x).toBe('c');
+  });
+
+  it('measures demand for ships before any prices', () => {
+    const r = fleetRequirement('cape');
+    expect(r.ballastRatio).toBeCloseTo(1, 6);
+    expect(r.ships).toBeGreaterThan(650);
+    expect(r.ships).toBeLessThan(MARKET_CLASSES.cape.fleet);
+    expect(fleetRequirement('cape', { routeScale: { 'C-TUB-QIN': 1.2 } }).ships).toBeGreaterThan(r.ships);
+  });
+});
+
+describe('lesson 3.1', () => {
+  it('finds Santos the farthest cargo port from Qingdao', () => {
+    expect(FARTHEST_FROM_QINGDAO).toBe('SAN');
+    expect(routeBetween('SAN', 'QIN').nm).toBeGreaterThan(routeBetween('TUB', 'QIN').nm);
+    expect(farthestSolved('QIN', 'SAN')).toBe(true);
+    expect(farthestSolved('SAN', 'QIN')).toBe(true);
+    expect(farthestSolved('TUB', 'QIN')).toBe(false);
+    expect(farthestSolved('SAN', 'ROT')).toBe(false);
+  });
+
+  it('shows long hauls taking more ship time than their tonnage', () => {
+    const cape = tradeRows('cape');
+    const c3 = cape.find((r) => r.id === 'C-TUB-QIN')!;
+    const c5 = cape.find((r) => r.id === 'C-PHE-QIN')!;
+    expect(c5.tonneShare).toBeGreaterThan(c3.tonneShare);
+    expect(c3.dayShare).toBeGreaterThan(c5.dayShare);
+    expect(cape.reduce((s, r) => s + r.dayShare, 0)).toBeCloseTo(1, 9);
+  });
+
+  it('routes along Brazil’s coast and south of Australia', () => {
+    expect(seaRoute('NOL', 'SAN')!.places).not.toContain('CGH');
+    expect(seaRoute('NEW', 'SIN')!.nm).toBeLessThan(4_800);
+  });
+});
+
+describe('lesson 3.2', () => {
+  it('needs eight berths with variable handling and seven with steady handling', () => {
+    const sols: string[] = [];
+    for (let b = 1; b <= 8; b++)
+      for (let rate = 60_000; rate <= 200_000; rate += 10_000)
+        for (let a = 5; a <= 50; a++)
+          for (const [k, cv] of Object.entries(CV)) if (fewestBerthsSolved(b, rate, a / 10, cv)) sols.push(`${b}/${rate}/${a / 10}/${k}`);
+    expect(sols).toEqual(['7/100000/2.6/steady', '8/100000/2.6/variable']);
+    expect(serviceDays(CHALLENGE32.rate)).toBeCloseTo(2.2, 9);
+  });
+});
+
+describe('lesson 3.3', () => {
+  it('has one answer to the slot-cut challenge: 29.5 ships a day', () => {
+    const sols: string[] = [];
+    for (let s = 18; s <= 40; s++) for (let a = 15; a <= 40; a += 0.5) if (slotCutSolved(s, a)) sols.push(`${s}/${a}`);
+    expect(sols).toEqual(['24/29.5']);
+    expect(canalState(CUT_SLOTS, 29.5).divertDay).toBeGreaterThanOrEqual(60);
+    expect(canalState(CUT_SLOTS, 30).divertDay).toBeLessThan(60);
+  });
+
+  it('quotes the model’s detours and fleet effects', () => {
+    expect(DETOUR_DAYS).toBeCloseTo(14.5, 1);
+    const drought = canalState(24, 32);
+    expect(drought.divertShare).toBeCloseTo(0.25, 9);
+    expect(drought.settledQueue).toBeCloseTo(24 * DETOUR_DAYS, 6);
+    expect(canalState(36, 32).divertShare).toBe(0);
+    expect(tradeStatus(['suez']).find((x) => x.trade.id === 'box')!.extraNm).toBeCloseTo(3741, -1);
+    expect(tradeStatus(['hormuz']).filter((x) => !x.route)).toHaveLength(2);
+    expect(extraShips(['panama']).kmax).toBeCloseTo(27, 0);
+    expect(extraShips(['suez']).cape).toBe(0);
+  });
+});
+
+describe('lesson 3.4', () => {
+  it('has exactly one cheapest full plan at each ballast speed', () => {
+    const choices = [...SHIPS34.map((s) => s.id), 'none'];
+    for (const sp of [10, 11, 11.5, 12, 14]) {
+      const sols: string[] = [];
+      for (const a of choices) for (const b of choices) for (const c of choices) for (const d of choices)
+        if (cheapestSolved34({ tub: a, phe: b, rby: c, new: d } as Plan, sp)) sols.push(`${a}/${b}/${c}/${d}`);
+      expect(sols).toHaveLength(1);
+    }
+    expect(cheapestSolved34({ tub: 'skua', phe: 'gannet', rby: 'tern', new: 'fulmar' }, 12)).toBe(true);
+    expect(cheapestSolved34({ tub: 'skua', phe: 'gannet', rby: 'tern', new: 'albatross' }, 10)).toBe(true);
+    expect(cheapestSolved34(START_PLAN, 12)).toBe(false);
+    expect(cheapestPlan(12).cost).toBeCloseTo(1_371_239, -1);
+    expect(planCost(START_PLAN, 12).cost).toBeCloseTo(1_817_719, -1);
+  });
+
+  it('sends more ballasters into the Atlantic when Brazil exports more', () => {
+    expect(ballasters('cape', 1, 1).intoAtlantic).toBeCloseTo(1470.6, 0);
+    expect(ballasters('cape', 1.5, 1).intoAtlantic).toBeGreaterThan(ballasters('cape', 1, 1).intoAtlantic);
+    expect(ballasters('cape', 1, 1).req.ballastRatio).toBeCloseTo(1, 6);
+    expect(ballasters('kmax', 1, 1).req.ballastRatio).toBeLessThan(1);
+  });
+});
+
+describe('lesson 3.5', () => {
+  it('needs 50 more Capesizes only when about 60 Mt of Qingdao’s ore moves from Australia to Brazil', () => {
+    const base = capeNeeds(BASE_MT).ships;
+    expect(QIN_TONNES).toBe(890);
+    expect(base).toBeCloseTo(700.3, 1);
+    expect(sourcingSolved({ ...BASE_MT })).toBe(false);
+    expect(sourcingSolved({ ...BASE_MT, 'C-PHE-QIN': 540, 'C-TUB-QIN': 310 })).toBe(false);
+    expect(sourcingSolved({ ...BASE_MT, 'C-PHE-QIN': 530, 'C-TUB-QIN': 320 })).toBe(true);
+    expect(sourcingSolved({ ...BASE_MT, 'C-PHE-QIN': 540, 'C-TUB-QIN': 315, 'C-NEW-QIN': 35 })).toBe(true);
+    expect(sourcingSolved({ ...BASE_MT, 'C-PHE-QIN': 530, 'C-TUB-QIN': 320, 'C-TUB-ROT': 45 })).toBe(false);
+    expect(sourcingSolved({ ...BASE_MT, 'C-TUB-QIN': 340 })).toBe(false);
+    expect(capeNeeds({ ...BASE_MT, 'C-PHE-QIN': 890, 'C-TUB-QIN': 0, 'C-NEW-QIN': 0 }).ships).toBeLessThan(capeNeeds({ ...BASE_MT, 'C-PHE-QIN': 0, 'C-TUB-QIN': 890, 'C-NEW-QIN': 0 }).ships / 2);
   });
 });

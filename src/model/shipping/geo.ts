@@ -70,6 +70,9 @@ export const PLACES: Place[] = [
   { id: 'SOL', name: 'Coral Sea', area: '', lat: -15.0, lon: 156.0, port: false },
   { id: 'BIS', name: 'Bismarck Sea', area: '', lat: -2.0, lon: 150.5, port: false },
   { id: 'MIC', name: 'Western Pacific', area: '', lat: 7.0, lon: 137.0, port: false },
+  { id: 'BAS', name: 'Off Bass Strait', area: 'Australia', lat: -39.8, lon: 148.5, port: false },
+  { id: 'LEU', name: 'Off Cape Leeuwin', area: 'Australia', lat: -35.8, lon: 114.5, port: false },
+  { id: 'SPA', name: 'South Pacific', area: '', lat: -20.0, lon: -120.0, port: false },
 ];
 
 export const PLACE: Record<string, Place> = Object.fromEntries(PLACES.map((p) => [p.id, p]));
@@ -124,6 +127,7 @@ export const LANES: Lane[] = [
   // Gulf of Mexico and Panama
   { id: 'NOL-FLS', from: 'NOL', to: 'FLS', via: [[26.0, -86.0]] },
   { id: 'NOL-YUC', from: 'NOL', to: 'YUC' },
+  { id: 'FLS-YUC', from: 'FLS', to: 'YUC', via: [[23.6, -84.5]] },
   { id: 'YUC-COL', from: 'YUC', to: 'COL', via: [[16.0, -82.5]] },
   { id: 'COL-BAL', from: 'COL', to: 'BAL', choke: 'panama', canalDays: 1, maxDraft: 15.24 },
   { id: 'BAL-JPN', from: 'BAL', to: 'JPN', via: [[25.0, -125.0], [36.0, -170.0], [37.0, 165.0]], wraps: true },
@@ -182,6 +186,14 @@ export const LANES: Lane[] = [
   { id: 'MIC-PHS', from: 'MIC', to: 'PHS' },
   { id: 'MIC-LUZ', from: 'MIC', to: 'LUZ' },
   { id: 'MIC-ECS', from: 'MIC', to: 'ECS', via: [[22.0, 129.0]] },
+  // Southern Australia and the South Pacific
+  { id: 'NEW-BAS', from: 'NEW', to: 'BAS', via: [[-36.5, 151.0]] },
+  { id: 'BAS-LEU', from: 'BAS', to: 'LEU', via: [[-39.8, 143.0], [-37.5, 136.0], [-35.5, 125.0]] },
+  { id: 'LEU-SUN', from: 'LEU', to: 'SUN', via: [[-25.0, 110.5]] },
+  { id: 'LEU-LOM', from: 'LEU', to: 'LOM', via: [[-22.0, 112.5]] },
+  { id: 'LEU-CGH', from: 'LEU', to: 'CGH', via: [[-37.0, 80.0], [-37.0, 40.0]] },
+  { id: 'BAL-SPA', from: 'BAL', to: 'SPA' },
+  { id: 'SPA-NEW', from: 'SPA', to: 'NEW', via: [[-28.0, -160.0], [-32.0, 175.0]], wraps: true },
 ];
 
 // ---------------------------------------------------------------------------
