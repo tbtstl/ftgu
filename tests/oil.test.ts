@@ -75,6 +75,14 @@ import { VOYAGE_DEFAULTS, cheapestSpeedSolved, lighteringSolved, scaleCost } fro
 import { TERMINAL_DEFAULTS, bestBuffer, bufferCurve, bufferSolved, highestRateSolved, terminalPlan } from '../src/lessons/oil/ch4/L4_3';
 import { pipelineSolved, spreadAt, trappedSolved } from '../src/lessons/oil/ch4/L4_4';
 import { arbFor, arbSolved, differentialsAt, highestOpen, qualitySolved } from '../src/lessons/oil/ch4/L4_5';
+import { WORLD, balanceSheet, convenienceYield, crudeAndProductStocks, fullCarry, futuresCurve, inventoryPrice, productMarket, simulateShock, stocksForPrice } from '../src/engines/oil/market';
+import { hubPricesFast } from '../src/engines/oil/network';
+import { oilHistory } from '../src/model/oil/history';
+import { BALANCE_DEFAULTS, flatBoost, flatGroup, flatProductsSolved, flatStocksSolved, rowsOf, yearOfStocks, yearOneChange } from '../src/lessons/oil/ch5/L5_1';
+import { EXPLORER_DEFAULTS, breakdown, cheapestNorthfieldSolved, historyFor, historyForMode, smallestExpansion, smallestExpansionSolved, spreadStats, widestAfterOpening } from '../src/lessons/oil/ch5/L5_2';
+import { MARKET_DEFAULTS, distillateFloorSolved, frontier, marketFor, moreDieselSolved, outputAt } from '../src/lessons/oil/ch5/L5_3';
+import { CURVE_STATE_DEFAULTS, TANK_DEFAULTS, frontSpread, impliedDayRate, tankTops, tankTopsSolved, turnSolved } from '../src/lessons/oil/ch5/L5_4';
+import { OUTAGE_DEFAULTS, SHOCK_STATE_DEFAULTS, crackRise, crudeBackedUp, gasolineSolved as crackRiseSolved, lowestPrice, peakPrice, releaseSolved, runShock } from '../src/lessons/oil/ch5/L5_5';
 
 const finite = (x: number) => Number.isFinite(x);
 
@@ -837,5 +845,156 @@ describe('chapter 4 lessons', () => {
     expect(qualitySolved(58, 106)).toBe(true);
     expect(differentialsAt(58, 106).coldwater).toBeCloseTo(-14.48, 2);
     expect(differentialsAt(80, 106).northfield).toBeCloseTo(-0.61, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 5 engines and the simulated history.
+
+describe('market model', () => {
+  it('balances supply and demand into stocks', () => {
+    const rows = balanceSheet({ group: 31.6 });
+    expect(rows[0].balance).toBeCloseTo(0.8, 6);
+    expect(rows[0].stocks).toBeCloseTo(2800 + 0.8 * 91.25, 6);
+    const flat = balanceSheet({ group: 31.75, quarters: 4 });
+    expect(flat[3].stocks).toBeCloseTo(2800, 6);
+    const cp = crudeAndProductStocks({ crudeSupply: 83, runs: Array(12).fill(83), productDemand: Array(12).fill(83 * 1.03 + 15), otherLiquids: 15 });
+    expect(cp[11].crudeStock).toBeCloseTo(0, 6);
+    expect(cp[11].productStock).toBeCloseTo(0, 6);
+  });
+  it('prices stocks', () => {
+    expect(inventoryPrice(WORLD.normalStocks)).toBe(WORLD.referencePrice);
+    expect(inventoryPrice(2660)).toBeCloseTo(96.99, 2);
+    expect(stocksForPrice(inventoryPrice(2500))).toBeCloseTo(2500, 6);
+  });
+  it('responds to shocks', () => {
+    const base = simulateShock({});
+    expect(base.every((m) => Math.abs(m.price - WORLD.referencePrice) < 1e-6)).toBe(true);
+    const peak = (s: ReturnType<typeof simulateShock>) => Math.max(...s.map((m) => m.price));
+    const out = simulateShock({ outage: { size: 2, start: 2, months: 6 } });
+    expect(peak(out)).toBeCloseTo(101.9, 1);
+    expect(peak(simulateShock({ outage: { size: 2, start: 2, months: 6 }, groupStabilizes: true }))).toBeLessThan(peak(out));
+    expect(peak(simulateShock({ outage: { size: 2, start: 2, months: 6 }, reserveRelease: { rate: 1, start: 3, months: 6 } }))).toBeLessThan(peak(out));
+  });
+  it('shapes the futures curve from stocks', () => {
+    expect(convenienceYield(0)).toBeCloseTo(6, 9);
+    expect(fullCarry(75)).toBeCloseTo(0.775, 9);
+    const low = futuresCurve({ fill: 0.2 });
+    const high = futuresCurve({ fill: 0.9 });
+    expect(low[1]).toBeLessThan(low[0]);
+    expect(high[1] - high[0]).toBeGreaterThan(0.6);
+    expect(high[1] - high[0]).toBeLessThanOrEqual(fullCarry(high[0]) + 1e-9);
+    const full = futuresCurve({ fill: 1 });
+    expect(full[1] - full[0]).toBeGreaterThan(fullCarry(full[0]));
+  });
+  it('makes seasonal product cracks', () => {
+    const pm = productMarket({ runs: 83, gasolineYield: 0.44, distillateYield: 0.42 });
+    const g = pm.map((m) => m.gasolineCrack);
+    expect(g.indexOf(Math.max(...g))).toBeGreaterThanOrEqual(6);
+    expect(g.indexOf(Math.max(...g))).toBeLessThanOrEqual(9);
+  });
+  it('prices the hub in closed form exactly as the network program does', () => {
+    for (let b = 250; b <= 1000; b += 50) {
+      for (const pipe of [300, 480, 700]) {
+        const inp = { ...NETWORK_DEFAULTS, basinSupply: b, pipeline: pipe };
+        const lp = nodePrices(inp);
+        const f = hubPricesFast(inp);
+        expect(f.kessler).toBeCloseTo(lp.kessler, 6);
+        expect(f.calder).toBeCloseTo(lp.calder, 6);
+      }
+    }
+  });
+  it('generates a deterministic, physically driven history', () => {
+    const h = oilHistory();
+    expect(h.length).toBe(260);
+    expect(oilHistory()).toBe(h);
+    const sp = h.map((w) => w.brent - w.wti);
+    // The Kessler–Calder line fills in the second year and the expansion relieves it in the fourth.
+    expect(Math.max(...sp.slice(90, 150))).toBeGreaterThan(10);
+    expect(Math.max(...sp.slice(165, 260))).toBeLessThan(6);
+    expect(Math.max(...oilHistory({ expansion: null }).map((w) => w.brent - w.wti))).toBeGreaterThan(25);
+    expect(h.some((w) => w.wtiCurve[1] < w.wtiCurve[0])).toBe(true);
+    expect(h.every((w) => Number.isFinite(w.crack321) && Number.isFinite(w.coldwater))).toBe(true);
+  });
+});
+
+describe('chapter 5 lessons', () => {
+  it('5.1: oil balances', () => {
+    const r = rowsOf(BALANCE_DEFAULTS);
+    expect(r[2].balance).toBeCloseTo(-1.2, 6);
+    expect(Math.round(r[3].stocks)).toBe(2745);
+    expect(inventoryPrice(r[3].stocks)).toBeCloseTo(85.49, 2);
+    expect(inventoryPrice(r[7].stocks)).toBeCloseTo(115.84, 2);
+    expect(flatGroup(1, 0.15)).toEqual([31.75]);
+    expect(yearOneChange({ ...BALANCE_DEFAULTS, group: 31.75 })).toBeCloseTo(0, 6);
+    expect(flatStocksSolved(BALANCE_DEFAULTS)).toBe(false);
+    expect(flatStocksSolved({ ...BALANCE_DEFAULTS, group: 31.75 })).toBe(true);
+    expect(flatStocksSolved({ ...BALANCE_DEFAULTS, group: 31.7 })).toBe(false);
+    const y = yearOfStocks(2, 0);
+    expect(y[4].crudeStock - y[1].crudeStock).toBeCloseTo(121.6, 1);
+    expect(y[4].productStock - y[1].productStock).toBeCloseTo(-82.7, 1);
+    expect(flatBoost(2)).toEqual([2.1]);
+    expect(flatProductsSolved(2, 0)).toBe(false);
+    expect(flatProductsSolved(2, 2.1)).toBe(true);
+  });
+  it('5.2: benchmarks and differentials', () => {
+    const s = EXPLORER_DEFAULTS;
+    expect(smallestExpansionSolved(s)).toBe(false);
+    expect(smallestExpansion()).toBe(275);
+    expect(smallestExpansionSolved({ ...s, add: 275 })).toBe(true);
+    expect(smallestExpansionSolved({ ...s, add: 250 })).toBe(false);
+    expect(widestAfterOpening(250)).toBeCloseTo(11.94, 2);
+    expect(widestAfterOpening(275)).toBeCloseTo(4.43, 2);
+    const st = spreadStats(historyFor(s));
+    expect(st.average).toBeCloseTo(5.58, 2);
+    expect(st.fullWeeks).toBe(80);
+    expect(cheapestNorthfieldSolved('built', 26)).toBe(false);
+    expect(cheapestNorthfieldSolved('built', 140)).toBe(true);
+    const b = breakdown(historyForMode('built')[140]);
+    expect(b.nfLocation).toBeCloseTo(-11.14, 2);
+    expect(b.nfQuality).toBeCloseTo(-5.38, 2);
+  });
+  it('5.3: product markets', () => {
+    const ref = marketFor(MARKET_DEFAULTS);
+    const g = ref.map((m) => m.gasolineStock);
+    expect(g.indexOf(Math.max(...g))).toBe(3);
+    expect(g.indexOf(Math.min(...g))).toBe(8);
+    expect(ref[8].gasolineCrack).toBeCloseTo(23.29, 2);
+    expect(distillateFloorSolved(MARKET_DEFAULTS)).toBe(false);
+    expect(distillateFloorSolved({ runs: 83, distillate: 0.4225, outage: 'none' })).toBe(true);
+    expect(distillateFloorSolved({ runs: 83, distillate: 0.425, outage: 'none' })).toBe(false);
+    expect(moreDieselSolved(106)).toBe(false);
+    expect(moreDieselSolved(88)).toBe(true);
+    expect(moreDieselSolved(87)).toBe(false);
+    expect(outputAt(87).gasoline).toBeCloseTo(49.66, 1);
+    const gs = frontier().map((p) => p.gasoline);
+    expect(Math.max(...gs) - Math.min(...gs)).toBeCloseTo(6.25, 1);
+  });
+  it('5.4: futures curve and tank tops', () => {
+    expect(turnSolved(CURVE_STATE_DEFAULTS)).toBe(false);
+    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fill: 33 })).toBe(true);
+    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fill: 34 })).toBe(false);
+    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 32 })).toBeLessThan(0);
+    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 55 })).toBeCloseTo(0.57, 2);
+    expect(tankTopsSolved(TANK_DEFAULTS)).toBe(false);
+    expect(tankTopsSolved({ fill: 97.5, floating: 1.2 })).toBe(true);
+    expect(tankTopsSolved({ fill: 98, floating: 1.2 })).toBe(false);
+    expect(tankTops({ fill: 100, floating: 1.2 }).spread).toBeCloseTo(1.19, 2);
+    expect(Math.round(impliedDayRate(1.2))).toBe(78947);
+  });
+  it('5.5: shocks', () => {
+    expect(releaseSolved(SHOCK_STATE_DEFAULTS)).toBe(false);
+    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 1 })).toBe(true);
+    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 0.9 })).toBe(false);
+    expect(peakPrice(runShock(SHOCK_STATE_DEFAULTS))).toBeCloseTo(101.85, 2);
+    expect(lowestPrice(runShock(SHOCK_STATE_DEFAULTS))).toBeCloseTo(66.42, 2);
+    expect(peakPrice(runShock({ ...SHOCK_STATE_DEFAULTS, group: true }))).toBeCloseTo(86.25, 2);
+    expect(peakPrice(runShock({ ...SHOCK_STATE_DEFAULTS, release: 1 }))).toBeCloseTo(89.66, 2);
+    expect(lowestPrice(runShock({ ...SHOCK_STATE_DEFAULTS, kind: 'demand', size: 3 }))).toBeCloseTo(54.39, 2);
+    expect(crackRiseSolved(OUTAGE_DEFAULTS)).toBe(false);
+    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 2.9 })).toBe(true);
+    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 2.8 })).toBe(false);
+    expect(crackRise(OUTAGE_DEFAULTS).gasoline).toBeCloseTo(3.567, 2);
+    expect(crudeBackedUp(OUTAGE_DEFAULTS)).toBeCloseTo(121.6, 6);
   });
 });

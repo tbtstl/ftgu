@@ -188,6 +188,32 @@ export function nodePrices(inp: NetworkInputs = NETWORK_DEFAULTS): Record<NodeId
   return out;
 }
 
+/**
+ * The same prices without solving the program: the network's few regimes in closed form (used
+ * where thousands of weeks of history need prices quickly). Agrees with nodePrices away from the
+ * exact boundaries between regimes.
+ */
+export function hubPricesFast(inp: NetworkInputs = NETWORK_DEFAULTS): { kessler: number; calder: number } {
+  const surplus = inp.basinSupply + Math.min(inp.coldwaterSupply, inp.coldwaterLine) - inp.inlandDemand;
+  const exportParity = Math.max(inp.northportPrice - inp.freightCalderNorthport, inp.northportPrice + inp.eastbayPremium - inp.freightCalderEastbay);
+  const calderFrom = (fromKessler: number) => {
+    const need = inp.calderDemand - fromKessler;
+    if (need > inp.seaboardSupply + 1e-9) return inp.northportPrice + inp.freightCalderNorthport;
+    if (need > 1e-9) return inp.northportPrice - inp.freightSeaboardNorthport + inp.freightSeaboardCalder;
+    return exportParity;
+  };
+  if (surplus < inp.pipeline - 1e-9) {
+    const calder = calderFrom(surplus);
+    return { kessler: calder - inp.pipelineTariff, calder };
+  }
+  const railed = Math.min(inp.rail, surplus - inp.pipeline);
+  const calder = calderFrom(inp.pipeline + railed);
+  if (surplus - inp.pipeline < inp.rail - 1e-9) return { kessler: calder - inp.railCost, calder };
+  const heldBack = surplus - inp.pipeline - inp.rail;
+  const kessler = heldBack < Math.min(inp.coldwaterSupply, inp.coldwaterLine) - 1e-9 ? inp.floor + inp.coldwaterTariff : inp.floor + inp.gathering;
+  return { kessler, calder };
+}
+
 /** Spread between the coastal benchmark (Northport) and the inland hub (Kessler), $/bbl. */
 export function hubSpread(inp: NetworkInputs = NETWORK_DEFAULTS): number {
   const p = nodePrices(inp);
