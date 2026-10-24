@@ -32,6 +32,11 @@ import { DAYS, LEAD_MAX, YEARS, archive, dayIndex, dayInfo, expectedTemp, foreca
 import { ENSO_DEFAULTS, ensoHistory, ensoPeriod } from '../src/engines/weather/enso';
 import { frontPassage, frontWeather } from '../src/engines/weather/fronts';
 import { stormOutlook } from '../src/engines/weather/storms';
+import { stationDay } from '../src/engines/weather/station';
+import { beamHeightKm, brightnessTempC, rainFromDbz } from '../src/engines/weather/remote';
+import { runModel, truthField, truthWaves } from '../src/engines/weather/nwp';
+import { attractorPoint, separationTime } from '../src/engines/weather/lorenz';
+import { brierScore, crpsNormal } from '../src/engines/weather/verify';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
@@ -41,7 +46,12 @@ import { jetSolved, tradesSolved } from '../src/lessons/weather/ch2/L2_1';
 import { FRONT_DEFAULTS, lagSolved, rainSolved } from '../src/lessons/weather/ch2/L2_2';
 import { INGREDIENT_DEFAULTS, floodSolved, leastLiftSolved } from '../src/lessons/weather/ch2/L2_3';
 import { PACIFIC_DEFAULTS, laNinaSolved, thresholdSolved } from '../src/lessons/weather/ch2/L2_4';
-import { STATION_DEFAULTS, steadiestSolved, steadyColdSolved } from '../src/lessons/weather/ch2/L2_5';
+import { STATION_DEFAULTS as CLIMATE_STATION_DEFAULTS, steadiestSolved, steadyColdSolved } from '../src/lessons/weather/ch2/L2_5';
+import { STATION_DEFAULTS, correctionSolved, gapSolved } from '../src/lessons/weather/ch3/L3_1';
+import { RADAR_DEFAULTS, SAT_DEFAULTS, opaqueSolved, rainBeamSolved } from '../src/lessons/weather/ch3/L3_2';
+import { FORECAST_DEFAULTS, stepSolved, windSolved } from '../src/lessons/weather/ch3/L3_3';
+import { steadySolved, togetherSolved } from '../src/lessons/weather/ch3/L3_4';
+import { CAL_DEFAULTS, calibrationSolved, climateLeadSolved } from '../src/lessons/weather/ch3/L3_5';
 
 describe('the Calder region', () => {
   it('gives Calder Bay a New York–like year', () => {
@@ -338,9 +348,55 @@ describe('fronts and storms', () => {
     expect(laNinaSolved(1.8)).toBe(true);
     expect(laNinaSolved(1.0)).toBe(false);
     expect(steadyColdSolved({ latitude: 55, continentality: 0.35, elevation: 0 })).toBe(true);
-    expect(steadyColdSolved(STATION_DEFAULTS)).toBe(false);
+    expect(steadyColdSolved(CLIMATE_STATION_DEFAULTS)).toBe(false);
     expect(steadiestSolved(6)).toBe(true);
     expect(steadiestSolved(0)).toBe(false);
+  });
+  it('measures, senses and models the atmosphere (chapter 3 engines)', () => {
+    // The station's official mean is (max + min) / 2 of its hourly curve.
+    const day = stationDay(dayIndex(10, 0, 15));
+    expect((day.trueMax + day.trueMin) / 2).toBeCloseTo(day.officialMeanF, 9);
+    const faulty = stationDay(dayIndex(10, 0, 15), { unshielded: 4 });
+    expect(faulty.readMax).toBeGreaterThan(day.trueMax);
+    // Radar: the beam climbs; 40 dBZ is about 11.5 mm/h.
+    expect(beamHeightKm(100, 0.5)).toBeCloseTo(1.46, 1);
+    expect(rainFromDbz(40)).toBeCloseTo(11.5, 0);
+    expect(brightnessTempC(20, -50, 1)).toBeCloseTo(-50, 6);
+    // The upwind scheme is stable up to a Courant number of 1.
+    const t0 = truthField(truthWaves(), 0, 12, 0);
+    expect(runModel(t0, 12, 1, 48).unstable).toBe(false);
+    expect(runModel(t0, 12, 3, 48).unstable).toBe(true);
+    // Lorenz: a hundredfold smaller error buys about ln(100)/0.9 ≈ 5 time units.
+    const p = attractorPoint(5);
+    const a = separationTime(p, 1e-3)!;
+    const b = separationTime(p, 1e-5)!;
+    expect(b - a).toBeGreaterThan(3);
+    expect(b - a).toBeLessThan(7);
+    // Scores.
+    expect(crpsNormal(0, 1, 0)).toBeCloseTo(0.234, 3);
+    expect(brierScore([1, 0], [true, false])).toBe(0);
+  });
+  it('chapter 3 challenges', () => {
+    expect(gapSolved({ year: 20, month: 0, dom: 2 })).toBe(true);
+    expect(gapSolved(STATION_DEFAULTS)).toBe(false);
+    expect(correctionSolved({ unshielded: 3, heatIsland: 0, drift: -0.2 })).toBe(true);
+    expect(correctionSolved({ unshielded: 3, heatIsland: 0, drift: -0.25 })).toBe(false);
+    expect(rainBeamSolved({ ...RADAR_DEFAULTS, rangeKm: 105 })).toBe(true);
+    expect(rainBeamSolved({ ...RADAR_DEFAULTS, rangeKm: 110 })).toBe(false);
+    expect(opaqueSolved({ ...SAT_DEFAULTS, tau: 2.7 })).toBe(true);
+    expect(opaqueSolved({ ...SAT_DEFAULTS, tau: 2.6 })).toBe(false);
+    expect(stepSolved(1, 20)).toBe(true);
+    expect(stepSolved(1.25, 20)).toBe(false);
+    expect(windSolved({ ...FORECAST_DEFAULTS, windMs: 10 })).toBe(true);
+    expect(windSolved(FORECAST_DEFAULTS)).toBe(false);
+    expect(togetherSolved(-6)).toBe(true);
+    expect(togetherSolved(-4)).toBe(false);
+    expect(steadySolved(13.25, 0.2)).toBe(true);
+    expect(steadySolved(13, 0.2)).toBe(false);
+    expect(climateLeadSolved(9)).toBe(true);
+    expect(climateLeadSolved(8)).toBe(false);
+    expect(calibrationSolved({ lead: 5, inflation: 1.65, bias: 0 })).toBe(true);
+    expect(calibrationSolved(CAL_DEFAULTS)).toBe(false);
   });
   it('places the Hadley cell’s edge with the rotation rate', () => {
     expect(circulation(1, 1 / 3).cells.length).toBe(3);
