@@ -5,6 +5,7 @@
 // a realistic range rather than to match any real system.
 
 import { psia } from '../../engines/gas/properties';
+import type { StorageSpec } from '../../engines/gas/storage';
 
 export type GasNodeId = 'ridgeback' | 'sandhill' | 'calder' | 'metro' | 'bayport';
 
@@ -94,7 +95,7 @@ export interface StorageField {
 
 export const STORAGE_FIELDS: StorageField[] = [
   { id: 'saltflat', name: 'Salt Flat', node: 'calder', kind: 'salt', workingBcf: 30, baseBcf: 12, maxWithdrawBcfd: 1.2, maxInjectBcfd: 0.6, x: 336, y: 262 },
-  { id: 'hollowcreek', name: 'Hollow Creek', node: 'metro', kind: 'reservoir', workingBcf: 120, baseBcf: 110, maxWithdrawBcfd: 1.0, maxInjectBcfd: 0.6, x: 430, y: 52 },
+  { id: 'hollowcreek', name: 'Hollow Creek', node: 'metro', kind: 'reservoir', workingBcf: 120, baseBcf: 110, maxWithdrawBcfd: 1.0, maxInjectBcfd: 0.8, x: 420, y: 40 },
 ];
 
 export interface Basin {
@@ -112,3 +113,52 @@ export const BASINS: Basin[] = [
 
 /** The LNG export terminal at Bayport: how much gas it can take in to liquefy, Bcf/d. */
 export const BAYPORT_LNG_FEEDGAS_BCFD = 1.2;
+
+/** Corridors where a pipeline could run, for building networks: the six built lines plus two that were never built. */
+export interface Corridor {
+  id: string;
+  from: GasNodeId;
+  to: GasNodeId;
+  lengthMi: number;
+}
+
+export const CORRIDORS: Corridor[] = [
+  ...PIPELINES.map((p) => ({ id: p.id, from: p.from, to: p.to, lengthMi: p.lengthMi })),
+  { id: 'ridgeback-sandhill', from: 'ridgeback', to: 'sandhill', lengthMi: 200 },
+  { id: 'bayport-metro', from: 'bayport', to: 'metro', lengthMi: 250 },
+];
+
+/** Gas demand at each place on three reference days, Bcf/d. */
+export type NodeAmounts = Record<GasNodeId, number>;
+
+export const REFERENCE_DAYS: Record<'summer' | 'winter' | 'design', { name: string; demand: NodeAmounts }> = {
+  summer: { name: 'A summer day', demand: { sandhill: 0.05, ridgeback: 0.1, calder: 0.2, metro: 1.1, bayport: 1.7 } },
+  winter: { name: 'A cold winter day', demand: { sandhill: 0.05, ridgeback: 0.1, calder: 0.3, metro: 2.4, bayport: 1.75 } },
+  design: { name: 'The design day', demand: { sandhill: 0.05, ridgeback: 0.1, calder: 0.35, metro: 3.1, bayport: 1.75 } },
+};
+
+/** Short-run cost of producing gas at each field (gathering, processing, upkeep), $/MMBtu: illustrative. */
+export const PRODUCTION_COST: Partial<Record<GasNodeId, number>> = { ridgeback: 1.2, sandhill: 1.6 };
+
+/** The storage fields with the physical limits the storage engine needs. */
+export const STORAGE_SPECS: Record<'saltflat' | 'hollowcreek', StorageSpec> = {
+  saltflat: { ...STORAGE_FIELDS[0], pMaxPsia: 2400, pwfPsia: 600, pInjPsia: 2700, wdHeadroom: 3, injHeadroom: 2 },
+  hollowcreek: { ...STORAGE_FIELDS[1], pMaxPsia: 2000, pwfPsia: 600, pInjPsia: 2300, wdHeadroom: 1.5, injHeadroom: 1.2 },
+};
+
+/**
+ * Simulated, illustrative terms for Bayport's LNG: buyers pay 115% of the Calder Hub price for feed
+ * gas (the extra covers the gas burned in liquefaction) plus a fixed fee for the plant, the usual
+ * structure of North American export contracts; charter rates, voyages and regasification fees are
+ * in a realistic range.
+ */
+export const BAYPORT_LNG = {
+  feedMultiplier: 1.15,
+  liquefactionFee: 2.5,
+  regasFee: 0.4,
+  charterPerDay: 80_000,
+  destinations: {
+    europe: { name: 'Europe', ladenDays: 13, voyageFees: 0 },
+    asia: { name: 'Asia', ladenDays: 25, voyageFees: 500_000 },
+  },
+} as const;

@@ -1,26 +1,34 @@
 // The natural gas course: its engines, its world, and the numbers its lessons quote.
 
 import { describe, expect, it } from 'vitest';
-import { checkSpec, combustionProducts, composition, gasProperties, METHANE, MMBTU_PER_MCF, MMBTU_PER_MWH, PIPELINE_GAS, R_PSIA, rankine, SCF_PER_LBMOL, psig } from '../src/engines/gas/properties';
+import { checkSpec, combustionProducts, composition, gasProperties, METHANE, MMBTU_PER_MCF, MMBTU_PER_MWH, PIPELINE_GAS, psia, psig, R_PSIA, rankine, SCF_PER_LBMOL } from '../src/engines/gas/properties';
 import { piston, scfPerCubicFoot, zFactor } from '../src/engines/gas/eos';
-import { ROUGHNESS, averagePressure, frictionFactor, inletPressure, outletPressure, pipeFlow, pipeInventory, pressureProfile } from '../src/engines/gas/hydraulics';
+import { averagePressure, frictionFactor, inletPressure, outletPressure, pipeFlow, pipeInventory, pressureProfile, ROUGHNESS } from '../src/engines/gas/hydraulics';
 import { compress, lineCapacity, stationLine } from '../src/engines/gas/compression';
-import { PIPELINE, PIPELINES, stationLineOf } from '../src/model/gas/world';
-import { psia } from '../src/engines/gas/properties';
-import { MIX_DEFAULTS, PRESETS, ethaneSolved, mixComposition } from '../src/lessons/gas/ch1/L1_1';
-import { CHARGE_SCF, HEAT, MAOP_PSIG, PISTON_DEFAULTS, V_MAX, V_MIN, maopSolved, zMinimum } from '../src/lessons/gas/ch1/L1_2';
-import { FLOW_DEFAULTS, TARGET_MMCFD, flowAt, northlineSolved, transitHours } from '../src/lessons/gas/ch1/L1_3';
-import { FEWEST_FOR_TARGET, LINE_DEFAULTS, STATION_DEFAULTS, TARGET_FLOW, capacityWith, delivers, expansionSolved, fewestStations } from '../src/lessons/gas/ch1/L1_4';
-import { BILL_DEFAULTS, CCF_THERM_HHV, HOME_SCF_PER_CF, METER_DEFAULTS, billsEqualSolved, meterHour, thermsPerCcf } from '../src/lessons/gas/ch1/L1_5';
+import { BAYPORT_LNG_FEEDGAS_BCFD, GAS_NODES, PIPELINE, PIPELINES, REFERENCE_DAYS, stationLineOf, STORAGE_SPECS } from '../src/model/gas/world';
+import { ethaneSolved, MIX_DEFAULTS, mixComposition, PRESETS } from '../src/lessons/gas/ch1/L1_1';
+import { CHARGE_SCF, HEAT, MAOP_PSIG, maopSolved, PISTON_DEFAULTS, V_MAX, V_MIN, zMinimum } from '../src/lessons/gas/ch1/L1_2';
+import { FLOW_DEFAULTS, flowAt, northlineSolved, TARGET_MMCFD, transitHours } from '../src/lessons/gas/ch1/L1_3';
+import { capacityWith, delivers, expansionSolved, FEWEST_FOR_TARGET, fewestStations, LINE_DEFAULTS, STATION_DEFAULTS, TARGET_FLOW } from '../src/lessons/gas/ch1/L1_4';
+import { BILL_DEFAULTS, billsEqualSolved, CCF_THERM_HHV, HOME_SCF_PER_CF, METER_DEFAULTS, meterHour, thermsPerCcf } from '../src/lessons/gas/ch1/L1_5';
 import { DAYS_PER_MONTH, gasFVF, gasInPlace, gasViscosity, pOverZ, pressureFromPz, simulateTank, wellRate } from '../src/engines/gas/reservoir';
-import { arpsCum, arpsEur, arpsRate, declineAt, fieldCash, fieldProduction, firstYearDecline, fitArps, noisyHistory, ridgebackMonthly, ridgebackRate, productionByVintage, SANDHILL_WELL, sandhillMonthly, sumBcf, switchTime } from '../src/engines/gas/decline';
-import { gallonsPerMcf, ethaneBreakeven, plantValue, mmbtuPerGallon, processGas } from '../src/engines/gas/processing';
+import { arpsCum, arpsEur, arpsRate, declineAt, fieldCash, fieldProduction, firstYearDecline, fitArps, noisyHistory, productionByVintage, ridgebackMonthly, ridgebackRate, SANDHILL_WELL, sandhillMonthly, sumBcf, switchTime } from '../src/engines/gas/decline';
+import { ethaneBreakeven, gallonsPerMcf, mmbtuPerGallon, plantValue, processGas } from '../src/engines/gas/processing';
 import { NGL_PRICES, OPEX_PER_MCF, RAW_WATER, RIDGEBACK_PI, RIDGEBACK_RAW, RIDGEBACK_ROCK, ROYALTY, SANDHILL_PI, SANDHILL_RAW, SANDHILL_ROCK, WELL_COST } from '../src/model/gas/production';
 import { BASE_ROCK, CHALLENGE_PRESSURE, explorerRate, fieldNumbers, FIELDS_DEFAULTS, leastPermSolved, permOf, permText, PWF, rateText, ROCK_DEFAULTS } from '../src/lessons/gas/ch2/L2_1';
 import { BLOCK_GIP, blockSolved, lineEstimate, runWell, steadyCap, steadySolved, SURVEYS, WELL_DEFAULTS, wellOf } from '../src/lessons/gas/ch2/L2_2';
 import { ACTUAL_BCF, bestFit, fitError, FORECAST_DEFAULTS, forecastSolved, HISTORY, SEEN } from '../src/lessons/gas/ch2/L2_3';
 import { breakevenPrice, BUDGET_WELLS, FIELD_DEFAULTS, fieldSolved, promise, schedule, TARGET } from '../src/lessons/gas/ch2/L2_4';
 import { breakevenSolved, CHALLENGE_GAS, dayValue, DEEP, ethaneLeftSolved, lowestPayingCent, PLANT_DEFAULTS, recoveryGain, runPlant, STANDARD, VALUE_DEFAULTS } from '../src/lessons/gas/ch2/L2_5';
+import { bindingArcs, corridorDesign, type FlowProblem, loopedFlow, solveFlow } from '../src/engines/gas/network';
+import { CITY_HOURLY_SHAPE, packLineCapacity, packLineOf, packWindow, runLinepack } from '../src/engines/gas/linepack';
+import { daysToFill, deliverableOver, injectCapacity, runStorage, storagePressure, withdrawCapacity } from '../src/engines/gas/storage';
+import { breakevenHub, cargoMargin, lngCargo, netback } from '../src/engines/gas/lng';
+import { BUILD_DEFAULTS, buildProblem, CAPITAL_CHARGE, chargePerMMBtu, CHEAPEST, CHEAPEST_COST, cheapestExpansion, design, expansionSolved as buildSolved, networkCost, onlyAdds, REGION_STATIONS } from '../src/lessons/gas/ch3/L3_1';
+import { dayPreset, hollowSolved, LOOP_DEFAULTS, LOOP_TARGET, loopedCapacity, loopSolved, solveDay, SOLVER_DEFAULTS } from '../src/lessons/gas/ch3/L3_2';
+import { ANSWER_RAMP, bestStart, ccgtMW, CHALLENGE_AVG, clean, dayMean, largestRamp, PACK_DEFAULTS, RAMP_STEP, rampSolved, simulate, START_MAX, START_MIN, START_STEP, startRange } from '../src/lessons/gas/ch3/L3_3';
+import { coldSpell, CROSSOVER_DAY, crossoverSolved, dayLabel, DESIGN_INV, DESIGN_NEED, firmRate, firmSolved, gasYear, INJ_DAYS, WD_DAYS, YEAR_DEFAULTS } from '../src/lessons/gas/ch3/L3_4';
+import { breakevenSolved as cargoBreakevenSolved, CHAIN_DEFAULTS, CHALLENGE, challengeAnswer, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
 
 describe('gas chapter 1: properties', () => {
   it('uses 60 °F and 14.73 psia as standard conditions', () => {
@@ -833,5 +841,473 @@ describe('gas 2.5', () => {
     expect(Math.round(gasProperties(noCo2).wobbe)).toBe(1298);
     expect((noCo2.nitrogen * 100).toFixed(2)).toBe('4.15');
     expect(checkSpec(noCo2).ok).toBe(false);
+  });
+});
+
+describe('gas chapter 3: network flow', () => {
+  const two: FlowProblem = {
+    nodes: ['a', 'b'],
+    arcs: [{ id: 'ab', from: 'a', to: 'b', cap: 1, cost: 0.2 }],
+    supplies: [
+      { node: 'a', cap: 5, cost: 2 },
+      { node: 'b', cap: 5, cost: 6 },
+    ],
+    demands: [{ node: 'b', cap: 3, value: 50 }],
+  };
+
+  it('fills the cheap path first and prices each node at its marginal cost', () => {
+    const s = solveFlow(two);
+    expect(s.flow.ab).toBeCloseTo(1, 9);
+    expect(s.supplied).toEqual([1, 2]);
+    expect(s.prices.a).toBeCloseTo(2, 9);
+    expect(s.prices.b).toBeCloseTo(6, 9);
+    expect(bindingArcs(two, s)).toEqual(['ab']);
+  });
+
+  it('prices the far node at the near price plus transport when the pipe has room', () => {
+    const s = solveFlow({ ...two, demands: [{ node: 'b', cap: 0.5, value: 50 }] });
+    expect(s.prices.b).toBeCloseTo(2.2, 9);
+    expect(s.unserved.b).toBeCloseTo(0, 9);
+  });
+
+  it('prices unserved demand at its value', () => {
+    const s = solveFlow({ ...two, supplies: [{ node: 'a', cap: 5, cost: 2 }] });
+    expect(s.unserved.b).toBeCloseTo(2, 9);
+    expect(s.prices.b).toBeCloseTo(50, 9);
+  });
+
+  it('serves the region’s design day only with Hollow Creek withdrawing', () => {
+    const nodes = GAS_NODES.map((n) => n.id);
+    const d = REFERENCE_DAYS.design.demand;
+    const base = {
+      nodes,
+      arcs: PIPELINES.map((p) => ({ id: p.id, from: p.from, to: p.to, cap: p.capacityBcfd, cost: p.variableCost })),
+      demands: (Object.keys(d) as Array<keyof typeof d>).map((k) => ({ node: k, cap: d[k], value: 50 })),
+    };
+    const supplies = [
+      { node: 'ridgeback', cap: 2.6, cost: 1.2 },
+      { node: 'sandhill', cap: 0.8, cost: 1.6 },
+      { node: 'calder', cap: 1.2, cost: 4 },
+    ];
+    const without = solveFlow({ ...base, supplies });
+    expect(without.unserved.metro).toBeGreaterThan(0.5);
+    const withHc = solveFlow({ ...base, supplies: [...supplies, { node: 'metro', cap: 1.0, cost: 4.5 }] });
+    expect(withHc.unserved.metro).toBeCloseTo(0, 9);
+  });
+
+  it('reproduces the six built lines’ capacities and prices them in billions', () => {
+    let total = 0;
+    for (const p of PIPELINES) {
+      const d = corridorDesign(p.id, p.sizeIn, p.stations);
+      expect(d.capacityBcfd).toBe(p.capacityBcfd);
+      total += d.cost;
+    }
+    expect(total / 1e9).toBeGreaterThan(5);
+    expect(total / 1e9).toBeLessThan(12);
+    expect(corridorDesign('calder-metro', 36, 4).capacityBcfd).toBeCloseTo(2.05, 9);
+  });
+
+  it('splits flow between looped pipes by their resistance', () => {
+    const pipe = { diameterIn: 35, lengthMi: 80, roughnessIn: 0.0007 };
+    const none = loopedFlow(pipe, 0, 0, 1454.7, 779.7).total;
+    const half = loopedFlow(pipe, 30, 0.5, 1454.7, 779.7);
+    const full = loopedFlow(pipe, 35, 1, 1454.7, 779.7);
+    expect(half.total).toBeGreaterThan(none);
+    expect(full.total).toBeCloseTo(2 * none, 0);
+    expect(half.inLoop + half.inMain).toBeCloseTo(half.total, 9);
+  });
+});
+
+describe('gas chapter 3: linepack, storage and LNG', () => {
+  const NL = packLineOf(PIPELINE['calder-metro']);
+
+  it('gives Northline its capacity and a pack window that closes at capacity', () => {
+    expect(packLineCapacity(NL)).toBeCloseTo(1802, 0);
+    const w0 = packWindow(NL, 600);
+    const w1 = packWindow(NL, 1400);
+    expect(w0.swing).toBeGreaterThan(w1.swing);
+    expect(packWindow(NL, 1801).swing).toBeLessThan(5);
+  });
+
+  it('keeps linepack within its window hour by hour', () => {
+    const dem = CITY_HOURLY_SHAPE.map((x) => 1200 * x);
+    const w = packWindow(NL, 1200);
+    const r = runLinepack(NL, (w.max + w.min) / 2, [1200], dem, 48);
+    for (const h of r) {
+      expect(h.discharge).toBeLessThanOrEqual(NL.maopPsia + 1e-3);
+      expect(h.delivery).toBeGreaterThanOrEqual(NL.minDeliveryPsia - 1e-3);
+    }
+    expect(CITY_HOURLY_SHAPE.reduce((a, b) => a + b) / 24).toBeCloseTo(1, 9);
+  });
+
+  it('slows withdrawals as storage empties and injections as it fills', () => {
+    const hc = STORAGE_SPECS.hollowcreek;
+    expect(withdrawCapacity(hc, 120)).toBeCloseTo(1, 9);
+    expect(withdrawCapacity(hc, 30)).toBeLessThan(withdrawCapacity(hc, 60));
+    expect(injectCapacity(hc, 110)).toBeLessThan(injectCapacity(hc, 30));
+    const days = daysToFill(hc, 0, 120);
+    expect(days).toBeGreaterThan(180);
+    expect(days).toBeLessThan(214);
+    const salt = STORAGE_SPECS.saltflat;
+    expect(daysToFill(salt, 0, 30)).toBeLessThan(70);
+    expect(deliverableOver(salt, 30, 10)).toBeCloseTo(12, 6);
+  });
+
+  it('runs a storage season and respects its ratchets', () => {
+    const hc = STORAGE_SPECS.hollowcreek;
+    const r = runStorage(hc, 100, Array<number>(60).fill(-1.0));
+    expect(r.some((d) => d.limited)).toBe(true);
+    for (const d of r) expect(d.inventory).toBeGreaterThanOrEqual(0);
+  });
+
+  it('conserves energy along the LNG chain and agrees with its own netback', () => {
+    const v = { hubPrice: 3, feedMultiplier: 1.15, liquefactionFee: 2.5, ladenDays: 13, charterPerDay: 80_000, voyageFees: 0, regasFee: 0.4 };
+    const c = lngCargo(v);
+    expect(c.feed).toBeCloseTo(c.liquefactionFuel + c.boilOff + c.regasFuel + c.sentOut, 3);
+    expect(c.loaded / 1e6).toBeCloseTo(3.825, 3);
+    expect(cargoMargin({ ...v, hubPrice: breakevenHub(v, 10) }, 10)).toBeCloseTo(0, 0);
+    expect(c.delivered$).toBeGreaterThan(6.5);
+    expect(c.delivered$).toBeLessThan(8);
+  });
+});
+
+describe('gas 3.1', () => {
+  const day = (d: 'summer' | 'winter' | 'design', plant = false) => {
+    const p = buildProblem({ ...BUILD_DEFAULTS, day: d, plant });
+    return { p, s: solveFlow(p) };
+  };
+  const supply = (r: ReturnType<typeof day>, id: string) => r.s.supplied[r.p.supplies.findIndex((x) => x.id === id)];
+  const short = (r: ReturnType<typeof day>) => Object.values(r.s.unserved).reduce((a, b) => a + b, 0);
+
+  it('quotes the region’s network on the three days', () => {
+    const summer = day('summer');
+    expect(summer.s.flow['calder-metro']).toBeCloseTo(0.65, 9);
+    expect(summer.s.flow['calder-bayport']).toBeCloseTo(0.85, 9);
+    expect(supply(summer, 'sandhill')).toBeCloseTo(0.55, 9);
+    expect(Math.round((summer.s.flow['calder-metro'] / 1.8) * 100)).toBe(36);
+    const winter = day('winter');
+    expect(supply(winter, 'saltflat')).toBeCloseTo(1.05, 9);
+    expect(supply(winter, 'hollowcreek')).toBeCloseTo(0.15, 9);
+    const design = day('design');
+    expect(short(design)).toBeLessThan(1e-9);
+    expect(supply(design, 'hollowcreek')).toBeCloseTo(0.85, 9);
+    expect(networkCost(BUILD_DEFAULTS) / 1e9).toBeCloseTo(7.89, 2);
+  });
+
+  it('can’t serve the design day without Hollow Creek, whatever the pipes', () => {
+    const p = buildProblem({ ...BUILD_DEFAULTS, day: 'design' });
+    const without = solveFlow({ ...p, supplies: p.supplies.filter((x) => x.id !== 'hollowcreek') });
+    expect(without.unserved.metro).toBeCloseTo(0.85, 9);
+    const supplyTotal = p.supplies.filter((x) => x.id !== 'hollowcreek').reduce((a, x) => a + x.cap, 0);
+    expect(supplyTotal).toBeLessThan(p.demands.reduce((a, d) => a + d.cap, 0));
+  });
+
+  it('makes a fourth Valley Line station the cheapest way to serve the new plant', () => {
+    expect(short(day('design', true))).toBeCloseTo(0.05, 9);
+    const best = cheapestExpansion();
+    expect({ id: best.id, size: best.size, stations: best.stations }).toEqual(CHEAPEST);
+    expect(CHEAPEST_COST / 1e6).toBeCloseTo(39.3, 1);
+    const answer = { ...BUILD_DEFAULTS, day: 'design' as const, plant: true, stations: { ...REGION_STATIONS, 'sandhill-metro': 4 } };
+    expect(buildSolved(answer)).toBe(true);
+    expect(buildSolved({ ...answer, day: 'winter' })).toBe(false);
+    expect(buildSolved({ ...answer, stations: { ...REGION_STATIONS, 'calder-metro': 4 } })).toBe(false);
+    expect(buildSolved({ ...answer, stations: { ...REGION_STATIONS, 'sandhill-metro': 4, 'calder-bayport': 2 } })).toBe(false);
+    expect(onlyAdds({ ...answer, stations: { ...REGION_STATIONS, 'sandhill-metro': 4, 'calder-bayport': 2 } })).toBe(false);
+    // The alternatives the success text names.
+    const nl3 = design('calder-metro', 36, 3);
+    const nl4 = design('calder-metro', 36, 4);
+    expect(((nl4.hp - nl3.hp) * 3000) / 1e6).toBeCloseTo(233.5, 1);
+    expect(nl4.capacityBcfd - 1.8).toBeCloseTo(0.25, 9);
+    expect(design('bayport-metro', 20, 1).cost / 1e6).toBeCloseTo(768.1, 1);
+  });
+
+  it('quotes the economies of scale on Northline’s corridor', () => {
+    expect(CAPITAL_CHARGE).toBeCloseTo(0.106, 3);
+    const d20 = design('calder-metro', 20, 3);
+    const d42 = design('calder-metro', 42, 3);
+    expect(d20.capacityBcfd).toBeCloseTo(0.35, 9);
+    expect(d20.cost / 1e6).toBeCloseTo(802, 0);
+    expect(d42.capacityBcfd).toBeCloseTo(2.7, 9);
+    expect(d20.cost / d20.capacityBcfd / (d42.cost / d42.capacityBcfd)).toBeCloseTo(2.7, 1);
+    const per36 = [1, 2, 3, 4, 5].map((n) => Math.round(design('calder-metro', 36, n).cost / design('calder-metro', 36, n).capacityBcfd / 1e7));
+    expect(per36).toEqual([139, 108, 101, 100, 103]);
+    const nl = design('calder-metro', 36, 3);
+    expect((nl.cost * CAPITAL_CHARGE) / 1e6).toBeCloseTo(193.6, 1);
+    expect(chargePerMMBtu(nl.cost, nl.capacityBcfd, 1)).toBeCloseTo(0.28, 2);
+    expect(chargePerMMBtu(nl.cost, nl.capacityBcfd, 0.6)).toBeCloseTo(0.47, 2);
+  });
+});
+
+describe('gas 3.2', () => {
+  it('routes the cold day through full Northline and Valley Line, with Hollow Creek making up the rest', () => {
+    const w = solveDay(SOLVER_DEFAULTS);
+    expect(SOLVER_DEFAULTS.metro).toBeCloseTo(2.4, 9);
+    expect(w.flow['calder-metro']).toBeCloseTo(1.8, 9);
+    expect(w.flow['sandhill-metro']).toBeCloseTo(0.45, 9);
+    expect(w.hollow).toBeCloseTo(0.15, 9);
+    expect(w.salt).toBeCloseTo(1.05, 9);
+    expect(w.flow['ridgeback-calder']).toBeCloseTo(1.65, 9);
+    expect(w.totalUnserved).toBeCloseTo(0, 9);
+    expect(w.binding.sort()).toEqual(['calder-metro', 'ridgeback-bayport', 'sandhill-metro']);
+    // The Coastal Line is full on all three reference days.
+    for (const d of ['summer', 'winter', 'design'] as const) expect(solveDay(dayPreset(d)).flow['ridgeback-bayport']).toBeCloseTo(0.85, 9);
+  });
+
+  it('leaves Metro short with gas to spare when Northline is out', () => {
+    const o = solveDay({ ...SOLVER_DEFAULTS, out: ['calder-metro'] });
+    expect(o.served.metro).toBeCloseTo(1.45, 9);
+    expect(o.unserved.metro).toBeCloseTo(0.95, 9);
+    expect(SOLVER_DEFAULTS.ridgeback - o.ridgeback).toBeCloseTo(0.45, 9);
+    expect(o.salt).toBeCloseTo(0, 9);
+  });
+
+  it('strands Ridgeback gas past its outlets’ 3.05 Bcf/d', () => {
+    const g = solveDay({ ...dayPreset('summer'), ridgeback: 3.4 });
+    expect(g.ridgeback).toBeCloseTo(3.05, 9);
+    expect(g.binding.sort()).toEqual(['ridgeback-bayport', 'ridgeback-calder']);
+  });
+
+  it('solves the Hollow Creek challenge at 0.85 Bcf/d and nowhere else', () => {
+    const answers: number[] = [];
+    for (let i = 0; i <= 20; i++) if (hollowSolved({ ...dayPreset('design'), hollow: i * 0.05 })) answers.push(Math.round(i * 5));
+    expect(answers).toEqual([85]);
+    expect(hollowSolved(SOLVER_DEFAULTS)).toBe(false);
+    expect(hollowSolved({ ...dayPreset('design'), hollow: 0.85, out: ['ridgeback-calder'] })).toBe(false);
+  });
+
+  it('quotes the looping numbers', () => {
+    expect(loopedCapacity(36, 0).total).toBeCloseTo(1802, 0);
+    const half = loopedCapacity(36, 0.5);
+    expect(half.total / 1000).toBeCloseTo(2.28, 2);
+    expect(half.inLoop).toBeCloseTo(half.inMain, 6);
+    expect(Math.round(half.inLoop)).toBe(1140);
+    expect(loopedCapacity(36, 1).total / 1000).toBeCloseTo(3.6, 2);
+    const h24 = loopedCapacity(24, 0.5);
+    expect(Math.round((h24.inLoop / h24.total) * 100)).toBe(26);
+    expect(lineCapacity({ ...stationLineOf(PIPELINE['calder-metro']), stations: 4 }, psia(765)) / 1000).toBeCloseTo(2.08, 2);
+  });
+
+  it('solves the looping challenge at 75% with 36-inch pipe, for about $1.24 billion', () => {
+    expect(LOOP_TARGET).toBe(2650);
+    const answers: number[] = [];
+    for (let i = 0; i <= 20; i++) if (loopSolved({ size: '36', share: i * 5 })) answers.push(i * 5);
+    expect(answers).toEqual([75]);
+    expect(loopSolved(LOOP_DEFAULTS)).toBe(false);
+    expect(loopSolved({ size: '30', share: 90 })).toBe(false);
+    const cap = loopedCapacity(36, 0.75).total;
+    expect(cap / 1000).toBeCloseTo(2.72, 2);
+    expect(loopedCapacity(36, 0.7).total).toBeLessThan(2650);
+    const hp = (q: number) => 3 * compress(q, psia(765), psia(1440)).hp;
+    const extra = hp(cap) - hp(loopedCapacity(36, 0).total);
+    expect(Math.round(extra / 1000) * 1000).toBe(91000);
+    expect((36 * 180 * 150_000 + extra * 3000) / 1e9).toBeCloseTo(1.24, 2);
+    // 24-inch loops can never reach it; 30-inch loops need 90%.
+    expect(loopedCapacity(24, 1).total).toBeLessThan(2650);
+  });
+});
+
+describe('gas 3.3', () => {
+  const NL = packLineOf(PIPELINE['calder-metro']);
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+
+  it('starts with a clean two days: an 89 MMcf swing and Metro never below 858 psig', () => {
+    const run = simulate(PACK_DEFAULTS);
+    expect(clean(run)).toBe(true);
+    const packs = run.map((h) => h.pack);
+    expect(Math.round(Math.max(...packs))).toBe(856);
+    expect(Math.round(Math.min(...packs))).toBe(767);
+    expect(Math.round(Math.min(...run.map((h) => h.delivery)) - 14.696)).toBe(858);
+    const w = startRange(1300, 0, 1300);
+    expect(Math.ceil(w.lo)).toBe(730);
+    expect(Math.floor(w.hi)).toBe(828);
+  });
+
+  it('carries at most a 375 MMcf/d evening ramp at 1,300 MMcf/d, and only from 785 MMcf at midnight', () => {
+    expect(ANSWER_RAMP).toBe(375);
+    expect(Math.round(ccgtMW(ANSWER_RAMP) / 100) * 100).toBe(2500);
+    const starts: number[] = [];
+    for (let s = START_MIN; s <= START_MAX; s += START_STEP) if (clean(simulate({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP, start: s }))) starts.push(s);
+    expect(starts).toEqual([785]);
+    for (let s = START_MIN; s <= START_MAX; s += START_STEP) expect(clean(simulate({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP + RAMP_STEP, start: s }))).toBe(false);
+    expect(bestStart({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP })).toBe(785);
+    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP, start: 785 })).toBe(true);
+    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP })).toBe(false);
+    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP - RAMP_STEP, start: 785 })).toBe(false);
+    expect(dayMean(CHALLENGE_AVG, 0)).toBeCloseTo(1300, 9);
+  });
+
+  it('cuts deliveries with a 475 MMcf/d ramp whatever the start', () => {
+    const over = simulate({ ...PACK_DEFAULTS, ramp: 475 });
+    expect(Math.round(ccgtMW(475) / 100) * 100).toBe(3200);
+    expect(over.find((h) => h.shortfall > 1e-6)?.hour).toBe(19);
+    expect(sum(over.map((h) => h.shortfall)) / 24).toBeCloseTo(12.9, 1);
+    for (let s = START_MIN; s <= START_MAX; s += START_STEP) expect(clean(simulate({ ...PACK_DEFAULTS, ramp: 475, start: s }))).toBe(false);
+  });
+
+  it('runs short on day 1 when receipts are 100 MMcf/d below demand, and no start avoids it', () => {
+    const drain = simulate({ ...PACK_DEFAULTS, ratable: false, receipts: 1200 });
+    expect(drain.find((h) => h.shortfall > 1e-6)?.hour).toBe(18);
+    expect(Math.round(sum(drain.map((h) => h.shortfall)) / 24)).toBe(100);
+    let latest = 0;
+    for (let s = START_MIN; s <= START_MAX; s += START_STEP) {
+      const r = simulate({ ...PACK_DEFAULTS, ratable: false, receipts: 1200, start: s });
+      expect(clean(r)).toBe(false);
+      latest = Math.max(latest, r.find((h) => h.shortfall > 1e-6)?.hour ?? 48);
+    }
+    expect(latest).toBe(42);
+  });
+
+  it('loses its flexibility as it fills', () => {
+    expect(Math.round(packWindow(NL, 0).swing)).toBe(472);
+    expect(Math.round(packWindow(NL, 1000).swing)).toBe(320);
+    expect(Math.round(packWindow(NL, 1400).swing)).toBe(183);
+    expect(Math.round(packLineCapacity(NL))).toBe(1802);
+    expect(largestRamp(1000)).toBe(800);
+    expect(largestRamp(600, 25, 1500)).toBe(1375);
+    let limit = 0;
+    for (let q = 0; q <= 1800; q += 5) {
+      const r = startRange(q, 0, q);
+      if (r.lo <= r.hi) limit = q;
+    }
+    expect(limit).toBe(1480);
+    // The hour-by-hour simulation agrees: 1,450 can be run clean, 1,500 can't.
+    const any = (avg: number) => {
+      for (let s = START_MIN; s <= START_MAX; s += START_STEP) if (clean(simulate({ ...PACK_DEFAULTS, avg, start: s }))) return true;
+      return false;
+    };
+    expect(any(1450)).toBe(true);
+    expect(any(1500)).toBe(false);
+  });
+});
+
+describe('gas 3.4', () => {
+  const HC = STORAGE_SPECS.hollowcreek;
+  const SF = STORAGE_SPECS.saltflat;
+
+  it('opens on Metro’s seasonal swing against its pipelines and Northline’s linepack', () => {
+    const pipes = PIPELINE['calder-metro'].capacityBcfd + PIPELINE['sandhill-metro'].capacityBcfd;
+    expect(pipes).toBeCloseTo(2.25, 9);
+    expect(REFERENCE_DAYS.summer.demand.metro / pipes).toBeCloseTo(0.49, 2);
+    expect(DESIGN_NEED).toBeCloseTo(0.85, 9);
+    expect(Math.round(packWindow(packLineOf(PIPELINE['calder-metro']), 0).swing)).toBe(472);
+    expect(Math.round(storagePressure(HC, 0))).toBe(957);
+    expect(storagePressure(HC, 120)).toBeCloseTo(2000, 6);
+  });
+
+  it('labels the gas year’s days', () => {
+    expect(dayLabel(0)).toBe('April 1');
+    expect(dayLabel(INJ_DAYS)).toBe('November 1');
+    expect(dayLabel(INJ_DAYS + WD_DAYS - 1)).toBe('March 31');
+    expect(dayLabel(289)).toBe('January 15');
+  });
+
+  it('runs the starting year: 119.1 Bcf by November 1, ratchets on the last 43 and 27 days', () => {
+    const r = gasYear(YEAR_DEFAULTS.start, YEAR_DEFAULTS.inject, YEAR_DEFAULTS.withdraw);
+    expect(r[INJ_DAYS - 1].inventory).toBeCloseTo(119.1, 1);
+    expect(r[r.length - 1].inventory).toBeCloseTo(30.4, 1);
+    expect(r.slice(0, INJ_DAYS).filter((d) => d.limited).length).toBe(43);
+    expect(r.slice(INJ_DAYS).filter((d) => d.limited).length).toBe(27);
+    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.limited))).toBe('March 5');
+    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.inventory < DESIGN_INV))).toBe('January 23');
+  });
+
+  it('quotes Hollow Creek’s ratchets and season limits', () => {
+    expect(withdrawCapacity(HC, 60)).toBeCloseTo(0.75, 2);
+    expect(withdrawCapacity(HC, 30)).toBeCloseTo(0.46, 2);
+    expect(injectCapacity(HC, 60)).toBeCloseTo(0.68, 2);
+    expect(injectCapacity(HC, 108)).toBeCloseTo(0.37, 2);
+    expect(Math.round(deliverableOver(HC, 120, WD_DAYS))).toBe(105);
+    expect(Math.round(DESIGN_INV)).toBe(69);
+    expect(Math.round((DESIGN_INV / 120) * 100)).toBe(57);
+  });
+
+  it('holds 0.54 Bcf/d all winter from full, and the challenge is solved only there', () => {
+    expect(firmRate()).toBe(0.54);
+    expect(firmSolved({ start: 36, inject: 0.45, withdraw: 0.54 })).toBe(true);
+    expect(firmSolved({ start: 36, inject: 0.45, withdraw: 0.53 })).toBe(false);
+    expect(firmSolved({ start: 36, inject: 0.45, withdraw: 0.55 })).toBe(false);
+    expect(firmSolved(YEAR_DEFAULTS)).toBe(false);
+  });
+
+  it('compares the salt caverns with the depleted field in a cold spell', () => {
+    expect(deliverableOver(SF, 30, 10)).toBeCloseTo(12, 6);
+    expect(deliverableOver(HC, 120, 10)).toBeCloseTo(10, 6);
+    expect(deliverableOver(HC, 120, 30)).toBeCloseTo(30, 6);
+    expect(deliverableOver(SF, 30, 30)).toBeCloseTo(26.5, 1);
+    expect(deliverableOver(HC, 30, 10)).toBeCloseTo(4.45, 2);
+    expect(deliverableOver(SF, 7.5, 10)).toBeCloseTo(4.18, 2);
+    expect(CROSSOVER_DAY).toBe(25);
+    expect(coldSpell(HC, 120, 30)[24]).toBeLessThan(coldSpell(SF, 30, 30)[24]);
+    expect(crossoverSolved({ fill: 100, days: 25 })).toBe(true);
+    expect(crossoverSolved({ fill: 100, days: 24 })).toBe(false);
+    expect(crossoverSolved({ fill: 90, days: 25 })).toBe(false);
+  });
+});
+
+describe('gas 3.5', () => {
+  const eu = lngCargo(voyageOf(CHAIN_DEFAULTS));
+  const as = lngCargo(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia' }));
+
+  it('loads 3.83 million MMBtu from 4.1 Bcf of feed, a cargo every 3.4 days, 107 a year', () => {
+    expect(eu.loaded).toBe(3_825_000);
+    expect(eu.feed).toBeCloseTo(4_250_000, 3);
+    const feedBcf = eu.feed / (MMBTU_PER_MCF * 1e6);
+    expect(feedBcf).toBeCloseTo(4.1, 1);
+    const every = feedBcf / BAYPORT_LNG_FEEDGAS_BCFD;
+    expect(every).toBeCloseTo(3.4, 1);
+    expect(Math.round(365 / every)).toBe(107);
+    expect(Math.round(eu.roundTripDays / every)).toBe(9);
+    expect(Math.round(as.roundTripDays / every)).toBe(16);
+  });
+
+  it('loses 12.5% of the gas on the way to Europe, against Northline’s 1.8%', () => {
+    expect(Math.round(eu.liquefactionFuel)).toBe(425_000);
+    expect(Math.round(eu.boilOff)).toBe(49_428);
+    expect(Math.round(eu.regasFuel)).toBe(56_634);
+    expect((1 - eu.sentOut / eu.feed) * 100).toBeCloseTo(12.5, 1);
+    const nl = PIPELINE['calder-metro'];
+    expect(stationLine(stationLineOf(nl), 1800).fuelShare * 100).toBeCloseTo(1.8, 1);
+  });
+
+  it('delivers to Europe at $7.17 and Asia at $7.91 with gas at $3.00', () => {
+    expect(eu.delivered$).toBeCloseTo(7.17, 2);
+    expect(eu.perMMBtu.shipping).toBeCloseTo(0.65, 2);
+    expect(eu.costs.shipping).toBe(2_400_000);
+    expect(Math.round((eu.delivered$ - 3) / 0.15)).toBe(28);
+    expect(eu.perMMBtu.liquefaction).toBeGreaterThan(eu.perMMBtu.shipping + eu.perMMBtu.regas);
+    expect(as.delivered$).toBeCloseTo(7.91, 2);
+    expect(as.perMMBtu.shipping).toBeCloseTo(1.31, 2);
+    expect(as.roundTripDays).toBe(54);
+    expect((as.boilOff / as.loaded) * 100).toBeCloseTo(2.5, 1);
+  });
+
+  it('raises shipping at $200,000 a day', () => {
+    expect(lngCargo(voyageOf({ ...CHAIN_DEFAULTS, charter: 200_000 })).perMMBtu.shipping).toBeCloseTo(1.61, 2);
+    expect(lngCargo(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia', charter: 200_000 })).perMMBtu.shipping).toBeCloseTo(3.08, 2);
+  });
+
+  it('earns $6.82 million on a $9.00 cargo to Europe, with a $7.73 netback and a $4.55 breakeven', () => {
+    const v = voyageOf(CHAIN_DEFAULTS);
+    expect(cargoMargin(v, 9) / 1e6).toBeCloseTo(6.82, 2);
+    expect(netback(v, 9)).toBeCloseTo(7.73, 2);
+    expect(breakevenHub(v, 9)).toBeCloseTo(4.55, 2);
+  });
+
+  it('solves the challenge at $3.90 and nowhere else on the grid', () => {
+    expect(challengeAnswer()).toBe(3.9);
+    expect(breakevenHub(voyageOf({ ...CHAIN_DEFAULTS, ...CHALLENGE }), 9)).toBeCloseTo(3.91, 2);
+    const base = { ...CHAIN_DEFAULTS, dest: 'asia' as const, destPrice: 9 };
+    expect(cargoBreakevenSolved({ ...base, hub: 3.9 })).toBe(true);
+    expect(cargoBreakevenSolved({ ...base, hub: 3.85 })).toBe(false);
+    expect(cargoBreakevenSolved({ ...base, hub: 3.95 })).toBe(false);
+    expect(cargoBreakevenSolved({ ...base, hub: 3.9, charter: 100_000 })).toBe(false);
+    expect(cargoBreakevenSolved({ ...CHAIN_DEFAULTS })).toBe(false);
+  });
+
+  it('sails the round trip in the right order', () => {
+    expect(voyagePhase(1, 13).phase).toBe('loading');
+    expect(voyagePhase(8, 13).phase).toBe('laden');
+    expect(voyagePhase(16, 13).phase).toBe('unloading');
+    expect(voyagePhase(29, 13).phase).toBe('ballast');
   });
 });
