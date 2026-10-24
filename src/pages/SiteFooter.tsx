@@ -180,7 +180,7 @@ export function SiteFooter() {
         )}
         <span aria-hidden="true">·</span>
         <span>
-          {h}h {m}m of daylight
+          {h}h {m}m of daylight today
         </span>
       </p>
     </footer>
