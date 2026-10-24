@@ -12,6 +12,8 @@ import {
 } from '../src/engines/compute/chipPower';
 import { busBandwidth, flatRingAllReduce, hierarchicalAllReduce, ringAllReduce, scaleOutLink, scaleUpLink } from '../src/engines/compute/collectives';
 import { checkAssignment, feasibleAssignments, workloadFit } from '../src/engines/compute/compatibility';
+import { breakEvenMarketPrice, contractPaths, rankedPaths } from '../src/engines/compute/contractPaths';
+import { CONTRACT_DEFAULTS, dropFromRatio, runContract } from '../src/engines/compute/contracts';
 import { airflowM3s, annualPue, chipCooling, waterFlowLs, chillerCop, junctionC } from '../src/engines/compute/cooling';
 import { fabric, jobNetworkShare, maxTwoTierGpus } from '../src/engines/compute/dcNetwork';
 import { DEMAND_DEFAULTS, growthFan, normalCdf, normalQuantile, weeklyDemand } from '../src/engines/compute/demand';
@@ -47,6 +49,7 @@ import {
   relativeError,
 } from '../src/engines/compute/memory';
 import { CPU, GPU, amdahl, crossoverItems, peakTflops, runTask } from '../src/engines/compute/parallel';
+import { backtest, breakEvenPrices, gpuGridKW, powerCapPlan, techParkPrices } from '../src/engines/compute/powerAware';
 import {
   bestReservation,
   breakEvenUtilization as L5_0_breakEvenUtilization,
@@ -54,7 +57,11 @@ import {
   providerEconomics,
   spotEffective,
 } from '../src/engines/compute/pricing';
+import { PROCUREMENT_DEFAULTS, WEEK_SHAPE, bestReserved, monthNeed, monthOverflow, procure } from '../src/engines/compute/procurement';
+import { fastOverflow, growthPaths, meanFirmHours, procurementSweep } from '../src/engines/compute/procurementSweep';
 import { clusterLayout, rackConfig, rackLimits, serverUnits } from '../src/engines/compute/rack';
+import { breakEvenDataTB, moveJob, transferHours } from '../src/engines/compute/regionMove';
+import { DAY_JOBS, scheduleDay } from '../src/engines/compute/regionSchedule';
 import { attainableTflops, cachedKernel, kernelTime, machineOf } from '../src/engines/compute/roofline';
 import { simulateServing } from '../src/engines/compute/scheduling';
 import {
@@ -85,6 +92,8 @@ import {
   inverterThroughCurrent,
 } from '../src/engines/compute/transistor';
 import { cheapestBy, unitCost } from '../src/engines/compute/units';
+import { PHYSICS_DEFAULTS, YIELD_FLEET, YIELD_WORKLOADS, productivityUnder, yieldRun } from '../src/engines/compute/yieldManager';
+import { pct } from '../src/framework/format';
 import { conductivityGain, dotCount, holesMillionSolved, leastDopingForMillion, sci } from '../src/lessons/compute/ch1/L1_1';
 import { IOFF, ION, LOW_VTH, PINCH_V, SWING_MV, current, thresholdSolved } from '../src/lessons/compute/ch1/L1_2';
 import {
@@ -378,6 +387,77 @@ import {
   thresholdAt,
   worth,
 } from '../src/lessons/compute/ch5/L5_5';
+import {
+  LESSON_NUMBERS as L6_1_N,
+  YIELD_DEFAULTS,
+  bestMargin,
+  bestSolved,
+  chatThresholdMs,
+  fleetFixedPerWeek,
+  lServesChat,
+  referenceBidsB,
+  revenueByWorkload,
+  runYield,
+  thresholdSolved as L6_1_thresholdSolved,
+} from '../src/lessons/compute/ch6/L6_1';
+import {
+  JOBS,
+  LESSON_NUMBERS as L6_2_N,
+  PLAN_DEFAULTS,
+  SPOT_DEFAULTS as L6_2_SPOT_DEFAULTS,
+  WIDE_ANSWER,
+  badYearSolved,
+  bestOf,
+  bestSpot,
+  paramsOf,
+  planOf,
+  spotBeatsReserved,
+  sweepOf,
+  wideSolved,
+} from '../src/lessons/compute/ch6/L6_2';
+import {
+  DATA_TB,
+  DAY_DEFAULTS,
+  JOB_DEFAULTS,
+  LESSON_NUMBERS as L6_3_N,
+  LINKS,
+  dayOf,
+  defaultData,
+  jobOf,
+  largestSolved,
+  marketAtLatency,
+  routeOf,
+  runJob,
+  slowestSolved as L6_3_slowestSolved,
+  worthMoving,
+} from '../src/lessons/compute/ch6/L6_3';
+import {
+  CHALLENGE_OWNED,
+  DAY_DEFAULTS as L6_4_DAY_DEFAULTS,
+  HALL_DEFAULTS as L6_4_HALL_DEFAULTS,
+  LESSON_NUMBERS as L6_4_N,
+  PAUSE_VALUE_ANSWER,
+  VALUE_MAX,
+  VALUE_MIN,
+  VALUE_STEP,
+  bestCap,
+  capSolved,
+  dayRun,
+  hallRun,
+  historyRun,
+  pauseValueSolved,
+  policyOf,
+} from '../src/lessons/compute/ch6/L6_4';
+import {
+  DESK_DEFAULTS,
+  LESSON_NUMBERS as L6_5_N,
+  deskRun,
+  firstProfitableRank,
+  hedgeSolved,
+  paramsOf as L6_5_paramsOf,
+  pathSolved,
+  priceSolved,
+} from '../src/lessons/compute/ch6/L6_5';
 import { ACCELERATORS, serverPowerW, ridgePoint, SM_LIMITS, GPU_SERIAL_GOPS, HOST_CPU, GPU_IDS } from '../src/model/compute/hardware';
 import { MODELS, kvBytesPerToken, paramCount, kvDim, matmulParams } from '../src/model/compute/models';
 import { PRICES } from '../src/model/compute/prices';
@@ -2390,6 +2470,7 @@ describe('chip power', () => {
 }
 
 // Chapter 5 engines
+
 {
   describe('units of compute', () => {
     it('ranks accelerators differently by GPU-hour and by token', () => {
@@ -2467,6 +2548,7 @@ describe('chip power', () => {
 }
 
 // Lesson 5.1
+
 {
   const N = L5_1_LESSON_NUMBERS;
 
@@ -2536,6 +2618,7 @@ describe('chip power', () => {
 }
 
 // Lesson 5.2
+
 {
   const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -2635,6 +2718,7 @@ describe('chip power', () => {
 }
 
 // Lesson 5.3
+
 {
   describe('lesson 5.3: demand', () => {
     it('peaks inference in the afternoon and bottoms out before dawn', () => {
@@ -2722,6 +2806,7 @@ describe('chip power', () => {
 }
 
 // Lesson 5.4
+
 {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
@@ -2835,6 +2920,7 @@ describe('chip power', () => {
 }
 
 // Lesson 5.5
+
 {
   const r2 = (x: number) => Math.round(x * 100) / 100;
 
@@ -2910,6 +2996,656 @@ describe('chip power', () => {
       expect(Math.round(L5_5_N.prodTrainB * 1000) / 1000).toBe(2.375);
       expect(r2(L5_5_N.farB / L5_5_N.farA)).toBe(2.37);
       expect(L5_5_N.listRatio).toBe(2);
+    });
+  });
+}
+
+// Chapter 6 engines
+{
+  describe('yield management', () => {
+    const base = { fleet: YIELD_FLEET, workloads: YIELD_WORKLOADS, policy: 'first-come' as const, protectB: 0, physics: PHYSICS_DEFAULTS, powerPrice: 55, hours: 168 };
+    it('earns more by giving each GPU to the work it does most valuably', () => {
+      const fc = yieldRun(base);
+      const bv = yieldRun({ ...base, policy: 'best-value' });
+      expect(bv.margin).toBeGreaterThan(fc.margin * 1.05);
+      expect(bv.served.frontier400).toBeCloseTo(1, 6);
+    });
+
+    it('changes with the physics', () => {
+      expect(productivityUnder({ ...PHYSICS_DEFAULTS, frontierPrecision: 'bf16' }).frontier400.A).toBe(0);
+      const bf16 = yieldRun({ ...base, policy: 'best-value', physics: { ...PHYSICS_DEFAULTS, frontierPrecision: 'bf16' } });
+      expect(bf16.margin).toBeLessThan(yieldRun({ ...base, policy: 'best-value' }).margin);
+    });
+  });
+
+  describe('procurement', () => {
+    it('reserves somewhere between nothing and the peak', () => {
+      expect(WEEK_SHAPE.length).toBe(168);
+      expect(monthOverflow(400, 400)).toBe(0);
+      expect(monthNeed(400)).toBeGreaterThan(monthOverflow(400, 0) - 1e-6);
+      const best = bestReserved(PROCUREMENT_DEFAULTS);
+      expect(best.reserved).toBe(260);
+      expect(procure({ ...PROCUREMENT_DEFAULTS, reserved: 0 }).mean).toBeGreaterThan(best.mean);
+      expect(procure({ ...PROCUREMENT_DEFAULTS, reserved: 500 }).mean).toBeGreaterThan(best.mean);
+    });
+  });
+
+  describe('moving work between regions', () => {
+    const job = { gpuHours: 100000, gpus: 512, dataInTB: 50, dataOutTB: 5, maxRttMs: Infinity, deadlineHours: 400 };
+    const route = { from: 'techpark' as const, to: 'northfield' as const, priceFrom: 3.5, priceTo: 1.52, linkGbps: 100, egressPerGB: 0.05 };
+    it('saves when the price gap beats the cost of moving data', () => {
+      expect(transferHours(50, 100)).toBeCloseTo(1.389, 3);
+      const m = moveJob(job, route);
+      expect(m.feasible).toBe(true);
+      expect(m.saving).toBeCloseTo(195250, 0);
+      expect(breakEvenDataTB(job, route)).toBeCloseTo(3600, 0);
+      expect(moveJob({ ...job, maxRttMs: 30 }, route).feasible).toBe(false);
+    });
+  });
+
+  describe('power-aware scheduling', () => {
+    it('rarely pays to pause, sometimes pays to cap', () => {
+      const prices = techParkPrices().flat();
+      expect(prices.reduce((a, b) => a + b, 0) / prices.length).toBeCloseTo(54.9, 1);
+      expect(gpuGridKW()).toBeCloseTo(1.476, 3);
+      const be = breakEvenPrices({ value: 2.4, capShare: 0.7, capAbove: 0, pauseAbove: 0 });
+      expect(be.pause).toBeCloseTo(2323, 0);
+      expect(be.cap).toBeCloseTo(970, 0);
+      const bt = backtest({ value: 0.95, capShare: 0.7, capAbove: 384, pauseAbove: 920 });
+      expect(bt.gain).toBeGreaterThan(0);
+      expect(bt.hoursPaused).toBe(6);
+    });
+
+    it('fits more GPUs under a fixed connection by capping them', () => {
+      const full = powerCapPlan(20, 1);
+      const capped = powerCapPlan(20, 0.7);
+      expect(full.gpus).toBe(13549);
+      expect(capped.work / full.work).toBeCloseTo(1.173, 3);
+    });
+  });
+
+  describe('capacity contracts', () => {
+    it('is profitable on average but risky, and hedging trades return for safety', () => {
+      const c = runContract(CONTRACT_DEFAULTS);
+      expect(c.mean).toBeCloseTo(1853541, -3);
+      expect(c.probLoss).toBeCloseTo(0.217, 3);
+      const h = runContract({ ...CONTRACT_DEFAULTS, hedgeShare: 0.5 });
+      expect(h.probLoss).toBeLessThan(c.probLoss / 2);
+      expect(h.mean).toBeLessThan(c.mean);
+      expect(dropFromRatio(4.8, 2.28, 2.4)).toBeCloseTo(0.1228, 4);
+    });
+  });
+}
+
+// Lesson 6.1
+{
+  const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('lesson 6.1: yield management', () => {
+    it('earns most by ranking GPUs by value (challenge a)', () => {
+      const best = bestMargin();
+      expect(best.policy).toBe('best-value');
+      expect(r0(best.margin)).toBe(934144);
+      expect(bestSolved(YIELD_DEFAULTS)).toBe(false);
+      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value' })).toBe(true);
+      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', protect: 150 })).toBe(true);
+      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', protect: 300 })).toBe(false);
+      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'first-come', protect: 300 })).toBe(false);
+      // The physics must be the reference: a different power price doesn't count.
+      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', power: 20 })).toBe(false);
+    });
+
+    it('finds the L-class’s chat threshold (challenge b)', () => {
+      expect(chatThresholdMs()).toBe(38);
+      expect(lServesChat(37)).toBe(false);
+      expect(lServesChat(38)).toBe(true);
+      expect(L6_1_thresholdSolved({ chatMs: 38 })).toBe(true);
+      expect(L6_1_thresholdSolved(YIELD_DEFAULTS)).toBe(false);
+      expect(L6_1_thresholdSolved({ chatMs: 39 })).toBe(false);
+      // One request alone on eight L-class cards: a little over 37 ms a token.
+      const tpot = servingPoint({ model: '70B', gpu: 'L', tp: 8, precision: 'bf16' }, 1, 1000, 300).tpot;
+      expect(tpot).toBeGreaterThan(0.037);
+      expect(tpot).toBeLessThan(0.038);
+    });
+
+    it('quotes the week’s numbers', () => {
+      expect(L6_1_N.fleet).toEqual({ L: 300, A: 1200, B: 300 });
+      expect(r0(fleetFixedPerWeek(), -3)).toBe(443000);
+      expect(r0(L6_1_N.fcMargin)).toBe(876210);
+      expect(r0(L6_1_N.fcBatchOnB)).toBe(16908);
+      expect(pct(1 - L6_1_N.fcServed.frontier400)).toBe('17%');
+      expect(r0(L6_1_N.bvMargin)).toBe(934144);
+      expect(r0(L6_1_N.bvGain)).toBe(57934);
+      expect(r0(L6_1_N.bvGainShare * 100, 1)).toBe(6.6);
+      expect(L6_1_N.bvCodeOnB).toBe(1);
+      expect(L6_1_N.bvFrontierOnB).toBe(1);
+      expect(r0(L6_1_N.bvServed.code8, 6)).toBe(1);
+      expect(r0(L6_1_N.bvServed.frontier400, 6)).toBe(1);
+      expect(r0(L6_1_N.bvServed.chat70, 6)).toBe(1);
+      expect(r0(L6_1_N.bvServed.batch8 * 100)).toBe(82);
+      expect(r0(L6_1_N.fcUtil.A * 100)).toBe(87);
+      expect(r0(L6_1_N.bvUtil.A * 100)).toBe(86);
+      expect(r0(L6_1_N.fc300Margin)).toBe(885919);
+      expect(r0(L6_1_N.fc300Recovered)).toBe(9709);
+      expect(r0(L6_1_N.fc300RecoveredShare * 100)).toBe(17);
+      expect(r0(L6_1_N.fc300BatchOnA)).toBe(95660);
+      expect(pct(1 - L6_1_N.fc300Served.frontier400)).toBe('15%');
+    });
+
+    it('quotes the bids and productivities', () => {
+      expect(r0(L6_1_N.prodFrontierB, 2)).toBe(3.13);
+      expect(r0(L6_1_N.prodTuneB, 2)).toBe(2.28);
+      expect(r0(L6_1_N.prodTrainL, 2)).toBe(0.27);
+      expect(r0(L6_1_N.bidsB.frontier, 2)).toBe(13.98);
+      expect(r0(L6_1_N.bidsB.code, 2)).toBe(11.97);
+      expect(r0(L6_1_N.bidsB.chat, 2)).toBe(9.33);
+      expect(r0(L6_1_N.bidsB.batch, 2)).toBe(3.4);
+      expect(r0(L6_1_N.bidsB.frontier - L6_1_N.bidsB.batch, 2)).toBe(10.58);
+      expect(r0(L6_1_N.bidsA.code, 2)).toBe(4.92);
+      expect(r0(L6_1_N.bidsA.batch, 2)).toBe(1.32);
+      expect(r0(L6_1_N.bidsL.tune, 2)).toBe(0.79);
+      expect(r0(L6_1_N.bidsL.chat, 2)).toBe(0.1);
+      // Fine-tuning is where the L-class bids most.
+      expect(Math.max(L6_1_N.bidsL.code, L6_1_N.bidsL.train, L6_1_N.bidsL.batch, L6_1_N.bidsL.chat)).toBeLessThan(L6_1_N.bidsL.tune);
+      const b = referenceBidsB();
+      expect(Object.values(b).every((x) => x !== null)).toBe(true);
+    });
+
+    it('quotes the physics that changes it', () => {
+      expect(r0(L6_1_N.bf16WeightsGB)).toBe(812);
+      expect(r0(L6_1_N.bf16UsableAGB)).toBe(576);
+      expect(r0(L6_1_N.prodFrontierBBf16, 2)).toBe(1.46);
+      expect(r0(L6_1_N.bf16BvMargin)).toBe(808252);
+      expect(r0(L6_1_N.bf16Loss)).toBe(125892);
+      expect(r0(L6_1_N.bf16FrontierServed * 100)).toBe(24);
+      expect(r0(L6_1_N.bf16Gain)).toBe(27920);
+      expect(r0(L6_1_N.chat20BvMargin)).toBe(911499);
+      expect(r0(L6_1_N.prodChatLAt, 3)).toBe(0.018);
+      expect(r0(L6_1_N.fcBeforeThreshold)).toBe(876612);
+      expect(r0(L6_1_N.fcAtThreshold)).toBe(875481);
+      expect(r0(L6_1_N.bvPower)).toBe(19622);
+      expect(r0(L6_1_N.power400Cost)).toBe(142703);
+      expect(r0(L6_1_N.power400Margin)).toBe(811063);
+    });
+
+    it('does most batch work at night under best value', () => {
+      const p = productivityUnder(PHYSICS_DEFAULTS).batch8;
+      const base = { fleet: YIELD_FLEET, workloads: YIELD_WORKLOADS, policy: 'best-value' as const, protectB: 0, physics: PHYSICS_DEFAULTS, powerPrice: 55 };
+      let prev = 0;
+      let night = 0;
+      let all = 0;
+      for (let h = 1; h <= 168; h++) {
+        const g = yieldRun({ ...base, hours: h }).gpuHours.batch8;
+        const cum = g.A * p.A + g.L * p.L + g.B * p.B;
+        const hod = (h - 1) % 24;
+        if (hod >= 19 || hod < 7) night += cum - prev;
+        all += cum - prev;
+        prev = cum;
+      }
+      expect(night / all).toBeGreaterThan(0.55);
+    });
+
+    it('splits revenue by workload consistently', () => {
+      const rev = revenueByWorkload({ ...YIELD_DEFAULTS, policy: 'best-value' });
+      const total = Object.values(rev).reduce((a, b) => a + b, 0);
+      expect(total).toBeCloseTo(runYield({ ...YIELD_DEFAULTS, policy: 'best-value' }).revenue, 3);
+    });
+  });
+}
+
+// Lesson 6.2
+{
+  const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('procurement sweep (procurementSweep.ts)', () => {
+    it('computes the same overflow as monthOverflow', () => {
+      for (const peak of [100, 400, 777.7])
+        for (const res of [0, 50, 260, 399.9, 400, 900]) expect(fastOverflow(peak, res)).toBeCloseTo(monthOverflow(peak, res), 6);
+    });
+
+    it('draws the same years as procure and agrees with it at every level', () => {
+      const p = PROCUREMENT_DEFAULTS;
+      expect(growthPaths(p).length).toBe(p.scenarios);
+      for (const params of [p, { ...p, growth: 0.08, sigma: 0.12 }, { ...p, sigma: 0 }]) {
+        const levels = [0, 130, 260, 300, 550, 800];
+        const sweep = procurementSweep(params, levels);
+        levels.forEach((res, i) => {
+          const full = procure({ ...params, reserved: res });
+          expect(sweep[i].mean / full.mean).toBeCloseTo(1, 9);
+          expect(sweep[i].p95 / full.p95).toBeCloseTo(1, 9);
+        });
+      }
+      const full = procure(p);
+      expect(meanFirmHours(p) + p.interruptible * 730 * p.months).toBeCloseTo((full.mean * p.scenarios) / (full.perUsefulHour * p.scenarios), 0);
+    });
+
+    it('is fast enough to redraw the curve', () => {
+      const t = performance.now();
+      procurementSweep({ ...PROCUREMENT_DEFAULTS, growth: 0.071 }, Array.from({ length: 81 }, (_, i) => i * 10));
+      expect(performance.now() - t).toBeLessThan(100);
+    });
+  });
+
+  describe('lesson 6.2 challenges', () => {
+    it('a: the reservation that makes a bad year cheapest', () => {
+      const b = bestOf(PLAN_DEFAULTS.growth, PLAN_DEFAULTS.sigma);
+      expect(b.mean.reserved).toBe(260);
+      expect(b.p95.reserved).toBe(300);
+      expect(badYearSolved(PLAN_DEFAULTS)).toBe(false);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 300 })).toBe(true);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 290 })).toBe(true);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 310 })).toBe(true);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 260 })).toBe(false);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 330 })).toBe(false);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 300, sigma: 6 })).toBe(false);
+      // The sweep the chart draws agrees with the plan the readouts show.
+      const pt = sweepOf(PLAN_DEFAULTS.growth, PLAN_DEFAULTS.sigma).find((x) => x.reserved === 300)!;
+      expect(pt.p95 / planOf({ ...PLAN_DEFAULTS, reserved: 300 }).p95).toBeCloseTo(1, 9);
+      expect(paramsOf(PLAN_DEFAULTS).growth).toBeCloseTo(0.04, 12);
+    });
+
+    it('b: the highest reclaim rate at which the pretraining run’s spot hours beat reserving', () => {
+      expect(WIDE_ANSWER).toBeCloseTo(0.75, 9);
+      const t = JOBS.train70;
+      expect(spotBeatsReserved(t, 0.75, 10)).toBe(true);
+      expect(spotBeatsReserved(t, 0.8, 10)).toBe(false);
+      expect(wideSolved({ job: 'train70', reclaims: 0.75, restart: 10 })).toBe(true);
+      expect(wideSolved({ job: 'train70', reclaims: 0.7, restart: 10 })).toBe(false);
+      expect(wideSolved({ job: 'train70', reclaims: 0.8, restart: 10 })).toBe(false);
+      expect(wideSolved({ job: 'train70', reclaims: 0.75, restart: 9 })).toBe(false);
+      expect(wideSolved({ job: 'tune8', reclaims: 0.75, restart: 10 })).toBe(false);
+      expect(wideSolved(L6_2_SPOT_DEFAULTS)).toBe(false);
+      // Floating-point slider values still land on the grid.
+      expect(wideSolved({ job: 'train70', reclaims: 0.7500000000000001, restart: 10 })).toBe(true);
+    });
+  });
+
+  describe('lesson 6.2 numbers', () => {
+    it('the plan', () => {
+      expect(r0(L6_2_N.averageHourNow)).toBe(262);
+      expect(r0(L6_2_N.finalPeak)).toBe(614);
+      expect(r0(L6_2_N.spotYear)).toBe(902280);
+      expect(r0(L6_2_N.allOnDemandMean / 1e6, 2)).toBe(7.79);
+      expect(r0(L6_2_N.allOnDemandP95 / 1e6, 2)).toBe(8.92);
+      expect(L6_2_N.bestMeanReserved).toBe(260);
+      expect(r0(L6_2_N.bestMeanMean / 1e6, 2)).toBe(6.31);
+      expect(r0(L6_2_N.bestMeanP95 / 1e6, 2)).toBe(7.3);
+      expect(L6_2_N.bestP95Reserved).toBe(300);
+      expect(r0(L6_2_N.bestP95P95 / 1e6, 2)).toBe(7.25);
+      expect(r0(L6_2_N.bestP95Mean / 1e6, 2)).toBe(6.36);
+      expect(r0(L6_2_N.bestP95Mean - L6_2_N.bestMeanMean)).toBe(48603);
+      expect(r0(L6_2_N.bestMeanP95 - L6_2_N.bestP95P95)).toBe(54838);
+      expect(r0(L6_2_N.bestP95Idle * 100)).toBe(11);
+      expect(r0(L6_2_N.bestMeanIdle * 100)).toBe(6);
+      expect(r0(L6_2_N.r500Mean / 1e6, 2)).toBe(8.02);
+      expect(L6_2_N.r500Mean).toBeGreaterThan(L6_2_N.allOnDemandMean);
+      expect(r0(L6_2_N.maxCheapest / 1e6, 2)).toBe(12.12);
+      expect(r0(L6_2_N.maxDearest / 1e6, 2)).toBe(12.22);
+      expect(L6_2_N.calmBest).toBe(270);
+      expect(L6_2_N.calmBestP95).toBe(270);
+      expect(L6_2_N.wildBestMean).toBe(250);
+      expect(L6_2_N.wildBestP95).toBe(340);
+      // Faster growth moves both best reservations right.
+      const fast = bestOf(8, 5);
+      expect(fast.mean.reserved).toBeGreaterThan(260);
+      expect(fast.p95.reserved).toBeGreaterThan(300);
+    });
+
+    it('spot', () => {
+      expect(r0(L6_2_N.tuneCost, 2)).toBe(1.03);
+      expect(L6_2_N.tuneInterval).toBe(17);
+      expect(r0(L6_2_N.tuneCross, 1)).toBe(18.5);
+      expect([L6_2_N.tuneGpus, L6_2_N.tuneServers, L6_2_N.trainGpus, L6_2_N.trainServers]).toEqual([10, 2, 304, 38]);
+      expect(r0(L6_2_N.trainHalf, 2)).toBe(1.35);
+      expect(r0(L6_2_N.trainOne, 2)).toBe(1.89);
+      expect(r0(L6_2_N.trainTwo, 2)).toBe(7.04);
+      expect(r0(L6_2_N.trainTwoUseful * 100)).toBe(14);
+      expect(L6_2_N.trainFour).toBe(Infinity);
+      expect(r0(L6_2_N.trainCross, 2)).toBe(0.77);
+      expect(r0(L6_2_N.trainCross * L6_2_N.trainServers)).toBe(29);
+      expect(r0(L6_2_N.trainHalfRestart2, 2)).toBe(1.17);
+      expect(r0(L6_2_N.trainHalfRestart20, 2)).toBe(1.66);
+      expect(r0(L6_2_N.trainHalfRestart30, 2)).toBe(2.15);
+      expect(r0(L6_2_N.reservedYear / 1e6, 2)).toBe(1.4);
+      expect(r0(L6_2_N.tuneSpotYear / 1e6, 2)).toBe(0.9);
+      expect(bestSpot(JOBS.tune8, 2, 10).interruptionsPerDay).toBe(4);
+    });
+  });
+}
+
+// Lesson 6.3
+{
+  const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('regionSchedule.ts: a day of jobs on one link', () => {
+    const route = { from: 'techpark' as const, to: 'northfield' as const, priceFrom: 3.5, priceTo: 1.5158, linkGbps: 100, egressPerGB: 0.05 };
+    it('moves the jobs that pay, keeps the rest home with a reason', () => {
+      const d = scheduleDay(DAY_JOBS, route);
+      const why = Object.fromEntries(d.rows.map((r) => [r.job.id, r.why]));
+      expect(why).toEqual({
+        pretrain: 'moves',
+        embed: 'moves',
+        batch: 'moves',
+        tune: 'moves',
+        eval: 'moves',
+        video: 'costs more to move',
+        chat: 'too far from users',
+        code: 'too far from users',
+      });
+    });
+
+    it('queues copies least slack first and respects the link’s day', () => {
+      const d = scheduleDay(DAY_JOBS, { ...route, linkGbps: 40 });
+      const start = Object.fromEntries(d.rows.map((r) => [r.job.id, r.copyStart]));
+      expect(start.batch).toBe(0);
+      expect(start.tune).toBeGreaterThan(0);
+      expect(start.pretrain).toBeGreaterThan(start.embed);
+      for (const r of d.rows) if (r.decision === 'move') expect(r.copyStart + r.linkHours + r.result.runH).toBeLessThanOrEqual(r.job.deadlineHours + 1e-9);
+      expect(d.linkHours).toBeLessThanOrEqual(24);
+      const slow = scheduleDay(DAY_JOBS, { ...route, linkGbps: 1 });
+      expect(slow.rows.find((r) => r.job.id === 'pretrain')!.why).toBe('link busy');
+    });
+
+    it('agrees with moveJob for a job alone', () => {
+      const d = scheduleDay([DAY_JOBS[0]], route);
+      expect(d.saving).toBeCloseTo(moveJob(DAY_JOBS[0], route).saving, 6);
+    });
+  });
+
+  describe('lesson 6.3: prices and the first demonstration', () => {
+    it('takes Lesson 5.5’s prices from the latency limit', () => {
+      expect(r0(L6_3_N.near, 2)).toBe(3.5);
+      expect(r0(L6_3_N.far, 2)).toBe(1.52);
+      expect(r0(L6_3_N.gap, 2)).toBe(1.98);
+      expect(r0(marketAtLatency(39).prices.northfield.A, 2)).toBe(1.52);
+      expect(r0(L6_3_N.open, 2)).toBe(1.4);
+      expect(r0(L6_3_N.openFar, 2)).toBe(1.4);
+      expect(routeOf(JOB_DEFAULTS).linkGbps).toBe(100);
+    });
+
+    it('quotes the pretraining slice', () => {
+      expect(DATA_TB[defaultData('pretrain')]).toBe(50);
+      expect(jobOf(JOB_DEFAULTS).dataOutTB).toBeCloseTo(5, 9);
+      expect([L6_3_N.preGpuHours, L6_3_N.preGpus, L6_3_N.preIn, r0(L6_3_N.preOut)]).toEqual([100000, 512, 50, 5]);
+      expect(r0(L6_3_N.preRunH / 24)).toBe(8);
+      expect(L6_3_N.preStay).toBeCloseTo(350000, 6);
+      expect(r0(L6_3_N.preMoveGpu)).toBe(151579);
+      expect(r0(L6_3_N.preEgress)).toBe(2750);
+      expect(r0(L6_3_N.preSaving)).toBe(195671);
+      expect(r0(L6_3_N.preCopyH, 1)).toBe(1.5);
+      expect(r0(L6_3_N.preBreakEven / 1000, 1)).toBe(3.6);
+      expect(L6_3_N.preBreakEven / L6_3_N.preIn).toBeGreaterThan(70);
+      expect(r0(L6_3_N.preOpenSaving)).toBe(-2750);
+    });
+
+    it('challenge a: 3,000 TB is the largest dataset on the slider that still saves', () => {
+      expect(L6_3_N.preBestTB).toBe(3000);
+      expect(L6_3_N.preNextTB).toBe(5000);
+      expect(L6_3_N.preBestSaving).toBeGreaterThan(0);
+      expect(L6_3_N.preNextSaving).toBeLessThan(0);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000) })).toBe(true);
+      expect(largestSolved(JOB_DEFAULTS)).toBe(false);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(2000) })).toBe(false);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(5000) })).toBe(false);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000), egress: 6 })).toBe(false);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000), lat: 40 })).toBe(false);
+    });
+
+    it('quotes the services and the overnight batch', () => {
+      expect(runJob({ ...JOB_DEFAULTS, job: 'chat', data: 0 }).feasible).toBe(false);
+      expect(L6_3_N.chatSaving).toBeCloseTo(14400 * L6_3_N.gap, 6);
+      expect(r0(L6_3_N.chatSaving)).toBe(28573);
+      expect(r0(L6_3_N.batchIn)).toBe(33);
+      expect(r0(L6_3_N.batchRunH, 1)).toBe(8);
+      expect(L6_3_N.batchDeadline).toBe(12);
+      expect(r0(L6_3_N.batchCopy10, 1)).toBe(9.2);
+      expect(L6_3_N.batchSlowestLink).toBe(25);
+      expect(r0(L6_3_N.batchSaving)).toBe(6287);
+    });
+  });
+
+  describe('lesson 6.3: the day of jobs', () => {
+    it('quotes the day', () => {
+      expect(L6_3_N.dayMoved).toBe(5);
+      expect(r0(L6_3_N.daySaving)).toBe(209585);
+      expect(r0(L6_3_N.dayStay)).toBe(461650);
+      expect(r0((L6_3_N.daySaving / L6_3_N.dayStay) * 100)).toBe(45);
+      expect(r0(L6_3_N.dayLinkH, 1)).toBe(6.9);
+      expect(r0(L6_3_N.videoGapSaving)).toBe(3968);
+      expect(r0(L6_3_N.videoEgress)).toBe(20200);
+      expect(L6_3_N.videoTB).toBe(404);
+      expect(r0(L6_3_N.embedSaving)).toBe(3905);
+      expect(L6_3_N.highFeeMoved).toBe(4);
+      expect(L6_3_N.daySlowMoved).toBe(3);
+      expect(r0(L6_3_N.daySlowSaving)).toBe(199393);
+      expect(L6_3_N.day1Moved).toBe(2);
+      expect(r0(L6_3_N.day1Saving)).toBe(3721);
+      const slow = dayOf({ ...DAY_DEFAULTS, link: LINKS.indexOf(10) });
+      expect(slow.rows.find((r) => r.job.id === 'batch')!.why).toBe('misses its deadline');
+      expect(slow.rows.find((r) => r.job.id === 'pretrain')!.decision).toBe('move');
+    });
+
+    it('challenge b: 40 Gb/s is the slowest link that moves every job worth moving', () => {
+      expect(L6_3_N.slowestAllLink).toBe(40);
+      expect(worthMoving(DAY_DEFAULTS).sort()).toEqual(['batch', 'embed', 'eval', 'pretrain', 'tune']);
+      expect(L6_3_slowestSolved({ ...DAY_DEFAULTS, link: LINKS.indexOf(40) })).toBe(true);
+      expect(L6_3_slowestSolved(DAY_DEFAULTS)).toBe(false);
+      expect(L6_3_slowestSolved({ ...DAY_DEFAULTS, link: LINKS.indexOf(25) })).toBe(false);
+      // With the assistants able to reach Northfield nothing is worth moving, so nothing solves it.
+      expect(worthMoving({ ...DAY_DEFAULTS, lat: 40 })).toEqual([]);
+      expect(LINKS.some((_, i) => L6_3_slowestSolved({ ...DAY_DEFAULTS, lat: 40, link: i }))).toBe(false);
+    });
+  });
+}
+
+// Lesson 6.4
+{
+  const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
+
+  describe('lesson 6.4: power-aware scheduling', () => {
+    it('quotes the size of the electricity bill', () => {
+      expect(r(L6_4_N.meanPrice)).toBe(55);
+      expect(L6_4_N.maxPrice).toBeGreaterThan(2000);
+      expect(r(L6_4_N.maxPrice)).toBe(2178);
+      expect(r(L6_4_N.kw, 2)).toBe(1.48);
+      expect(r(L6_4_N.meanEnergy, 3)).toBe(0.081);
+      expect(r(L6_4_N.meanShare * 100, 1)).toBe(3.4);
+      expect(r(L6_4_N.valueToEnergy)).toBe(30);
+      expect(r(L6_4_N.costPowerShare * 100, 1)).toBe(4.1);
+      expect(r(L6_4_N.speed70 * 100)).toBe(82);
+    });
+
+    it('prices the spike hour three ways', () => {
+      expect(r(L6_4_N.spikeEnergy, 2)).toBe(3.22);
+      expect(r(-L6_4_N.spikeNetFull, 2)).toBe(0.82);
+      expect(r(-L6_4_N.spikeNetPause, 2)).toBe(0.96);
+      expect(r(-L6_4_N.spikeNetCap, 2)).toBe(0.28);
+      expect(r(L6_4_N.cap240)).toBe(970);
+      expect(r(L6_4_N.pause240)).toBe(2323);
+      expect(r(L6_4_N.cap095)).toBe(384);
+      expect(r(L6_4_N.pause095)).toBe(919);
+    });
+
+    it('backtests the policy over the history', () => {
+      expect([L6_4_N.run240.hoursCapped, L6_4_N.run240.hoursPaused, r(L6_4_N.run240.gain, 2), r(L6_4_N.run240.energyFlat, 2)]).toEqual([6, 0, 3.21, 233.43]);
+      expect([L6_4_N.run095.hoursCapped, L6_4_N.run095.hoursPaused, r(L6_4_N.run095.gain, 2)]).toEqual([4, 6, 8]);
+      expect(r(L6_4_N.run095.energyFlat - L6_4_N.run095.energyPolicy, 2)).toBe(14.38);
+      expect(r(L6_4_N.run025.gain, 2)).toBe(14.74);
+      expect(r(L6_4_N.run095.gain * 1000)).toBe(8003);
+      expect(r(L6_4_N.fleet120Cost / 1e6, 1)).toBe(4.5);
+    });
+
+    it('runs the default day', () => {
+      const d = L6_4_N.dayDefault;
+      expect(d.hours.filter((h) => h.mode === 'capped').length).toBe(3);
+      expect(d.hours.filter((h) => h.mode === 'paused').length).toBe(0);
+      expect(r(d.energyFlat - d.energyPolicy, 2)).toBe(2.89);
+      expect(r(d.workLost, 2)).toBe(1.29);
+      expect(r(d.gain, 2)).toBe(1.6);
+      expect(dayRun(L6_4_DAY_DEFAULTS).gain).toBeCloseTo(d.gain, 9);
+    });
+
+    it('quotes deferrable work', () => {
+      expect(r(L6_4_N.defer.shifted, 2)).toBe(1.07);
+      expect(r(L6_4_N.defer.asap, 2)).toBe(1.32);
+      expect(r((L6_4_N.defer.saving / L6_4_N.defer.asap) * 100)).toBe(19);
+      expect(r(L6_4_N.defer.saving, 2)).toBe(0.25);
+    });
+
+    it('solves challenge a only at $2.25', () => {
+      expect(PAUSE_VALUE_ANSWER).toBe(2.25);
+      expect(pauseValueSolved(2.25)).toBe(true);
+      expect(pauseValueSolved(2.2)).toBe(false);
+      expect(pauseValueSolved(2.3)).toBe(false);
+      expect(pauseValueSolved(L6_4_DAY_DEFAULTS.value)).toBe(false);
+      expect(policyOf(2.25, 70).pauseAbove).toBeLessThan(L6_4_N.maxPrice);
+      expect(policyOf(2.3, 70).pauseAbove).toBeGreaterThan(L6_4_N.maxPrice);
+      // Only one grid value solves it.
+      let count = 0;
+      for (let v = VALUE_MIN; v <= VALUE_MAX + 1e-9; v = Math.round((v + VALUE_STEP) * 100) / 100) if (pauseValueSolved(v)) count++;
+      expect(count).toBe(1);
+    });
+
+    it('quotes the hall under a fixed connection', () => {
+      expect(L6_4_N.full.running).toBe(13549);
+      expect(L6_4_N.full.dark).toBe(6451);
+      expect(L6_4_N.at70.running).toBe(19356);
+      expect(r(L6_4_N.at70.work)).toBe(15893);
+      expect(r((L6_4_N.at70.work / L6_4_N.full.work - 1) * 100, 1)).toBe(17.3);
+      expect(L6_4_N.bestCap).toBe(68);
+      expect(L6_4_N.atBest.running).toBe(19926);
+      expect(r(L6_4_N.atBest.work)).toBe(16094);
+      expect(r((L6_4_N.atBest.work / L6_4_N.full.work - 1) * 100, 1)).toBe(18.8);
+      expect(L6_4_N.allFitCap).toBe(L6_4_N.bestCap - 1);
+      expect(r(L6_4_N.atAllFit.work)).toBe(16018);
+      expect(L6_4_N.extraGpus).toBe(5807);
+      expect(r(L6_4_N.extraWork)).toBe(2344);
+      expect(r(L6_4_N.extraCost / 1e6, 1)).toBe(79);
+      expect(r(L6_4_N.costPerExtraWork)).toBe(33708);
+      expect(r(L6_4_N.gpuYear)).toBe(13607);
+    });
+
+    it('gains nothing from capping if speed fell in step with power', () => {
+      const full = hallRun(CHALLENGE_OWNED, 100, true).work;
+      for (const c of [95, 85, 75, 68]) expect(hallRun(CHALLENGE_OWNED, c, true).work).toBeLessThanOrEqual(full + 1);
+    });
+
+    it('solves challenge b only at the best cap', () => {
+      expect(bestCap(CHALLENGE_OWNED)).toBe(68);
+      expect(capSolved(L6_4_HALL_DEFAULTS)).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68 })).toBe(true);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 67 })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 69 })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68, linear: true })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68, owned: 21000 })).toBe(false);
+    });
+
+    it('backtests fast enough at the slowest settings', () => {
+      let worst = 0;
+      for (const cap of [50, 75, 95]) {
+        const t = performance.now();
+        historyRun(VALUE_MIN, cap);
+        worst = Math.max(worst, performance.now() - t);
+      }
+      expect(worst).toBeLessThan(60);
+    });
+  });
+}
+
+// Lesson 6.5
+{
+  describe('contract paths (contractPaths.ts)', () => {
+    it('replays exactly the draws of runContract', () => {
+      for (const c of [CONTRACT_DEFAULTS, { ...CONTRACT_DEFAULTS, hedgeShare: 0.4, bArrival: 3, failureShare: 0.06 }]) {
+        const npvs = contractPaths(c)
+          .map((p) => p.npv)
+          .sort((a, b) => a - b);
+        const ref = runContract(c).npvs;
+        expect(npvs.length).toBe(ref.length);
+        for (let i = 0; i < ref.length; i += 37) expect(npvs[i]).toBeCloseTo(ref[i], 4);
+      }
+      const ranked = rankedPaths(CONTRACT_DEFAULTS);
+      expect(ranked[0].npv).toBeLessThanOrEqual(ranked[1].npv);
+      expect(ranked[0].quarters.length).toBe(12);
+    });
+
+    it('breaks even where resold hours cover the contract', () => {
+      expect(breakEvenMarketPrice(CONTRACT_DEFAULTS)).toBeCloseTo(1.3 / (0.8 * 0.97), 9);
+    });
+  });
+
+  describe('lesson 6.5: the contract desk', () => {
+    it('starts from the engine’s defaults, with the drop from 2.67 A-class GPUs’ work', () => {
+      const p = L6_5_paramsOf(DESK_DEFAULTS);
+      expect(p.contractPrice).toBe(1.3);
+      expect(p.bArrival).toBe(5);
+      expect(p.bDrop).toBeCloseTo(0.2509, 4);
+    });
+
+    it('challenge a: the highest unhedged price with at most 10% chance of loss', () => {
+      expect(priceSolved(DESK_DEFAULTS)).toBe(false);
+      expect(L6_5_N.priceAnswer).toBe(1.21);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.21 })).toBe(true);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.2 })).toBe(false);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.22 })).toBe(false);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.21, hedge: 5 })).toBe(false);
+    });
+
+    it('challenge b: the smallest forward sale that keeps the 5th percentile from losing', () => {
+      expect(hedgeSolved(DESK_DEFAULTS)).toBe(false);
+      expect(L6_5_N.hedgeAnswer).toBe(60);
+      expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 60 })).toBe(true);
+      expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 55 })).toBe(false);
+      expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 65 })).toBe(false);
+    });
+
+    it('challenge c: the worst path that still makes money', () => {
+      const first = firstProfitableRank(DESK_DEFAULTS);
+      expect(first).toBe(L6_5_N.firstProfitable);
+      expect(pathSolved(DESK_DEFAULTS, first)).toBe(true);
+      expect(pathSolved(DESK_DEFAULTS, first - 1)).toBe(false);
+      expect(pathSolved(DESK_DEFAULTS, 51)).toBe(false);
+      expect((first - 1) / 1000).toBeCloseTo(deskRun(DESK_DEFAULTS).probLoss, 9);
+    });
+
+    it('quotes these numbers', () => {
+      const m = (x: number) => Math.round(x / 1e4) / 100;
+      const p = (x: number, d = 1) => Math.round(x * 100 * 10 ** d) / 10 ** d;
+      expect(L6_5_N.gpus).toBe(512);
+      expect(L6_5_N.quarters).toBe(12);
+      expect(L6_5_N.startPrice).toBe(2.4);
+      expect(L6_5_N.bPrice).toBe(4.8);
+      expect(Math.round(L6_5_N.aAfter * 100) / 100).toBe(1.8);
+      expect(p(L6_5_N.drop, 0)).toBe(25);
+      expect(m(L6_5_N.mean)).toBe(1.84);
+      expect(m(L6_5_N.worst)).toBe(-3.55);
+      expect(m(L6_5_N.best)).toBe(11.71);
+      expect(m(L6_5_N.p5)).toBe(-1.62);
+      expect(p(L6_5_N.probLoss)).toBe(21.8);
+      expect(Math.round(L6_5_N.breakEven * 100) / 100).toBe(1.68);
+      expect(L6_5_N.medianBelowQuarter).toBe(7);
+      expect(Math.round(L6_5_N.medianLast * 100) / 100).toBe(1.4);
+      expect(p(L6_5_N.early)).toBe(44.1);
+      expect(p(L6_5_N.never)).toBe(3.2);
+      expect(p(L6_5_N.ratio3Drop, 0)).toBe(33);
+      expect(p(L6_5_N.ratio3Loss)).toBe(33.5);
+      expect(Math.round(L6_5_N.ratioArith * 100) / 100).toBe(2.28);
+      expect(p(L6_5_N.arithLoss)).toBe(9.3);
+      expect(p(L6_5_N.fail10Loss)).toBe(40.7);
+      expect(p(L6_5_N.resale70Loss)).toBe(59.3);
+      expect(p(L6_5_N.resale90Loss)).toBe(4.6);
+      expect(p(L6_5_N.priceAnswerLoss)).toBe(9.4);
+      expect(p(L6_5_N.priceNextLoss)).toBe(10.3);
+      expect(m(L6_5_N.priceAnswerMean)).toBe(2.88);
+      expect(Math.round(L6_5_N.ownerCost * 100) / 100).toBe(1.55);
+      expect(m(L6_5_N.hedge50Mean)).toBe(1.54);
+      expect(p(L6_5_N.hedge50Loss)).toBe(7.6);
+      expect(m(L6_5_N.hedge100)).toBe(1.23);
+      expect(m(L6_5_N.hedgeAnswerP5)).toBe(0.09);
+      expect(m(L6_5_N.hedgeBelowP5)).toBe(-0.05);
+      expect(m(L6_5_N.hedgeAnswerMean)).toBe(1.48);
+      expect(p(L6_5_N.hedgeAnswerLoss)).toBe(3.5);
+      expect(L6_5_N.firstProfitable).toBe(219);
     });
   });
 }
