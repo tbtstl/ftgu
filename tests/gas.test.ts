@@ -5,7 +5,7 @@ import { checkSpec, combustionProducts, composition, gasProperties, METHANE, MMB
 import { piston, scfPerCubicFoot, zFactor } from '../src/engines/gas/eos';
 import { averagePressure, frictionFactor, inletPressure, outletPressure, pipeFlow, pipeInventory, pressureProfile, ROUGHNESS } from '../src/engines/gas/hydraulics';
 import { compress, lineCapacity, stationLine } from '../src/engines/gas/compression';
-import { BAYPORT_LNG, BAYPORT_LNG_FEEDGAS_BCFD, GAS_NODES, PIPELINE, PIPELINES, REFERENCE_DAYS, stationLineOf, STORAGE_SPECS } from '../src/model/gas/world';
+import { BAYPORT_LNG, BAYPORT_LNG_FEEDGAS_BCFD, CORRIDORS, GAS_NODES, PIPELINE, PIPELINES, REFERENCE_DAYS, stationLineOf, STORAGE_SPECS } from '../src/model/gas/world';
 import { ethaneSolved, MIX_DEFAULTS, mixComposition, PRESETS } from '../src/lessons/gas/ch1/L1_1';
 import { CHARGE_SCF, HEAT, MAOP_PSIG, maopSolved, PISTON_DEFAULTS, V_MAX, V_MIN, zMinimum } from '../src/lessons/gas/ch1/L1_2';
 import { FLOW_DEFAULTS, flowAt, northlineSolved, TARGET_MMCFD, transitHours } from '../src/lessons/gas/ch1/L1_3';
@@ -20,7 +20,7 @@ import { BLOCK_GIP, blockSolved, lineEstimate, runWell, steadyCap, steadySolved,
 import { ACTUAL_BCF, bestFit, fitError, FORECAST_DEFAULTS, forecastSolved, HISTORY, SEEN } from '../src/lessons/gas/ch2/L2_3';
 import { breakevenPrice, BUDGET_WELLS, FIELD_DEFAULTS, fieldSolved, promise, schedule, TARGET } from '../src/lessons/gas/ch2/L2_4';
 import { breakevenSolved, CHALLENGE_GAS, dayValue, DEEP, ethaneLeftSolved, lowestPayingCent, PLANT_DEFAULTS, recoveryGain, runPlant, STANDARD, VALUE_DEFAULTS } from '../src/lessons/gas/ch2/L2_5';
-import { bindingArcs, corridorDesign, type FlowProblem, loopedFlow, solveFlow } from '../src/engines/gas/network';
+import { bindingArcs, COMPRESSION_COST_PER_HP, corridorDesign, type FlowProblem, loopedFlow, PIPE_SIZES, solveFlow } from '../src/engines/gas/network';
 import { CITY_HOURLY_SHAPE, packLineCapacity, packLineOf, packWindow, runLinepack } from '../src/engines/gas/linepack';
 import { dailyFromMonthly, daysToFill, deliverableOver, injectCapacity, optimizeStorage, runStorage, storagePressure, thresholdPolicy, withdrawCapacity } from '../src/engines/gas/storage';
 import { breakevenHub, cargoChoice, cargoMargin, lngCargo, netback, overseasPrices } from '../src/engines/gas/lng';
@@ -54,6 +54,13 @@ import { bestRuleThresholds, ruleBookFor, ruleYears, SPREAD_RULE_DEFAULTS, SPREA
 import { BASIS_DESK_DEFAULTS, basisDeskNumbers, basisDeskRun, basisDeskSignals, basisDeskSolved, GROWTH_MAX, leastGlutGrowth, METRO_DESK_DEFAULTS, metroDeskRun, metroForecastSolved, viewsYearFiveGlut } from '../src/lessons/gas/ch6/L6_3';
 import { ARB_LEASE_DEFAULTS, ARBITRAGE_DEFAULTS, arbitrageData, arbitrageNumbers, arbitrageSolved, arbitrageTotal, arbitrageYears, assetValues, FEE_SCALE, feeKeyOf, LEASE_BCF, leaseFloorFee, leasePath, leaseYearSolved, worstUnhedgedYear } from '../src/lessons/gas/ch6/L6_4';
 import { LAB_CHALLENGE, labBook, labCosts, labLargestSize, labOutcome, labSpreadHindsight, labWalk, labWinterHdd, STRATEGY_LAB_DEFAULTS, strategyLabNumbers, strategyLabSolved } from '../src/lessons/gas/ch6/L6_5';
+import { AS_BUILT, CAPSTONE_CONDITIONS, CHALLENGE_SEEDS, designDay, designMorningOf, type GasSystem, lineDesign, lineTariff, NEW_LINE_TARIFF, PASSIVE, PORTFOLIO_DEFAULTS, portfolioYear, PRACTICE_SEEDS, RIVALS, summarizeYear, systemCapacity, systemCost, systemForecast, systemLines, systemTakeaway, systemYear, tournament, TOURNAMENT_SEEDS, winterColder } from '../src/engines/gas/capstone';
+import { defaultCapstone, sanitizeCapstone } from '../src/lessons/gas/shared/capstone';
+import { cheapestFix, CONSTRUCTOR_DEFAULTS, constructorChecks, constructorFixes, constructorFixText, constructorLeastCapital, constructorLineRef, constructorNumbers, constructorOnlyAdds, constructorSolved, FIXES_DEFAULTS } from '../src/lessons/gas/ch7/L7_1';
+import { REGIONAL_MARKET_DEFAULTS, regionalMarketSolved, RM_INDUSTRY, RM_INTERRUPTIBLE, rmChanges, rmEight, rmFullOnlyInWinter, rmLineName, rmSameNetwork, rmWinter } from '../src/lessons/gas/ch7/L7_2';
+import { ensembleSweeps, FORECAST_CHALLENGE_DEFAULTS, forecastChallengeSolved, forecastRound, fullPipeDays, marketOnSteps, networkWords, ROUND_HORIZON, ROUND_MEMBERS, ROUND_MONTHS, roundTally, scoreRound, TALLY_DEFAULTS } from '../src/lessons/gas/ch7/L7_3';
+import { PM_LEASE_MAX, PM_PARTS, PM_TARGET, pmDrivers, pmEight, pmHolds, pmLeaseBcf, pmNetworkWords, pmNumbers, pmRunning, pmShare, portfolioManagerSolved } from '../src/lessons/gas/ch7/L7_4';
+import { activeParts, deskPhrase, KEEP_DEFAULTS, partTotals, practiceKeepers, TOURNAMENT_DEFAULTS, tournamentDesks, tournamentNetworkWords, tournamentPartName, tournamentPortfolioWords, tournamentRun, tournamentSolved, withParts } from '../src/lessons/gas/ch7/L7_5';
 
 describe('gas chapter 1: properties', () => {
   it('uses 60 °F and 14.73 psia as standard conditions', () => {
@@ -2709,5 +2716,441 @@ describe('gas 6.5', () => {
     expect(n.takeaway).toBeCloseTo(3.05, 9);
     expect(labWalk('ridgeback').walk.total / 1e6).toBeCloseTo(4.6, 2);
     expect(labWinterHdd().map((x) => Math.round(x))).toEqual([-37, -452, 610, -440, 495, 67, -233, 103]);
+  });
+});
+
+describe('gas chapter 7: the capstone engine', () => {
+  const withStations = (id: string, n: number): GasSystem => ({ sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, [id]: n } });
+
+  it('starts from the region after Year 8: six lines, Express with a third station', () => {
+    const cap = systemCapacity(AS_BUILT);
+    expect(cap['ridgeback-calder']).toBeCloseTo(2.6, 9);
+    expect(cap['calder-metro']).toBeCloseTo(PIPELINE['calder-metro'].capacityBcfd, 9);
+    expect(cap['bayport-metro']).toBe(0);
+    expect(systemCost(AS_BUILT)).toEqual({ added: 0, annual: 0, changed: [] });
+    expect(CAPSTONE_CONDITIONS.ridgeback).toBeCloseTo(3.56, 9);
+    // Year 9's Ridgeback outgrows its takeaway by a sliver.
+    expect(systemTakeaway(AS_BUILT)).toBeLessThan(CAPSTONE_CONDITIONS.ridgeback);
+  });
+
+  it('prices changes as Lesson 3.1 did: stations by their horsepower, new pipe in full', () => {
+    const s = withStations('ridgeback-bayport', 4);
+    const c = systemCost(s);
+    expect(c.changed).toEqual(['ridgeback-bayport']);
+    expect(c.added).toBeCloseTo((lineDesign('ridgeback-bayport', 30, 4).hp - lineDesign('ridgeback-bayport', 30, 3).hp) * COMPRESSION_COST_PER_HP, 3);
+    expect(c.annual).toBeCloseTo(c.added * CAPITAL_CHARGE, 6);
+    const n = { sizes: { ...AS_BUILT.sizes, 'bayport-metro': 24 }, stations: { ...AS_BUILT.stations, 'bayport-metro': 3 } };
+    expect(systemCost(n).added).toBeCloseTo(lineDesign('bayport-metro', 24, 3).cost, 3);
+    expect(systemLines(n).extra).toEqual([{ id: 'bayport-metro', from: 'bayport', to: 'metro', capacityBcfd: lineDesign('bayport-metro', 24, 3).capacityBcfd, variableCost: NEW_LINE_TARIFF }]);
+  });
+
+  it('runs a year: the glut strands Ridgeback gas until the takeaway grows', () => {
+    const asBuilt = summarizeYear(AS_BUILT, systemYear(AS_BUILT, 501));
+    expect(asBuilt.avg.ridgeback - asBuilt.avg.calder).toBeLessThan(-1);
+    const s = withStations('ridgeback-bayport', 4);
+    expect(systemTakeaway(s)).toBeGreaterThan(CAPSTONE_CONDITIONS.ridgeback);
+    const fixed = summarizeYear(s, systemYear(s, 501));
+    expect(fixed.avg.ridgeback - fixed.avg.calder).toBeCloseTo(-PIPELINE['ridgeback-calder'].variableCost, 2);
+    expect(systemYear(AS_BUILT, 501).curves).toHaveLength(12);
+  });
+
+  it('leaves homes cold on the design day as built, and not once Metro gets more pipe', () => {
+    expect(designDay(AS_BUILT).rationed).toBeGreaterThan(0.05);
+    expect(designDay(withStations('calder-metro', 4)).rationed).toBeLessThan(1e-6);
+    expect(designMorningOf().tempF).toBeLessThan(5);
+  });
+
+  it('runs a portfolio and a tournament', () => {
+    const passive = portfolioYear(AS_BUILT, 501, PASSIVE);
+    expect(passive.total).toBe(0);
+    const y = portfolioYear(AS_BUILT, 501, PORTFOLIO_DEFAULTS);
+    expect(y.total).toBeCloseTo(y.storage.total + y.firm.total + y.toll.total + y.weather.total + y.metro.total, 3);
+    expect(y.monthly).toHaveLength(12);
+    // Hedged storage carries almost no price exposure; unhedged carries its whole schedule.
+    const unhedged = portfolioYear(AS_BUILT, 501, { ...PORTFOLIO_DEFAULTS, storageHedged: false });
+    expect(Math.max(...unhedged.exposure)).toBeGreaterThan(Math.max(...y.exposure));
+    const t = tournament(AS_BUILT, RIVALS[0].settings, TOURNAMENT_SEEDS.slice(0, 4));
+    expect(t.totals).toHaveLength(4);
+    expect(t.worst).toBeLessThanOrEqual(t.mean);
+  });
+
+  it('forecasts on the reader’s system', () => {
+    const f = systemForecast(AS_BUILT, CHALLENGE_SEEDS[0], 214, 0.8, 6);
+    expect(f.members).toHaveLength(6);
+    expect(f.actual.storage).toHaveLength(365 - 214);
+    expect(winterColder(weatherYear(CHALLENGE_SEEDS[0]))).toBeCloseTo(winterColder(systemYear(AS_BUILT, CHALLENGE_SEEDS[0]).weather), 9);
+  });
+
+  it('keeps the capstone in the browser, checked on the way in', () => {
+    const d = sanitizeCapstone({ system: { sizes: { 'bayport-metro': 24, 'calder-metro': 37 }, stations: { 'bayport-metro': 9 } }, portfolio: { storageShare: 5, skill: 'x' } });
+    expect(d.system.sizes['bayport-metro']).toBe(24);
+    expect(d.system.sizes['calder-metro']).toBe(AS_BUILT.sizes['calder-metro']);
+    expect(d.system.stations['bayport-metro']).toBe(5);
+    expect(d.portfolio.storageShare).toBe(0.2);
+    expect(d.portfolio.skill).toBe(PORTFOLIO_DEFAULTS.skill);
+    expect(sanitizeCapstone(null)).toEqual(defaultCapstone());
+  });
+});
+
+describe('gas 7.1', () => {
+  const withChanges = (changes: Record<string, [number, number]>): GasSystem => {
+    const s: GasSystem = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations } };
+    for (const [id, [size, n]] of Object.entries(changes)) {
+      s.sizes[id] = size;
+      s.stations[id] = n;
+    }
+    return s;
+  };
+
+  it('fails both tests as built on the design morning', () => {
+    const k = constructorChecks(AS_BUILT);
+    expect(k.production).toBeCloseTo(3.56, 9);
+    expect(k.takeaway).toBeCloseTo(3.55, 9);
+    expect(k.homesCut).toBeCloseTo(0.099, 3);
+    expect(k.cutAt.metro).toBeCloseTo(k.homesCut, 9);
+    expect(k.day.price.metro).toBe(100);
+    expect(k.day.price.ridgeback).toBeCloseTo(1.2, 9);
+    expect(k.day.price.calder).toBeCloseTo(5.28, 2);
+    expect(k.cost.added).toBe(0);
+    expect(constructorSolved(AS_BUILT)).toBe(false);
+    const n = constructorNumbers();
+    expect(n.date).toBe('February 8');
+    expect(n.winter).toBe(8);
+    expect(n.morning.tempF).toBeCloseTo(-2.2, 1);
+    expect(n.morning.storage.saltflat).toBeCloseTo(15.0, 1);
+    expect(n.morning.storage.hollowcreek).toBeCloseTo(51.2, 1);
+    expect(n.hollowWd).toBeCloseTo(0.66, 2);
+    expect(n.powerOff).toBeCloseTo(1.07, 2);
+    expect(n.industryOff).toBeCloseTo(0.22, 2);
+    expect(n.interruptibleOff).toBeCloseTo(0.09, 2);
+    expect(n.homesDemand).toBeCloseTo(3.01, 2);
+    expect(n.lng).toBeCloseTo(1.8, 9);
+    expect(CONSTRUCTOR_DEFAULTS.sel).toBe('calder-metro');
+    expect(FIXES_DEFAULTS.problem).toBe('glut');
+  });
+
+  it('finds compression cheapest: a fourth Coastal Line station for Ridgeback, a fifth Valley Line station for Metro', () => {
+    const g = cheapestFix('glut');
+    expect(g).toMatchObject({ id: 'ridgeback-bayport', size: 30, stations: 4 });
+    expect(g.cost / 1e6).toBeCloseTo(72.3, 1);
+    expect(g.after).toBeCloseTo(0.95, 9);
+    const d = cheapestFix('design');
+    expect(d).toMatchObject({ id: 'sandhill-metro', size: 24, stations: 5 });
+    expect(d.cost / 1e6).toBeCloseTo(186.9, 1);
+    expect(d.metroPrice).toBe(20);
+    const n = constructorNumbers();
+    expect(n.expressFix.cost / 1e6).toBeCloseTo(283.2, 1);
+    expect(n.northFix.cost / 1e6).toBeCloseTo(233.5, 1);
+    expect(n.bayMetro).toMatchObject({ size: 20, stations: 1 });
+    expect(n.bayMetro.cost / 1e6).toBeCloseTo(768.1, 1);
+    expect(n.valley4.cost / 1e6).toBeCloseTo(39.3, 1);
+    expect(n.valley4.cut).toBeCloseTo(0.049, 3);
+    expect(n.valley4.cap).toBeCloseTo(0.5, 9);
+    // No single change passes both tests.
+    const fixes = constructorFixes();
+    expect(fixes.glut.filter((r) => r.best).map((r) => r.id)).toEqual(['ridgeback-calder', 'ridgeback-bayport', 'ridgeback-sandhill']);
+    expect(fixes.design.filter((r) => r.best).map((r) => r.id)).toEqual(['sandhill-metro', 'calder-metro', 'bayport-metro']);
+    expect(constructorFixText(g)).toBe('a fourth station');
+    expect(constructorFixText(n.bayMetro)).toBe('a new 20-inch pipe with one station');
+    expect(constructorLineRef('ridgeback-bayport')).toBe('the Coastal Line');
+    expect(constructorLineRef('calder-metro')).toBe('Northline');
+  });
+
+  it('is solved by the two cheapest fixes, and nothing cheaper passes both tests', () => {
+    expect(constructorLeastCapital() / 1e6).toBeCloseTo(259.2, 1);
+    const s = withChanges({ 'ridgeback-bayport': [30, 4], 'sandhill-metro': [24, 5] });
+    expect(constructorSolved(s)).toBe(true);
+    expect(constructorNumbers().bothMetro).toBe(20);
+    // A dearer network that passes both isn't the answer.
+    expect(constructorSolved(withChanges({ 'ridgeback-bayport': [30, 4], 'calder-metro': [36, 4] }))).toBe(false);
+    // Taking a station off a line in the ground isn't allowed, even when free.
+    expect(constructorOnlyAdds(withChanges({ 'sandhill-calder': [24, 1] }))).toBe(false);
+    // Every pair and triple of additions cheaper than the answer fails a test.
+    const opts: Array<{ id: string; size: number; n: number; cost: number }> = [];
+    for (const c of CORRIDORS)
+      for (const size of PIPE_SIZES)
+        for (let n = 1; n <= 5; n++) {
+          if (size === AS_BUILT.sizes[c.id] && n === AS_BUILT.stations[c.id]) continue;
+          const one = withChanges({ [c.id]: [size, n] });
+          if (!constructorOnlyAdds(one)) continue;
+          const cost = systemCost(one).added;
+          if (cost < constructorLeastCapital() - 1) opts.push({ id: c.id, size, n, cost });
+        }
+    const passes = (list: typeof opts) => {
+      const k = constructorChecks(withChanges(Object.fromEntries(list.map((o) => [o.id, [o.size, o.n]]))));
+      return k.takeaway > k.production && k.homesCut === 0;
+    };
+    for (let i = 0; i < opts.length; i++)
+      for (let j = i + 1; j < opts.length; j++) {
+        if (opts[i].id === opts[j].id || opts[i].cost + opts[j].cost >= constructorLeastCapital() - 1) continue;
+        expect(passes([opts[i], opts[j]])).toBe(false);
+        for (let l = j + 1; l < opts.length; l++) {
+          if (new Set([opts[i].id, opts[j].id, opts[l].id]).size < 3 || opts[i].cost + opts[j].cost + opts[l].cost >= constructorLeastCapital() - 1) continue;
+          expect(passes([opts[i], opts[j], opts[l]])).toBe(false);
+        }
+      }
+  });
+});
+
+describe('gas 7.2', () => {
+  const fix: GasSystem = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, 'ridgeback-bayport': 4, 'sandhill-metro': 5 } };
+
+  it('runs the network as built through the eight practice winters: a stranded basin and one cold morning', () => {
+    const b = rmEight(AS_BUILT);
+    expect(b.winters).toHaveLength(8);
+    // Ridgeback sits at its production cost all year, every winter.
+    expect(b.winters.every((w) => Math.abs(w.summary.max.ridgeback - 1.2) < 1e-6)).toBe(true);
+    expect(b.ridgebackBasis).toBeCloseTo(-2.22, 2);
+    expect(CAPSTONE_CONDITIONS.ridgeback - systemTakeaway(AS_BUILT)).toBeCloseTo(0.01, 6);
+    expect(b.calder).toBeCloseTo(3.42, 2);
+    // Northline full about 14 days a year; oil switching at Metro in four winters; one rationed day.
+    expect(b.lines.find((l) => l.id === 'calder-metro')!.fullDays).toBeCloseTo(14.1, 1);
+    expect(b.oilWinters).toBe(4);
+    expect(b.rationedDays).toBe(1);
+    expect(b.metroMax).toBe(100);
+    expect([RM_INTERRUPTIBLE, RM_INDUSTRY]).toEqual([8, 20]);
+    expect(rmFullOnlyInWinter(AS_BUILT, 'calder-metro')).toBe(false);
+  });
+
+  it('adds up who is paid as built', () => {
+    const b = rmEight(AS_BUILT);
+    const rb = b.lines.filter((l) => l.id === 'ridgeback-calder' || l.id === 'ridgeback-bayport').reduce((a, l) => a + l.rent, 0);
+    expect(rb / 1e9).toBeCloseTo(2.76, 2);
+    expect(b.ridgebackSales / 1e9).toBeCloseTo(1.62, 2);
+    const nl = b.winters.map((w) => w.summary.rent['calder-metro']);
+    expect(Math.max(...nl) / 1e6).toBeCloseTo(312.5, 1);
+    expect(nl.indexOf(Math.max(...nl))).toBe(7);
+    expect(b.capital).toBe(0);
+  });
+
+  it('shows what a changed network moves', () => {
+    const b = rmEight(AS_BUILT);
+    const m = rmEight(fix);
+    expect(rmChanges(fix)).toEqual(['Coastal Line: 4 stations instead of 3', 'Valley Line: 5 stations instead of 3']);
+    expect(rmSameNetwork(fix, AS_BUILT)).toBe(false);
+    expect(m.ridgebackBasis).toBeCloseTo(-0.12, 3);
+    expect(m.rationedDays).toBe(0);
+    expect(m.metroMax).toBe(20);
+    expect((m.producers - b.producers) / 1e9).toBeCloseTo(2.91, 2);
+    expect((m.rents - b.rents) / 1e9).toBeCloseTo(-2.81, 2);
+    expect((m.metroBill - b.metroBill) / 1e6).toBeCloseTo(-44, 0);
+    expect(m.capital / 1e6).toBeCloseTo(27.5, 1);
+    expect(rmLineName('bayport-metro')).toBe('Bayport–Metro line');
+  });
+
+  it('solves the challenge on the morning homes went without gas, and only then', () => {
+    const w = rmWinter(AS_BUILT, 7);
+    expect(w.rationedDays).toEqual([313]);
+    const day = systemYear(AS_BUILT, PRACTICE_SEEDS[7]).days[313];
+    expect(day.tempF).toBeCloseTo(-2.2, 1);
+    expect(day.rationed).toBeCloseTo(0.099, 3);
+    expect(day.flow['calder-metro']).toBeCloseTo(1.8, 6);
+    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 313 })).toBe(true);
+    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 312 })).toBe(false);
+    expect(regionalMarketSolved({ winter: 7, network: 'yours', day: 313 })).toBe(false);
+    expect(regionalMarketSolved(REGIONAL_MARKET_DEFAULTS)).toBe(false);
+    // On the changed network that morning, Metro pays $20 and nobody is cut.
+    const f = systemYear(fix, PRACTICE_SEEDS[7]).days[313];
+    expect(f.price.metro).toBe(20);
+    expect(f.rationed).toBeLessThan(1e-6);
+  });
+});
+
+describe('gas 7.3', () => {
+  const open = () => forecastRound(AS_BUILT, FORECAST_CHALLENGE_DEFAULTS.winter, FORECAST_CHALLENGE_DEFAULTS.month, FORECAST_CHALLENGE_DEFAULTS.skill);
+
+  it('opens on January 1 of the first hidden winter with the market’s and the imagined winters’ forecasts', () => {
+    const r = open();
+    expect(r.seed).toBe(CHALLENGE_SEEDS[0]);
+    expect(r.storageNow).toBeCloseTo(98.5, 1);
+    expect(r.market.basis).toBeCloseTo(0.745, 3);
+    expect(r.market.calder).toBeCloseTo(5.102, 3);
+    expect(r.market.storage).toBeCloseTo(37.5, 6);
+    expect(r.ensemble.basis).toBeCloseTo(0.99, 2);
+    expect(r.ensemble.calder).toBeCloseTo(5.16, 2);
+    expect(r.ensemble.storage).toBeCloseTo(35.9, 1);
+    expect(r.fcTemp).toBeCloseTo(25.3, 1);
+    expect(r.normalTemp).toBeCloseTo(28.6, 1);
+    // Every imagined winter sees Metro's pipes run full on at least one January day.
+    const f = systemForecast(AS_BUILT, r.seed, r.day, FORECAST_CHALLENGE_DEFAULTS.skill, ROUND_MEMBERS, ROUND_HORIZON);
+    expect(f.members.filter((m) => fullPipeDays(m.metroBasis.slice(0, 31)) > 0)).toHaveLength(ROUND_MEMBERS);
+    expect(networkWords(AS_BUILT)).toEqual({ asBuilt: true, changed: [], capital: 0 });
+  });
+
+  it('counts full-pipe days above Northline’s trip and scores against the market on the slider’s steps', () => {
+    expect(lineTariff('calder-metro')).toBeCloseTo(0.15, 9);
+    expect(fullPipeDays([0.15, 0.155, 0.2, 3])).toBe(2);
+    const r = open();
+    expect(marketOnSteps(r)).toEqual({ basis: 0.74, calder: 5.1, storage: 37.5 });
+    // A reader who leaves every forecast at the market's ties it and beats nothing.
+    expect(scoreRound(marketOnSteps(r), r).beaten).toBe(0);
+    expect(forecastChallengeSolved([scoreRound(marketOnSteps(r), r)])).toBe(false);
+  });
+
+  it('is solvable: entering the imagined winters’ averages sweeps five rounds, none in the coldest winter', () => {
+    const sweeps = ensembleSweeps(AS_BUILT, TALLY_DEFAULTS.skill);
+    expect(sweeps).toEqual([
+      { winter: 1, month: 8 },
+      { winter: 1, month: 9 },
+      { winter: 4, month: 8 },
+      { winter: 4, month: 9 },
+      { winter: 5, month: 10 },
+    ]);
+    const r = forecastRound(AS_BUILT, 1, 8, TALLY_DEFAULTS.skill);
+    const entry = { basis: Math.round(r.ensemble.basis * 100) / 100, calder: Math.round(r.ensemble.calder * 100) / 100, storage: Math.round(r.ensemble.storage * 10) / 10 };
+    expect(forecastChallengeSolved([scoreRound(entry, r)])).toBe(true);
+  });
+
+  it('tallies every round: the imagined winters beat the market more often, and miss the cold January', () => {
+    const t = roundTally(AS_BUILT, TALLY_DEFAULTS.skill);
+    expect(t.rounds).toHaveLength(CHALLENGE_SEEDS.length * ROUND_MONTHS.length);
+    expect(t.wins).toEqual({ basis: 12, calder: 12, storage: 10 });
+    expect(t.ensembleMiss.basis).toBeCloseTo(0.485, 2);
+    expect(t.marketMiss.basis).toBeCloseTo(0.57, 2);
+    expect(t.ensembleMiss.calder).toBeCloseTo(0.203, 2);
+    expect(t.marketMiss.calder).toBeCloseTo(0.238, 2);
+    expect(t.ensembleMiss.storage).toBeCloseTo(3.29, 1);
+    expect(t.marketMiss.storage).toBeCloseTo(4.74, 1);
+    const none = roundTally(AS_BUILT, 0);
+    expect(none.wins.calder).toBe(7);
+    expect(none.wins.storage).toBe(11);
+    // All six Decembers go to the imagined winters on the basis.
+    expect(t.rounds.filter((r) => r.month === 8 && Math.abs(r.ensemble.basis - r.actual.basis) < Math.abs(r.market.basis - r.actual.basis))).toHaveLength(6);
+    // The market's biggest basis miss: January of Winter 1, a breakaway neither forecast saw.
+    const big = t.rounds.reduce((b, r) => (Math.abs(r.market.basis - r.actual.basis) > Math.abs(b.market.basis - b.actual.basis) ? r : b));
+    expect(big).toMatchObject({ winter: 0, month: 9 });
+    expect(big.actual.basis).toBeCloseTo(3.42, 2);
+    expect(big.ensemble.basis).toBeCloseTo(0.99, 2);
+    const winters = CHALLENGE_SEEDS.map((s) => winterColder(systemYear(AS_BUILT, s).weather));
+    expect(winters.indexOf(Math.max(...winters))).toBe(0);
+  });
+});
+
+describe('gas 7.4', () => {
+  it('starts the portfolio on the network as built: a hedged lease that earns in every practice winter, and Northline priced about right', () => {
+    const n = pmNumbers(AS_BUILT);
+    // Fees are the April 1 intrinsic values, the same in every winter.
+    expect(n.first.storage.fee).toBeGreaterThan(2.5e6);
+    expect(n.first.storage.fee).toBeLessThan(3.2e6);
+    expect(n.firmFee).toBeCloseTo(n.firm.years[7].firm.fee, 6);
+    expect(pmLeaseBcf(PORTFOLIO_DEFAULTS)).toBeCloseTo(1, 9);
+    // The first winter: the lease earns all of the portfolio's profit; its cash bottoms out in December and February brings it back.
+    expect(n.first.total).toBeGreaterThan(0.7e6);
+    expect(n.first.storage.total).toBeGreaterThanOrEqual(n.first.total);
+    expect(n.leaseLowMonth).toBe(8);
+    expect(n.leaseBestMonth).toBe(10);
+    expect(n.first.peakCapital).toBeGreaterThan(6e6);
+    // Hedged, the lease has no gas left unpriced; unhedged, several Bcf.
+    expect(n.exposureHedged).toBeLessThan(0.01);
+    expect(n.exposureOpen).toBeGreaterThan(3);
+    expect(n.lease.wins).toBe(8);
+    expect(n.leaseOpen.mean).toBeLessThan(n.lease.mean);
+    expect(n.leaseOpen.wins).toBeLessThan(n.lease.wins);
+  });
+
+  it('shows firm Northline and Metro basis sold as two sides of one bet', () => {
+    const n = pmNumbers(AS_BUILT);
+    expect(Math.abs(n.firm.mean)).toBeLessThan(0.1 * n.firmFee);
+    const firmBest = n.firm.totals.indexOf(Math.max(...n.firm.totals));
+    const metroWorst = n.metroOpen.totals.indexOf(Math.min(...n.metroOpen.totals));
+    expect(firmBest).toBe(metroWorst);
+    // Held together at the same volume, they never make or lose more than about the fees.
+    expect(Math.max(...n.both.totals.map(Math.abs))).toBeLessThan(100_000);
+    // The toll earns more than April's value in every winter; the weather trades have the best return on cash.
+    expect(n.toll.years.every((y) => y.toll.total > 0)).toBe(true);
+    expect(n.weather.returnOnCash).toBeGreaterThan(Math.max(n.lease.returnOnCash, n.toll.returnOnCash));
+  });
+
+  it('adds the parts up, and holds nothing when nothing is held', () => {
+    const e = pmEight(AS_BUILT, PORTFOLIO_DEFAULTS);
+    expect(e.totals).toHaveLength(8);
+    e.years.forEach((y) => expect(y.total).toBeCloseTo(PM_PARTS.reduce((a, part) => a + y[part].total, 0), 3));
+    expect(pmRunning(e.years[0].monthly)[12]).toBeCloseTo(e.years[0].total, 3);
+    expect(PM_PARTS.filter((part) => pmHolds(PORTFOLIO_DEFAULTS, part))).toEqual(['storage', 'firm', 'weather', 'metro']);
+    expect(pmEight(AS_BUILT, PASSIVE).mean).toBe(0);
+    expect(pmNetworkWords(AS_BUILT)).toEqual({ asBuilt: true, changed: [], capital: 0 });
+    expect(pmDrivers(AS_BUILT).colder).toHaveLength(8);
+  });
+
+  it('has a challenge the defaults don’t solve and a few portfolios do, on the network as built and on a changed one', () => {
+    expect(portfolioManagerSolved(AS_BUILT, PORTFOLIO_DEFAULTS)).toBe(false);
+    const bigger = { ...PORTFOLIO_DEFAULTS, storageShare: pmShare(2) };
+    expect(portfolioManagerSolved(AS_BUILT, bigger)).toBe(true);
+    const e = pmEight(AS_BUILT, bigger);
+    expect(e.worst).toBeGreaterThan(0);
+    expect(e.mean).toBeGreaterThanOrEqual(PM_TARGET.mean);
+    expect(e.peakCapital).toBeLessThanOrEqual(PM_TARGET.capital);
+    // Too much storage needs too much cash.
+    expect(portfolioManagerSolved(AS_BUILT, { ...PASSIVE, storageShare: pmShare(PM_LEASE_MAX) })).toBe(false);
+    const changed: GasSystem = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, 'ridgeback-bayport': 4, 'sandhill-metro': 5 } };
+    expect(portfolioManagerSolved(changed, { ...PASSIVE, storageShare: pmShare(1.5), weatherLots: 20, metroSellMMBtuD: 10_000, metroSkipColderF: 0 })).toBe(true);
+    expect(pmNetworkWords(changed).changed).toEqual(['Coastal Line', 'Valley Line']);
+  });
+});
+
+describe('gas 7.5', () => {
+  const p = PORTFOLIO_DEFAULTS;
+
+  it('runs the same tournament as the engine, part by part', () => {
+    const run = tournamentRun(AS_BUILT, p, 'unseen');
+    const t = tournament(AS_BUILT, p);
+    expect(run.result.mean).toBeCloseTo(t.mean, 6);
+    expect(run.result.worst).toBeCloseTo(t.worst, 6);
+    expect(run.result.peakCapital).toBeCloseTo(t.peakCapital, 6);
+    expect(run.seeds).toEqual(TOURNAMENT_SEEDS);
+    const parts = partTotals(run);
+    expect(Object.values(parts).reduce((a, b) => a + b, 0)).toBeCloseTo(run.result.totals.reduce((a, b) => a + b, 0), 3);
+    expect(activeParts(p)).toEqual(['storage', 'firm', 'weather', 'metro']);
+    expect(activeParts(PASSIVE)).toEqual([]);
+    expect(activeParts(withParts(p, ['storage']))).toEqual(['storage']);
+  });
+
+  it('ranks the desks as the prose says for the network as built and the default portfolio', () => {
+    const desks = tournamentDesks(AS_BUILT, p, 'unseen');
+    expect(desks.map((d) => d.id)).toEqual(['yours', 'storage', 'gambler', 'insurer', 'forecaster', 'shipper', 'passive']);
+    const mine = desks[0].run.result;
+    expect(desks.every((d) => d.id === 'yours' || d.run.result.mean < mine.mean)).toBe(true);
+    expect(mine.mean).toBeCloseTo(1_101_100, -3);
+    expect(mine.worst).toBeCloseTo(-289_064, -3);
+    expect(Math.round(mine.winRate * 12)).toBe(10);
+    const run = desks[0].run;
+    expect(run.colder[run.result.totals.indexOf(mine.worst)]).toBeCloseTo(-542.1, 0);
+    expect(run.colder[run.result.totals.indexOf(mine.best)]).toBeCloseTo(430.4, 0);
+    expect(tournamentRun(AS_BUILT, p, 'practice').result.mean).toBeCloseTo(1_009_253, -3);
+    const byId = Object.fromEntries(desks.map((d) => [d.id, d]));
+    expect(Math.round(byId.storage.run.result.winRate * 12)).toBe(11);
+    expect(Math.round(byId.gambler.run.result.winRate * 12)).toBe(5);
+    expect(byId.passive.run.result.totals.every((t) => t === 0)).toBe(true);
+    expect(byId.passive.perCash).toBeNull();
+    const bestPerCash = [...desks].filter((d) => d.perCash !== null).sort((a, b) => (b.perCash ?? 0) - (a.perCash ?? 0))[0];
+    expect(bestPerCash.id).toBe('shipper');
+    expect(bestPerCash.perCash).toBeCloseTo(0.624, 2);
+    const steadiest = desks.filter((d) => d.id !== 'passive').sort((a, b) => b.run.result.worst - a.run.result.worst)[0];
+    expect(steadiest.id).toBe('forecaster');
+    expect(deskPhrase('shipper')).toBe('the Northline shipper');
+  });
+
+  it('keeps what made money on the practice winters, and lets the unseen winters judge it', () => {
+    expect(practiceKeepers(AS_BUILT, p)).toEqual(['storage', 'weather']);
+    expect(tournamentSolved(KEEP_DEFAULTS, AS_BUILT, p)).toBe(false);
+    expect(tournamentSolved({ ...KEEP_DEFAULTS, firm: false, metro: false }, AS_BUILT, p)).toBe(true);
+    // The toll isn't held, so its box doesn't matter.
+    expect(tournamentSolved({ ...KEEP_DEFAULTS, firm: false, metro: false, toll: false }, AS_BUILT, p)).toBe(true);
+    const kept = tournamentRun(AS_BUILT, withParts(p, ['storage', 'weather']), 'unseen');
+    expect(kept.result.mean).toBeCloseTo(895_453, -3);
+    const parts = partTotals(tournamentRun(AS_BUILT, p, 'unseen'));
+    expect(parts.firm + parts.metro).toBeCloseTo(2_467_767, -3);
+    const practiceParts = partTotals(tournamentRun(AS_BUILT, p, 'practice'));
+    expect(practiceParts.firm + practiceParts.metro).toBeCloseTo(-177_990, -3);
+  });
+
+  it('describes the network and the portfolio', () => {
+    expect(tournamentNetworkWords(AS_BUILT)).toBe('the network as built');
+    const s = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, 'ridgeback-bayport': 4 } };
+    expect(tournamentNetworkWords(s)).toContain('Coastal Line at 30 inches with 4 stations');
+    expect(tournamentPortfolioWords(p)).toContain('a lease of 1.0 Bcf of Salt Flat, hedged');
+    expect(tournamentPortfolioWords(PASSIVE)).toBe('no positions at all');
+    expect(tournamentPartName('firm', p)).toBe('firm capacity on Northline');
+    expect(TOURNAMENT_DEFAULTS).toEqual({ winters: 'unseen', network: 'yours', rival: 'storage' });
   });
 });

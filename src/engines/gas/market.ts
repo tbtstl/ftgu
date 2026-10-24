@@ -21,6 +21,15 @@ import { BASINS, GAS_NODES, PIPELINES, PRODUCTION_COST, STORAGE_SPECS, type GasN
 import { solveFlow, type DemandStep, type FlowProblem, type FlowSolution, type SupplyStep } from './network';
 import { injectCapacity, withdrawCapacity, type StorageSpec } from './storage';
 
+/** A pipeline in a corridor the region hasn't built (the capstone's new lines). */
+export interface ExtraPipe {
+  id: string;
+  from: GasNodeId;
+  to: GasNodeId;
+  capacityBcfd: number;
+  variableCost: number;
+}
+
 export type FieldId = 'saltflat' | 'hollowcreek';
 export const FIELDS: FieldId[] = ['saltflat', 'hollowcreek'];
 /** Where each storage field connects to the network. */
@@ -71,6 +80,8 @@ export interface SeasonalOptions {
    * since a filling field injects more slowly and an emptying one withdraws more slowly.
    */
   rates?: Partial<Record<FieldId, { inject: number[]; withdraw: number[] }>>;
+  /** Pipelines in corridors the region hasn't built. */
+  extraPipelines?: ExtraPipe[];
 }
 
 /**
@@ -180,7 +191,7 @@ export function seasonalPlan(o: SeasonalOptions = {}): SeasonalPlan {
   }
   for (let m = 0; m < 12; m++) {
     const days = monthDays[m];
-    for (const p of PIPELINES) arcs.push({ id: `${p.id}@${m}`, from: `${p.from}@${m}`, to: `${p.to}@${m}`, cap: (o.capacity?.[p.id] ?? p.capacityBcfd) * days, cost: p.variableCost });
+    for (const p of [...PIPELINES, ...(o.extraPipelines ?? [])]) arcs.push({ id: `${p.id}@${m}`, from: `${p.from}@${m}`, to: `${p.to}@${m}`, cap: (o.capacity?.[p.id] ?? p.capacityBcfd) * days, cost: p.variableCost });
     supplies.push({ id: `prod-ridgeback@${m}`, node: `ridgeback@${m}`, cap: (prod.ridgeback ?? 0) * days, cost: PRODUCTION_COST.ridgeback ?? 1.2 });
     supplies.push({ id: `prod-sandhill@${m}`, node: `sandhill@${m}`, cap: (prod.sandhill ?? 0) * days, cost: PRODUCTION_COST.sandhill ?? 1.6 });
     for (const d of demandBlocks(temps[m], o.demand)) demands.push({ id: `${d.id}@${m}`, node: `${d.node}@${m}`, cap: d.cap * days, value: d.value });
@@ -192,7 +203,7 @@ export function seasonalPlan(o: SeasonalOptions = {}): SeasonalPlan {
   // The spring reserve leaves the hold arc for an instant; count it back in.
   for (const r of reserveAt) inventory[r.field][r.index] += sol.served[r.demand];
   const totalInventory = inventory.saltflat.map((x, m) => x + inventory.hollowcreek[m]);
-  const flow = Object.fromEntries(PIPELINES.map((p) => [p.id, Array.from({ length: 12 }, (_, m) => (sol.flow[`${p.id}@${m}`] ?? 0) / monthDays[m])]));
+  const flow = Object.fromEntries([...PIPELINES, ...(o.extraPipelines ?? [])].map((p) => [p.id, Array.from({ length: 12 }, (_, m) => (sol.flow[`${p.id}@${m}`] ?? 0) / monthDays[m])]));
   const rationed = Array<number>(12).fill(0);
   demands.forEach((d, i) => {
     if (d.value < 100) return;
@@ -226,6 +237,8 @@ export interface MarketDayInput {
   specs?: Record<FieldId, StorageSpec>;
   /** Use the faster shortest-path search. */
   fast?: boolean;
+  /** Pipelines in corridors the region hasn't built. */
+  extraPipelines?: ExtraPipe[];
 }
 
 /** Storage withdraws when the price is above its water value plus this, and injects when below it minus this, $/MMBtu. */
@@ -268,7 +281,7 @@ export function marketProblem(inp: MarketDayInput): FlowProblem {
   }
   return {
     nodes: GAS_NODES.map((n) => n.id),
-    arcs: PIPELINES.map((p) => ({ id: p.id, from: p.from, to: p.to, cap: inp.capacity?.[p.id] ?? p.capacityBcfd, cost: p.variableCost })),
+    arcs: [...PIPELINES, ...(inp.extraPipelines ?? [])].map((p) => ({ id: p.id, from: p.from, to: p.to, cap: inp.capacity?.[p.id] ?? p.capacityBcfd, cost: p.variableCost })),
     supplies,
     demands,
   };
@@ -351,6 +364,8 @@ export interface YearOptions {
   days?: number;
   /** Use the faster shortest-path search. */
   fast?: boolean;
+  /** Pipelines in corridors the region hasn't built. */
+  extraPipelines?: ExtraPipe[];
 }
 
 export interface YearDay {
@@ -558,7 +573,7 @@ export function simulateYear(o: YearOptions): YearDay[] {
       hollowcreek: waterValueOf(plan, 'hollowcreek', d, storage.hollowcreek, specs.hollowcreek.workingBcf, kappa),
     };
     const demand = typeof o.demand === 'function' ? o.demand(d) : o.demand;
-    const r = marketDay({ tempF: o.weather.temp[d], production: o.production?.(d), capacity: o.capacity?.(d), storage, waterValue, demand, specs, fast: o.fast });
+    const r = marketDay({ tempF: o.weather.temp[d], production: o.production?.(d), capacity: o.capacity?.(d), storage, waterValue, demand, specs, fast: o.fast, extraPipelines: o.extraPipelines });
     storage.saltflat = Math.max(0, Math.min(specs.saltflat.workingBcf, storage.saltflat + r.storageFlow.saltflat));
     storage.hollowcreek = Math.max(0, Math.min(specs.hollowcreek.workingBcf, storage.hollowcreek + r.storageFlow.hollowcreek));
     out.push({
