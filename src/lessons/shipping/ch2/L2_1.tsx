@@ -377,7 +377,7 @@ export default function Lesson() {
         Why build ships so big that they press against every limit? Mostly because a big ship moves each tonne of cargo for less fuel. The water drags on a hull’s
         wetted surface, which grows with the square of its size, while the cargo it carries grows with the cube. In the next demonstration the curve is the
         designer’s family of bulk carriers, from a Handysize of {fmt(SMALL.loa)} meters to an ore carrier {fmt(ORE.loa)} meters long, {fmt(ORE.beam)} wide and
-        drawing {fmt(ORE.draft)} meters — about the size of the 400,000-tonne ore carriers built for the Brazilian miner Vale, the largest bulk carriers afloat.
+        drawing {fmt(ORE.draft)} meters — about the size of the 400,000-tonne ore carriers built for the Brazilian miner Vale, among the largest bulk carriers afloat.
         The dots are Northwind’s three ships. The height is the fuel each burns, laden, to carry one tonne of cargo a thousand nautical miles. Change the speed:
       </P>
 

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
+  Controls,
   DataTable,
   FigRef,
   Figure,
@@ -353,12 +354,14 @@ export default function Lesson() {
             { label: 'loading in Brazil or the US Gulf', value: pct(atlShare) },
           ]}
         />
-        <Slider label="Start" tone="teal" value={w.start} min={0} max={117} onChange={(v) => setWorld({ start: v })} display={monthLabel(w.start)} />
-        <Slider label="Period" tone="teal" value={w.weeks} min={13} max={52} onChange={(v) => setWorld({ weeks: v })} display={`${w.weeks} weeks`} />
-        <Slider label="Brokers’ reach" tone="orange" value={Math.round(w.reach * 1000) / 10} min={0.5} max={5} step={0.25} onChange={(v) => setWorld({ reach: v / 100 })} display={`${fmt(w.reach * 100, 2)}% of the world’s cargoes`} />
-        {GROUPS.map((g) => (
-          <Slider key={g.key} label={g.label} tone="orange" value={groupValue(w, g.routes)} min={0.5} max={1.5} step={0.05} onChange={(v) => setGroup(g.routes, v)} display={pct(groupValue(w, g.routes))} />
-        ))}
+        <Controls columns={2}>
+          <Slider label="Start" tone="teal" value={w.start} min={0} max={117} onChange={(v) => setWorld({ start: v })} display={monthLabel(w.start)} />
+          <Slider label="Period" tone="teal" value={w.weeks} min={13} max={52} onChange={(v) => setWorld({ weeks: v })} display={`${w.weeks} weeks`} />
+          <Slider label="Brokers’ reach" tone="orange" value={Math.round(w.reach * 1000) / 10} min={0.5} max={5} step={0.25} onChange={(v) => setWorld({ reach: v / 100 })} display={`${fmt(w.reach * 100, 2)}% of cargoes`} />
+          {GROUPS.map((g) => (
+            <Slider key={g.key} label={g.label} tone="orange" value={groupValue(w, g.routes)} min={0.5} max={1.5} step={0.05} onChange={(v) => setGroup(g.routes, v)} display={pct(groupValue(w, g.routes))} />
+          ))}
+        </Controls>
         <DataTable
           caption="The cargoes on offer by trade, with the freight they pay"
           rows={rows.filter((r) => r.n > 0)}

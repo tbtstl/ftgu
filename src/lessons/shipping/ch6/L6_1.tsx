@@ -354,7 +354,7 @@ export default function Lesson() {
             { label: 'Cash b/e', cell: (s) => `$${fmt(shipCost(s, d.finance).cashBreakeven)}` },
             { label: 'Full b/e', cell: (s) => `$${fmt(shipCost(s, d.finance).fullBreakeven)}` },
             {
-              label: <span className="sr-only">Remove</span>,
+              label: '',
               cell: (s) => (
                 <Button onClick={() => remove(s.id)} disabled={d.ships.length <= 1} label={`Remove ${s.name}`}>
                   Remove
