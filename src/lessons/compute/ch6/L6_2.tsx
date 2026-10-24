@@ -117,8 +117,8 @@ const SHAPE_MEAN = WEEK_SHAPE.reduce((a, b) => a + b, 0) / WEEK_SHAPE.length;
 
 function NeedFan({ s }: { s: PlanState }) {
   const fan = growthFan(PROCUREMENT_DEFAULTS.peakNow, MONTHS - 1, s.growth / 100, s.sigma / 100, Math.max(1, s.reserved));
-  const top = 24;
-  const bot = 170;
+  const top = 40;
+  const bot = 186;
   const hi = Math.max(...fan.map((f) => f.p95), s.reserved, 100);
   const [, yMax] = niceDomain(0, hi, 4);
   const sx = scale(0, MONTHS - 1, X0 + 8, X1 - 8);
@@ -129,7 +129,7 @@ function NeedFan({ s }: { s: PlanState }) {
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 204"
+      viewBox="0 0 640 220"
       role="img"
       aria-label={`The busiest hour’s need over the year: ${fmt(PROCUREMENT_DEFAULTS.peakNow)} A-class GPUs now, a median of ${fmt(last.p50)} in month ${MONTHS}, and a 90% range of ${fmt(last.p5)} to ${fmt(last.p95)}. ${fmt(s.reserved)} GPUs reserved.`}
     >
@@ -141,7 +141,7 @@ function NeedFan({ s }: { s: PlanState }) {
       <path d={areaPath(xs, fan.map((f) => sy(f.p75)), fan.map((f) => sy(f.p25)))} fill={tint(GRAPHIC.gray, 0.32)} />
       <path d={linePath(xs, fan.map((f) => sy(f.p50)))} fill="none" stroke="#333" strokeWidth={2} />
       <path d={linePath(xs, avg.map(sy))} fill="none" stroke="#333" strokeWidth={1.3} strokeDasharray="5 4" />
-      <text className="ax" x={sx(MONTHS - 1) - 4} y={sy(avg[avg.length - 1]) + 15} textAnchor="end">
+      <text className="ax" x={sx(0) + 4} y={sy(avg[0]) + 15}>
         an average hour (median)
       </text>
       <text className="ax" x={sx(MONTHS - 1) - 4} y={sy(last.p95) - 6} textAnchor="end">
@@ -156,11 +156,11 @@ function NeedFan({ s }: { s: PlanState }) {
         </g>
       )}
       {fan.map((f) => (
-        <text key={f.month} className="ax ax-m" x={sx(f.month)} y={188}>
+        <text key={f.month} className="ax ax-m" x={sx(f.month)} y={204}>
           {f.month + 1}
         </text>
       ))}
-      <text className="ax ax-e" x={X1} y={202}>
+      <text className="ax ax-e" x={X1} y={218}>
         month of the year
       </text>
     </svg>
