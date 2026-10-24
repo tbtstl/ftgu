@@ -175,7 +175,7 @@ export default function Lesson() {
           yTicks={[0, 20_000, 40_000, 60_000]}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 0 ? 'Year 1' : v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Earnings, $ per day (TCE)"
           height={170}
           bands={kind === 'newbuild' ? [{ from: month / 12, to: r.deliveryMonth / 12, color: tint(GRAPHIC.gray, 0.18), label: 'building' }] : []}

@@ -268,7 +268,7 @@ export default function Lesson() {
           yTicks={niceTicks(eLo / 1e6, eHi / 1e6, 4)}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${fmt(v, Math.abs(v) < 1 && v !== 0 ? 1 : 0)}m`}
+          yFormat={(v) => `$${fmt(v, Math.abs(v) < 1 && v !== 0 ? 1 : 0)}m`.replace('$−', '−$')}
           yLabel="Running total, $ million"
           bands={[{ from: s.split, to: 12, color: tint(GRAPHIC.gray, 0.16), label: 'out of sample' }]}
           refLines={[{ y: 0, color: '#9a9a9a', dash: '2 3' }]}
@@ -284,7 +284,7 @@ export default function Lesson() {
           yTicks={niceTicks(ddLo / 1e6, 0, 2)}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${fmt(v, Math.abs(v) < 1 && v !== 0 ? 1 : 0)}m`}
+          yFormat={(v) => `$${fmt(v, Math.abs(v) < 1 && v !== 0 ? 1 : 0)}m`.replace('$−', '−$')}
           yLabel="Below its previous high"
           bands={[{ from: s.split, to: 12, color: tint(GRAPHIC.gray, 0.16) }]}
           height={110}

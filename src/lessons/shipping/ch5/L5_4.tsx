@@ -371,7 +371,7 @@ export default function Lesson() {
           yMin={0}
           xTicks={[0, 25, 50, 75, 100]}
           xFormat={(v) => `${v}%`}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           xLabel="Simulated futures, worst to best"
           yLabel="Earnings over the 100 days, $ per day"
           height={220}

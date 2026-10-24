@@ -248,7 +248,7 @@ export default function Lesson() {
           yTicks={[0, yMax / 2, yMax]}
           xTicks={ticks}
           xFormat={(m) => MONTH_SHORT[m % 12]}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Index, $ per day"
           height={210}
           bands={[{ from: tr.month, to: tr.month + 1, color: tint(GRAPHIC.orange, 0.15), label: 'contract month' }]}
@@ -390,7 +390,7 @@ export default function Lesson() {
           yMin={0}
           xTicks={months}
           xFormat={(i) => MONTH_SHORT[(hg.state.start + i) % 12]}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Earnings, $ per day"
           height={200}
         />

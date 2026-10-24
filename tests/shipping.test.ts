@@ -57,6 +57,14 @@ import { newsTradeSolved, tradeResult, spreadsAt, DRIVER_DEFAULTS, NEWS_MONTH, t
 import { SOLUTIONS as SOLUTIONS53, START as START53, charterIn, fleetSurpriseSolved, charterOutSeries } from '../src/lessons/shipping/ch5/L5_3';
 import { harvestSolved, weakestPayingHarvest, longestWaitSolved, waitValue, comparePlans, DEFAULTS as DEFAULTS54, BEST_MONTH, WEAKEST, SOY_GRID } from '../src/lessons/shipping/ch5/L5_4';
 import { DEFAULT_LAB as LAB55, halvesSolved, labRun as labRun55, passingThresholds, worldTotals as worldTotals55 } from '../src/lessons/shipping/ch5/L5_5';
+import { cargoOffers, operate, shipCost, shipPrice, DEFAULT_WORLD, DEFAULT_POLICY } from '../src/engines/shipping/company';
+import { runStrategy, periodHire, STRATEGY_KEYS, NEUTRAL_DRIVERS, DEFAULT_TOURNAMENT } from '../src/engines/shipping/tournament';
+import { defaultDesign as defaultCompany, sanitize as sanitizeCompany } from '../src/lessons/shipping/shared/company';
+import { fleetSolved, fleetStats, breakEvenMultiple, historyYears, newShip, CAPACITY_TARGET } from '../src/lessons/shipping/ch6/L6_1';
+import { W0 as W62, soySolved, expectedSoyShare, bookNeeds, SOY_TARGET } from '../src/lessons/shipping/ch6/L6_2';
+import { decisionLog, fuelShockSolved, isStartingCompany, shockBaseline, runDesk, SHOCK_BUNKER, SHOCK_GAIN } from '../src/lessons/shipping/ch6/L6_3';
+import { SCENARIOS as SCEN64, scenarioResult as result64, scenarioScored, forecastSolved as forecastSolved64, type Pair as Pair64 } from '../src/lessons/shipping/ch6/L6_4';
+import { onlyCharterOutPays, optionsOf, quotedResults, VIEW_DEFAULTS, WORLD_NAMES } from '../src/lessons/shipping/ch6/L6_5';
 import { floating, freshLoadSolved, surveyResult } from '../src/lessons/shipping/ch1/L1_1';
 import { CLEAN_14_KW, drag, foulingSolved, shipWavelength } from '../src/lessons/shipping/ch1/L1_2';
 import { twelveDaySolved, voyageAt, PASSAGE_NM } from '../src/lessons/shipping/ch1/L1_3';
@@ -1087,5 +1095,182 @@ describe('lesson 5.5', () => {
     expect(mom.filter((x) => x > 0)).toHaveLength(1);
     expect(mom[11]).toBeGreaterThan(0);
     expect(worldTotals55({ ...LAB55, strategy: 'fundamental' }).every((x) => x > 0)).toBe(true);
+  });
+});
+
+describe('the company engines', () => {
+  const fin = { ltv: 0.6, rate: 0.07, tenor: 12, equityReturn: 0.1 };
+  const h = standardHistory();
+
+  it('prices ships and their daily costs', () => {
+    expect(shipPrice('kmax', 5, h.cls.kmax, 30)).toBeGreaterThan(shipPrice('kmax', 15, h.cls.kmax, 30));
+    const owned = shipCost({ id: 'a', name: 'A', cls: 'kmax', age: 6, mode: 'owned', price: 22e6, hire: 0, at: 'QIN', openDay: 0 }, fin);
+    expect(owned.fullBreakeven).toBeGreaterThan(owned.cashBreakeven);
+    const chartered = shipCost({ id: 'b', name: 'B', cls: 'kmax', age: 6, mode: 'chartered', price: 0, hire: 10_000, at: 'QIN', openDay: 0 }, fin);
+    expect(chartered.opex).toBe(0);
+    expect(chartered.hire).toBe(10_000);
+  });
+
+  it('generates cargoes deterministically and schedules each at most once', () => {
+    const a = cargoOffers(DEFAULT_WORLD);
+    const b = cargoOffers(DEFAULT_WORLD);
+    expect(a.map((o) => o.id)).toEqual(b.map((o) => o.id));
+    expect(a.length).toBeGreaterThan(50);
+    const ships = defaultCompany().ships;
+    const r = operate(ships, a, DEFAULT_POLICY, fin, DEFAULT_WORLD);
+    const ids = r.runs.flatMap((x) => x.fixtures.map((f) => f.cargo.id));
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const run of r.runs) for (const f of run.fixtures) {
+      expect(f.cargo.cls).toBe(run.ship.cls);
+      expect(f.arrive).toBeLessThanOrEqual(f.cargo.to + 1e-9);
+    }
+    expect(r.profit).toBeCloseTo(r.voyageNet - r.dailyCosts, 3);
+  });
+
+  it('runs every strategy and keeps chartering out immune to the physical dials', () => {
+    const ships = defaultCompany().ships;
+    const base = STRATEGY_KEYS.map((k) => runStrategy(k, ships, fin, h, NEUTRAL_DRIVERS, DEFAULT_TOURNAMENT));
+    expect(base.every((r) => r.monthly.length === 144)).toBe(true);
+    const out = runStrategy('charterOut', ships, fin, h, { ...NEUTRAL_DRIVERS, soy: 0.7 }, DEFAULT_TOURNAMENT);
+    expect(out.total).toBeCloseTo(base[1].total, 6);
+    expect(periodHire('kmax', h, 30)).toBeGreaterThan(0);
+  });
+
+  it('keeps a stored company sane', () => {
+    const bad = sanitizeCompany({ ships: [{ id: 'x', cls: 'tanker' }], finance: { ltv: 5 } });
+    expect(bad.ships.length).toBeGreaterThan(0);
+    expect(bad.finance.ltv).toBeLessThanOrEqual(0.8);
+  });
+});
+
+describe('lesson 6.1', () => {
+  const d0 = defaultCompany();
+  const add = (d: typeof d0, ...o: Array<['kmax' | 'cape', 'owned' | 'chartered', number]>) =>
+    o.reduce((x, [cls, mode, age]) => ({ ...x, ships: [...x.ships, newShip(x, cls, mode, age, 'QIN')] }), d);
+
+  it('needs four ships, 20 billion tonne-miles and cash costs covered', () => {
+    expect(CAPACITY_TARGET).toBe(20);
+    expect(fleetSolved(d0)).toBe(false);
+    expect(fleetStats(d0).margin).toBeCloseTo(-4072, 0);
+    expect(fleetSolved(add(d0, ['cape', 'chartered', 10], ['cape', 'chartered', 10]))).toBe(false);
+    expect(fleetSolved(add(d0, ['cape', 'chartered', 10], ['cape', 'chartered', 10], ['kmax', 'chartered', 10], ['kmax', 'chartered', 10]))).toBe(true);
+    const lowLoan = { ...d0, finance: { ...d0.finance, ltv: 0.2 } };
+    expect(fleetSolved(add(lowLoan, ['cape', 'chartered', 10], ['cape', 'chartered', 10]))).toBe(true);
+    expect(fleetSolved({ ...d0, finance: { ...d0.finance, ltv: 0 } })).toBe(false);
+  });
+
+  it('quotes the starting company’s exposure', () => {
+    expect(breakEvenMultiple(d0)).toBeCloseTo(1.157, 2);
+    const ys = historyYears(d0);
+    expect(ys.reduce((a, b) => (b.cashFlow < a.cashFlow ? b : a)).year).toBe(6);
+    expect(ys.reduce((a, b) => (b.cashFlow > a.cashFlow ? b : a)).year).toBe(12);
+  });
+});
+
+describe('lesson 6.2', () => {
+  it('needs the harvest: soybeans reach a quarter of the expected Kamsarmax cargoes only in windows starting February–May', () => {
+    const sols: Array<[number, number]> = [];
+    for (let start = 0; start <= 117; start++) for (let weeks = 13; weeks <= 52; weeks++) if (soySolved({ ...W62, start, weeks })) sols.push([start, weeks]);
+    expect(sols).toHaveLength(267);
+    expect(new Set(sols.map(([s]) => s % 12))).toEqual(new Set([1, 2, 3, 4]));
+    expect(Math.max(...sols.map(([, w]) => w))).toBe(25);
+    expect(soySolved(W62)).toBe(false);
+    expect(expectedSoyShare({ ...W62, start: 99, weeks: 13 })).toBeGreaterThan(SOY_TARGET);
+    expect(soySolved({ ...W62, start: 99, weeks: 13, reach: 0.05 })).toBe(true);
+    expect(soySolved({ ...W62, start: 99, weeks: 13, routeScale: { 'P-SAN-QIN': 1.05 } })).toBe(false);
+  });
+
+  it('needs far more ships for the book than Northwind has', () => {
+    const offers = cargoOffers(W62);
+    expect(bookNeeds(offers, W62, 'cape').ships).toBeCloseTo(12.7, 1);
+    expect(bookNeeds(offers, W62, 'kmax').ships).toBeGreaterThan(10);
+  });
+});
+
+describe('lesson 6.3', () => {
+  const d = defaultCompany();
+  it('solves the $900 fuel shock only by slowing to 9–10 knots', () => {
+    expect(isStartingCompany(d)).toBe(true);
+    expect(shockBaseline(d)).toBeCloseTo(-5_227_586, -1);
+    expect(fuelShockSolved({ ...d, policy: { ...d.policy, bunker: SHOCK_BUNKER } })).toBe(false);
+    expect(fuelShockSolved({ ...d, policy: { ...d.policy, bunker: SHOCK_BUNKER, speed: 9 } })).toBe(true);
+    expect(fuelShockSolved({ ...d, policy: { ...d.policy, bunker: 890, speed: 9 } })).toBe(false);
+    expect(fuelShockSolved({ ...d, policy: { ...d.policy, bunker: SHOCK_BUNKER, speed: 9, congestion: 0.5 } })).toBe(false);
+    expect(fuelShockSolved({ ...d, ships: d.ships.slice(0, 1), policy: { ...d.policy, bunker: SHOCK_BUNKER, speed: 9 } })).toBe(false);
+    let n = 0;
+    for (const rule of ['bestTce', 'nearest', 'bestFreight'] as const)
+      for (let sp = 9; sp <= 15; sp += 0.5)
+        for (let mt = 0; mt <= 25000; mt += 5000)
+          if (fuelShockSolved({ ...d, policy: { rule, speed: sp, minTce: mt, waitDays: 3, bunker: SHOCK_BUNKER, congestion: 0 } })) {
+            n++;
+            expect(sp).toBeLessThanOrEqual(10);
+          }
+    expect(n).toBeGreaterThan(0);
+    expect(runDesk({ ...d, policy: { ...d.policy, bunker: SHOCK_BUNKER, speed: 9 } }).profit - shockBaseline(d)).toBeGreaterThan(SHOCK_GAIN);
+  });
+
+  it('replays the desk exactly and beats the benchmark at the start', () => {
+    const offers = cargoOffers(d.world);
+    const r = operate(d.ships, offers, d.policy, d.finance, d.world);
+    const log = decisionLog(d.ships, offers, d.policy, d.world);
+    expect(log.map((x) => x.chosen.cargo.id).sort()).toEqual(r.runs.flatMap((x) => x.fixtures.map((f) => f.cargo.id)).sort());
+    expect(r.profit - r.benchmark).toBeCloseTo(1_050_165, -1);
+    expect(log[0].options).toHaveLength(10);
+  });
+});
+
+describe('lesson 6.4', () => {
+  const grid = (x: number) => 2000 + Math.round((x - 2000) / 250) * 250;
+  const best = (id: (typeof SCEN64)[number]['id']): Pair64 => ({ cape: grid(result64(id).cape.outcome), kmax: grid(result64(id).kmax.outcome) });
+  const naive = (id: (typeof SCEN64)[number]['id']): Pair64 => ({ cape: result64(id).cape.naive, kmax: result64(id).kmax.naive });
+
+  it('scores forecasts near the outcome, never the no-change forecast, and needs three scenarios', () => {
+    for (const s of SCEN64) {
+      expect(scenarioScored(s.id, best(s.id))).toBe(true);
+      expect(scenarioScored(s.id, naive(s.id))).toBe(false);
+      expect(scenarioScored(s.id, { cape: grid(naive(s.id).cape), kmax: grid(naive(s.id).kmax) })).toBe(false);
+    }
+    expect(forecastSolved64({ cyclone: best('cyclone'), panama: best('panama') })).toBe(false);
+    expect(forecastSolved64({ cyclone: best('cyclone'), panama: best('panama'), steel: naive('steel') })).toBe(false);
+    expect(forecastSolved64({ cyclone: best('cyclone'), panama: best('panama'), steel: best('steel') })).toBe(true);
+  });
+
+  it('hits the class that carries the trade, by several times the shock', () => {
+    expect(result64('cyclone').kmax.effect).toBeCloseTo(0, 9);
+    expect(result64('cyclone').cape.effect).toBeCloseTo(-0.089, 2);
+    expect(result64('panama').cape.effect).toBeCloseTo(0, 9);
+    expect(result64('panama').kmax.effect).toBeCloseTo(0.223, 2);
+    expect(result64('steel').kmax.effect).toBeCloseTo(0, 9);
+    expect(result64('steel').cape.effect).toBeCloseTo(-0.39, 2);
+    expect(result64('deliveries').kmax.effect).toBeLessThan(-0.15);
+    expect(result64('storms').cape.effect).toBeGreaterThan(0.18);
+    expect(result64('deliveries').kmax.naive / result64('deliveries').kmax.outcome - 1).toBeCloseTo(0.898, 2);
+  });
+});
+
+describe('lesson 6.5', () => {
+  const d = defaultCompany();
+  const full = optionsOf(VIEW_DEFAULTS);
+  it('leaves only chartering out in profit when Brazil’s ore collapses or ships flood in', () => {
+    expect(onlyCharterOutPays(d.ships, d.finance, NEUTRAL_DRIVERS, full)).toBe(false);
+    expect(onlyCharterOutPays(d.ships, d.finance, { ...NEUTRAL_DRIVERS, ore: 0.6 }, full)).toBe(true);
+    expect(onlyCharterOutPays(d.ships, d.finance, { ...NEUTRAL_DRIVERS, ore: 0.65 }, full)).toBe(false);
+    expect(onlyCharterOutPays(d.ships, d.finance, { ...NEUTRAL_DRIVERS, ore: 0.65 }, { ...full, hedgeShare: 0 })).toBe(true);
+    expect(onlyCharterOutPays(d.ships, d.finance, { ...NEUTRAL_DRIVERS, fleet: 1.05, ore: 0.8 }, full)).toBe(true);
+    expect(onlyCharterOutPays(d.ships, d.finance, { ...NEUTRAL_DRIVERS, ore: 0.6 }, { ...full, from: 12 })).toBe(false);
+    const chartered = d.ships.map((s) => ({ ...s, mode: 'chartered' as const, hire: 10_000 }));
+    expect(onlyCharterOutPays(chartered, d.finance, { ...NEUTRAL_DRIVERS, ore: 0.6 }, full)).toBe(false);
+  });
+
+  it('quotes the starting company’s tournament', () => {
+    const q = quotedResults();
+    expect(q.neutral.charterIn.total).toBeGreaterThan(q.neutral.spot.total);
+    expect(q.neutral.charterOut.maxDrawdown).toBeLessThan(q.neutral.spot.maxDrawdown);
+    expect(q.weakSoy.reposition.total).toBeCloseTo(q.weakSoy.spot.total, 6);
+    expect(q.moreShips.charterIn.total).toBeLessThan(q.moreShips.spot.total);
+    expect(q.strongSoy.charterOut.total).toBeCloseTo(q.neutral.charterOut.total, 6);
+    expect(q.beat).toEqual({ charterOut: 7, charterIn: 9, reposition: 10, hedge: 11 });
+    expect(WORLD_NAMES).toHaveLength(11);
+    expect(Object.values(q.worlds).every((xs) => xs[10] < 0)).toBe(true);
   });
 });

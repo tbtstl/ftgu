@@ -446,7 +446,7 @@ export default function Lesson() {
           yMax={indexTop}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Index and market rate, $ per day"
           bands={bands}
           cursor={(hs.state.month + 0.5) / 12}

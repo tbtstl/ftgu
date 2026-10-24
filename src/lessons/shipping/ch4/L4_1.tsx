@@ -345,7 +345,7 @@ export default function Lesson() {
           yTicks={[0, 20_000, 40_000, 60_000]}
           xTicks={[60, 80, 100, 120, 140]}
           xFormat={(v) => `${v}%`}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           xLabel="Demand, % of the baseline trades"
           yLabel="Market earnings, $ per day (TCE)"
           bands={[

@@ -308,7 +308,7 @@ export default function Lesson() {
           yMin={0}
           xTicks={[0, 3, 6, 9, 12, 15]}
           xFormat={yearX}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Earnings, $ per day (TCE)"
           height={170}
         />
@@ -465,7 +465,7 @@ export default function Lesson() {
           yMin={0}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 0 ? 'Year 1' : v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Earnings, $ per day (TCE)"
           height={200}
         />

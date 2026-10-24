@@ -326,7 +326,7 @@ export default function Lesson() {
           yMax={tceHi}
           xTicks={yearTicks}
           xFormat={yearFmt}
-          yFormat={(v) => `$${fmt(v / 1000)}k`}
+          yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
           yLabel="Earnings, $ per day (TCE)"
           height={200}
           cursor={st.month}
