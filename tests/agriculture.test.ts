@@ -49,6 +49,13 @@ import { wettestSolved } from '../src/lessons/agriculture/ch4/L4_2';
 import { blendGain, blendSolved, spreadSolved } from '../src/lessons/agriculture/ch4/L4_3';
 import { NET0, bargeSolved, fillShare, railSolved, seasons, settingsOf } from '../src/lessons/agriculture/ch4/L4_4';
 import { WORLD0, balanceOf, bufferSolved, dearBigYear, history, valleyAverage } from '../src/lessons/agriculture/ch4/L4_5';
+import { EXPIRY, MARKET_YEARS, cropYear, decFutures, harvestCurve, portSpot, storageReturn } from '../src/engines/agriculture/market';
+import { allSeasons, revenue, summarize, walkForward } from '../src/engines/agriculture/hedging';
+import { deliverySolved, expiryCash, hedgeRecord, worstMarginYear } from '../src/lessons/agriculture/ch5/L5_1';
+import { CURVE0, curveOf, stopsPayingSolved, storedReturn, worstStorageYear } from '../src/lessons/agriculture/ch5/L5_2';
+import { BASIS0, FROSTED_DISCOUNT, charterProfit, charterSolved, cliffSolved, partsOf } from '../src/lessons/agriculture/ch5/L5_3';
+import { backtest, rightButLost, shareSolved, trade } from '../src/lessons/agriculture/ch5/L5_4';
+import { LAB0, costliestYear, leastVariableSolved } from '../src/lessons/agriculture/ch5/L5_5';
 import { bumperSolved } from '../src/lessons/agriculture/ch1/L1_5';
 
 const P = DISTRICT.prairie;
@@ -601,5 +608,188 @@ describe('chapter 4: the world balance (4.5)', () => {
     expect(Math.round(r * 100)).toBe(-63);
     expect(Math.round(r * r * 5)).toBe(2);
     expect(corr(long.slice(1).map((y) => y.price), long.slice(0, -1).map((y) => y.price))).toBeGreaterThan(0.2);
+  });
+});
+
+const cents = (x: number) => Math.round(x * 100);
+const dollars = (x: number) => Math.round(x * 100) / 100;
+
+describe('chapter 5: the market engine', () => {
+  it('converges, and its futures are unbiased forecasts', () => {
+    for (const y of [1, 7, 40, 46]) {
+      expect(decFutures(y, EXPIRY.Dec)).toBeCloseTo(cropYear(y).decFinal, 9);
+      expect(portSpot(y, EXPIRY.Dec)).toBeCloseTo(cropYear(y).decFinal, 9);
+      expect(cropYear(y).decFinal).toBeCloseTo(history()[y - 1].price, 6);
+    }
+    let gap = 0;
+    for (let y = 1; y <= 200; y++) gap += cropYear(y).decFinal - decFutures(y, dayOf(5, 1));
+    expect(Math.abs(gap / 200)).toBeLessThan(0.1);
+  });
+});
+
+describe('chapter 5: futures and delivery (5.1)', () => {
+  it('delivers, converges and hedges as the prose says', () => {
+    expect(dollars(expiryCash())).toBe(5.01);
+    expect(deliverySolved(503)).toBe(true);
+    expect(deliverySolved(502)).toBe(false);
+    expect(deliverySolved(504)).toBe(false);
+    const gap = (d: number) => cents(decFutures(40, d) - portSpot(40, d));
+    expect(gap(dayOf(10, 15))).toBe(11);
+    expect(gap(dayOf(11, 10))).toBe(6);
+    expect(gap(dayOf(12, 8))).toBe(1);
+    const mar = hedgeRecord('mar');
+    expect(cents(mar.hedgedSd)).toBe(40);
+    expect(dollars(mar.cashSd)).toBe(1);
+    expect(dollars(mar.hedgedMean)).toBe(4.34);
+    expect(dollars(mar.cashMean)).toBe(4.42);
+    expect(cents(hedgeRecord('jul').hedgedSd)).toBe(65);
+    expect(cents(hedgeRecord('sep').hedgedSd)).toBe(91);
+    expect(worstMarginYear()).toBe(46);
+  });
+});
+
+describe('chapter 5: the curve and storage (5.2)', () => {
+  it('draws the curve the prose describes', () => {
+    const c = curveOf(CURVE0);
+    expect(dollars(c.futures.Dec)).toBe(5.6);
+    expect(dollars(c.futures.Jul)).toBe(5.95);
+    const full = c.carry * ((EXPIRY.Jul - EXPIRY.Dec) / 30.4);
+    expect(cents(c.futures.Jul - c.futures.Dec)).toBe(35);
+    expect(cents(full)).toBe(47);
+    expect(Math.round(((c.futures.Jul - c.futures.Dec) / full) * 4)).toBe(3);
+    expect(dollars(c.harvestCash)).toBe(4.3);
+    expect(dollars(c.julyCash)).toBe(5.02);
+    expect(cents(storageReturn(c))).toBe(32);
+    const tight = curveOf({ ...CURVE0, world: -8 });
+    expect(Math.round(c.stocksToUse * 1000)).toBe(109);
+    expect(Math.round(tight.stocksToUse * 1000)).toBe(83);
+    expect(Math.abs(tight.futures.Jul - tight.futures.Dec)).toBeLessThan(0.005);
+    const inverted = curveOf({ ...CURVE0, world: -10 });
+    expect(dollars(inverted.futures.Jul)).toBe(9.57);
+    expect(dollars(inverted.futures.Dec)).toBe(9.75);
+    expect(dollars(inverted.newCrop)).toBe(6.53);
+    expect(stopsPayingSolved({ ...CURVE0, world: -6 })).toBe(true);
+    expect(stopsPayingSolved({ ...CURVE0, world: -5 })).toBe(false);
+    expect(stopsPayingSolved({ ...CURVE0, world: -7 })).toBe(false);
+    const big = harvestCurve({ valley: 650, world: 0, carryIn: 100 });
+    expect(dollars(big.futures.Dec)).toBe(4.68);
+    expect(cents(big.harvestSpread)).toBe(42);
+    expect(dollars(big.harvestCash)).toBe(2.6);
+    expect(cents(storageReturn(big))).toBe(52);
+  });
+  it('stores over sixty years as the prose says', () => {
+    const hedged = Array.from({ length: MARKET_YEARS }, (_, i) => storedReturn(i + 1, 'Jul', true));
+    const plain = Array.from({ length: MARKET_YEARS }, (_, i) => storedReturn(i + 1, 'Jul', false));
+    expect(cents(hedged.reduce((a, b) => a + b, 0) / MARKET_YEARS)).toBe(29);
+    expect(hedged.filter((v) => v > 0).length).toBe(58);
+    expect(cents(plain.reduce((a, b) => a + b, 0) / MARKET_YEARS)).toBe(34);
+    expect(plain.filter((v) => v <= 0).length).toBe(17);
+    expect(dollars(Math.min(...plain))).toBe(-1.11);
+    expect(worstStorageYear()).toBe(46);
+    expect(cropYear(46).theta).toBeLessThan(0);
+  });
+});
+
+describe('chapter 5: basis (5.3)', () => {
+  it('takes the basis apart as the prose says', () => {
+    const f = partsOf(BASIS0, 'fairview');
+    expect(dollars(f.total)).toBe(-1.3);
+    expect([cents(f.network), cents(f.handling), cents(f.harvest), cents(f.carry)]).toEqual([-85, -8, -27, -10]);
+    expect(cents(partsOf({ ...BASIS0, day: 365 + dayOf(2, 15) - dayOf(10, 15) }, 'fairview').total)).toBe(-97);
+    expect(dollars(partsOf(BASIS0, 'dunmore').total)).toBe(-1.12);
+    expect(dollars(partsOf(BASIS0, 'ashby').total)).toBe(-1.42);
+    expect(cents(partsOf({ ...BASIS0, valley: 300 }, 'fairview').total)).toBe(-74);
+    expect(cliffSolved({ ...BASIS0, valley: 570 })).toBe(true);
+    expect(cliffSolved({ ...BASIS0, valley: 560 })).toBe(false);
+    expect(cliffSolved({ ...BASIS0, valley: 580 })).toBe(false);
+    expect(cents(FROSTED_DISCOUNT)).toBe(15);
+  });
+  it('charters barges as the prose says', () => {
+    const basis = Array.from({ length: MARKET_YEARS }, (_, i) => charterProfit(i + 1, 0));
+    expect(basis.filter((b) => b > 0.82 && b < 0.88).length).toBe(27);
+    expect(basis.filter((b) => b > 0.64 && b < 0.72).length).toBe(22);
+    expect(basis.filter((b) => Math.abs(b - 0.45) < 0.005).length).toBe(2);
+    expect(basis.filter((b) => Math.abs(b - 1.5) < 0.005).length).toBe(8);
+    const paid = (c: number) => basis.filter((b) => b - c > 0.005).length;
+    expect(paid(0.6)).toBe(58);
+    expect(paid(0.8)).toBe(36);
+    expect(charterSolved(87)).toBe(true);
+    expect(charterSolved(86)).toBe(false);
+    expect(charterSolved(88)).toBe(false);
+  });
+});
+
+describe('chapter 5: forecasts and futures (5.4)', () => {
+  it('trades the report as the prose says', () => {
+    const t = trade(26, 'sep');
+    expect([Math.round(t.market.mean), Math.round(t.analyst.mean), Math.round(cropYear(26).valley)]).toEqual([493, 460, 452]);
+    expect([dollars(t.futures), dollars(t.fair), dollars(t.exit)]).toEqual([5.82, 6.08, 6.3]);
+    expect(cents(t.pnl)).toBe(47);
+    expect(Math.round((t.pnl * 5000) / 10) * 10).toBe(2360);
+    const sep = backtest('sep', 'report', 0, 0);
+    expect(sep.wins).toBe(41);
+    expect(Math.round((sep.total / sep.trades) * 1000)).toBe(71);
+    expect(Math.round((sep.total * 5000) / 100) * 100).toBe(21300);
+    const aug = backtest('aug', 'report', 0, 0);
+    expect(aug.total / sep.total).toBeGreaterThan(0.4);
+    expect(aug.total / sep.total).toBeLessThan(0.6);
+    const sd = (r: { pnls: number[]; total: number; trades: number }) => Math.sqrt(r.pnls.reduce((a, p) => a + (p - r.total / r.trades) ** 2, 0) / r.pnls.length);
+    expect(cents(sd(sep))).toBe(16);
+    expect(cents(sd(backtest('sep', 'harvest', 0, 0)))).toBe(49);
+    expect(sd(backtest('aug', 'harvest', 0, 0))).toBeGreaterThan(0.49);
+    expect(backtest('aug', 'harvest', 0, 0).total).toBeGreaterThan(0);
+    expect(backtest('sep', 'harvest', 0, 0).total).toBeLessThan(sep.total);
+    const quarter = backtest('sep', 'report', 0.25, 0);
+    expect(Math.round((quarter.total / quarter.trades) * 1000)).toBe(46);
+    const half = backtest('sep', 'report', 0.5, 0);
+    expect(Math.round((half.total / half.trades) * 1000)).toBe(22);
+    expect(shareSolved({ decision: 'sep', exit: 'report', share: 75, threshold: 0 })).toBe(true);
+    expect(shareSolved({ decision: 'sep', exit: 'report', share: 50, threshold: 0 })).toBe(false);
+    expect(rightButLost(5)).toBe(true);
+    expect(rightButLost(26)).toBe(false);
+  });
+});
+
+describe('chapter 5: the strategy lab (5.5)', () => {
+  it('hedges as the prose says', () => {
+    const d = allSeasons('dryland');
+    const sum = (kind: 'none' | 'futures' | 'puts', r: number) => summarize(d.map((s) => revenue(s, kind, r)));
+    const none = sum('none', 0);
+    expect([Math.round(none.mean), Math.round(none.sd), Math.round(none.worst)]).toEqual([742, 110, 543]);
+    const full = sum('futures', 1);
+    expect([Math.round(full.sd), Math.round(full.worst)]).toEqual([133, 49]);
+    const puts = sum('puts', 1);
+    expect([Math.round(puts.sd), Math.round(puts.worst), Math.round(none.mean - puts.mean)]).toEqual([87, 585, 11]);
+    const corr = (xs: number[], ys: number[]) => {
+      const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+      const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+      let c = 0;
+      let vx = 0;
+      let vy = 0;
+      xs.forEach((x, i) => {
+        c += (x - mx) * (ys[i] - my);
+        vx += (x - mx) ** 2;
+        vy += (ys[i] - my) ** 2;
+      });
+      return c / Math.sqrt(vx * vy);
+    };
+    expect(cents(corr(d.map((s) => s.yield), d.map((s) => s.cash)))).toBe(-75);
+    const irr = allSeasons('irrigated');
+    expect(cents(corr(irr.map((s) => s.yield), irr.map((s) => s.cash)))).toBe(-39);
+    expect(Math.round(summarize(irr.map((s) => revenue(s, 'none', 0))).sd)).toBe(172);
+    expect(Math.round(summarize(irr.map((s) => revenue(s, 'futures', 1))).sd)).toBe(90);
+    expect(leastVariableSolved({ ...LAB0, ratio: 40 })).toBe(true);
+    expect(leastVariableSolved({ ...LAB0, ratio: 50 })).toBe(false);
+  });
+  it('walks forward as the prose says', () => {
+    const d = allSeasons('dryland').slice(10);
+    expect(Math.round(summarize(d.map((s) => revenue(s, 'none', 0))).sd)).toBe(102);
+    expect(Math.round(summarize(d.map((s) => revenue(s, 'futures', 0.4))).sd)).toBe(94);
+    const wf = walkForward('futures', 20);
+    expect(Math.round(summarize(wf.revenues).sd)).toBe(103);
+    expect([Math.min(...wf.ratios), Math.max(...wf.ratios)]).toEqual([0.1, 1]);
+    expect(Math.round(summarize(walkForward('futures', 5).revenues).sd)).toBe(121);
+    expect(Math.round(summarize(walkForward('puts', 20).revenues).sd)).toBe(83);
+    expect(costliestYear()).toBe(46);
   });
 });

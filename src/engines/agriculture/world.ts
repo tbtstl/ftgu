@@ -102,6 +102,32 @@ export function clearWorld(y: WorldYear = {}): Balance {
   return { price, regions, production: supply - carryIn, use, carryIn, carryOut, stocksToUse: carryOut / useOutsideChina, trade };
 }
 
+/**
+ * Just the clearing price, $ a bushel, by Newton's method on the log price — the same root as
+ * clearWorld, faster, for computing many prices.
+ */
+export function worldPrice(crop: Partial<Record<RegionId, number>>, carryIn: number): number {
+  let supply = carryIn;
+  for (const r of REGIONS) supply += r.production * (1 + (crop[r.id] ?? 0));
+  let x = 0; // log(price / BASE_PRICE)
+  for (let i = 0; i < 40; i++) {
+    let f = -supply;
+    let df = 0;
+    for (const r of REGIONS) {
+      const u = r.use * Math.exp(-r.elasticity * x);
+      f += u;
+      df -= r.elasticity * u;
+    }
+    const k = (BASE_STOCKS - PIPELINE) * Math.exp(-STOCK_RESPONSE * x);
+    f += PIPELINE + k;
+    df -= STOCK_RESPONSE * k;
+    const step = f / df;
+    x -= Math.max(-0.5, Math.min(0.5, step));
+    if (Math.abs(step) < 1e-12) break;
+  }
+  return BASE_PRICE * Math.exp(x);
+}
+
 /** The price at which the world would carry out a given stocks-to-use ratio, for drawing the curve. */
 export function priceAtStocksToUse(su: number, y: WorldYear = {}): number {
   // Stocks-to-use pins stocks, which pins the price through stocksAt (use depends weakly on price; iterate).
@@ -124,7 +150,7 @@ export interface HistoryYear extends Balance {
 
 /** Mean valley corn over the 400 simulated seasons of Lesson 3.5, million bushels. */
 let valleyMean: number | null = null;
-function meanValley(): number {
+export function meanValley(): number {
   if (valleyMean === null) {
     let t = 0;
     for (let y = 1; y <= 400; y++) t += valleySeason(y).corn / 1e6;
@@ -135,6 +161,10 @@ function meanValley(): number {
 
 /** How much of the valley's harvest surprise is shared by the whole U.S. crop. */
 export const VALLEY_SHARE = 0.45;
+/** The valley harvest's variability (its standard deviation as a share of the mean), rounded. */
+export const VALLEY_SD = 0.125;
+/** The variability of the rest of the U.S. crop, independent of the valley's. */
+export const US_OWN_SD = Math.sqrt(Math.max(0, 0.066 ** 2 - (VALLEY_SHARE * VALLEY_SD) ** 2));
 
 /**
  * A simulated history of the world market: each year's regional harvests vary at random — the
@@ -154,8 +184,7 @@ export function worldHistory(n: number, first = 1, seed = 2024): HistoryYear[] {
       const e = gaussian(r);
       if (reg.id === 'us') {
         const fromValley = VALLEY_SHARE * (valleyCorn / mean - 1);
-        const own = Math.sqrt(Math.max(0, reg.cropSd ** 2 - (VALLEY_SHARE * 0.125) ** 2));
-        crop[reg.id] = fromValley + own * e;
+        crop[reg.id] = fromValley + US_OWN_SD * e;
       } else crop[reg.id] = reg.cropSd * e;
     }
     const b = clearWorld({ crop, carryIn });

@@ -28,3 +28,7 @@ export const FILL = {
   stress: 'rgba(231, 91, 85, .12)',
   band: 'rgba(0, 0, 0, .045)',
 };
+
+/** The market's colors: futures violet, cash corn gold, the basis between them teal, margin money red. */
+export const MARKET_LINE = { futures: GRAPHIC.violet, cash: GRAPHIC.gold, basis: GRAPHIC.teal, margin: GRAPHIC.red, world: GRAPHIC.green };
+export const MARKET_TONE = { futures: 'violet', cash: 'gold', basis: 'teal', margin: 'red', world: 'green' } as const satisfies Record<string, Tone>;
