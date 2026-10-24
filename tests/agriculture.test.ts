@@ -27,6 +27,13 @@ import { doubledNitrogenSolved, inputCurve } from '../src/lessons/agriculture/ch
 import { bestScoutingThreshold, outcome, strategyRecord, thresholdSolved } from '../src/lessons/agriculture/ch2/L2_3';
 import { bestStart, harvestSolved, wheatValue } from '../src/lessons/agriculture/ch2/L2_4';
 import { acreBudget, breakevenSolved, farmProfits } from '../src/lessons/agriculture/ch2/L2_5';
+import { withEvents, type WeatherEvent } from '../src/model/agriculture/climate';
+import { canopyReflectance, ndvi, seasonNdvi } from '../src/engines/agriculture/vegetation';
+import { ridgeSoilSolved, suitability } from '../src/lessons/agriculture/ch3/L3_1';
+import { droughtSolved, freezeSolved, type LabState } from '../src/lessons/agriculture/ch3/L3_2';
+import { ndviSolved } from '../src/lessons/agriculture/ch3/L3_3';
+import { fitFor, pairSolved } from '../src/lessons/agriculture/ch3/L3_4';
+import { endings, normalWeatherProduction, percentileSolved, production } from '../src/lessons/agriculture/ch3/L3_5';
 import { ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
 import { lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
 import { ridgeSolved } from '../src/lessons/agriculture/ch1/L1_3';
@@ -349,5 +356,81 @@ describe('chapter 2: farm economics (2.5)', () => {
   it('has a solvable challenge', () => {
     expect(breakevenSolved('corn', 4.75, 176, 1, 265)).toBe(true);
     expect(breakevenSolved('corn', 4.8, 176, 1, 265)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 3
+
+describe('chapter 3: geography (3.1)', () => {
+  it('maps the districts as the prose says', () => {
+    const s = suitability({ rain: 1, temp: 0, soil: 1 });
+    expect(Math.round(s.prairie.cornMargin)).toBe(355);
+    expect(Math.round(s.bottoms.cornMargin)).toBe(349);
+    expect(Math.round(s.plains.corn)).toBe(73);
+    expect(Math.round(s.plains.cornMargin)).toBe(-93);
+    expect(Math.round(s.plains.wheatMargin)).toBe(138);
+    expect(s.ridge.best).toBe('wheat');
+    expect(Math.round(suitability({ rain: 0.8, temp: 0, soil: 1 }).north.corn)).toBe(122);
+    expect(Math.round(suitability({ rain: 1, temp: 2, soil: 1 }).prairie.corn)).toBe(153);
+    expect(ridgeSoilSolved({ rain: 1, temp: 0, soil: 1.1 })).toBe(true);
+    expect(ridgeSoilSolved({ rain: 1, temp: 0, soil: 1.2 })).toBe(false);
+  });
+});
+
+describe('chapter 3: extremes (3.2)', () => {
+  const st = (o: Partial<LabState>): LabState => ({ crop: 'corn', kind: 'drought', date: dayOf(7, 10), days: 21, degrees: 6, low: -3, ...o });
+  it('finds the vulnerable windows', () => {
+    expect(freezeSolved(st({ crop: 'wheat', kind: 'frost', low: -4, date: dayOf(5, 21) }))).toBe(true);
+    expect(freezeSolved(st({ crop: 'wheat', kind: 'frost', low: -4, date: dayOf(5, 22) }))).toBe(false);
+    expect(droughtSolved(st({ date: dayOf(6, 13) }))).toBe(true);
+    expect(droughtSolved(st({ date: dayOf(7, 17) }))).toBe(false);
+    const w = simulatedYear(REFERENCE_YEAR, 'prairie');
+    const corn = (e: WeatherEvent) => Math.round(simulateSeason(withEvents(w, [e]), cornOpts).yield);
+    expect(corn({ kind: 'drought', start: dayOf(6, 13), days: 21 })).toBe(153);
+    expect(corn({ kind: 'drought', start: dayOf(7, 17), days: 21 })).toBe(172);
+    expect(corn({ kind: 'drought', start: dayOf(6, 26), days: 28 })).toBe(148);
+    expect(corn({ kind: 'frost', day: dayOf(8, 15), low: -3 })).toBe(99);
+    expect(corn({ kind: 'frost', day: dayOf(9, 5), low: -3 })).toBe(161);
+    expect(corn({ kind: 'frost', day: dayOf(8, 15), low: -1 })).toBe(171);
+  });
+});
+
+describe('chapter 3: satellites (3.3)', () => {
+  it('reads the canopy as the prose says', () => {
+    expect(Math.round(ndvi(canopyReflectance(0)) * 100) / 100).toBe(0.2);
+    expect(Math.round(ndvi(canopyReflectance(1)) * 100) / 100).toBe(0.51);
+    expect(Math.round(ndvi(canopyReflectance(5)) * 100) / 100).toBe(0.81);
+    expect(Math.round(ndvi(canopyReflectance(5, 0.7)) * 100) / 100).toBe(0.64);
+    expect(ndviSolved(3.2, 1, 0)).toBe(true);
+    expect(ndviSolved(3.3, 1, 0)).toBe(false);
+    const drought = seasonNdvi(fieldSeason(46, { district: 'prairie', crop: 'corn' }));
+    expect(Math.round(drought[dayOf(8, 1)] * 100) / 100).toBe(0.72);
+    expect(Math.round(drought[dayOf(8, 15)] * 100) / 100).toBe(0.37);
+  });
+});
+
+describe('chapter 3: forecasting (3.4)', () => {
+  it('forecasts with the skill in the prose', () => {
+    expect(Math.round(fitFor(dayOf(8, 1), ['temp', 'rain']).rmseTest * 10) / 10).toBe(18.6);
+    expect(Math.round(fitFor(dayOf(8, 1), []).rmseTest * 10) / 10).toBe(25);
+    expect(Math.round(fitFor(dayOf(8, 15), ['temp', 'rain', 'ndvi', 'condition']).rmseTest * 10) / 10).toBe(14);
+    expect(Math.round(fitFor(dayOf(9, 1), ['temp', 'rain', 'ndvi', 'condition']).rmseTest * 10) / 10).toBe(11.6);
+    expect(pairSolved(4, ['temp', 'condition'])).toBe(true);
+    expect(pairSolved(4, ['temp', 'rain'])).toBe(false);
+  });
+});
+
+describe('chapter 3: Monte Carlo (3.5)', () => {
+  it('describes the valley’s harvest distribution', () => {
+    const corn = Array.from({ length: 400 }, (_, i) => production(i + 1, 'corn', false));
+    const d = describeSample(corn);
+    expect(Math.round(d.mean)).toBe(506);
+    expect(Math.round(d.q05)).toBe(390);
+    expect(Math.round(d.min)).toBe(269);
+    expect(Math.round(normalWeatherProduction().corn)).toBe(630);
+    expect(percentileSolved(200, 'corn', false, 420)).toBe(true);
+    expect(percentileSolved(200, 'corn', false, 410)).toBe(false);
+    expect(Math.round(describeSample(endings(46, dayOf(8, 1))).mean)).toBe(321);
   });
 });

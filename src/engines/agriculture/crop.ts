@@ -422,6 +422,7 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
   let drainTotal = 0;
   let coldRun = 0;
   let premature = false;
+  let frostSurvival = 1;
   let severity = 0;
   let diseaseStarted = false;
   let sprayDecided = false;
@@ -479,7 +480,8 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
       let pollen = 1;
       if (crop === 'corn' && dev >= 0.5 && dev < 0.58) pollen = Math.max(0.3, 1 - 0.07 * Math.max(0, w.tmax - 35));
       if (crop === 'wheat' && dev >= stageAt('wheat', 'B') && dev < setTo) {
-        if (w.tmin < -1.5) pollen = Math.max(0, 1 - 0.35 * (-1.5 - w.tmin));
+        // A freeze kills the florets it reaches outright; heat only weakens pollination for the day.
+        if (w.tmin < -1.5) frostSurvival *= 1 - Math.min(0.9, 0.3 * (-1.5 - w.tmin));
         if (w.tmax > 32) pollen = Math.min(pollen, Math.max(0.3, 1 - 0.06 * (w.tmax - 32)));
       }
       // How close the crop grows to what the light allows: every shortfall — heat, dry air, dry soil, nitrogen — counts.
@@ -605,7 +607,7 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     kernels = ears * kernelsPerEar;
   } else {
     setIndex = kernelSetFactor(growthRatio);
-    kernels = WHEAT_KERNELS_PER_ACRE * (0.55 + 0.45 * (opts.fallStand ?? 1)) * setIndex;
+    kernels = WHEAT_KERNELS_PER_ACRE * (0.55 + 0.45 * (opts.fallStand ?? 1)) * setIndex * frostSurvival;
   }
   // Grain fill: the canopy's supply after flowering plus what the stems can give back.
   const remob = biomassAtFill > 0 ? biomassAtFill * P.remobilize : 0;

@@ -25,13 +25,16 @@ const WET_DAY = 158;
 const RA_MEAN = 26;
 const RA_SWING = 15.5;
 
+/** The climate fields of a district: enough to draw its normal year. */
+export type ClimateParams = Pick<District, 'tAvg' | 'tAmp' | 'diurnal' | 'rainIn' | 'rainSeason' | 'sun'>;
+
 /** Normal daily mean temperature, °C, for day of year d (0 = January 1). */
-export function normalTemp(district: District, d: number): number {
+export function normalTemp(district: ClimateParams, d: number): number {
   return district.tAvg + district.tAmp * Math.cos((TAU * (d - PEAK_DAY)) / 365);
 }
 
 /** Normal daily range between high and low, °C: a little wider in summer. */
-export function normalRange(district: District, d: number): number {
+export function normalRange(district: ClimateParams, d: number): number {
   return district.diurnal + 1.5 * Math.cos((TAU * (d - PEAK_DAY)) / 365);
 }
 
@@ -41,18 +44,18 @@ export function extraterrestrial(d: number): number {
 }
 
 /** Normal rain per day, inches: the annual total shaped toward late spring and early summer. */
-export function normalRain(district: District, d: number): number {
+export function normalRain(district: ClimateParams, d: number): number {
   return (district.rainIn / 365) * (1 + district.rainSeason * Math.cos((TAU * (d - WET_DAY)) / 365));
 }
 
 /** Chance that a day is wet (at least a trace worth counting). */
-export function wetChance(district: District, d: number): number {
+export function wetChance(district: ClimateParams, d: number): number {
   const base = 0.12 + 0.006 * district.rainIn;
   return Math.min(0.6, base * (1 + 0.35 * Math.cos((TAU * (d - WET_DAY)) / 365)));
 }
 
 /** Solar radiation on a clear-ish dry day and on a wet day, MJ per m² per day. */
-export function sunlight(district: District, d: number, wet: boolean): number {
+export function sunlight(district: ClimateParams, d: number, wet: boolean): number {
   const ra = extraterrestrial(d);
   return ra * (wet ? 0.36 : 0.62 + district.sun);
 }
@@ -221,6 +224,41 @@ export function firstColdSpell(days: DayWeather[], from = 213): number {
     if (run >= 4) return d;
   }
   return days.length;
+}
+
+// ---------------------------------------------------------------------------
+// Extreme events, layered onto a year's weather.
+
+export type WeatherEvent =
+  /** No rain for `days` days from `start`, under clear skies with hotter afternoons. */
+  | { kind: 'drought'; start: number; days: number }
+  /** Highs `degrees` hotter (lows half as much) for `days` days from `start`. */
+  | { kind: 'heat'; start: number; days: number; degrees: number }
+  /** A cold night: the low on `day` falls to `low` °C. */
+  | { kind: 'frost'; day: number; low: number };
+
+/** The year's weather with the events applied, in order. */
+export function withEvents(days: DayWeather[], events: WeatherEvent[]): DayWeather[] {
+  if (!events.length) return days;
+  const out = days.map((w) => ({ ...w }));
+  for (const e of events) {
+    if (e.kind === 'drought') {
+      for (let d = Math.max(0, e.start); d < Math.min(out.length, e.start + e.days); d++) {
+        out[d].rain = 0;
+        out[d].tmax += 2;
+        out[d].srad = Math.max(out[d].srad, sunlight({ tAvg: 0, tAmp: 0, diurnal: 0, rainIn: 0, rainSeason: 0, sun: 0 }, d, false));
+      }
+    } else if (e.kind === 'heat') {
+      for (let d = Math.max(0, e.start); d < Math.min(out.length, e.start + e.days); d++) {
+        out[d].tmax += e.degrees;
+        out[d].tmin += e.degrees / 2;
+      }
+    } else if (e.day >= 0 && e.day < out.length) {
+      out[e.day].tmin = Math.min(out[e.day].tmin, e.low);
+      out[e.day].tmax = Math.min(out[e.day].tmax, e.low + 12);
+    }
+  }
+  return out;
 }
 
 /** Total rain over days [from, to), inches. */
