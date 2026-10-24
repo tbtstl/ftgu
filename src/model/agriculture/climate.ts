@@ -210,6 +210,19 @@ export function spliceWeather(known: DayWeather[], future: DayWeather[], cutoff:
   return known.slice(0, cutoff).concat(future.slice(cutoff));
 }
 
+/**
+ * The day autumn's first cold spell is complete: the fourth day in a row with a daily mean below
+ * 12 °C, after `from`. Corn still filling its kernels then stops (a premature black layer).
+ */
+export function firstColdSpell(days: DayWeather[], from = 213): number {
+  let run = 0;
+  for (let d = from; d < days.length; d++) {
+    run = (days[d].tmax + days[d].tmin) / 2 < 12 ? run + 1 : 0;
+    if (run >= 4) return d;
+  }
+  return days.length;
+}
+
 /** Total rain over days [from, to), inches. */
 export function rainBetween(days: DayWeather[], from: number, to: number): number {
   let s = 0;

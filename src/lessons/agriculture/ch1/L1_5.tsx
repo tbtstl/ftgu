@@ -19,7 +19,7 @@ import {
   scale,
   useScenario,
 } from '../../../framework';
-import { CROP, kernelSetFactor, simulateSeason, type SeasonResult } from '../../../engines/agriculture/crop';
+import { CROP, simulateSeason, type SeasonResult } from '../../../engines/agriculture/crop';
 import { describe } from '../../../engines/strategy/distribution';
 import { REFERENCE_YEAR, simulatedYear, spliceWeather } from '../../../model/agriculture/climate';
 import { DISTRICT, dateLabel, dayOf } from '../../../model/agriculture/region';
@@ -171,8 +171,8 @@ export default function Lesson() {
       <P>
         The two halves of that fraction are decided at different times. The number of <K tone="gold">kernels per ear</K> is settled in the few weeks around
         silking. Each kernel needs a silk pollinated and then a steady supply of sugar in its first days, and a plant that is short of water, too hot, or simply
-        growing slowly then aborts the kernels it can’t support, starting at the tip of the ear. In our model, kernel set follows how close the crop comes to the growth
-        its light allows from just before silking to three weeks after. The <K tone="teal">weight</K> of each kernel is settled later, during grain fill, by how much
+        growing slowly then aborts the kernels it can’t support, starting at the tip of the ear. In our model, kernel set follows how fast each plant grows from just
+        before silking to three weeks after, and how close that growth comes to what its light allows. The <K tone="teal">weight</K> of each kernel is settled later, during grain fill, by how much
         sugar the canopy makes — plus what the stalks can give back — divided among the kernels that set, up to the most a kernel can hold. In the next
         demonstration, choose a season from the model’s simulated history and a plant population:
       </P>
@@ -194,7 +194,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'silking', value: dateLabel(r.stageDays[4]) },
-            { label: 'kernel set', value: `${fmt(kernelSetFactor(r.setIndex) * 100)}% of potential`, tone: 'gold' },
+            { label: 'kernel set', value: `${fmt(r.setIndex * 100)}% of potential`, tone: 'gold' },
             { label: 'kernels per bushel', value: fmt(r.kernelsPerBu), tone: 'teal' },
             { label: 'yield', value: buAc(r.yield), tone: 'gold' },
           ]}
@@ -212,16 +212,16 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        In the reference season, with Cedar Bend’s usual 32,000 plants an acre, about 31,000 ears carry 541 kernels each, and the kernels fill to 89,300 to the
-        bushel: 188 bushels an acre. The kernels could have held 233 bushels if every one had filled completely, so the limit that season was the canopy’s supply of
+        In the reference season, with Cedar Bend’s usual 32,000 plants an acre, about 31,000 ears carry 538 kernels each, and the kernels fill to 88,800 to the
+        bushel: 188 bushels an acre. The kernels could have held 232 bushels if every one had filled completely, so the limit that season was the canopy’s supply of
         sugar in August, not the number of kernels.
       </P>
       <P>
-        Now step through the other seasons. The <b>dry August</b> set plenty of kernels, 556 an ear, but couldn’t fill them: they came in light, 120,800 to the
-        bushel, and the field made 143. The <b>hot July</b> did the opposite. Heat and dry air around silking left only 431 kernels an ear, but a good August filled
-        those few nearly to the maximum, 73,600 to the bushel, and the field recovered to 182. A crop can make up for lost kernels with heavier ones, up to a point;
-        it can never add kernels after silking. The <b>drought</b> took both: 339 kernels an ear, filled to only 137,600 a bushel, for 76. And the <b>bumper</b>{' '}
-        season, mild at silking with a cool, sunny August, set 579 kernels an ear and filled them to 77,100 a bushel, for 233. That is why everyone who follows corn — farmers,
+        Now step through the other seasons. The <b>dry August</b> set plenty of kernels, 553 an ear, but couldn’t fill them: they came in light, 120,200 to the
+        bushel, and the field made 143. The <b>hot July</b> did the opposite. Heat and dry air around silking left only 460 kernels an ear, but a cool, wet August
+        filled those few close to the maximum, 78,500 to the bushel, and the field recovered to 182. A crop can make up for lost kernels with heavier ones, up to a
+        point; it can never add kernels after silking. The <b>drought</b> took both: 358 kernels an ear, filled to only 145,500 a bushel, for 76. And the{' '}
+        <b>bumper</b> season, mild at silking with a cool, sunny August, set 550 kernels an ear and filled them to 73,300 a bushel, for 233. That is why everyone who follows corn — farmers,
         elevators and traders — watches the weather around silking so closely. It is the one window that decides the ceiling.
       </P>
 
@@ -297,15 +297,15 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        On May 1 the field’s prospects are the whole valley’s climate: an average of 177 bushels, the middle half of outcomes between 160 and 196, and a 1-in-20
+        On May 1 the field’s prospects are the whole valley’s climate: an average of 176 bushels, the middle half of outcomes between 160 and 195, and a 1-in-20
         chance of worse than 131. That spread is the risk every farmer carries into the summer. Then, in the reference season, the weather is kind. By August 1 the
-        average outcome has risen to 191 and the chance of falling below 150 has nearly vanished; by mid-September it is 188, pinned to what actually happened.
+        average outcome has risen to 190 and the chance of falling below 150 has nearly vanished; by mid-September it is 188, pinned to what actually happened.
       </P>
       <P>
         Switch to the drought. Through May it looks like any other season. By July 1 the average has slipped to 154; by July 15, with silking under way in the heat, it
-        is 131; by August 1, 99. Every one of those weeks is news. Somewhere a grain buyer, a feed mill and a futures trader are each reading the same weather and
-        redrawing the same distribution, and the price they’re willing to pay for next winter’s corn moves with it. The bumper season moves the other way, from 177 to
-        203 by August 1 and 233 in the end.
+        is 132; by August 1, 99. Every one of those weeks is news. Somewhere a grain buyer, a feed mill and a futures trader are each reading the same weather and
+        redrawing the same distribution, and the price they’re willing to pay for next winter’s corn moves with it. The bumper season moves the other way, from 176 to
+        202 by August 1 and 233 in the end.
       </P>
       <P>
         That is the central fact of this course in its first form: a harvest is uncertain right up until it happens, and the uncertainty resolves on a schedule set by

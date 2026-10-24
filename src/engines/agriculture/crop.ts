@@ -279,8 +279,12 @@ export interface SeasonResult {
   /** Day maturity was reached, or the day the crop was killed. */
   maturityDay: number;
   killed: boolean;
-  /** Growing conditions (0–1) through the kernel-setting window around flowering. */
+  /** Corn: cold weather after dent ended grain fill before the hybrid reached black layer on its own. */
+  premature: boolean;
+  /** Share of the potential kernels that set around flowering (0–1). */
   setIndex: number;
+  /** Corn: grams of dry matter each plant added per day around silking, which sets its kernel number. */
+  plantGrowthRate: number;
   /** Growing conditions (0–1) through grain fill. */
   fillIndex: number;
   /** Mean stress factors over the season: water, temperature. */
@@ -368,6 +372,7 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
   let maturityDay = -1;
   let lastIrr = -99;
   let setSum = 0;
+  let ratioSum = 0;
   let setN = 0;
   let fillSum = 0;
   let fillN = 0;
@@ -378,6 +383,9 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
   let irrTotal = 0;
   let stressDays = 0;
   let drainTotal = 0;
+  let coldRun = 0;
+  let premature = false;
+
   let prevPotLai = potentialLai(crop, 0, laiMax);
 
   for (let d = start; d < weather.length; d++) {
@@ -423,7 +431,9 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
       }
       // How close the crop grows to what the light allows: every shortfall — heat, dry air, dry soil, nitrogen — counts.
       const potential = P.rue * par * intercept;
-      setSum += (potential > 0.5 ? Math.min(1, growth / potential) : Math.min(1, ft) * ks * nutrient) * pollen;
+      ratioSum += (potential > 0.5 ? Math.min(1, growth / potential) : Math.min(1, ft) * ks * nutrient) * pollen;
+      // Corn also counts how fast each plant is growing.
+      setSum += growth * pollen;
       setN++;
     }
     if (alive && dev >= fillFrom && dev < 1) {
@@ -467,6 +477,11 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
       if (pot > prevPotLai) lai += (pot - prevPotLai) * Math.min(1, 0.3 + 0.7 * ks) * Math.min(1, 0.5 + 0.5 * nutrient);
       else lai = Math.min(lai, lai * (pot / Math.max(1e-6, prevPotLai)));
       if (ks < 0.5) lai *= 1 - 0.03 * (0.5 - ks) / 0.5;
+      // Late in a corn season, cold nights age the leaves, and a light frost burns some of them.
+      if (crop === 'corn' && newDev > stageAt('corn', 'R1')) {
+        if (w.tmin <= 0 && w.tmin > P.killingFrost) lai *= 0.65;
+        else if (w.tmin < 6) lai *= 0.95;
+      }
       lai = Math.max(0, lai);
     }
     prevPotLai = pot;
@@ -481,6 +496,13 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     if (alive && newDev >= 1 && maturityDay < 0) {
       maturityDay = d;
       alive = false;
+    }
+    // A run of cold days after dent ends grain fill early: a premature black layer.
+    coldRun = (w.tmax + w.tmin) / 2 < 12 ? coldRun + 1 : 0;
+    if (alive && crop === 'corn' && newDev >= stageAt('corn', 'R5') && newDev < 1 && coldRun >= 4) {
+      maturityDay = d;
+      alive = false;
+      premature = true;
     }
 
     grain = Math.max(grain, fillSupply);
@@ -507,18 +529,22 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
   }
 
   // Kernel number, set around flowering.
-  const setIndex = setN ? setSum / setN : 0;
   const fillIndex = fillN ? fillSum / fillN : 0;
-  const setFactor = kernelSetFactor(setIndex);
   let ears = 0;
   let kernelsPerEar = 0;
   let kernels: number;
+  let plantGrowthRate = 0;
+  let setIndex: number;
+  const growthRatio = setN ? ratioSum / setN : 0;
   if (crop === 'corn') {
-    ears = population * 0.97 * (setIndex < 0.4 ? Math.max(0.5, 1 - (0.4 - setIndex)) : 1);
-    kernelsPerEar = KERNELS_PER_EAR * Math.pow(1 / popRatio, 0.45) * setFactor;
+    plantGrowthRate = setN ? setSum / setN / (population / M2_PER_ACRE) : 0;
+    setIndex = cornKernelSet(plantGrowthRate) * Math.pow(Math.min(1, growthRatio / 0.78), 0.9);
+    ears = population * 0.97 * Math.max(0.4, Math.min(1, plantGrowthRate / 1.0));
+    kernelsPerEar = KERNELS_PER_EAR * setIndex;
     kernels = ears * kernelsPerEar;
   } else {
-    kernels = WHEAT_KERNELS_PER_ACRE * (0.55 + 0.45 * (opts.fallStand ?? 1)) * setFactor;
+    setIndex = kernelSetFactor(growthRatio);
+    kernels = WHEAT_KERNELS_PER_ACRE * (0.55 + 0.45 * (opts.fallStand ?? 1)) * setIndex;
   }
   // Grain fill: the canopy's supply after flowering plus what the stems can give back.
   const remob = biomassAtFill > 0 ? biomassAtFill * P.remobilize : 0;
@@ -537,7 +563,9 @@ export function simulateSeason(weather: DayWeather[], opts: SeasonOptions): Seas
     stageDays,
     maturityDay: maturityDay >= 0 ? maturityDay : end,
     killed,
+    premature,
     setIndex,
+    plantGrowthRate,
     fillIndex,
     meanKs: ksN ? ksSum / ksN : 1,
     kernels,
@@ -561,8 +589,19 @@ export function fillHeatFactor(crop: Crop, tmax: number): number {
   return Math.max(0.4, 1 - 0.06 * Math.max(0, tmax - limit));
 }
 
-/** Share of the potential kernels that set, from the growing conditions around flowering (0–1). */
-export function kernelSetFactor(setIndex: number): number {
-  const x = Math.max(0, Math.min(1, (setIndex - 0.35) / 0.6));
+/** Wheat: share of the potential kernels that set, from how close growth came to the light's ceiling around flowering (0–1). */
+export function kernelSetFactor(ratio: number): number {
+  const x = Math.max(0, Math.min(1, (ratio - 0.2) / 0.7));
   return Math.pow(x, 0.6);
+}
+
+/** Below this plant growth rate around silking, g per plant per day, an ear sets no kernels. */
+export const PGR_THRESHOLD = 0.8;
+
+/**
+ * Corn: share of the 640 potential kernels per ear that set, from the plant's growth rate around
+ * silking (grams per plant per day). Kernel number rises steeply above a threshold and saturates.
+ */
+export function cornKernelSet(pgr: number): number {
+  return Math.max(0, 1 - Math.exp(-(pgr - PGR_THRESHOLD) / 1.5));
 }

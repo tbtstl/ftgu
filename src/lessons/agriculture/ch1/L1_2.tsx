@@ -22,7 +22,7 @@ import {
   useScenario,
 } from '../../../framework';
 import { STAGES, gdd, simulateSeason, stageAt, type SeasonResult } from '../../../engines/agriculture/crop';
-import { REFERENCE_YEAR, applyShift, frostDates, simulatedYear } from '../../../model/agriculture/climate';
+import { REFERENCE_YEAR, applyShift, firstColdSpell, frostDates, simulatedYear } from '../../../model/agriculture/climate';
 import { DISTRICT, DISTRICTS, MONTHS, MONTH_START, dateLabel, dayOf, type DistrictId } from '../../../model/agriculture/region';
 import { DayChart } from '../shared/DayChart';
 import { CornPlant, WheatPlant } from '../shared/Plant';
@@ -31,6 +31,19 @@ import { CROP_LINE } from '../shared/tones';
 const PRAIRIE = DISTRICT.prairie;
 const WEATHER = simulatedYear(REFERENCE_YEAR, 'prairie');
 const KILL = frostDates(WEATHER, -2).firstFall;
+const COLD = firstColdSpell(WEATHER);
+
+/** Did cold weather end the season before the hybrid reached black layer on its own? */
+function cutShort(r: SeasonResult): boolean {
+  return r.killed || r.premature;
+}
+
+/** How the season ended, for labels: "black layer" or "cold ended fill". */
+function ending(r: SeasonResult): { label: string; day: number } {
+  if (r.killed) return { label: 'killed by frost', day: r.maturityDay };
+  if (r.premature) return { label: 'cold ended grain fill', day: r.maturityDay };
+  return { label: 'black layer', day: r.maturityDay };
+}
 const LATE_PLANT = dayOf(6, 5);
 const SPEED = 14; // days of season per second of animation
 
@@ -47,7 +60,7 @@ function grow(plant: number, hybrid: number, shift: number): SeasonResult {
 /** The challenge: planted June 5, the longest hybrid (in 25-GDD steps) that reaches black layer before the killing frost. */
 export function lateHybridSolved(plant: number, hybrid: number, shift: number): boolean {
   if (plant !== LATE_PLANT || shift !== 0) return false;
-  return !grow(plant, hybrid, 0).killed && grow(plant, hybrid + 25, 0).killed;
+  return !cutShort(grow(plant, hybrid, 0)) && cutShort(grow(plant, hybrid + 25, 0));
 }
 
 function stageName(r: SeasonResult, i: number) {
@@ -100,7 +113,9 @@ export default function Lesson() {
   const r1 = season.stageDays[4];
   const r6 = season.stageDays[9];
   const solved = lateHybridSolved(plant, hybrid, shift);
-  const killDev = season.killed ? season.days[season.days.length - 1].dev : 1;
+  const cut = cutShort(season);
+  const end = ending(season);
+  const killDev = cut ? season.days[season.days.length - 1].dev : 1;
 
   const d2 = useScenario('calendars', { district: 'prairie' as DistrictId, day: dayOf(5, 20) });
   const dist = DISTRICT[d2.state.district];
@@ -109,7 +124,7 @@ export default function Lesson() {
     const corn = simulateSeason(wy, { crop: 'corn', plantDay: dayOf(5, 1), maturityGdd: dist.hybridGdd, pawIn: dist.pawIn, startWater: dist.springWater });
     const wheat = simulateSeason(wy, { crop: 'wheat', pawIn: dist.pawIn, startWater: dist.springWater });
     const temps = wy.map((x) => (x.tmax + x.tmin) / 2);
-    return { wy, corn, wheat, temps, kill: frostDates(wy, -2).firstFall };
+    return { wy, corn, wheat, temps, kill: frostDates(wy, -2).firstFall, cold: firstColdSpell(wy) };
   }, [dist]);
   const at = (r: SeasonResult, code: string) => r.stageDays[STAGES[r.crop].findIndex((x) => x.code === code)];
   const cornEnd = at(cal.corn, 'R6') >= 0 ? at(cal.corn, 'R6') : cal.corn.maturityDay;
@@ -122,7 +137,8 @@ export default function Lesson() {
   const cornDev = devOn(cal.corn, d2.state.day);
   const wheatDev = devOn(cal.wheat, d2.state.day);
   const wheatGone = d2.state.day > wheatEnd + 10;
-  const cornGone = d2.state.day > cornEnd + 30 || (cal.corn.killed && d2.state.day > cal.corn.maturityDay + 30);
+  const cornGone = d2.state.day > cal.corn.maturityDay + 30;
+  const calEnd = ending(cal.corn);
 
   return (
     <LessonPage id="agriculture/1.2">
@@ -160,15 +176,15 @@ export default function Lesson() {
             className="diagram"
             viewBox="0 0 240 300"
             role="img"
-            aria-label={`A corn plant on ${dateLabel(day, true)}: ${t >= season.days.length ? (season.killed ? 'killed by frost' : 'mature') : stageName(season, today.stage)}, ${fmt(today.gdd)} growing degree days since planting.`}
+            aria-label={`A corn plant on ${dateLabel(day, true)}: ${t >= season.days.length - 1 ? end.label : stageName(season, today.stage)}, ${fmt(today.gdd)} growing degree days since planting.`}
           >
             <rect x={0} y={262} width={240} height={38} fill="#e9e1d2" />
-            <CornPlant dev={t >= season.days.length ? killDev : today.dev} x={120} y={262} height={210} alive={!(season.killed && t >= season.days.length - 1)} />
+            <CornPlant dev={t >= season.days.length ? killDev : today.dev} x={120} y={262} height={210} alive={!(cut && t >= season.days.length - 1)} />
           </svg>
           <div>
             <div style={{ fontSize: 13, color: '#5f5f5f' }}>{dateLabel(day, true)}</div>
             <div style={{ fontSize: 20, fontWeight: 500, margin: '2px 0 8px' }}>
-              {t >= season.days.length - 1 ? (season.killed ? 'Killed by frost' : 'R6 · black layer') : stageName(season, today.stage)}
+              {t >= season.days.length - 1 ? (cut ? end.label[0].toUpperCase() + end.label.slice(1) : 'R6 · black layer') : stageName(season, today.stage)}
             </div>
             <div style={{ fontSize: 14, color: '#5f5f5f', lineHeight: 1.6 }}>
               High {fmt(w.tmax, 1)} °C, low {fmt(w.tmin, 1)} °C: <span className="tone-teal">{fmt(g, 1)} GDD</span> today
@@ -194,18 +210,21 @@ export default function Lesson() {
             { y: hybrid * stageAt('corn', 'R1'), label: 'silking', color: GRAPHIC.gold },
             { y: hybrid, label: 'black layer', color: '#333' },
           ]}
-          marks={[{ day: KILL, label: 'killing frost', color: GRAPHIC.red, dash: '4 3' }]}
+          marks={[
+            { day: COLD, label: 'first cold spell', color: GRAPHIC.blue, dash: '4 3' },
+            { day: KILL, label: 'killing frost', color: GRAPHIC.red, dash: '4 3', row: 1 },
+          ]}
           cursor={Math.min(day, dayOf(11, 30))}
           onScrub={(d) => {
             play.setPlaying(false);
             setT(Math.max(0, d - plant));
           }}
-          ariaLabel={`Growing degree days since planting on ${dateLabel(plant)}, for a ${fmt(hybrid)}-GDD hybrid. Silking on ${r1 >= 0 ? dateLabel(r1) : 'no date'}; ${r6 >= 0 ? `black layer on ${dateLabel(r6)}` : `the crop is killed by frost on ${dateLabel(season.maturityDay)}`}.`}
+          ariaLabel={`Growing degree days since planting on ${dateLabel(plant)}, for a ${fmt(hybrid)}-GDD hybrid. Silking on ${r1 >= 0 ? dateLabel(r1) : 'no date'}; ${end.label} on ${dateLabel(end.day)}.`}
         />
         <Readouts
           items={[
             { label: 'silking', value: r1 >= 0 ? dateLabel(r1) : '—', tone: 'gold' },
-            { label: season.killed ? 'killed by frost' : 'black layer', value: season.killed ? dateLabel(season.maturityDay) : r6 >= 0 ? dateLabel(r6) : '—', tone: season.killed ? 'red' : 'ink' },
+            { label: end.label, value: dateLabel(end.day), tone: cut ? 'red' : 'ink' },
             { label: 'days, planting to the end', value: fmt(season.maturityDay - plant) },
           ]}
         />
@@ -225,24 +244,26 @@ export default function Lesson() {
       <P>
         Slide the year warmer. At +2 °C the crop silks on July 7 and reaches black layer on August 26, three weeks early. That isn’t good news: the same number of
         degree days now passes in fewer days, so the canopy has less time to catch light while the kernels fill. A cooler year stretches the season instead, and
-        brings the opposite risk: at −2 °C the crop is still filling when the reference season’s first killing frost arrives on November 16. That frost — a low of
-        −2 °C or colder, which kills corn leaves outright — is the hard edge of the season.
+        brings the opposite risk. Autumn ends a corn season in two steps. First comes a run of cold days — in our model, four in a row averaging under 12 °C, which
+        in the reference season is complete on October 9. A crop still filling its kernels then simply stops, short of its own black layer: a{' '}
+        <b>premature black layer</b>, with lighter kernels than it would have had. Weeks later a <b>killing frost</b>, a low of −2 °C or colder, kills whatever
+        leaves are left; in the reference season it comes on November 16. At −2 °C the crop is still filling on October 3 when a cold spell stops it.
       </P>
 
       <Challenge
         id="a"
-        question="Suppose rain holds Cedar Bend’s planting back to June 5, in the reference season’s normal temperatures. What is the longest-season hybrid that still reaches black layer before the killing frost?"
+        question="Suppose rain holds Cedar Bend’s planting back to June 5, in the reference season’s normal temperatures. What is the longest-season hybrid that still reaches black layer on its own, before cold weather stops it?"
         solved={solved}
         status={
           plant !== LATE_PLANT
             ? `Set the planting date to June 5. It is ${dateLabel(plant)}.`
             : shift !== 0
               ? 'Set the year back to normal temperatures (+0.0 °C).'
-              : season.killed
-                ? `A ${fmt(hybrid)}-GDD hybrid is killed by frost on ${dateLabel(season.maturityDay)}, before black layer.`
+              : cut
+                ? `A ${fmt(hybrid)}-GDD hybrid is stopped short by the cold on ${dateLabel(season.maturityDay)}, before black layer.`
                 : `A ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'}. Could a longer one make it?`
         }
-        success={`Solved. Planted June 5, a ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'}; one 25 GDD longer would still be filling at the frost. Longer-season hybrids yield more when they finish, because they spend more days catching light, so late planting forces a real trade: switch to a shorter hybrid and give up yield, or keep the long one and risk the frost.`}
+        success={`Solved. Planted June 5, a ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'}; one 25 GDD longer would still be filling when the cold arrives. Longer-season hybrids usually yield more, because they spend more days catching light, but only if they finish. Late planting forces a real trade: switch to a shorter hybrid and give up some yield, or keep the long one and gamble on a warm autumn.`}
       />
 
       <H2>Winter wheat keeps a different calendar</H2>
@@ -269,7 +290,7 @@ export default function Lesson() {
           className="diagram"
           viewBox="0 0 640 190"
           role="img"
-          aria-label={`${dist.name} on ${dateLabel(d2.state.day, true)} of the reference season. Winter wheat greens up on ${dateLabel(at(cal.wheat, 'GU'))}, heads on ${dateLabel(at(cal.wheat, 'H'))} and is ripe on ${dateLabel(wheatEnd)}. Corn planted May 1 silks on ${dateLabel(at(cal.corn, 'R1'))} and ${cal.corn.killed ? `is killed by frost on ${dateLabel(cal.corn.maturityDay)}` : `reaches black layer on ${dateLabel(cornEnd)}`}.`}
+          aria-label={`${dist.name} on ${dateLabel(d2.state.day, true)} of the reference season. Winter wheat greens up on ${dateLabel(at(cal.wheat, 'GU'))}, heads on ${dateLabel(at(cal.wheat, 'H'))} and is ripe on ${dateLabel(wheatEnd)}. Corn planted May 1 silks on ${dateLabel(at(cal.corn, 'R1'))}; ${calEnd.label} on ${dateLabel(calEnd.day)}.`}
         >
           <rect x={0} y={150} width={640} height={40} fill="#e9e1d2" />
           <g transform="translate(0,0)">
@@ -289,7 +310,7 @@ export default function Lesson() {
               corn harvested
             </text>
           ) : (
-            <CornPlant dev={cornDev} x={430} y={150} height={130} alive={!(cal.corn.killed && d2.state.day >= cal.corn.maturityDay)} />
+            <CornPlant dev={cornDev} x={430} y={150} height={130} alive={!(cutShort(cal.corn) && d2.state.day >= cal.corn.maturityDay)} />
           )}
           <text className="lab" x={180} y={176} textAnchor="middle" style={{ fill: '#ad5310' }}>
             winter wheat
@@ -342,7 +363,7 @@ export default function Lesson() {
             { y: 0, label: 'wheat’s base, 0 °C', color: CROP_LINE.wheat, dash: '5 4' },
             { y: 10, label: 'corn’s base, 10 °C', color: CROP_LINE.corn, dash: '5 4' },
           ]}
-          marks={[{ day: cal.kill, label: 'killing frost', color: GRAPHIC.red }]}
+          marks={[{ day: cal.cold, label: 'first cold spell', color: GRAPHIC.blue }, { day: cal.kill, label: 'killing frost', color: GRAPHIC.red, row: 1 }]}
           cursor={d2.state.day}
           onScrub={(d) => d2.set({ day: d })}
           ariaLabel={`Daily mean temperature through the reference season in ${dist.name}, with the base temperatures of wheat (0 °C) and corn (10 °C).`}
@@ -357,7 +378,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'wheat ripe', value: dateLabel(wheatEnd), tone: 'orange' },
-            { label: cal.corn.killed ? 'corn killed by frost' : 'corn at black layer', value: dateLabel(cal.corn.killed ? cal.corn.maturityDay : cornEnd), tone: 'gold' },
+            { label: `corn: ${calEnd.label}`, value: dateLabel(calEnd.day), tone: 'gold' },
             { label: 'first killing frost', value: dateLabel(cal.kill), tone: 'red' },
           ]}
         />
@@ -365,9 +386,9 @@ export default function Lesson() {
 
       <P>
         On the Black Prairie the reference season’s wheat greens up on March 22, heads on May 24 and is ripe on June 30 — two weeks before the corn even silks. In the
-        warmer High Plains the wheat is ripe on June 15; in the North Tier not until July 22. The North’s corn, an earlier hybrid
-        of 1,250 GDD, silks on July 23 and is still short of black layer when the North’s killing frost comes on October 3. For a short-season district, that frost
-        is a yearly worry.
+        warmer High Plains the wheat is ripe on June 15; in the North Tier not until July 22. The North’s corn, an earlier hybrid of 1,250 GDD, silks on July 23 and
+        is still short of black layer when cold weather stops it on September 30, three days before the North’s first killing frost. For a short-season district,
+        the end of the season is a yearly worry.
       </P>
       <P>
         These calendars matter far beyond the farm. Wheat comes off the fields in early summer and corn in the fall, so the two crops flood into elevators and onto

@@ -41,7 +41,7 @@ export interface DayChartProps {
   height?: number;
   bands?: DayBand[];
   /** Vertical marks at days, with a short label. */
-  marks?: Array<{ day: number; label?: string; color?: string; dash?: string }>;
+  marks?: Array<{ day: number; label?: string; color?: string; dash?: string; row?: number }>;
   /** Horizontal reference lines. */
   refLines?: Array<{ y: number; label?: string; color?: string; dash?: string }>;
   /** Highlighted day. */
@@ -209,7 +209,7 @@ export function DayChart({
               <text
                 className={x(m.day) > X1 - 90 ? 'ax ax-e' : 'ax'}
                 x={x(m.day) > X1 - 90 ? x(m.day) - 4 : x(m.day) + 4}
-                y={bottom - 6}
+                y={bottom - 6 - 13 * (m.row ?? 0)}
                 style={{ fill: m.color ?? undefined }}
               >
                 {m.label}

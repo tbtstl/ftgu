@@ -6,7 +6,7 @@ import { canopyDay, gramsToBushels, interception, leafAssimilation } from '../sr
 import { CROP, gdd, kernelSetFactor, simulateSeason, waterStress } from '../src/engines/agriculture/crop';
 import { nitrogenSeason, sufficiency } from '../src/engines/agriculture/soil';
 import { describe as describeSample } from '../src/engines/strategy/distribution';
-import { REFERENCE_YEAR, applyShift, frostDates, normalYear, simulatedYear, spliceWeather } from '../src/model/agriculture/climate';
+import { REFERENCE_YEAR, applyShift, firstColdSpell, frostDates, normalYear, simulatedYear, spliceWeather } from '../src/model/agriculture/climate';
 import { DISTRICT, DISTRICTS, dateLabel, dayOf } from '../src/model/agriculture/region';
 import { ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
 import { lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
@@ -82,7 +82,14 @@ describe('chapter 1: the season model (1.2)', () => {
     const warm = simulateSeason(applyShift(REF, { temp: 2 }), cornOpts);
     expect(dateLabel(warm.stageDays[4])).toBe('Jul 7');
     expect(dateLabel(warm.stageDays[9])).toBe('Aug 26');
-    expect(simulateSeason(applyShift(REF, { temp: -2 }), cornOpts).killed).toBe(true);
+    const cool = simulateSeason(applyShift(REF, { temp: -2 }), cornOpts);
+    expect(cool.premature).toBe(true);
+    expect(dateLabel(cool.maturityDay)).toBe('Oct 3');
+    expect(dateLabel(firstColdSpell(REF))).toBe('Oct 9');
+    const north = simulateSeason(simulatedYear(REFERENCE_YEAR, 'north'), { ...cornOpts, maturityGdd: 1250, pawIn: 8, startWater: 0.95 });
+    expect(north.premature).toBe(true);
+    expect(dateLabel(north.maturityDay)).toBe('Sep 30');
+    expect(dateLabel(frostDates(simulatedYear(REFERENCE_YEAR, 'north'), -2).firstFall)).toBe('Oct 3');
   });
   it('dates the two calendars', () => {
     const wheat = simulateSeason(REF, { crop: 'wheat', pawIn: P.pawIn, startWater: P.springWater });
@@ -91,7 +98,8 @@ describe('chapter 1: the season model (1.2)', () => {
     expect(dateLabel(plains.stageDays[7])).toBe('Jun 15');
   });
   it('has a solvable challenge', () => {
-    expect(lateHybridSolved(dayOf(6, 5), 1475, 0)).toBe(true);
+    expect(lateHybridSolved(dayOf(6, 5), 1425, 0)).toBe(true);
+    expect(lateHybridSolved(dayOf(6, 5), 1400, 0)).toBe(false);
     expect(lateHybridSolved(dayOf(6, 5), 1450, 0)).toBe(false);
   });
 });
@@ -158,39 +166,42 @@ describe('chapter 1: yield formation (1.5)', () => {
   const grow = (year: number, population = 32000) => simulateSeason(simulatedYear(year, 'prairie'), { ...cornOpts, population });
   it('gives the yield components in the prose', () => {
     const rows = [
-      [REFERENCE_YEAR, 541, 89296, 188],
-      [111, 556, 120829, 143],
-      [133, 431, 73577, 182],
-      [46, 339, 137574, 76],
-      [180, 579, 77130, 233],
+      [REFERENCE_YEAR, 538, 88800, 188],
+      [111, 553, 120200, 143],
+      [133, 460, 78500, 182],
+      [46, 358, 145500, 76],
+      [180, 550, 73300, 233],
     ];
     for (const [year, kpe, kpb, y] of rows) {
       const r = grow(year);
       expect(Math.round(r.kernelsPerEar)).toBe(kpe);
-      expect(Math.abs(r.kernelsPerBu - kpb)).toBeLessThan(1);
+      expect(Math.round(r.kernelsPerBu / 100) * 100).toBe(kpb);
       expect(Math.round(r.yield)).toBe(y);
     }
-    expect(Math.round(ref.sink)).toBe(233);
-    expect(kernelSetFactor(1)).toBe(1);
+    expect(Math.round(ref.sink)).toBe(232);
+    expect(kernelSetFactor(0.9)).toBe(1);
     expect(CROP.corn.minKernelsPerBu).toBe(72000);
+    // The light-or-water figure: the High Plains' unirrigated corn in the reference season.
+    const plains = simulateSeason(simulatedYear(REFERENCE_YEAR, 'plains'), { ...cornOpts, pawIn: 8, startWater: DISTRICT.plains.springWater });
+    expect(Math.round(plains.yield)).toBe(27);
   });
   it('has a solvable challenge', () => {
-    expect(bumperSolved('bumper', 27000)).toBe(true);
-    expect(bumperSolved('bumper', 26000)).toBe(false);
+    expect(bumperSolved('bumper', 30000)).toBe(true);
+    expect(bumperSolved('bumper', 29000)).toBe(false);
   });
   it('narrows the forecast as the season unfolds', () => {
     const at = (truth: number, cut: number) =>
       describeSample(Array.from({ length: 200 }, (_, i) => simulateSeason(spliceWeather(simulatedYear(truth, 'prairie'), simulatedYear(i + 1, 'prairie'), cut), cornOpts).yield));
     const may = at(REFERENCE_YEAR, dayOf(5, 1));
-    expect(Math.round(may.mean)).toBe(177);
+    expect(Math.round(may.mean)).toBe(176);
     expect(Math.round(may.q25)).toBe(160);
-    expect(Math.round(may.q75)).toBe(196);
+    expect(Math.round(may.q75)).toBe(195);
     expect(Math.round(may.q05)).toBe(131);
-    expect(Math.round(at(REFERENCE_YEAR, dayOf(8, 1)).mean)).toBe(191);
+    expect(Math.round(at(REFERENCE_YEAR, dayOf(8, 1)).mean)).toBe(190);
     expect(Math.round(at(46, dayOf(7, 1)).mean)).toBe(154);
-    expect(Math.round(at(46, dayOf(7, 15)).mean)).toBe(131);
+    expect(Math.round(at(46, dayOf(7, 15)).mean)).toBe(132);
     expect(Math.round(at(46, dayOf(8, 1)).mean)).toBe(99);
-    expect(Math.round(at(180, dayOf(8, 1)).mean)).toBe(203);
+    expect(Math.round(at(180, dayOf(8, 1)).mean)).toBe(202);
   });
 });
 

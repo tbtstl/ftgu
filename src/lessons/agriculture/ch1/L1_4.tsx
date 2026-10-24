@@ -305,7 +305,7 @@ export default function Lesson() {
         On the Black Prairie the two ceilings take turns: light sets the pace on 52 days and water on 47, mostly the hot, bright ones. The air there averages a deficit
         of about 1.5 kilopascals, so each kilogram of dry matter costs about 140 kilograms of transpired water. In the High Plains, where most corn is irrigated, this
         unirrigated field tells the story: the air is so dry — 2.35 kilopascals on average — that water is the limit on 75 of 82 days even before the soil runs low,
-        and once it does, the crop is starved twice over. It yields 40 bushels. That is why the Plains grow wheat, which does its growing in the cooler, damper spring,
+        and once it does, the crop is starved twice over. It yields 27 bushels. That is why the Plains grow wheat, which does its growing in the cooler, damper spring,
         and why the corn there is pumped from wells.
       </P>
       <P>
