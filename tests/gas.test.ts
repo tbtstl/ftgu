@@ -5,7 +5,7 @@ import { checkSpec, combustionProducts, composition, gasProperties, METHANE, MMB
 import { piston, scfPerCubicFoot, zFactor } from '../src/engines/gas/eos';
 import { averagePressure, frictionFactor, inletPressure, outletPressure, pipeFlow, pipeInventory, pressureProfile, ROUGHNESS } from '../src/engines/gas/hydraulics';
 import { compress, lineCapacity, stationLine } from '../src/engines/gas/compression';
-import { BAYPORT_LNG_FEEDGAS_BCFD, GAS_NODES, PIPELINE, PIPELINES, REFERENCE_DAYS, stationLineOf, STORAGE_SPECS } from '../src/model/gas/world';
+import { BAYPORT_LNG, BAYPORT_LNG_FEEDGAS_BCFD, GAS_NODES, PIPELINE, PIPELINES, REFERENCE_DAYS, stationLineOf, STORAGE_SPECS } from '../src/model/gas/world';
 import { ethaneSolved, MIX_DEFAULTS, mixComposition, PRESETS } from '../src/lessons/gas/ch1/L1_1';
 import { CHARGE_SCF, HEAT, MAOP_PSIG, maopSolved, PISTON_DEFAULTS, V_MAX, V_MIN, zMinimum } from '../src/lessons/gas/ch1/L1_2';
 import { FLOW_DEFAULTS, flowAt, northlineSolved, TARGET_MMCFD, transitHours } from '../src/lessons/gas/ch1/L1_3';
@@ -22,22 +22,29 @@ import { breakevenPrice, BUDGET_WELLS, FIELD_DEFAULTS, fieldSolved, promise, sch
 import { breakevenSolved, CHALLENGE_GAS, dayValue, DEEP, ethaneLeftSolved, lowestPayingCent, PLANT_DEFAULTS, recoveryGain, runPlant, STANDARD, VALUE_DEFAULTS } from '../src/lessons/gas/ch2/L2_5';
 import { bindingArcs, corridorDesign, type FlowProblem, loopedFlow, solveFlow } from '../src/engines/gas/network';
 import { CITY_HOURLY_SHAPE, packLineCapacity, packLineOf, packWindow, runLinepack } from '../src/engines/gas/linepack';
-import { daysToFill, deliverableOver, injectCapacity, runStorage, storagePressure, withdrawCapacity } from '../src/engines/gas/storage';
-import { breakevenHub, cargoMargin, lngCargo, netback } from '../src/engines/gas/lng';
+import { dailyFromMonthly, daysToFill, deliverableOver, injectCapacity, optimizeStorage, runStorage, storagePressure, thresholdPolicy, withdrawCapacity } from '../src/engines/gas/storage';
+import { breakevenHub, cargoChoice, cargoMargin, lngCargo, netback, overseasPrices } from '../src/engines/gas/lng';
 import { BUILD_DEFAULTS, buildProblem, CAPITAL_CHARGE, chargePerMMBtu, CHEAPEST, CHEAPEST_COST, cheapestExpansion, design, expansionSolved as buildSolved, networkCost, onlyAdds, REGION_STATIONS } from '../src/lessons/gas/ch3/L3_1';
 import { dayPreset, hollowSolved, LOOP_DEFAULTS, LOOP_TARGET, loopedCapacity, loopSolved, solveDay, SOLVER_DEFAULTS } from '../src/lessons/gas/ch3/L3_2';
 import { ANSWER_RAMP, bestStart, ccgtMW, CHALLENGE_AVG, clean, dayMean, largestRamp, PACK_DEFAULTS, RAMP_STEP, rampSolved, simulate, START_MAX, START_MIN, START_STEP, startRange } from '../src/lessons/gas/ch3/L3_3';
 import { coldSpell, CROSSOVER_DAY, crossoverSolved, dayLabel, DESIGN_INV, DESIGN_NEED, firmRate, firmSolved, gasYear, INJ_DAYS, WD_DAYS, YEAR_DEFAULTS } from '../src/lessons/gas/ch3/L3_4';
 import { breakevenSolved as cargoBreakevenSolved, CHAIN_DEFAULTS, CHALLENGE, challengeAnswer, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
-import { clearRegion, forwardCurve, marketDay, normalPlan, planInventory, planMonth, SEASONAL_COSTS, seasonalPlan, simulateYear } from '../src/engines/gas/market';
+import { clearRegion, forwardCurve, marketDay, normalPlan, planFor, planInventory, planMonth, scenarioYear, SEASONAL_COSTS, seasonalPlan, simulateYear } from '../src/engines/gas/market';
 import { capacityAuction, firmCapacityValue, futuresMarks, interruptibleValue, marginCalls } from '../src/engines/gas/contracts';
-import { GAS_MONTHS, normalTemp, weatherYear } from '../src/model/gas/weather';
+import { GAS_MONTHS, normalTemp, weatherYear, withColdSnap } from '../src/model/gas/weather';
 import { demandByNode, OIL_SWITCH_VALUE } from '../src/model/gas/demand';
 import { BAL_JAN15, BAL_JUL15, BALANCE_DEFAULTS, BALANCE_YEARS, balanceDay, balanceWeeks, LNG_CUT_TEMP, lngCutSolved, storageValue, winterDraw } from '../src/lessons/gas/ch4/L4_1';
 import { BASIS_STEPS, breakawaySolved, breakawayTemp, HUB_DAY, HUB_DEFAULTS, hubDay, hubWinter, hubWinterStats, metroSetter, SHORTCUT_RENT } from '../src/lessons/gas/ch4/L4_2';
 import { ANCHOR_ANSWER, anchorSolved, CAPACITY_AUCTION_DEFAULTS, EXPANSION_ANNUAL_COST, EXPANSION_COST, EXPANSION_COST_PER_UNIT, EXPANSION_MMBTU_D, expansionOutcome, IT_TOTAL, MARKETER_BID, METRO_GAS_VALUE, QTY_STEP, SPIKE_METRO_PRICE, WINTERS } from '../src/lessons/gas/ch4/L4_3';
 import { enoughStorageScale, enoughStorageSolved, ROUND_TRIP, SEASON_DEFAULTS, seasonPlan, seasonSummary, STORAGE_BCF, WINTER_SEEDS, winterStats } from '../src/lessons/gas/ch4/L4_4';
 import { backwardationThreshold, curveAt, curveChallengeSolved, HEDGE_CONTRACTS, hedgeSolved, INITIAL_MARGIN, MAINTENANCE_MARGIN, SHORT_LEVEL, strips, swapBasis, utilityCost, type WinterId, winterRun } from '../src/lessons/gas/ch4/L4_5';
+import { GAS_PLANTS, impliedHeatRate, powerDay, sparkSpread } from '../src/engines/gas/power';
+import { BASIS_DEFAULTS, basisStatsFor, EXPRESS_ENOUGH, GROWTH, growthProduction, growthRun, latestYearSolved, NORMAL_GAP, northlineSolved as basisNorthlineSolved, TAKEAWAY } from '../src/lessons/gas/ch5/L5_1';
+import { curveDaily, hedgeYearSolved, LEASE_DEFAULTS, LEASE_GRID, LEASE_YEARS, leaseDays, leaseIntrinsic, leasePerfect, leasePerfectValues, leaseSpec, leaseSpotPaths, leaseTrades, leaseUnhedged, LEVEL_MAX, LEVEL_MIN, LEVEL_TARGET, levelChallengeSolved, SCENARIO_DEFAULTS, scheduleValue } from '../src/lessons/gas/ch5/L5_2';
+import { COLD_POWER_ANSWER, coldDayG2P, coldPowerSolved, G2P_BURN_SWEEP, G2P_COLD_DEFAULTS, G2P_DEFAULTS, G2P_SWITCHES, g2pHour, lakesideSpark, SPARK_TARGET, sparkTargetSolved } from '../src/lessons/gas/ch5/L5_3';
+import { asiaPremium, CANCEL_COST, cancelLevelSolved, CARGO_MMBTU, FIRST_CANCEL_LEVEL, firstSummerCut, homeBase, homeStats, summerCutSolved, TRADER_DEFAULTS, traderMonths, traderSummary } from '../src/lessons/gas/ch5/L5_4';
+import { CRISIS_DEFAULTS, crisisRun, crisisStats, EVERY_DEFENSE, giveWay, marchDefenseSolved, NORTHLINE_CHALLENGE, northlineNeeded, STORM_DAYS, STORM_LEAD, stormNorthlineSolved, warmestRationing, WORST_STORM } from '../src/lessons/gas/ch5/L5_5';
+import { COST_RECIPE } from '../src/engines/market/offerCost';
 
 describe('gas chapter 1: properties', () => {
   it('uses 60 °F and 14.73 psia as standard conditions', () => {
@@ -1743,5 +1750,416 @@ describe('gas 4.5', () => {
     const w = winterRun('mild');
     const marks = futuresMarks(140, w.path[0], w.path.slice(1));
     expect(marginCalls(140, marks.cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN).length).toBe(5);
+  });
+});
+
+describe('gas chapter 5: engines', () => {
+  it('reruns a year under new conditions with a matching plan, and caches it', () => {
+    const a = scenarioYear({ seed: 3, capacity: { 'ridgeback-calder': 1.6 } });
+    const b = scenarioYear({ seed: 3, capacity: { 'ridgeback-calder': 1.6 } });
+    expect(a).toBe(b);
+    const basis = a.reduce((s, d) => s + d.price.ridgeback - d.price.calder, 0) / a.length;
+    expect(basis).toBeLessThan(-0.5);
+    expect(planFor({ capacity: { 'ridgeback-calder': 1.6 } })).toBe(planFor({ capacity: { 'ridgeback-calder': 1.6 } }));
+  });
+
+  it('values storage on a known price path by dynamic programming', () => {
+    const spec = { ...STORAGE_SPECS.saltflat, workingBcf: 1, baseBcf: 0.4, maxWithdrawBcfd: 0.5, maxInjectBcfd: 0.5 };
+    // Buy at $2 for two days, sell at $4 for two days: 1 Bcf bought and sold, less $0.10 of costs.
+    const r = optimizeStorage([2, 2, 4, 4], spec, { grid: 20 });
+    expect(r.value).toBeCloseTo(1.037e6 * (4 - 2 - 0.1), 0);
+    expect(r.inventory[1]).toBeCloseTo(1, 9);
+    expect(r.inventory[3]).toBeCloseTo(0, 9);
+    // A flat path earns nothing.
+    expect(optimizeStorage([3, 3, 3, 3], spec, { grid: 20 }).value).toBeCloseTo(0, 6);
+    expect(dailyFromMonthly([1, 2], [2, 3])).toEqual([1, 1, 2, 2, 2]);
+    const t = thresholdPolicy([2, 2, 4, 4], [3, 3, 3, 3], spec, 0.5);
+    expect(t.value).toBeCloseTo(1.037e6 * (4 - 2 - 0.1), 0);
+  });
+
+  it('runs the electricity region at a gas price and finds spark spreads', () => {
+    expect(sparkSpread(40, 5, 6.4, 4)).toBeCloseTo(4, 9);
+    expect(impliedHeatRate(40, 5)).toBe(8);
+    const cheap = powerDay(2);
+    const dear = powerDay(6);
+    expect(cheap.gasBcf).toBeGreaterThan(dear.gasBcf);
+    expect(dear.avgPrice).toBeGreaterThan(cheap.avgPrice);
+    expect(GAS_PLANTS.map((g) => g.heatRate)).toEqual([6.4, 7.6, 14]);
+  });
+
+  it('sends a cargo to the better netback and cancels it only when the feed gas isn’t covered', () => {
+    const terms = BAYPORT_LNG;
+    const c = cargoChoice(3, { europe: 9, asia: 10 }, terms);
+    expect(c.best).toBe('asia');
+    expect(c.fob).toBeCloseTo(1.15 * 3 + 2.5, 9);
+    expect(c.cancel).toBe(false);
+    const weak = cargoChoice(3, { europe: 5, asia: 5.5 }, terms);
+    expect(weak.margin).toBeLessThan(0);
+    expect(weak.cancel).toBe(false);
+    expect(cargoChoice(3, { europe: 4, asia: 4 }, terms).cancel).toBe(true);
+    const p = overseasPrices(5, 24);
+    expect(p.europe).toHaveLength(24);
+    expect(Math.min(...p.europe)).toBeGreaterThan(3);
+  });
+
+  it('lays a cold snap over a weather year', () => {
+    const w = weatherYear(8);
+    const s = withColdSnap(w, 300, 5, 30);
+    expect(s.temp[302]).toBeLessThanOrEqual(w.normal[302] - 30);
+    expect(s.temp[299]).toBe(w.temp[299]);
+    expect(s.hdd[302]).toBeGreaterThan(w.hdd[302]);
+  });
+});
+
+describe('gas 5.1', () => {
+  const harsh = basisStatsFor(BASIS_DEFAULTS);
+
+  it('sits at the cost of the trip most of the harsh year and breaks away on 7 days', () => {
+    expect(BASIS_DEFAULTS).toEqual({ winter: 'harsh', northline: 1.8, express: 2.1 });
+    expect(harsh.metroAtTrip).toBe(358);
+    expect(harsh.metroOver1).toBe(7);
+    expect(harsh.metroMax).toBeCloseTo(10.43, 2);
+    expect(harsh.metroAvg).toBeCloseTo(0.27, 2);
+    expect(harsh.ridgebackAvg).toBeCloseTo(-0.12, 6);
+    // Northline's rent equals 4.3's firm value ($45.31 per MMBtu/d) times its 1.8 Bcf/d.
+    expect(harsh.northlineRent / 1e6).toBeCloseTo(84.6, 1);
+    expect(basisStatsFor({ ...BASIS_DEFAULTS, winter: 'typical' }).northlineRent / 1e6).toBeCloseTo(3.06, 2);
+    expect(basisStatsFor({ ...BASIS_DEFAULTS, winter: 'mild' }).northlineRent).toBeLessThan(1000);
+  });
+
+  it('crosses $1 on more days, not wider ones, when Northline shrinks', () => {
+    const nl15 = basisStatsFor({ ...BASIS_DEFAULTS, northline: 1.5 });
+    expect(nl15.metroOver1).toBe(19);
+    expect(nl15.metroAvg).toBeCloseTo(0.56, 2);
+  });
+
+  it('solves the Northline challenge at 1.95 Bcf/d only', () => {
+    expect(basisNorthlineSolved(BASIS_DEFAULTS)).toBe(false);
+    expect(basisNorthlineSolved({ ...BASIS_DEFAULTS, northline: 1.9 })).toBe(false);
+    expect(basisNorthlineSolved({ ...BASIS_DEFAULTS, northline: 1.95 })).toBe(true);
+    expect(basisNorthlineSolved({ ...BASIS_DEFAULTS, northline: 2 })).toBe(false);
+    expect(basisNorthlineSolved({ ...BASIS_DEFAULTS, northline: 1.95, winter: 'typical' })).toBe(false);
+    expect(basisStatsFor({ ...BASIS_DEFAULTS, northline: 1.9 }).metroOver1).toBe(4);
+  });
+
+  it('strands Ridgeback gas one step below 1.65 Bcf/d on Ridgeback Express', () => {
+    expect(EXPRESS_ENOUGH).toBe(1.65);
+    expect(basisStatsFor({ ...BASIS_DEFAULTS, express: 1.65 }).ridgebackAvg).toBeCloseTo(-0.12, 6);
+    const re16 = basisStatsFor({ ...BASIS_DEFAULTS, express: 1.6 });
+    expect(re16.ridgebackAvg).toBeCloseTo(-2.94, 2);
+    expect(re16.ridgebackUnder50).toBe(365);
+    expect(re16.calderAvg).toBeCloseTo(4.14, 2);
+    expect(harsh.calderAvg).toBeCloseTo(3.64, 2);
+    expect(re16.expressRent / 1e9).toBeCloseTo(1.71, 2);
+  });
+
+  it('breaks the basis in December of year 4 without an expansion', () => {
+    expect(TAKEAWAY).toBeCloseTo(3.05, 9);
+    expect(growthProduction(GROWTH.years - 1, 365)).toBeCloseTo(3.32, 9);
+    const never = growthRun('never', 0.5);
+    expect(never.monthly.findIndex((b) => b < NORMAL_GAP)).toBe(44);
+    expect(never.monthly.filter((b) => b < NORMAL_GAP).length).toBe(28);
+    expect(never.calder[5]).toBeCloseTo(5.21, 2);
+    expect(never.rent.reduce((a, b) => a + b, 0) / 1e9).toBeCloseTo(5.84, 2);
+    // A quarter-Bcf/d expansion in year 4 lasts until February of year 6.
+    expect(growthRun('4', 0.25).monthly.findIndex((b) => b < NORMAL_GAP)).toBe(70);
+  });
+
+  it('needs the 0.5 Bcf/d expansion by year 4', () => {
+    expect(latestYearSolved({ online: '4', size: '0.5' })).toBe(true);
+    expect(latestYearSolved({ online: '3', size: '0.5' })).toBe(false);
+    expect(latestYearSolved({ online: '5', size: '0.5' })).toBe(false);
+    expect(latestYearSolved({ online: 'never', size: '0.5' })).toBe(false);
+    expect(latestYearSolved({ online: '4', size: '1' })).toBe(false);
+    expect(growthRun('5', 0.5).monthly.filter((b) => b < NORMAL_GAP).length).toBe(4);
+  });
+});
+
+describe('gas 5.2', () => {
+  const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+
+  it('gives the two leases their fields’ speeds', () => {
+    expect(leaseDays('salt')).toEqual({ fill: 50, empty: 25 });
+    const r = leaseDays('reservoir');
+    expect(r.fill).toBeCloseTo(150, 9);
+    expect(r.empty).toBeCloseTo(120, 9);
+  });
+
+  it('values the leases exactly on their grids: a finer grid changes nothing', () => {
+    for (const id of ['salt', 'reservoir'] as const) {
+      const fine = optimizeStorage(curveDaily(100), leaseSpec(id), { grid: LEASE_GRID[id] * 2, costs: { injectCost: 0.05, withdrawCost: 0.05 } });
+      expect(fine.value).toBeCloseTo(leaseIntrinsic(id).value, 0);
+    }
+  });
+
+  it('quotes the intrinsic values and the trades behind them', () => {
+    const salt = leaseIntrinsic('salt');
+    const res = leaseIntrinsic('reservoir');
+    expect(salt.value / 1e6).toBeCloseTo(2.016, 2);
+    expect(res.value / 1e6).toBeCloseTo(1.693, 2);
+    const st = leaseTrades(salt.flow, curveDaily(100));
+    expect(st.bought).toBeCloseTo(1, 6);
+    expect(st.buyAvg).toBeCloseTo(2.8, 2);
+    expect(st.sellAvg).toBeCloseTo(4.84, 2);
+    const rt = leaseTrades(res.flow, curveDaily(100));
+    expect(rt.buyAvg).toBeCloseTo(2.81, 2);
+    expect(rt.sellAvg).toBeCloseTo(4.55, 2);
+    expect(LEASE_DEFAULTS).toEqual({ lease: 'salt', level: 100, fee: 0.05 });
+  });
+
+  it('makes storage space worth more when the region starts the year with more gas', () => {
+    expect(leaseIntrinsic('salt', LEVEL_MIN).value / 1e6).toBeCloseTo(1.794, 2);
+    expect(leaseIntrinsic('salt', LEVEL_MAX).value / 1e6).toBeCloseTo(2.411, 2);
+    for (let l = LEVEL_MIN + 10; l <= LEVEL_MAX; l += 10) expect(leaseIntrinsic('salt', l).value).toBeGreaterThan(leaseIntrinsic('salt', l - 10).value);
+  });
+
+  it('solves the first challenge at 120% of plan and nowhere else', () => {
+    expect(leaseIntrinsic('salt', 110).value).toBeLessThan(LEVEL_TARGET);
+    expect(leaseIntrinsic('salt', 120).value).toBeGreaterThanOrEqual(LEVEL_TARGET);
+    expect(levelChallengeSolved({ lease: 'salt', level: 120, fee: 0.05 })).toBe(true);
+    expect(levelChallengeSolved({ lease: 'salt', level: 130, fee: 0.05 })).toBe(false);
+    expect(levelChallengeSolved({ lease: 'salt', level: 110, fee: 0.05 })).toBe(false);
+    expect(levelChallengeSolved({ lease: 'reservoir', level: 120, fee: 0.05 })).toBe(false);
+    expect(levelChallengeSolved({ lease: 'salt', level: 120, fee: 0.1 })).toBe(false);
+  });
+
+  it('finds the extrinsic value with perfect foresight: large for salt, small for the reservoir', () => {
+    const saltPF = leasePerfectValues('salt');
+    const resPF = leasePerfectValues('reservoir');
+    expect(saltPF).toHaveLength(LEASE_YEARS);
+    expect(avg(saltPF) / 1e6).toBeCloseTo(2.751, 2);
+    expect(avg(resPF) / 1e6).toBeCloseTo(1.773, 2);
+    expect(Math.round((avg(saltPF) / leaseIntrinsic('salt').value - 1) * 100)).toBe(36);
+    expect(Math.round((avg(resPF) / leaseIntrinsic('reservoir').value - 1) * 100)).toBe(5);
+    expect(Math.min(...saltPF) / 1e6).toBeCloseTo(1.68, 2);
+    expect(Math.max(...saltPF) / 1e6).toBeCloseTo(4.49, 2);
+  });
+
+  it('never lets a fixed schedule beat perfect foresight', () => {
+    for (const id of ['salt', 'reservoir'] as const) {
+      const plan = leaseIntrinsic(id).flow;
+      leaseSpotPaths().forEach((p, i) => expect(leasePerfect(id, i + 1).value).toBeGreaterThanOrEqual(scheduleValue(plan, p) - 1));
+    }
+  });
+
+  it('shows years when even perfect foresight falls short of the hedge, and solves the second challenge in them', () => {
+    const intr = leaseIntrinsic('salt').value;
+    const below = leasePerfectValues('salt').map((v, i) => (v < intr ? i + 1 : 0)).filter(Boolean);
+    expect(below).toEqual([7, 14, 21, 22]);
+    expect(leasePerfectValues('reservoir').filter((v) => v < leaseIntrinsic('reservoir').value)).toHaveLength(11);
+    expect(hedgeYearSolved({ lease: 'salt', year: 7 })).toBe(true);
+    expect(hedgeYearSolved({ lease: 'salt', year: 1 })).toBe(false);
+    expect(hedgeYearSolved({ lease: 'reservoir', year: 7 })).toBe(false);
+    expect(SCENARIO_DEFAULTS).toEqual({ lease: 'salt', year: 1 });
+    const unhedged = leaseUnhedged('salt');
+    expect(Math.round(Math.min(...unhedged) / 1000)).toBe(681);
+    expect(Math.max(...unhedged) / 1e6).toBeCloseTo(3.54, 2);
+    expect(avg(unhedged) / intr).toBeCloseTo(1, 1);
+  });
+});
+
+describe('gas 5.3', () => {
+  const gasSet = (id: string | null) => !!id && COST_RECIPE[id]?.fuel === 'gas';
+
+  it('starts at the electricity course’s $5 gas, where Mill Creek sets $42 at 19:00 and gas sets 8 hours', () => {
+    expect(G2P_DEFAULTS).toEqual({ gas: 5, hour: 19 });
+    const day = powerDay(5);
+    expect(g2pHour(5, 19).price).toBeCloseTo(42, 9);
+    expect(g2pHour(5, 19).marginal).toBe('cc2');
+    expect(day.hours.filter((h) => gasSet(h.marginal)).length).toBe(8);
+    expect(day.hours.filter((h) => h.marginal === 'cc1').length).toBe(6);
+    expect(day.hours.filter((h) => h.marginal === 'cc2').map((h) => h.hour)).toEqual([18, 19]);
+    expect(powerDay(3).hours.filter((h) => gasSet(h.marginal)).length).toBe(21);
+    expect(day.energy.cc1).toBeCloseTo(1913, 6);
+  });
+
+  it('quotes Lakeside’s spark spread and the implied heat rates at $5', () => {
+    expect(lakesideSpark(5, 19)).toBeCloseTo(6, 9);
+    expect(impliedHeatRate(g2pHour(5, 19).price, 5)).toBeCloseTo(8.4, 9);
+    expect(impliedHeatRate(powerDay(5).avgPrice, 5)).toBeCloseTo(6.36, 2);
+  });
+
+  it('solves the spark-spread challenge only at $10.00', () => {
+    expect(SPARK_TARGET).toBe(12);
+    const answers: number[] = [];
+    for (let i = 0; i <= 210; i++) {
+      const g = Math.round((1.5 + i * 0.05) / 0.05) * 0.05;
+      if (sparkTargetSolved({ gas: g, hour: 19 })) answers.push(g);
+    }
+    expect(answers).toEqual([10]);
+    expect(sparkTargetSolved({ gas: 10, hour: 18 })).toBe(false);
+  });
+
+  it('derives the power plants’ demand for gas: 65,478 MMBtu a day when cheap, 12,690 above $3.75', () => {
+    expect(G2P_BURN_SWEEP[0].mmbtu).toBeCloseTo(65477.7, 1);
+    expect(G2P_BURN_SWEEP[G2P_BURN_SWEEP.length - 1].mmbtu).toBeCloseTo(12689.7, 1);
+    expect(G2P_BURN_SWEEP[0].mmbtu / G2P_BURN_SWEEP[G2P_BURN_SWEEP.length - 1].mmbtu).toBeCloseTo(5.2, 1);
+    expect(G2P_SWITCHES.map((s) => Math.round(s.gas * 100) / 100)).toEqual([2.11, 2.5, 3.16, 3.75]);
+    for (let i = 1; i < G2P_BURN_SWEEP.length; i++) expect(G2P_BURN_SWEEP[i].mmbtu).toBeLessThanOrEqual(G2P_BURN_SWEEP[i - 1].mmbtu + 1e-9);
+  });
+
+  it('carries Metro’s cold-day gas price into the power price, capped by oil at $15', () => {
+    expect(G2P_COLD_DEFAULTS).toEqual({ temp: 28 });
+    const normal = coldDayG2P(28);
+    expect(normal.metro).toBeCloseTo(4.09, 2);
+    expect(normal.p19).toBeCloseTo(35.1, 1);
+    expect(coldDayG2P(13).metro).toBeCloseTo(normal.metro, 9);
+    expect(coldDayG2P(12).metro).toBeCloseTo(4.5, 9);
+    const oil = coldDayG2P(8);
+    expect(oil.metro).toBeCloseTo(OIL_SWITCH_VALUE, 9);
+    expect(oil.p19).toBeCloseTo(118, 9);
+    expect(oil.p19 / normal.p19).toBeGreaterThan(3);
+    expect(Math.round(normal.lakeMargin)).toBe(3929);
+    expect(Math.round(oil.lakeMargin)).toBe(14400);
+    expect(coldDayG2P(9).p19).toBeCloseTo(64.8, 9);
+    expect(COLD_POWER_ANSWER).toBe(8);
+    expect(coldPowerSolved(8)).toBe(true);
+    expect(coldPowerSolved(7)).toBe(false);
+    expect(coldPowerSolved(9)).toBe(false);
+  });
+});
+
+describe('gas 5.4', () => {
+  const D = traderMonths(TRADER_DEFAULTS);
+  const S = traderSummary(D);
+
+  it('sends the two years’ cargoes to the better netback, some at a loss and none cancelled', () => {
+    expect(CARGO_MMBTU).toBe(3_825_000);
+    expect(CANCEL_COST).toBeCloseTo(9_562_500, 6);
+    expect([S.europe, S.asia, S.cancelled, S.atLoss]).toEqual([10, 14, 0, 8]);
+    expect(S.result / 1e6).toBeCloseTo(90.3, 1);
+    expect(S.resultCancelEveryLoss / 1e6).toBeCloseTo(28.9, 1);
+  });
+
+  it('quotes the first months and the sunk-fee example', () => {
+    expect(D[0].choice.best).toBe('europe');
+    expect(D[0].asia - D[0].europe).toBeCloseTo(0.63, 2);
+    expect(D[0].choice.netback.europe).toBeCloseTo(10.73, 2);
+    expect(D[1].choice.best).toBe('asia');
+    expect(D[1].asia).toBeCloseTo(15.08, 2);
+    const sep = D[8].choice;
+    expect(sep.best).toBe('europe');
+    expect(sep.netback.europe).toBeCloseTo(4.8, 2);
+    expect(sep.fob).toBeCloseTo(5.87, 2);
+    expect(sep.margin).toBeCloseTo(-1.07, 2);
+    expect(sep.marginFeeSunk).toBeCloseTo(1.43, 2);
+    expect(sep.cancel).toBe(false);
+    expect(asiaPremium(9)).toBeCloseTo(0.76, 2);
+  });
+
+  it('starts cancelling cargoes at 75% of the simulated prices, and the challenge is solved only there', () => {
+    expect(FIRST_CANCEL_LEVEL).toBe(75);
+    expect(traderSummary(traderMonths({ ...TRADER_DEFAULTS, level: 75 })).cancelled).toBe(2);
+    expect(traderSummary(traderMonths({ ...TRADER_DEFAULTS, level: 80 })).cancelled).toBe(0);
+    expect(traderSummary(traderMonths({ ...TRADER_DEFAULTS, level: 60 })).cancelled).toBe(14);
+    expect(cancelLevelSolved({ ...TRADER_DEFAULTS, level: 75 })).toBe(true);
+    expect(cancelLevelSolved({ ...TRADER_DEFAULTS, level: 70 })).toBe(false);
+    expect(cancelLevelSolved({ ...TRADER_DEFAULTS, level: 75, charter: 100_000 })).toBe(false);
+  });
+
+  it('caps Calder at the netback ÷ 1.15 and pins it there when overseas prices fall', () => {
+    const h9 = homeStats(9);
+    expect(h9.cap).toBeCloseTo(6.09, 2);
+    expect(h9.calderMax).toBeCloseTo(h9.cap, 6);
+    expect(h9.cutDays).toBe(2);
+    expect(h9.calderAvg.toFixed(2)).toBe(homeBase().calderAvg.toFixed(2));
+    const h6 = homeStats(6);
+    expect(h6.cap).toBeCloseTo(3.58, 2);
+    expect([h6.cutDays, h6.summerCut]).toEqual([47, 0]);
+    expect(h6.calderAvg).toBeCloseTo(3.3, 2);
+    const h4 = homeStats(4);
+    expect(h4.cap).toBeCloseTo(1.91, 2);
+    expect(h4.cutDays).toBe(105);
+    expect(h4.calderAvg).toBeCloseTo(1.82, 2);
+    expect(h4.calderMax).toBeCloseTo(1.97, 2);
+    const h3 = homeStats(3);
+    expect(h3.lngAvg).toBeLessThan(1e-9);
+    expect(h3.calderAvg).toBeCloseTo(1.36, 2);
+  });
+
+  it('first cuts the terminal in summer at $5.50 in Asia, and the challenge is solved only there', () => {
+    expect(firstSummerCut()).toBe(5.5);
+    expect(homeStats(5.5).summerCut).toBe(24);
+    expect(homeStats(5.5).cap).toBeCloseTo(3.16, 2);
+    expect(homeStats(6).summerCut).toBe(0);
+    expect(summerCutSolved(5.5)).toBe(true);
+    expect(summerCutSolved(5)).toBe(false);
+    expect(summerCutSolved(6)).toBe(false);
+  });
+});
+
+describe('gas 5.5', () => {
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const FREEZE = { ...CRISIS_DEFAULTS, freeze: WORST_STORM.freeze };
+  const OUTAGE = { ...FREEZE, northline: WORST_STORM.northline };
+  const WORST = { ...OUTAGE, temp: WORST_STORM.temp };
+
+  it('handles the cold alone with oil switching: Metro at $15, no one rationed, Calder creeping up', () => {
+    const s = crisisStats(CRISIS_DEFAULTS);
+    expect(s.peakMetro).toBeCloseTo(15, 6);
+    expect(s.rationedBcf).toBeLessThan(1e-6);
+    const run = crisisRun(CRISIS_DEFAULTS);
+    const day1 = run[STORM_LEAD];
+    const gw = giveWay(day1, CRISIS_DEFAULTS);
+    expect(r2(gw.oil)).toBe(0.26);
+    expect(r2(gw.industry)).toBe(0.08);
+    expect(day1.flow['calder-metro']).toBeCloseTo(1.8, 6);
+    expect(r2(-day1.storageFlow.hollowcreek)).toBe(0.82);
+    expect(r2(run[STORM_LEAD - 1].price.calder)).toBe(3.9);
+    expect(r2(run[STORM_LEAD + STORM_DAYS - 1].price.calder)).toBe(4.51);
+  });
+
+  it('lets LNG give way when the wells freeze, leaving Metro no worse off', () => {
+    const s = crisisStats(FREEZE);
+    expect(r2(s.peakCalder)).toBe(6.46);
+    expect(r2(s.lngGivenUp)).toBe(3.85);
+    expect(r2(giveWay(crisisRun(FREEZE)[STORM_LEAD], FREEZE).lng)).toBe(0.77);
+    expect(s.peakMetro).toBeCloseTo(15, 6);
+    expect(s.rationedBcf).toBeLessThan(1e-6);
+  });
+
+  it('climbs to $20 with Northline out and to rationing when colder still', () => {
+    const o = crisisStats(OUTAGE);
+    expect(o.peakMetro).toBeCloseTo(20, 6);
+    expect(r2(giveWay(crisisRun(OUTAGE)[STORM_LEAD], OUTAGE).oil)).toBe(0.63);
+    const w = crisisStats(WORST);
+    expect(w.peakMetro).toBeCloseTo(100, 6);
+    expect(r2(w.rationedBcf)).toBe(1.22);
+    expect(w.rationDays).toBe(5);
+    expect(r2(giveWay(crisisRun(WORST)[STORM_LEAD], WORST).homes)).toBe(0.23);
+  });
+
+  it('weighs the defenses against the worst storm', () => {
+    expect(r2(crisisStats({ ...WORST, freeze: 0 }).rationedBcf)).toBe(1.22);
+    expect(crisisStats({ ...WORST, northline: 1.8 }).rationedBcf).toBeLessThan(1e-6);
+    const hold = crisisStats({ ...WORST, lngHold: true });
+    expect(r2(hold.rationedBcf)).toBe(1.84);
+    expect(r2(hold.peakCalder)).toBe(99.85);
+    expect(r2(crisisStats({ ...WORST, when: 'dec' }).rationedBcf)).toBe(0.25);
+    expect(r2(crisisStats({ ...WORST, when: 'mar' }).rationedBcf)).toBe(2.31);
+    expect(r2(crisisStats({ ...WORST, when: 'mar', northline: 1.8 }).rationedBcf)).toBe(0.42);
+    const s = crisisStats(WORST);
+    expect(Math.round(s.hollowAtStorm)).toBe(67);
+    expect(r2(withdrawCapacity(STORAGE_SPECS.hollowcreek, s.hollowAtStorm))).toBe(0.82);
+  });
+
+  it('solves the Northline challenge at 1.70 Bcf/d and nowhere else', () => {
+    expect(northlineNeeded()).toBeCloseTo(1.7, 9);
+    const base = { ...NORTHLINE_CHALLENGE, day: 6 };
+    expect(stormNorthlineSolved({ ...base, northline: 1.7 })).toBe(true);
+    expect(stormNorthlineSolved({ ...base, northline: 1.65 })).toBe(false);
+    expect(stormNorthlineSolved({ ...base, northline: 1.75 })).toBe(false);
+    expect(stormNorthlineSolved({ ...base, northline: 1.7, freeze: 0 })).toBe(false);
+    expect(r2(crisisStats({ ...NORTHLINE_CHALLENGE, northline: 1.65 }).rationedBcf)).toBe(0.01);
+  });
+
+  it('solves the March challenge at −10 °F with every defense', () => {
+    expect(warmestRationing()).toBe(-10);
+    const base = { ...EVERY_DEFENSE, day: 6 };
+    expect(marchDefenseSolved({ ...base, temp: -10 })).toBe(true);
+    expect(marchDefenseSolved({ ...base, temp: -9 })).toBe(false);
+    expect(marchDefenseSolved({ ...base, temp: -11 })).toBe(false);
+    expect(crisisStats({ ...EVERY_DEFENSE, temp: -9 }).rationedBcf).toBeLessThan(1e-6);
+    expect(crisisStats({ ...EVERY_DEFENSE, temp: -10 }).rationedBcf).toBeGreaterThan(0.05);
   });
 });

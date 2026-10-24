@@ -86,6 +86,15 @@ export function weatherYear(seed: number, opts: { persistence?: number; shift?: 
   return { temp, normal, hdd: temp.map(hdd), cdd: temp.map(cdd) };
 }
 
+/**
+ * The same year with a cold snap: from `start` for `days` days, each day's temperature is at most
+ * `depthF` below normal (days already colder stay as they were).
+ */
+export function withColdSnap(w: WeatherYear, start: number, days: number, depthF: number): WeatherYear {
+  const temp = w.temp.map((t, d) => (d >= start && d < start + days ? Math.min(t, w.normal[d] - depthF) : t));
+  return { temp, normal: w.normal, hdd: temp.map(hdd), cdd: temp.map(cdd) };
+}
+
 /** The normal year: every day at its normal temperature. */
 export function normalYear(): WeatherYear {
   const temp = Array.from({ length: GAS_YEAR_DAYS }, (_, d) => normalTemp(d));

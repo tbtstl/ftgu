@@ -346,6 +346,65 @@ export function waterValueOf(plan: SeasonalPlan, field: FieldId, day: number, in
   return base * Math.exp(kappa * gap);
 }
 
+export interface ScenarioOptions {
+  /** Weather year seed, and an optional shift (°F) and severity. */
+  seed: number;
+  shift?: number;
+  severity?: number;
+  /** Production at each basin, Bcf/d, all year. */
+  production?: Partial<Record<GasNodeId, number>>;
+  /** Pipeline capacities, Bcf/d, all year. */
+  capacity?: Record<string, number>;
+  demand?: DemandOptions;
+  storageScale?: number;
+}
+
+const planCache = new Map<string, SeasonalPlan>();
+/** A seasonal plan for a set of conditions, cached: storage operators plan for the region as it is. */
+export function planFor(o: Pick<ScenarioOptions, 'production' | 'capacity' | 'demand' | 'storageScale'>): SeasonalPlan {
+  const key = JSON.stringify([o.production ?? null, o.capacity ?? null, o.demand ?? null, o.storageScale ?? 1]);
+  let p = planCache.get(key);
+  if (!p) {
+    p = seasonalPlan({ production: o.production, capacity: o.capacity, demand: o.demand, storageScale: o.storageScale });
+    if (planCache.size > 200) planCache.clear();
+    planCache.set(key, p);
+  }
+  return p;
+}
+
+const scenarioCache = new Map<string, YearDay[]>();
+/**
+ * A simulated year under changed conditions — more or less production, a pipeline derated or
+ * expanded, different LNG demand — with the storage plan redrawn for those conditions, as the
+ * operators would. Cached by its options.
+ */
+export function scenarioYear(o: ScenarioOptions): YearDay[] {
+  const key = JSON.stringify(o);
+  let y = scenarioCache.get(key);
+  if (!y) {
+    const plan = planFor(o);
+    const scale = o.storageScale ?? 1;
+    const specs = scale === 1 ? STORAGE_SPECS : scaledSpecs(scale);
+    y = simulateYear({
+      weather: weatherYear(o.seed, { shift: o.shift, severity: o.severity }),
+      plan,
+      production: o.production ? () => o.production! : undefined,
+      capacity: o.capacity ? () => o.capacity : undefined,
+      demand: o.demand,
+      specs,
+    });
+    if (scenarioCache.size > 300) scenarioCache.clear();
+    scenarioCache.set(key, y);
+  }
+  return y;
+}
+
+/** The storage fields with working gas and rates scaled. */
+export function scaledSpecs(scale: number): Record<FieldId, StorageSpec> {
+  const f = (s: StorageSpec): StorageSpec => ({ ...s, workingBcf: s.workingBcf * scale, baseBcf: s.baseBcf * scale, maxInjectBcfd: s.maxInjectBcfd * scale, maxWithdrawBcfd: s.maxWithdrawBcfd * scale });
+  return { saltflat: f(STORAGE_SPECS.saltflat), hollowcreek: f(STORAGE_SPECS.hollowcreek) };
+}
+
 export interface CurveOptions {
   /** Day of the gas year the curve is drawn on. */
   startDay: number;
