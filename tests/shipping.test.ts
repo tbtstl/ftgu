@@ -47,6 +47,16 @@ import { CHALLENGE_FREIGHT, CHALLENGE_OUTCOME, START_FREIGHT, VOYAGE, averageMat
 import { balancedSolved, truthOnDay, START_DAY, KFH, MISS, PAIR, K_FREIGHT, type BuilderState } from '../src/lessons/shipping/ch4/L4_3';
 import { BASE as BASE44, START as START44, runCycle, swingHalvedSolved, eventEffect } from '../src/lessons/shipping/ch4/L4_4';
 import { collapseSolved, ffaTrade, fastForward, hedgeStrip, missSpread, LAST_TRADE_DAY, COLLAPSE_MONTH } from '../src/lessons/shipping/ch4/L4_5';
+import { forecastPath, forecastError, DEFAULT_ASSUMPTIONS } from '../src/engines/shipping/forecast';
+import { periodCharter, spreadTrade, whatIf } from '../src/engines/shipping/strategies';
+import { compareChoices, marketMonths, repositionPlan, stayPlan } from '../src/engines/shipping/allocation';
+import { backtest, bunkerHedge } from '../src/engines/shipping/backtest';
+import { historyWith, eventAt } from '../src/model/shipping/history';
+import { DEFAULT_STATE as DEFAULT51, forecastSolved, forecastRun, sensitivity as sensitivity51, allDateErrors } from '../src/lessons/shipping/ch5/L5_1';
+import { newsTradeSolved, tradeResult, spreadsAt, DRIVER_DEFAULTS, NEWS_MONTH, type Legs } from '../src/lessons/shipping/ch5/L5_2';
+import { SOLUTIONS as SOLUTIONS53, START as START53, charterIn, fleetSurpriseSolved, charterOutSeries } from '../src/lessons/shipping/ch5/L5_3';
+import { harvestSolved, weakestPayingHarvest, longestWaitSolved, waitValue, comparePlans, DEFAULTS as DEFAULTS54, BEST_MONTH, WEAKEST, SOY_GRID } from '../src/lessons/shipping/ch5/L5_4';
+import { DEFAULT_LAB as LAB55, halvesSolved, labRun as labRun55, passingThresholds, worldTotals as worldTotals55 } from '../src/lessons/shipping/ch5/L5_5';
 import { floating, freshLoadSolved, surveyResult } from '../src/lessons/shipping/ch1/L1_1';
 import { CLEAN_14_KW, drag, foulingSolved, shipWavelength } from '../src/lessons/shipping/ch1/L1_2';
 import { twelveDaySolved, voyageAt, PASSAGE_NM } from '../src/lessons/shipping/ch1/L1_3';
@@ -919,5 +929,163 @@ describe('lesson 4.5', () => {
     expect(missSpread(tp, true)).toBeLessThan(missSpread(tp, false) / 10);
     expect(missSpread(hedgeStrip(54, 'P-TP', 1.5), true)).toBeGreaterThan(missSpread(tp, true) * 5);
     expect(missSpread(hedgeStrip(54, 'P-FH', 1), true)).toBeGreaterThan(missSpread(tp, true) * 3);
+  });
+});
+
+describe('strategy engines', () => {
+  const k = standardHistory().cls.kmax;
+
+  it('forecasts better when it counts the orderbook', () => {
+    const withBook = forecastPath('kmax', k, 48, 12, DEFAULT_ASSUMPTIONS);
+    const without = forecastPath('kmax', k, 48, 12, { ...DEFAULT_ASSUMPTIONS, deliveries: false });
+    expect(withBook).toHaveLength(12);
+    expect(forecastError(withBook)).toBeLessThan(forecastError(without));
+  });
+
+  it('re-solves a month with its drivers changed', () => {
+    const m = k[30];
+    expect(whatIf('kmax', m, {})).toBeCloseTo(m.tce, 6);
+    expect(whatIf('kmax', m, { fleet: 1.05 })).toBeLessThan(m.tce);
+    expect(whatIf('kmax', m, { congestion: { QIN: 3 } })).toBeGreaterThan(m.tce);
+    expect(eventAt(101)?.closed).toContain('panama');
+  });
+
+  it('charters in, trades spreads, repositions and backtests', () => {
+    const idx = dailyIndex('kmax');
+    const p = periodCharter('kmax', idx, 24, 12);
+    expect(p.monthly).toHaveLength(12);
+    expect(p.total).toBeCloseTo(p.monthly.reduce((a, b) => a + b, 0), 6);
+    expect(spreadTrade([1, 2, 3], [0, 0, 1], 0, 2, 10).pnl).toBe(10);
+    const s = { month: 1, bunker: 600, soy: 1, speed: 12, horizon: 100 };
+    const eqs = marketMonths(s);
+    expect(repositionPlan(s, eqs).tce).toBeGreaterThan(stayPlan(s, eqs).tce);
+    const c = compareChoices(s, eqs, 0, 0, 5, 1);
+    expect(c.mean.stay).toBeCloseTo(stayPlan(s, eqs).tce, 3);
+    const bt = backtest({ strategy: 'hedge', cls: 'kmax', days: 30, cost: 0, threshold: 0.1, from: 1, to: 143 }, idx, k);
+    expect(bt.trades.every((t) => t.side === 'sell')).toBe(true);
+    expect(bunkerHedge([500, 600, 550], 100, 0, 3)).toEqual([10_000, -5_000]);
+  });
+
+  it('keeps different histories apart', () => {
+    const plain = historyWith({ events: false });
+    expect(plain.cls.kmax[0].tce).toBeCloseTo(k[0].tce, 6);
+    expect(plain.cls.kmax.some((m, i) => Math.abs(m.tce - k[i].tce) > 1)).toBe(true);
+    const a = dailyIndex('kmax', undefined, plain.cls.kmax);
+    const b = dailyIndex('kmax');
+    expect(a.some((v, i) => Math.abs(v - b[i]) > 1)).toBe(true);
+  });
+});
+
+describe('lesson 5.1', () => {
+  it('reaches a 10% miss from Year 5 only with slower growth and the orderbook counted', () => {
+    expect(forecastSolved(DEFAULT51)).toBe(false);
+    expect(forecastRun(DEFAULT51).error).toBeCloseTo(0.181, 3);
+    const good = { ...DEFAULT51, growth: 0.005, fade: 0.92, scrap: 0, qin: 2 };
+    expect(forecastSolved(good)).toBe(true);
+    expect(forecastSolved({ ...DEFAULT51, growth: 0, fade: 0.98, scrap: 0 })).toBe(true);
+    expect(forecastSolved({ ...good, deliveries: false })).toBe(false);
+    expect(forecastSolved({ ...good, month: 49 })).toBe(false);
+    expect(forecastSolved({ ...good, cls: 'cape' })).toBe(false);
+    expect(forecastRun(DEFAULT51).errorNoDeliveries).toBeGreaterThan(0.5);
+  });
+
+  it('counts the orderbook and shows lopsided risks in a slump', () => {
+    const e = allDateErrors();
+    expect(e.kmax.m24).toBeLessThan(e.kmax.m24no);
+    expect(e.cape.m12).toBeLessThan(e.cape.m12no);
+    const slump = sensitivity51('cape', 60);
+    const cargo = slump.rows.find((r) => r.key === 'cargo')!;
+    expect(cargo.up.change).toBeGreaterThan(3 * Math.abs(cargo.down!.change));
+    expect(slump.idleMax).toBeGreaterThan(50);
+    expect(sensitivity51('cape', 60).rows.find((r) => r.key === 'panama')!.up.change).toBeCloseTo(0, 9);
+    expect(sensitivity51('kmax', 60).rows.find((r) => r.key === 'panama')!.up.change).toBeGreaterThan(0.1);
+  });
+});
+
+describe('lesson 5.2', () => {
+  it('pays $300,000 on the Brazil news only short, entered in April of Year 6, held three months or less, at 75–90 days a leg', () => {
+    const sols: string[] = [];
+    for (const legs of ['class', 'capeRoute', 'kmaxRoute'] as Legs[])
+      for (const side of ['long', 'short'] as const)
+        for (let entry = 0; entry <= 142; entry++)
+          for (let held = 1; held <= 12; held++)
+            for (let days = 15; days <= 90; days += 15) if (newsTradeSolved({ legs, side, entry, held, days })) sols.push(`${legs}/${side}/${entry}/${held}/${days}`);
+    expect(sols).toEqual(['class/short/63/1/75', 'class/short/63/1/90', 'class/short/63/2/75', 'class/short/63/2/90', 'class/short/63/3/75', 'class/short/63/3/90']);
+    expect(tradeResult({ legs: 'class', side: 'short', entry: NEWS_MONTH, held: 1, days: 90 }).pnl).toBeCloseTo(401_476, -1);
+    expect(tradeResult({ legs: 'class', side: 'short', entry: NEWS_MONTH, held: 5, days: 90 }).pnl).toBeLessThan(0);
+  });
+
+  it('moves each spread through the class that carries the cargo', () => {
+    const base = spreadsAt(DRIVER_DEFAULTS);
+    const ore = spreadsAt({ ...DRIVER_DEFAULTS, brazilOre: 0.5 });
+    expect(ore.kmax).toBeCloseTo(base.kmax, 6);
+    expect(ore.cls).toBeLessThan(0);
+    const panama = spreadsAt({ ...DRIVER_DEFAULTS, panama: true });
+    expect(panama.cape).toBeCloseTo(base.cape, 6);
+    expect(panama.kmaxRoute).toBeGreaterThan(base.kmaxRoute * 1.5);
+  });
+});
+
+describe('lesson 5.3', () => {
+  it('survives 5% more ships only from Year 2 April or Year 11 August–December', () => {
+    expect(SOLUTIONS53).toEqual([15, 127, 128, 129, 130, 131]);
+    expect(fleetSurpriseSolved({ ...START53, start: 15, fleet: 5 })).toBe(true);
+    expect(fleetSurpriseSolved({ ...START53, start: 16, fleet: 5 })).toBe(false);
+    expect(fleetSurpriseSolved({ ...START53, start: 15, fleet: 4 })).toBe(false);
+    expect(fleetSurpriseSolved({ ...START53, start: 15, fleet: 5, margin: 1 })).toBe(false);
+    expect(charterIn({ ...START53, start: 15, fleet: 5 }).total).toBeCloseTo(1_754_326, -1);
+  });
+
+  it('quotes the model: a boom-year charter-in turns to a loss with 5% more ships', () => {
+    expect(charterIn(START53).hire).toBeCloseTo(18_939, 0);
+    expect(charterIn(START53).total).toBeCloseTo(1_359_093, -1);
+    expect(charterIn({ ...START53, fleet: 5 }).total).toBeLessThan(0);
+    const out = charterOutSeries('actual');
+    expect(out.filter((x) => x > 0).length / out.length).toBeCloseTo(0.61, 2);
+    expect(charterOutSeries('fleet').filter((x) => x > 0).length).toBeGreaterThan(out.filter((x) => x > 0).length);
+  });
+});
+
+describe('lesson 5.4', () => {
+  it('repositions best in February, and only while the harvest is at least 0.75 of normal', () => {
+    expect(BEST_MONTH).toBe(1);
+    expect(WEAKEST).toBe(0.75);
+    expect(comparePlans({ ...DEFAULTS54, month: 1 }).diff).toBeCloseTo(3654, -1);
+    expect(comparePlans(DEFAULTS54).diff).toBeLessThan(0);
+    const sols = SOY_GRID.filter((soy) => harvestSolved({ ...DEFAULTS54, month: 1, soy }));
+    expect(sols).toEqual([0.75]);
+    expect(harvestSolved({ ...DEFAULTS54, month: 0, soy: 0.75 })).toBe(false);
+    expect(weakestPayingHarvest(600, 12, 0)).toBe(0.75);
+  });
+
+  it('values waiting only when the choice is close: four days in April at ±20%', () => {
+    const sols = Array.from({ length: 21 }, (_, w) => w).filter((wait) => longestWaitSolved({ month: 3, vol: 0.2, wait }));
+    expect(sols).toEqual([4]);
+    expect(waitValue(3, 0.2, 3).value).toBeGreaterThan(0);
+    expect(waitValue(1, 0.2, 0).value).toBeLessThan(50);
+    expect(longestWaitSolved({ month: 3, vol: 0.25, wait: 4 })).toBe(false);
+  });
+});
+
+describe('lesson 5.5', () => {
+  it('passes both halves only with a wide mean-reversion band', () => {
+    expect(passingThresholds(0.25)).toEqual([41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 55, 56]);
+    expect(halvesSolved({ ...LAB55, strategy: 'reversion', threshold: 45 })).toBe(true);
+    expect(halvesSolved({ ...LAB55, strategy: 'reversion', threshold: 10 })).toBe(false);
+    expect(halvesSolved({ ...LAB55, strategy: 'fundamental', threshold: 45 })).toBe(false);
+  });
+
+  it('matches the engine and quotes the model', () => {
+    const k = standardHistory().cls.kmax;
+    const eng = backtest({ strategy: 'fundamental', cls: 'kmax', days: 30, cost: 0.0025, threshold: 0.1, from: 1, to: 143 }, dailyIndex('kmax'), k);
+    const at = (strategy: 'seasonal' | 'momentum' | 'reversion' | 'fundamental' | 'hedge') => labRun55({ ...LAB55, strategy });
+    expect(at('fundamental').all.total).toBeCloseTo(eng.summary.total, 3);
+    expect(at('seasonal').all.total / 1e6).toBeCloseTo(-2.277, 2);
+    expect(at('fundamental').hitRate).toBeCloseTo(0.824, 2);
+    expect(worldTotals55({ ...LAB55, strategy: 'seasonal' }).every((x) => x < 0)).toBe(true);
+    const mom = worldTotals55({ ...LAB55, strategy: 'momentum' });
+    expect(mom.filter((x) => x > 0)).toHaveLength(1);
+    expect(mom[11]).toBeGreaterThan(0);
+    expect(worldTotals55({ ...LAB55, strategy: 'fundamental' }).every((x) => x > 0)).toBe(true);
   });
 });

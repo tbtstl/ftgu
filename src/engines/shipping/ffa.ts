@@ -39,12 +39,18 @@ export function indexWeights(id: ClassId): number[] {
   return TC_ROUTES[id].map(() => 1);
 }
 
-const INDEX_CACHE = new Map<string, number[]>();
+/** Cached per history (by identity) and weights. */
+const INDEX_CACHE = new WeakMap<CycleMonth[], Map<string, number[]>>();
 
 /** The class's daily timecharter index over the history, $/day. */
 export function dailyIndex(id: ClassId, weights = indexWeights(id), months: CycleMonth[] = standardHistory().cls[id]): number[] {
-  const key = `${id}|${weights.join(',')}|${months.length}|${months[0]?.tce}`;
-  const hit = INDEX_CACHE.get(key);
+  const key = `${id}|${weights.join(',')}`;
+  let byHistory = INDEX_CACHE.get(months);
+  if (!byHistory) {
+    byHistory = new Map();
+    INDEX_CACHE.set(months, byHistory);
+  }
+  const hit = byHistory.get(key);
   if (hit) return hit;
   const p = dailyPath(id, 101, months);
   const routes = TC_ROUTES[id];
@@ -56,7 +62,7 @@ export function dailyIndex(id: ClassId, weights = indexWeights(id), months: Cycl
       weights,
     );
   });
-  INDEX_CACHE.set(key, out);
+  byHistory.set(key, out);
   return out;
 }
 

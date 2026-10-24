@@ -57,6 +57,57 @@ export function standardHistory(seed = HISTORY_SEED): History {
   return h;
 }
 
+export interface HistoryOverrides {
+  seed?: number;
+  /** Apply the trades' seasons (default true). */
+  seasonal?: boolean;
+  /** Include the three disruptions (default true). */
+  events?: boolean;
+  lag?: number;
+  orderResponse?: number;
+  shock?: number;
+}
+
+const CUSTOM = new Map<string, History>();
+
+/**
+ * Another history the model could have produced: a different draw of shocks, or the same draw with
+ * some of the world changed. Memoized; about 20–30 ms to build.
+ */
+export function historyWith(o: HistoryOverrides): History {
+  const key = JSON.stringify(o);
+  const hit = CUSTOM.get(key);
+  if (hit) return hit;
+  const seed = o.seed ?? HISTORY_SEED;
+  const bunker = bunkerPath(HISTORY_MONTHS, seed);
+  const events = o.events === false ? [] : HISTORY_EVENTS;
+  const base = {
+    ...DEFAULT_CYCLE,
+    months: HISTORY_MONTHS,
+    seed,
+    bunker,
+    events,
+    seasonal: o.seasonal ?? true,
+    lag: o.lag ?? DEFAULT_CYCLE.lag,
+    orderResponse: o.orderResponse ?? DEFAULT_CYCLE.orderResponse,
+    shock: o.shock ?? DEFAULT_CYCLE.shock,
+  };
+  const h: History = {
+    months: HISTORY_MONTHS,
+    bunker,
+    events,
+    cls: { kmax: simulateCycle('kmax', { ...base, growth: 0.025 }), cape: simulateCycle('cape', { ...base, growth: 0.02 }) },
+  };
+  if (CUSTOM.size > 40) CUSTOM.clear();
+  CUSTOM.set(key, h);
+  return h;
+}
+
+/** The disruption under way in a month of the history, if any. */
+export function eventAt(t: number, events: CycleEvent[] = HISTORY_EVENTS): CycleEvent | undefined {
+  return events.find((e) => t >= e.from && t < e.to);
+}
+
 /** "Year 3, March" for a month index. */
 export function monthLabel(t: number): string {
   const names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];

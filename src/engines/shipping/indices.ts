@@ -69,15 +69,21 @@ export interface DailyPath {
   noise: number[];
 }
 
-const PATH_CACHE = new Map<string, DailyPath>();
+/** Cached per history (by identity) and seed. */
+const PATH_CACHE = new WeakMap<CycleMonth[], Map<string, DailyPath>>();
 
 /**
  * Daily earnings: the monthly path interpolated between month midpoints, times persistent
  * day-to-day noise. Deterministic for a class and seed.
  */
 export function dailyPath(id: ClassId, seed = 101, months: CycleMonth[] = standardHistory().cls[id]): DailyPath {
-  const key = `${id}|${seed}|${months.length}|${months[0]?.tce}`;
-  const hit = PATH_CACHE.get(key);
+  const key = `${id}|${seed}`;
+  let byHistory = PATH_CACHE.get(months);
+  if (!byHistory) {
+    byHistory = new Map();
+    PATH_CACHE.set(months, byHistory);
+  }
+  const hit = byHistory.get(key);
   if (hit) return hit;
   const r = rng(seed + (id === 'cape' ? 7 : 0));
   const n = months.length * DAYS_PER_MONTH;
@@ -100,7 +106,7 @@ export function dailyPath(id: ClassId, seed = 101, months: CycleMonth[] = standa
     tce.push(base * Math.exp(x));
   }
   const p = { month, tce, noise };
-  PATH_CACHE.set(key, p);
+  byHistory.set(key, p);
   return p;
 }
 
