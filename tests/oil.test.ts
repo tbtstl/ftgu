@@ -64,6 +64,17 @@ import { DEFAULT_PRICES as FCC_DEFAULTS, bestTempSolved, bestTemperature, hydrog
 import { CHEAPEST_15, DHT_M3_PER_HOUR, feedOf, getSlates, hydrogenPlantSolved, productPpm, throughputSolved, treatingCost } from '../src/lessons/oil/ch3/L3_3';
 import { butaneAt, butaneFiveSolved, handBlendSolved, optimumCost } from '../src/lessons/oil/ch3/L3_4';
 import { bestExpansionSolved, coldwaterLimitSolved, expansionGain } from '../src/lessons/oil/ch3/L3_5';
+import { costPerBarrel, frictionFactor, hydraulics, maxFlow } from '../src/engines/oil/pipeline';
+import { cheapestSpeed, voyage } from '../src/engines/oil/tanker';
+import { expectedBuffer, planStorage, priceStrip, simulateBuffer } from '../src/engines/oil/storage';
+import { NETWORK_DEFAULTS, nodePrices, solveNetwork } from '../src/engines/oil/network';
+import { arbitrage, closingFreight, crudeNetback, qualityDifferentials } from '../src/engines/oil/arbitrage';
+import { COLDWATER_LINE, KESSLER_CALDER, TYPICAL_CRUDE } from '../src/model/oil/logistics';
+import { FLUIDS, northfieldMaxSolved, operatingProfile, tariffSolved } from '../src/lessons/oil/ch4/L4_1';
+import { VOYAGE_DEFAULTS, cheapestSpeedSolved, lighteringSolved, scaleCost } from '../src/lessons/oil/ch4/L4_2';
+import { TERMINAL_DEFAULTS, bestBuffer, bufferCurve, bufferSolved, highestRateSolved, terminalPlan } from '../src/lessons/oil/ch4/L4_3';
+import { pipelineSolved, spreadAt, trappedSolved } from '../src/lessons/oil/ch4/L4_4';
+import { arbFor, arbSolved, differentialsAt, highestOpen, qualitySolved } from '../src/lessons/oil/ch4/L4_5';
 
 const finite = (x: number) => Number.isFinite(x);
 
@@ -681,5 +692,150 @@ describe('chapter 3 lessons', () => {
     expect(shadowPrices({ config: cfg(37) }).coker).toBeGreaterThan(1000);
     expect(shadowPrices({ config: cfg(38) }).coker).toBeCloseTo(0, 0);
     expect(crudeBreakeven('coldwater', { config: cfg(0) })).toBeCloseTo(62.54, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chapter 4 engines.
+
+describe('logistics', () => {
+  it('computes pipeline hydraulics', () => {
+    expect(frictionFactor(1000, 0)).toBeCloseTo(0.064, 6);
+    const rb = { name: 'Ridgeback', sg: crude('ridgeback').sg, viscosity: viscosity(crude('ridgeback'), 15) };
+    const h = hydraulics(KESSLER_CALDER, rb, 300000);
+    expect(h.regime).toBe('turbulent');
+    expect(h.elevationPsi).toBeLessThan(0);
+    // Friction grows faster than flow; the maximum with the line's stations is about 520 kb/d of light crude.
+    expect(hydraulics(KESSLER_CALDER, rb, 400000).psiPerMile / h.psiPerMile).toBeGreaterThan(1.6);
+    expect(Math.round(maxFlow(KESSLER_CALDER, rb) / 1000)).toBe(520);
+    expect(Math.round(maxFlow(KESSLER_CALDER, TYPICAL_CRUDE) / 1000)).toBe(483);
+    expect(Math.round(maxFlow(COLDWATER_LINE, { name: 'blend', sg: 0.9068, viscosity: 328.4 }) / 1000)).toBe(360);
+    const c = costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 400000);
+    expect(c.total).toBeCloseTo(1.77, 2);
+    expect(costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 200000).total).toBeGreaterThan(c.total);
+  });
+  it('prices tanker voyages', () => {
+    const v = voyage({ vessel: 'vlcc', route: 'eastbay', speed: 13 });
+    expect(v.perBbl).toBeCloseTo(3.458, 3);
+    expect(v.lightering).toBe(600000);
+    expect(voyage({ vessel: 'aframax', route: 'northport', speed: 13 }).perBbl).toBeCloseTo(2.573, 3);
+    const s = cheapestSpeed('vlcc');
+    expect(s).toBeCloseTo(11.65, 2);
+    for (const d of [-0.5, 0.5]) expect(voyage({ vessel: 'vlcc', route: 'eastbay', speed: s + d }).perBbl).toBeGreaterThan(voyage({ vessel: 'vlcc', route: 'eastbay', speed: s }).perBbl);
+    expect(cheapestSpeed('vlcc', 45000, 800)).toBeLessThan(cheapestSpeed('vlcc', 45000, 400));
+  });
+  it('stores against a contango', () => {
+    expect(planStorage(priceStrip(75, 0.6)).profit).toBeCloseTo(0, 3);
+    const p = planStorage(priceStrip(75, 1.0));
+    expect(p.profit / 1e6).toBeCloseTo(33.6, 1);
+    expect(Math.max(...p.inventory)).toBeCloseTo(20e6, -3);
+    expect(p.inventory[11]).toBeCloseTo(0, 3);
+  });
+  it('simulates buffer stocks', () => {
+    const base = { runs: 150000, cargo: 1050000, interval: 7, maxDelay: 4, storms: 3 };
+    expect(simulateBuffer({ ...base, buffer: 0 }).shortfall).toBeGreaterThan(0);
+    const e0 = expectedBuffer({ ...base, buffer: 600000 });
+    const e1 = expectedBuffer({ ...base, buffer: 750000 });
+    expect(e0.shortfall).toBeCloseTo(172500, -2);
+    expect(e1.shortfall).toBeLessThan(e0.shortfall);
+    expect(expectedBuffer({ ...base, buffer: 1200000 }).shortfall).toBe(0);
+  });
+  it('prices the crude network', () => {
+    const s = solveNetwork();
+    expect(s.status).toBe('optimal');
+    const p = nodePrices();
+    expect(p.kessler).toBeCloseTo(76.2, 6);
+    expect(p.calder).toBeCloseTo(78.2, 6);
+    expect(p.basin).toBeCloseTo(75.2, 6);
+    expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 300 }).kessler).toBeCloseTo(79.5, 6);
+    expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 550 }).kessler).toBeCloseTo(68.2, 6);
+    expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 700 }).kessler).toBeCloseTo(54, 6);
+    expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 900 }).kessler).toBeCloseTo(51, 6);
+  });
+  it('finds arbitrage margins and quality values', () => {
+    const a = { originPrice: 74.5, pipelineTariff: 2, terminalFees: 0.4, freight: 2.573, insurance: 0.0005, losses: 0.002, destinationPrice: 79, transitDays: 16, financingRate: 0.06 };
+    expect(arbitrage(a).margin).toBeCloseTo(-0.872, 2);
+    expect(arbitrage({ ...a, freight: closingFreight(a) }).margin).toBeCloseTo(0, 9);
+    expect(crudeNetback('ridgeback')).toBeCloseTo(88.32, 2);
+    expect(crudeNetback('coldwater')).toBeCloseTo(75.3, 1);
+    const q = qualityDifferentials();
+    expect(q.coldwater).toBeCloseTo(-13.03, 1);
+    expect(qualityDifferentials({ productPrice: { hsfo: 40 } }).coldwater).toBeLessThan(q.coldwater);
+  });
+});
+
+describe('chapter 4 lessons', () => {
+  it('4.1: pipelines and pumps', () => {
+    expect(northfieldMaxSolved('mix', 400, 3)).toBe(false);
+    expect(northfieldMaxSolved('northfield', 380, 3)).toBe(true);
+    expect(northfieldMaxSolved('northfield', 375, 3)).toBe(false);
+    expect(northfieldMaxSolved('northfield', 385, 3)).toBe(false);
+    expect(northfieldMaxSolved('northfield', 380, 4)).toBe(false);
+    expect(tariffSolved(300, 1.8)).toBe(false);
+    expect(tariffSolved(350, 1.8)).toBe(true);
+    expect(tariffSolved(355, 1.8)).toBe(false);
+    expect(Math.round(maxFlow(KESSLER_CALDER, FLUIDS.northfield) / 1000)).toBe(383);
+    expect(Math.round(maxFlow(KESSLER_CALDER, TYPICAL_CRUDE, 4) / 1000)).toBe(559);
+    expect(hydraulics(KESSLER_CALDER, TYPICAL_CRUDE, 400000).psiPerMile).toBeCloseTo(6.37, 2);
+    expect(hydraulics(KESSLER_CALDER, TYPICAL_CRUDE, 400000).electricMW).toBeCloseTo(19.4, 1);
+    expect(hydraulics(KESSLER_CALDER, FLUIDS.coldwater, 200000).regime).toBe('laminar');
+    expect(hydraulics(KESSLER_CALDER, FLUIDS.coldwater, 250000).regime).toBe('turbulent');
+    expect(costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 200000).total).toBeCloseTo(3.39, 2);
+    expect(operatingProfile(FLUIDS.mix, 400000, 3).feasible).toBe(true);
+    expect(operatingProfile(FLUIDS.northfield, 385000, 3).feasible).toBe(false);
+  });
+  it('4.2: tankers', () => {
+    const v = { ...VOYAGE_DEFAULTS, vessel: 'vlcc' as const, route: 'eastbay' as const, hire: 45000 };
+    expect(cheapestSpeedSolved(VOYAGE_DEFAULTS)).toBe(false);
+    expect(cheapestSpeedSolved({ ...v, speed: 11.6 })).toBe(true);
+    expect(cheapestSpeedSolved({ ...v, speed: 11.7 })).toBe(true);
+    expect(cheapestSpeedSolved({ ...v, speed: 11.5 })).toBe(false);
+    expect(lighteringSolved(0.6, false)).toBe(false);
+    expect(lighteringSolved(1.7, false)).toBe(true);
+    expect(lighteringSolved(1.65, false)).toBe(false);
+    expect(lighteringSolved(1.7, true)).toBe(false);
+    expect(scaleCost('vlcc', 'northport', 0.6, false)).toBeCloseTo(1.732, 3);
+    expect(scaleCost('vlcc', 'northport', 0.6, true)).toBeCloseTo(1.432, 3);
+    expect(scaleCost('suezmax', 'northport', 0.6, false)).toBeCloseTo(2.278, 3);
+    expect(cheapestSpeed('vlcc', 45000, 400)).toBeCloseTo(13.34, 2);
+    expect(cheapestSpeed('vlcc', 100000, 600)).toBeCloseTo(15.21, 2);
+  });
+  it('4.3: storage and buffer stocks', () => {
+    expect(highestRateSolved(TERMINAL_DEFAULTS)).toBe(false);
+    expect(highestRateSolved({ slope: 1, seasonal: 0, fee: 0.4, rate: 8.5 })).toBe(true);
+    expect(highestRateSolved({ slope: 1, seasonal: 0, fee: 0.4, rate: 8 })).toBe(false);
+    expect(terminalPlan({ slope: 1, seasonal: 0, fee: 0.4, rate: 8.5 }).profit / 1e6).toBeCloseTo(2.27, 2);
+    expect(terminalPlan({ slope: 0.85, seasonal: 0, fee: 0.4, rate: 6 }).profit / 1e6).toBeCloseTo(6.1, 1);
+    expect(terminalPlan({ slope: 0, seasonal: 3, fee: 0.4, rate: 6 }).profit / 1e6).toBeCloseTo(27.15, 1);
+    expect(bestBuffer().buffer).toBe(600000);
+    expect(bestBuffer().total / 1e6).toBeCloseTo(8.51, 2);
+    expect(bufferCurve().find((p) => p.shortfall === 0)!.buffer).toBe(1200000);
+    expect(bufferSolved(600000)).toBe(true);
+    expect(bufferSolved(450000)).toBe(false);
+  });
+  it('4.4: global oil flows', () => {
+    expect(pipelineSolved({ basin: 400, pipeline: 480, rail: 150 })).toBe(false);
+    expect(pipelineSolved({ basin: 700, pipeline: 700, rail: 150 })).toBe(false);
+    expect(pipelineSolved({ basin: 700, pipeline: 710, rail: 150 })).toBe(true);
+    expect(pipelineSolved({ basin: 700, pipeline: 720, rail: 150 })).toBe(false);
+    expect(spreadAt(700, 710)).toBeCloseTo(3.7, 6);
+    expect(spreadAt(700, 600)).toBeCloseTo(11.7, 6);
+    expect(trappedSolved(400)).toBe(false);
+    expect(trappedSolved(630)).toBe(true);
+    expect(trappedSolved(640)).toBe(false);
+    expect(spreadAt(300)).toBeCloseTo(-0.5, 6);
+    expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 880 }).kessler).toBeCloseTo(51, 6);
+  });
+  it('4.5: arbitrage and quality differentials', () => {
+    expect(arbSolved('aframax', 74.5, 79)).toBe(false);
+    expect(arbSolved('vlcc', 74.4, 79)).toBe(true);
+    expect(arbSolved('vlcc', 74.3, 79)).toBe(false);
+    expect(arbFor('aframax', 74.5, 79).margin).toBeCloseTo(-0.872, 2);
+    expect(highestOpen('aframax')).toBe(73.6);
+    expect(highestOpen('vlcc')).toBe(74.4);
+    expect(qualitySolved(62, 106)).toBe(false);
+    expect(qualitySolved(58, 106)).toBe(true);
+    expect(differentialsAt(58, 106).coldwater).toBeCloseTo(-14.48, 2);
+    expect(differentialsAt(80, 106).northfield).toBeCloseTo(-0.61, 2);
   });
 });
