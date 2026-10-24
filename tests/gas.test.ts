@@ -31,8 +31,8 @@ import { coldSpell, CROSSOVER_DAY, crossoverSolved, dayLabel, DESIGN_INV, DESIGN
 import { breakevenSolved as cargoBreakevenSolved, CHAIN_DEFAULTS, CHALLENGE, challengeAnswer, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
 import { clearRegion, forwardCurve, marketDay, normalPlan, planFor, planInventory, planMonth, scenarioYear, SEASONAL_COSTS, seasonalPlan, simulateYear } from '../src/engines/gas/market';
 import { capacityAuction, firmCapacityValue, futuresMarks, interruptibleValue, marginCalls } from '../src/engines/gas/contracts';
-import { GAS_MONTHS, normalTemp, weatherYear, withColdSnap } from '../src/model/gas/weather';
-import { demandByNode, OIL_SWITCH_VALUE } from '../src/model/gas/demand';
+import { GAS_MONTH_START, GAS_MONTHS, normalTemp, weatherYear, WINTER_START, withColdSnap } from '../src/model/gas/weather';
+import { demandBlocks, demandByNode, OIL_SWITCH_VALUE } from '../src/model/gas/demand';
 import { BAL_JAN15, BAL_JUL15, BALANCE_DEFAULTS, BALANCE_YEARS, balanceDay, balanceWeeks, LNG_CUT_TEMP, lngCutSolved, storageValue, winterDraw } from '../src/lessons/gas/ch4/L4_1';
 import { BASIS_STEPS, breakawaySolved, breakawayTemp, HUB_DAY, HUB_DEFAULTS, hubDay, hubWinter, hubWinterStats, metroSetter, SHORTCUT_RENT } from '../src/lessons/gas/ch4/L4_2';
 import { ANCHOR_ANSWER, anchorSolved, CAPACITY_AUCTION_DEFAULTS, EXPANSION_ANNUAL_COST, EXPANSION_COST, EXPANSION_COST_PER_UNIT, EXPANSION_MMBTU_D, expansionOutcome, IT_TOTAL, MARKETER_BID, METRO_GAS_VALUE, QTY_STEP, SPIKE_METRO_PRICE, WINTERS } from '../src/lessons/gas/ch4/L4_3';
@@ -45,6 +45,15 @@ import { COLD_POWER_ANSWER, coldDayG2P, coldPowerSolved, G2P_BURN_SWEEP, G2P_COL
 import { asiaPremium, CANCEL_COST, cancelLevelSolved, CARGO_MMBTU, FIRST_CANCEL_LEVEL, firstSummerCut, homeBase, homeStats, summerCutSolved, TRADER_DEFAULTS, traderMonths, traderSummary } from '../src/lessons/gas/ch5/L5_4';
 import { CRISIS_DEFAULTS, crisisRun, crisisStats, EVERY_DEFENSE, giveWay, marchDefenseSolved, NORTHLINE_CHALLENGE, northlineNeeded, STORM_DAYS, STORM_LEAD, stormNorthlineSolved, warmestRationing, WORST_STORM } from '../src/lessons/gas/ch5/L5_5';
 import { COST_RECIPE } from '../src/engines/market/offerCost';
+import { conditionsOf, END_OF_WINTER, gasHistory, HISTORY_YEARS, planFrom } from '../src/model/gas/history';
+import { contractPath, curveAt as futuresCurveAt, historyMonths, monthAverage, monthLabel, settlement } from '../src/engines/gas/futures';
+import { forecastFundamentals, forecastSkill, forecastTemps, remainingHddError, SKILL_DECAY_DAYS } from '../src/engines/gas/forecast';
+import { daysIn, defaultCosts, hypothesizedConditions, lakesideMargin, leasedStorage, LOT_MMBTU, marginRates, metroBasisTrades, monthlyStorageOptimum, nextOf, powerAsset, ridgebackTakeaway, ridgebackTrades, runBook, spreadSignals, storageAsset, tradeable, transportAsset, weatherSignals, weatherTrades } from '../src/engines/gas/strategies';
+import { COLD_SPELL, coldSpellAnswer, coldSpellMiss, ERROR_YEARS, FORECAST_MEMBERS, FORECASTER_DEFAULTS, forecasterPricePerHdd, forecasterRestError, forecasterRun, forecasterSolved, forecasterStoragePerHdd, forecasterSurprises, forecasterTwoWeekError, forecasterTwoWeeks, PRICE_TOLERANCE, WEEKS } from '../src/lessons/gas/ch6/L6_1';
+import { bestRuleThresholds, ruleBookFor, ruleYears, SPREAD_RULE_DEFAULTS, SPREAD_TRADER_DEFAULTS, spreadTraderSolved, traderBook, traderCold, traderFollowsWeather, traderSignal, traderSignals, traderWinters } from '../src/lessons/gas/ch6/L6_2';
+import { BASIS_DESK_DEFAULTS, basisDeskNumbers, basisDeskRun, basisDeskSignals, basisDeskSolved, GROWTH_MAX, leastGlutGrowth, METRO_DESK_DEFAULTS, metroDeskRun, metroForecastSolved, viewsYearFiveGlut } from '../src/lessons/gas/ch6/L6_3';
+import { ARB_LEASE_DEFAULTS, ARBITRAGE_DEFAULTS, arbitrageData, arbitrageNumbers, arbitrageSolved, arbitrageTotal, arbitrageYears, assetValues, FEE_SCALE, feeKeyOf, LEASE_BCF, leaseFloorFee, leasePath, leaseYearSolved, worstUnhedgedYear } from '../src/lessons/gas/ch6/L6_4';
+import { LAB_CHALLENGE, labBook, labCosts, labLargestSize, labOutcome, labSpreadHindsight, labWalk, labWinterHdd, STRATEGY_LAB_DEFAULTS, strategyLabNumbers, strategyLabSolved } from '../src/lessons/gas/ch6/L6_5';
 
 describe('gas chapter 1: properties', () => {
   it('uses 60 °F and 14.73 psia as standard conditions', () => {
@@ -2161,5 +2170,544 @@ describe('gas 5.5', () => {
     expect(marchDefenseSolved({ ...base, temp: -11 })).toBe(false);
     expect(crisisStats({ ...EVERY_DEFENSE, temp: -9 }).rationedBcf).toBeLessThan(1e-6);
     expect(crisisStats({ ...EVERY_DEFENSE, temp: -10 }).rationedBcf).toBeGreaterThan(0.05);
+  });
+});
+
+describe('gas chapter 6: history, futures and forecasts', () => {
+  it('runs eight years with storage carried from one March to the next April', () => {
+    const h = gasHistory();
+    expect(h).toHaveLength(HISTORY_YEARS);
+    for (let y = 1; y < h.length; y++) expect(h[y].start).toEqual(h[y - 1].days[364].storage);
+    expect(h.every((y) => y.days.length === 365 && y.plans.length === 12)).toBe(true);
+    // The history never rations protected demand.
+    expect(h.every((y) => y.days.every((d) => d.rationed < 1e-6))).toBe(true);
+  });
+
+  it('grows Ridgeback until it outruns its pipes in year 5, and the expansion clears it', () => {
+    expect(ridgebackTakeaway(conditionsOf(3))).toBeGreaterThan(conditionsOf(3).ridgeback);
+    expect(ridgebackTakeaway(conditionsOf(4))).toBeLessThan(conditionsOf(4).ridgeback);
+    expect(ridgebackTakeaway(conditionsOf(5))).toBeGreaterThan(conditionsOf(5).ridgeback);
+    const basis = (y: number) => gasHistory()[y].days.reduce((s, d) => s + d.price.ridgeback - d.price.calder, 0) / 365;
+    expect(basis(3)).toBeCloseTo(-0.12, 2);
+    expect(basis(4)).toBeLessThan(-1.5);
+    expect(basis(5)).toBeCloseTo(-0.12, 2);
+  });
+
+  it('keeps a spring reserve in plans drawn after April', () => {
+    const p = planFrom(7, { saltflat: 30, hollowcreek: 120 }, conditionsOf(0), gasHistory()[0].plan);
+    const marchEnd = 12 - 7;
+    expect(p.inventory.saltflat[marchEnd] + 1e-6).toBeGreaterThanOrEqual(END_OF_WINTER.saltflat);
+    expect(p.inventory.hollowcreek[marchEnd] + 1e-6).toBeGreaterThanOrEqual(END_OF_WINTER.hollowcreek);
+  });
+
+  it('prices futures that were right on average at every lead', () => {
+    const N = historyMonths();
+    for (const lead of [0, 1, 3, 6, 11]) {
+      let s = 0;
+      let n = 0;
+      for (let d = lead; d < N; d++) {
+        s += (lead === 0 ? monthAverage(d, 'calder') : settlement(d)) - futuresCurveAt(d - lead).calder[d];
+        n++;
+      }
+      expect(Math.abs(s / n)).toBeLessThan(1e-9);
+    }
+    // A contract's path ends at its settlement.
+    const path = contractPath(33);
+    expect(path).toHaveLength(12);
+    expect(path[path.length - 1].price).toBe(settlement(33));
+    expect(monthLabel(33)).toBe('Jan Y3');
+  });
+
+  it('quotes Ridgeback basis from the region as it stands: blind to year 5 a year ahead, sure of it once it arrives', () => {
+    // On March 1 of year 4, the curve's year-5 months still show the tariff.
+    expect(futuresCurveAt(47).ridgebackBasis[50]).toBeCloseTo(-0.12, 2);
+    // On April 1 of year 5 they show the glut, and a year later still (before the expansion).
+    expect(futuresCurveAt(48).ridgebackBasis[50]).toBeLessThan(-0.8);
+    expect(futuresCurveAt(59).ridgebackBasis[62]).toBeLessThan(-0.8);
+    expect(monthAverage(62, 'ridgeback', 'calder')).toBeCloseTo(-0.12, 2);
+  });
+
+  it('forecasts with skill that fades with lead time', () => {
+    expect(forecastSkill(0.9, 0)).toBeCloseTo(0.9, 9);
+    expect(forecastSkill(0.9, SKILL_DECAY_DAYS)).toBeCloseTo(0.9 / Math.E, 9);
+    const w = gasHistory()[2].weather;
+    // No skill: the forecast is the normal temperature.
+    expect(forecastTemps(w, 214, 14, 0)).toEqual(w.normal.slice(214, 228));
+    // Perfect skill on the first day is nearly the truth; the error grows with lead.
+    const errs = (skill: number, h: number) => {
+      let s = 0;
+      for (let k = 0; k < 60; k++) {
+        const wy = weatherYear(9000 + k);
+        const f = forecastTemps(wy, 200, 14, skill, k)[h - 1];
+        s += (f - wy.temp[200 + h - 1]) ** 2;
+      }
+      return Math.sqrt(s / 60);
+    };
+    expect(errs(1, 1)).toBeLessThan(errs(1, 14));
+    expect(errs(0.9, 7)).toBeLessThan(errs(0, 7));
+  });
+
+  it('forecasts the rest of winter with a spread that narrows as winter passes', () => {
+    const nov = forecastFundamentals(0, 214, { skill: 0.9 });
+    const feb = forecastFundamentals(0, 306, { skill: 0.9 });
+    expect(nov.members).toHaveLength(8);
+    expect(nov.endHigh - nov.endLow).toBeGreaterThan(feb.endHigh - feb.endLow);
+    expect(remainingHddError(214, 0)).toBeGreaterThan(remainingHddError(306, 0));
+    expect(remainingHddError(306, 0.9)).toBeLessThan(remainingHddError(306, 0));
+  });
+});
+
+describe('gas chapter 6: strategies', () => {
+  it('sets margins from the history and books a futures trade to its settlement', () => {
+    const m = marginRates();
+    expect(m.futures).toBeGreaterThan(5000);
+    expect(m.futures % 500).toBe(0);
+    const costs = { futuresFee: 0, basisFee: 0, futuresMargin: m.futures, basisMargin: m.basis };
+    const r = runBook([{ entry: 24, legs: [{ kind: 'futures', delivery: 33, lots: 2 }] }], costs);
+    expect(r.total).toBeCloseTo(2 * LOT_MMBTU * (settlement(33) - futuresCurveAt(24).calder[33]), 4);
+    expect(r.margin[24]).toBe(2 * m.futures);
+    expect(r.margin[33]).toBe(0);
+    // Fees come off each side.
+    const withFees = runBook([{ entry: 24, exit: 30, legs: [{ kind: 'futures', delivery: 33, lots: 1 }] }], { ...costs, futuresFee: 0.01 });
+    expect(withFees.totalFees).toBeCloseTo(2 * LOT_MMBTU * 0.01, 6);
+  });
+
+  it('settles index gas against the month and basis swaps against realized basis', () => {
+    const zero = { futuresFee: 0, basisFee: 0, futuresMargin: 0, basisMargin: 0 };
+    const idx = runBook([{ entry: 34, legs: [{ kind: 'index', delivery: 34, lots: -1 }] }], zero);
+    expect(idx.total).toBeCloseTo(-LOT_MMBTU * (monthAverage(34, 'calder') - settlement(34)), 4);
+    const b = runBook([{ entry: 30, legs: [{ kind: 'basis', place: 'metro', delivery: 33, mmbtuPerDay: 10000 }] }], zero);
+    expect(b.total).toBeCloseTo(10000 * daysIn(33) * (monthAverage(33, 'metro', 'calder') - futuresCurveAt(30).metroBasis[33]), 3);
+    expect(tradeable({ entry: 30, legs: [{ kind: 'index', delivery: 31, lots: 1 }] })).toBe(false);
+  });
+
+  it('earns nothing on average from trading every year without information', () => {
+    const zero = { futuresFee: 0, basisFee: 0, futuresMargin: 0, basisMargin: 0 };
+    // Metro's winter basis sold every year: the premium pays exactly for the blowouts.
+    expect(Math.abs(runBook(metroBasisTrades({ lead: 3, mmbtuPerDay: -10000 }), zero).total)).toBeLessThan(1);
+  });
+
+  it('pays for weather forecast skill', () => {
+    const none = weatherSignals(0);
+    expect(none.every((s) => Math.abs(s.forecastColder) < 1e-9)).toBe(true);
+    const low = runBook(weatherTrades({ skill: 0.3, thresholdF: 0, lots: 10 })).total;
+    const high = runBook(weatherTrades({ skill: 0.9, thresholdF: 0, lots: 10 })).total;
+    expect(high).toBeGreaterThan(low);
+    expect(high).toBeGreaterThan(0);
+  });
+
+  it('turns a correct production hypothesis into Ridgeback basis profits', () => {
+    const right = runBook(ridgebackTrades({ growth: 0.12, expansion: true }, { lead: 6, threshold: 0.25, mmbtuPerDay: 10000 }));
+    const flat = runBook(ridgebackTrades({ growth: 0, expansion: false }, { lead: 6, threshold: 0.25, mmbtuPerDay: 10000 }));
+    expect(right.total).toBeGreaterThan(1e6);
+    expect(flat.total).toBeLessThan(right.total);
+    expect(hypothesizedConditions({ growth: 0.12, expansion: true }, 4, 5).ridgebackExpress).toBeCloseTo(2.6, 9);
+  });
+
+  it('picks calendar spreads from storage and tracks them to the first settlement', () => {
+    const s = spreadSignals({ entryCal: 7, longCal: 11, shortCal: 0, lots: 1, rule: 'always', thresholdBcf: 0 });
+    expect(s).toHaveLength(7);
+    expect(s[0]).toMatchObject({ entry: 7, longDelivery: 11, shortDelivery: 12, exit: 11 });
+    const behind = spreadSignals({ entryCal: 7, longCal: 11, shortCal: 0, lots: 1, rule: 'behind', thresholdBcf: 12 });
+    expect(behind.filter((x) => x.traded).every((x) => x.vsPlan <= -12)).toBe(true);
+    expect(nextOf(7, 0)).toBe(12);
+  });
+
+  it('values storage, pipes and a power plant against the April curve and the year', () => {
+    const st = storageAsset(0.1);
+    expect(st).toHaveLength(8);
+    // Rolling intrinsic, hedged, never earns less than the April intrinsic value by much.
+    expect(st.every((a) => a.hedged > a.forward * 0.97)).toBe(true);
+    const north = transportAsset('northline', 50000);
+    const avgForward = north.reduce((s, a) => s + a.forward, 0) / 8;
+    const avgRealized = north.reduce((s, a) => s + a.realized, 0) / 8;
+    expect(avgRealized).toBeGreaterThan(avgForward * 0.8);
+    const express = transportAsset('express', 50000);
+    expect(express[4].realized).toBeGreaterThan(1e7);
+    expect(express[3].realized).toBeLessThan(1);
+    expect(lakesideMargin(3)).toBeCloseTo(powerDay(3).margin.cc1, 6);
+    expect(powerAsset().every((a) => a.realized > 0)).toBe(true);
+    const opt = monthlyStorageOptimum([2, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4], leasedStorage(0.1), { startCal: 0, start: 0.75, end: 0.75 });
+    expect(opt.value).toBeGreaterThan(0);
+    expect(opt.moves.reduce((a, b) => a + b, 0)).toBeCloseTo(0, 6);
+  });
+});
+
+describe('gas 6.1', () => {
+  it('quotes the demand added by a heating degree day', () => {
+    const total = (t: number) => demandBlocks(t).reduce((s, b) => s + b.cap, 0);
+    expect((total(30) - total(40)) / 10).toBeCloseTo(0.0535, 6);
+  });
+
+  it('opens on an ordinary winter the forecast gets about right', () => {
+    const sur = forecasterSurprises();
+    expect(sur).toHaveLength(8);
+    // Year 3 is the coldest winter, Year 6 close to normal.
+    expect(Math.max(...sur.map((s) => s[0]))).toBe(sur[2][0]);
+    expect(Math.abs(sur[5][0])).toBeLessThan(100);
+    const base = forecasterRun(FORECASTER_DEFAULTS.year, FORECASTER_DEFAULTS.day, FORECASTER_DEFAULTS.skill);
+    expect(base.members).toHaveLength(FORECAST_MEMBERS);
+    expect(base.endActual).toBeGreaterThanOrEqual(base.endLow);
+    expect(base.endActual).toBeLessThanOrEqual(base.endHigh);
+    // Skill barely moves the end of March from November 1.
+    expect(Math.abs(forecasterRun(5, WINTER_START, 0).endMean - forecasterRun(5, WINTER_START, 1).endMean)).toBeLessThan(2);
+  });
+
+  it('misses Year 3 from November and catches it by March', () => {
+    const nov = forecasterRun(2, WINTER_START, FORECASTER_DEFAULTS.skill);
+    expect(nov.endActual).toBeLessThan(nov.endLow);
+    const mar = forecasterRun(2, GAS_MONTH_START[11], FORECASTER_DEFAULTS.skill);
+    expect(mar.endActual).toBeGreaterThanOrEqual(mar.endLow);
+    expect(mar.endActual).toBeLessThanOrEqual(mar.endHigh);
+    expect(mar.endHigh - mar.endLow).toBeLessThan(nov.endHigh - nov.endLow);
+  });
+
+  it('finds storage absorbing about half of a degree day, and the price the rest', () => {
+    const f = forecasterRun(0, WINTER_START, 0);
+    const perHdd = forecasterStoragePerHdd(f);
+    expect(perHdd).toBeGreaterThan(0.02);
+    expect(perHdd).toBeLessThan(0.035);
+    expect(forecasterPricePerHdd(f)).toBeGreaterThan(0);
+  });
+
+  it('makes the cold spell of January 1, Year 3 the challenge, solved at the least skill within 50 cents', () => {
+    const spell = forecasterTwoWeeks(forecasterRun(COLD_SPELL.year, COLD_SPELL.day, 0));
+    expect(spell.normalTemp - spell.actTemp).toBeGreaterThan(15);
+    const answer = coldSpellAnswer();
+    expect(answer).toBeCloseTo(0.9, 9);
+    expect(coldSpellMiss(answer)).toBeLessThanOrEqual(PRICE_TOLERANCE);
+    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: answer })).toBe(true);
+    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: 0.95 })).toBe(false);
+    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: 0.85 })).toBe(false);
+    expect(forecasterSolved({ ...FORECASTER_DEFAULTS, skill: answer })).toBe(false);
+  });
+
+  it('shows the miss shrinking as winter passes, and skill paying only over two weeks', () => {
+    const rest0 = forecasterRestError(0);
+    const at = (d: number) => rest0[WEEKS.indexOf(d)];
+    expect(WEEKS).toContain(GAS_MONTH_START[10]);
+    expect(at(WINTER_START)).toBeGreaterThan(at(GAS_MONTH_START[10]));
+    expect(at(GAS_MONTH_START[10])).toBeGreaterThan(at(GAS_MONTH_START[11]));
+    expect(at(WINTER_START)).toBeGreaterThan(180);
+    const rest8 = forecasterRestError(0.8);
+    expect(Math.abs(rest8[0] - rest0[0]) / rest0[0]).toBeLessThan(0.05);
+    expect(forecasterTwoWeekError(GAS_MONTH_START[9], 0.8)).toBeLessThan(forecasterTwoWeekError(GAS_MONTH_START[9], 0));
+    expect(ERROR_YEARS).toBe(120);
+    // Year 3 began its winter more than two typical misses colder than normal.
+    expect(forecasterSurprises()[2][0] / rest0[0]).toBeGreaterThan(2);
+  });
+});
+
+describe('gas 6.2', () => {
+  it('trades March/April in seven winters and January/October in eight', () => {
+    expect(traderSignals('marApr')).toHaveLength(7);
+    expect(traderSignals('janOct')).toHaveLength(8);
+    expect(SPREAD_TRADER_DEFAULTS).toEqual({ spread: 'marApr', year: 2, side: 'buy', lots: 10 });
+  });
+
+  it('follows Year 3 and Year 4 as the prose says', () => {
+    const y3 = traderSignal('marApr', 2);
+    expect(y3.atEntry).toBeCloseTo(2.69, 2);
+    expect(futuresCurveAt(y3.entry).calder[y3.longDelivery]).toBeCloseTo(4.14, 2);
+    expect(futuresCurveAt(y3.entry).calder[y3.shortDelivery]).toBeCloseTo(1.45, 2);
+    expect(futuresCurveAt(y3.exit).calder[y3.longDelivery]).toBeCloseTo(6.15, 2);
+    expect(futuresCurveAt(y3.exit).calder[y3.shortDelivery]).toBeCloseTo(1.74, 2);
+    expect(y3.atExit).toBeCloseTo(4.41, 2);
+    expect(Math.abs(traderCold(2, GAS_MONTH_START[7], GAS_MONTH_START[9]))).toBeLessThan(20);
+    const ma = traderWinters('marApr');
+    expect(ma[2].cold).toBeCloseTo(431, 0);
+    expect(Math.round(traderBook('marApr', 2, 'buy', 10).total)).toBe(171934);
+    expect(ma[3].cold).toBeCloseTo(-431, 0);
+    expect(ma[3].gapExit).toBeCloseTo(16.8, 1);
+    expect(ma[3].signal.atExit).toBeCloseTo(0.06, 2);
+    expect(Math.round(traderBook('marApr', 3, 'buy', 10).total)).toBe(-205768);
+    // Selling is the mirror image, less the same fees twice.
+    expect(traderBook('marApr', 3, 'sell', 10).total).toBeCloseTo(205768 - 2 * 300, 0);
+  });
+
+  it('widens in every colder-than-normal winter and narrows in every milder one, whatever November storage said', () => {
+    const ma = traderWinters('marApr');
+    expect(traderFollowsWeather('marApr')).toBe(true);
+    expect(ma.filter((w) => w.cold > 0).map((w) => w.year)).toEqual([0, 2, 4]);
+    expect(ma.every((w) => w.gapEntry < 0)).toBe(true);
+    expect(Math.min(...ma.map((w) => -w.gapEntry))).toBeCloseTo(1.6, 1);
+    expect(Math.max(...ma.map((w) => -w.gapEntry))).toBeCloseTo(15.7, 1);
+    const byGap = [...ma].sort((a, b) => a.gapEntry - b.gapEntry);
+    expect([byGap[0].year, byGap[1].year]).toEqual([0, 6]);
+    expect(byGap[0].change).toBeCloseTo(0.43, 2);
+    expect(byGap[1].change).toBeCloseTo(-1.39, 2);
+    const jo = traderWinters('janOct');
+    expect(Math.min(...jo.map((w) => w.change))).toBeCloseTo(-0.79, 2);
+    expect(Math.max(...jo.map((w) => w.change))).toBeCloseTo(0.64, 2);
+    expect(Math.min(...ma.map((w) => w.change))).toBeCloseTo(-2.05, 2);
+    expect(Math.max(...ma.map((w) => w.change))).toBeCloseTo(1.72, 2);
+  });
+
+  it('loses buying every November, and the storage rule only wins at a lucky threshold', () => {
+    const always = ruleBookFor('always', 0);
+    expect(Math.round(always.total)).toBe(-106576);
+    expect(Math.round(always.totalFees)).toBe(2100);
+    const best = bestRuleThresholds();
+    expect(best.thresholds).toEqual([11, 12]);
+    expect(Math.round(best.total)).toBe(68024);
+    expect(ruleYears('behind', 11)).toEqual([0, 1, 2, 6]);
+    expect(Math.round(ruleBookFor('behind', 10).total)).toBe(-137744);
+    expect(ruleYears('behind', 10)).toEqual([0, 1, 2, 3, 6]);
+    expect(Math.round(ruleBookFor('behind', 13).total)).toBe(-103910);
+    expect(ruleYears('behind', 13)).toEqual([0, 1, 6]);
+  });
+
+  it('solves the challenge only at the best threshold', () => {
+    expect(spreadTraderSolved(SPREAD_RULE_DEFAULTS)).toBe(false);
+    expect(spreadTraderSolved({ rule: 'behind', threshold: 11 })).toBe(true);
+    expect(spreadTraderSolved({ rule: 'behind', threshold: 12 })).toBe(true);
+    expect(spreadTraderSolved({ rule: 'behind', threshold: 10 })).toBe(false);
+    expect(spreadTraderSolved({ rule: 'always', threshold: 11 })).toBe(false);
+  });
+});
+
+describe('gas 6.3', () => {
+  it('trades nothing on the market’s own hypothesis', () => {
+    const r = basisDeskRun(BASIS_DESK_DEFAULTS);
+    expect(r.book.trades).toHaveLength(0);
+    expect(r.signals.every((s) => Math.abs(s.view - s.forward) < 1e-9)).toBe(true);
+  });
+
+  it('quotes the market blind to Year 5’s glut and to Year 6’s expansion', () => {
+    const n = basisDeskNumbers();
+    expect(n.takeaway).toBeCloseTo(3.05, 9);
+    expect(n.takeawayAfter).toBeCloseTo(3.55, 9);
+    expect(n.prod(3)).toBeCloseTo(2.96, 9);
+    expect(n.prod(4)).toBeCloseTo(3.08, 9);
+    expect(n.fwdJanY5).toBeCloseTo(-0.12, 2);
+    expect(n.realJanY5).toBeLessThan(-4.5);
+    expect(n.y5Avg).toBeCloseTo(-2.52, 1);
+    expect(n.fwdJanY6).toBeLessThan(-3);
+    expect(n.realJanY6).toBeCloseTo(-0.12, 2);
+  });
+
+  it('sees the glut from 0.10 Bcf/d a year of growth, and solves the challenge there', () => {
+    expect(leastGlutGrowth()).toBeCloseTo(0.1, 9);
+    expect(viewsYearFiveGlut(0.08)).toBe(false);
+    expect(basisDeskSolved({ ...BASIS_DESK_DEFAULTS, growth: 0.1 })).toBe(true);
+    expect(basisDeskSolved({ ...BASIS_DESK_DEFAULTS, growth: 0.08 })).toBe(false);
+    expect(basisDeskSolved({ ...BASIS_DESK_DEFAULTS, growth: 0.12 })).toBe(false);
+  });
+
+  it('earns on the glut and the expansion, more the earlier it trades', () => {
+    const n = basisDeskNumbers();
+    expect(n.atLeastTrades).toBe(6);
+    expect(n.atLeastFirst?.delivery).toBe(48);
+    expect(n.atLeastLast?.delivery).toBe(53);
+    expect(n.atLeastTotal).toBeGreaterThan(1.8e6);
+    expect(n.atLeastTotal).toBeLessThan(1.9e6);
+    expect(n.withExpTrades).toBe(12);
+    expect(n.withExpTotal).toBeGreaterThan(4.5e6);
+    expect(n.expOnlyPnl).toBeGreaterThan(2.7e6);
+    expect(n.expBuyLow).toBeLessThan(-3.5);
+    expect(n.expBuyHigh).toBeCloseTo(-1.13, 2);
+    expect(n.lead11Total).toBeGreaterThan(15e6);
+    expect(n.lead1Total).toBeLessThan(1e6);
+    const run = basisDeskRun({ ...BASIS_DESK_DEFAULTS, growth: 0.1, expansion: true });
+    expect(run.book.trades.every((o) => o.pnl > 0)).toBe(true);
+  });
+
+  it('loses only the fees selling basis at the cost of the trip in a year without a glut', () => {
+    const n = basisDeskNumbers();
+    expect(n.eagerEarlyCount).toBe(6);
+    expect(n.eagerEarlyPnl).toBeCloseTo(-18300, 0);
+    expect(n.feePerMonth).toBeCloseTo(3100, 6);
+    // The view never rises above the cost of the trip to Calder.
+    expect(basisDeskSignals({ growth: GROWTH_MAX, expansion: true }, 11, 0.05).every((s) => s.view <= -0.12 + 1e-9)).toBe(true);
+  });
+
+  it('sells Metro’s winter basis at a fair premium, and profits from forecast skill', () => {
+    const n = basisDeskNumbers();
+    expect(n.metroFwd[0]).toBeCloseTo(0.3, 2);
+    expect(n.metroFwd[1]).toBeCloseTo(0.74, 2);
+    expect(n.metroFwd[2]).toBeCloseTo(0.42, 2);
+    expect(Math.abs(n.everyGross)).toBeLessThan(1);
+    expect(n.everyTotal).toBeCloseTo(-72000, -2);
+    expect(n.calmWinter).toBeCloseTo(293000, -3);
+    expect(n.jan3Pnl).toBeLessThan(-700000);
+    expect(n.jan3Real).toBeCloseTo(3.02, 1);
+    expect(n.winter3).toBeLessThan(-750000);
+    expect(n.filteredTrades).toBe(11);
+    expect(n.filteredTotal).toBeCloseTo(312000, -3);
+    expect(n.jan3Forecast).toBeGreaterThan(4);
+    expect(n.feb8Forecast).toBeLessThan(0);
+    expect(n.feb8Pnl).toBeLessThan(-200000);
+    expect(metroDeskRun(METRO_DESK_DEFAULTS).book.trades).toHaveLength(24);
+  });
+
+  it('solves the forecast challenge at skill 0.4', () => {
+    const at = (skill: number) => metroForecastSolved({ mode: 'forecast', skill, colder: 0 });
+    expect(at(0.4)).toBe(true);
+    expect(at(0.3)).toBe(false);
+    expect(at(0.5)).toBe(false);
+    expect(metroForecastSolved({ mode: 'forecast', skill: 0.4, colder: 1 })).toBe(false);
+  });
+
+  it('values firm Ridgeback Express capacity only in Year 5', () => {
+    const n = basisDeskNumbers();
+    expect(n.expressY5).toBeGreaterThan(8e6);
+    expect(n.expressY5Forward).toBeGreaterThan(6e6);
+    expect(n.expressOther).toBeLessThan(1000);
+  });
+});
+
+describe('gas 6.4', () => {
+  it('runs the hedged lease at or above April’s value every year, the unhedged one with the winter', () => {
+    const n = arbitrageNumbers();
+    const d = arbitrageData();
+    expect(n.allAbove).toBe(true);
+    expect(n.hedgedMinYear).toBe(4);
+    expect(n.hedgedMaxYear).toBe(1);
+    expect(n.hedgedExtra).toBeGreaterThan(0);
+    // Colder-than-normal winters paid the unhedged lease at least April's value; the clearly mild ones 30–60% of it.
+    expect(n.colderYears).toEqual([2, 4, 5, 7]);
+    expect(n.colderMinRatio).toBeGreaterThanOrEqual(1);
+    expect(n.mildYears).toEqual([1, 3, 6]);
+    expect(n.mildLow).toBeGreaterThan(0.29);
+    expect(n.mildHigh).toBeLessThan(0.61);
+    // Paths start and end a quarter full.
+    const path = leasePath(d.lease[0].moves);
+    expect(path[0]).toBeCloseTo(LEASE_BCF * 0.25, 9);
+    expect(path[12]).toBeGreaterThanOrEqual(LEASE_BCF * 0.25 - 1e-9);
+  });
+
+  it('finds Year 4 as the unhedged lease’s worst year against April (challenge a)', () => {
+    const n = arbitrageNumbers();
+    expect(worstUnhedgedYear()).toBe(4);
+    expect(n.worstRatio).toBeCloseTo(0.304, 2);
+    expect(n.worstWarmer).toBeGreaterThan(400);
+    expect(n.worstSellMonth).toBe(10);
+    expect(n.worstSellAvg).toBeLessThan(n.worstSellQuote - 0.9);
+    expect(leaseYearSolved({ year: 4 })).toBe(true);
+    expect(leaseYearSolved(ARB_LEASE_DEFAULTS)).toBe(false);
+    expect([1, 2, 3, 5, 6, 7, 8].some((year) => leaseYearSolved({ year }))).toBe(false);
+  });
+
+  it('prices Northline as fair insurance and Express only once the glut is visible', () => {
+    const n = arbitrageNumbers();
+    const d = arbitrageData();
+    expect(n.northFlat).toBe(true);
+    expect(n.northAvg / n.northFwd).toBeCloseTo(1, 2);
+    expect(n.northBestYear).toBe(2);
+    const share = n.northBest / d.northline.reduce((s, a) => s + a.realized, 0);
+    expect(share).toBeGreaterThan(0.4);
+    expect(share).toBeLessThan(0.5);
+    expect(n.northCalmCount).toBe(3);
+    expect(n.northCalmMax).toBeLessThan(3000);
+    expect(n.expYears).toEqual([4]);
+    expect(n.expSurplus).toBeCloseTo(0.03, 6);
+    expect(n.expFwd).toBeGreaterThan(6e6);
+    expect(n.expEarned).toBeGreaterThan(n.expFwd);
+  });
+
+  it('values the Lakeside toll by the gas price level', () => {
+    const n = arbitrageNumbers();
+    expect(n.lakeDev).toBeCloseTo(0.11, 9);
+    expect(n.lakeMaxYear).toBe(3);
+    expect(n.lakeMinYear).toBe(6);
+    expect(n.coalSwitch).toBeCloseTo(3.75, 6);
+    expect(n.metroAvg[3]).toBeLessThan(n.coalSwitch);
+    expect(n.metroAvg[6]).toBeGreaterThan(n.coalSwitch);
+  });
+
+  it('helps where the curve can see and does nothing for Northline', () => {
+    const n = arbitrageNumbers();
+    expect(n.rule.hedged).toBeGreaterThan(n.every.hedged);
+    expect(n.rule.express).toBeGreaterThan(n.every.express);
+    expect(n.rule.lakeside).toBeGreaterThan(n.every.lakeside);
+    expect(n.rule.northline).toBeCloseTo(n.every.northline, 6);
+    expect(n.hedgedWorstAtDefault).toBeLessThan(0);
+    expect(n.unhedgedWorstAtDefault).toBeLessThan(n.hedgedWorstAtDefault);
+    // Every fee starts within a step or two of the asset's average April value.
+    for (const asset of ['hedged', 'northline', 'express', 'lakeside'] as const) {
+      const v = assetValues(asset);
+      const avg = v.reduce((s, x) => s + x.forward, 0) / v.length / 1e6;
+      const key = feeKeyOf(asset);
+      expect(Math.abs(ARBITRAGE_DEFAULTS[key] - avg)).toBeLessThan(2 * FEE_SCALE[key].step + 1e-9);
+    }
+  });
+
+  it('solves the lease-fee challenge at the hedged lease’s floor (challenge b)', () => {
+    const floor = leaseFloorFee();
+    expect(floor).toBeCloseTo(2, 9);
+    expect(arbitrageNumbers().floorMargin).toBeGreaterThan(0);
+    const at = { ...ARBITRAGE_DEFAULTS, lease: floor };
+    expect(arbitrageSolved(at)).toBe(true);
+    expect(arbitrageYears(at).every((y) => y.profit > 0)).toBe(true);
+    expect(arbitrageYears({ ...at, lease: floor + FEE_SCALE.lease.step }).some((y) => y.profit <= 0)).toBe(true);
+    expect(arbitrageSolved({ ...at, lease: floor - FEE_SCALE.lease.step })).toBe(false);
+    expect(arbitrageSolved({ ...at, asset: 'unhedged' })).toBe(false);
+    expect(arbitrageSolved({ ...at, rule: 'april' })).toBe(false);
+    expect(arbitrageSolved(ARBITRAGE_DEFAULTS)).toBe(false);
+    expect(arbitrageTotal(at)).toBeGreaterThan(arbitrageTotal({ ...at, asset: 'unhedged' }));
+  });
+});
+
+describe('gas 6.5', () => {
+  const k = (x: number) => Math.round(x / 1000);
+
+  it('runs the four strategies as Lessons 6.1–6.3 left them, at ordinary costs', () => {
+    expect(labCosts(1)).toEqual(defaultCosts());
+    expect(labSpreadHindsight()).toBe(11);
+    const n = strategyLabNumbers();
+    expect(n.futuresMargin).toBe(13500);
+    expect(n.basisMargin).toBeCloseTo(0.28, 9);
+    expect(k(n.weather.total)).toBe(588);
+    expect(n.weather.trades.length).toBe(34);
+    expect(n.weather.trades.filter((o) => o.pnl <= 0).length).toBe(8);
+    expect(k(n.weather.peakCapital)).toBe(139);
+    expect(k(n.spread.total)).toBe(68);
+    expect(k(n.spread.peakCapital)).toBe(298);
+    expect(k(n.spread.maxDrawdown)).toBe(140);
+    expect(n.ridgeback.trades.length).toBe(12);
+    expect(n.ridgeback.winRate).toBe(1);
+    expect(n.ridgeback.total / 1e6).toBeCloseTo(4.6, 2);
+    expect(Math.round((n.ridgeback.total / n.all.total) * 100)).toBe(83);
+    expect(k(n.metro.total)).toBe(312);
+    expect(k(n.metro.totalFees)).toBe(33);
+    expect(k(n.metroCostly)).toBe(19);
+    expect(n.all.total / 1e6).toBeCloseTo(5.57, 2);
+    expect(k(n.all.peakCapital)).toBe(379);
+    expect(n.all.peakCapital).toBeLessThan(n.ridgeback.peakCapital);
+    expect(n.allPeakMonth).toBe(9);
+  });
+
+  it('survives at ×2 with $1 million and runs out of capital at ×3 before the Ridgeback trades', () => {
+    expect(labLargestSize('all', 1, 1_000_000)).toBe(2);
+    expect(strategyLabSolved({ ...LAB_CHALLENGE, size: 2 })).toBe(true);
+    expect(strategyLabSolved({ ...LAB_CHALLENGE, size: 1 })).toBe(false);
+    expect(strategyLabSolved({ ...LAB_CHALLENGE, size: 3 })).toBe(false);
+    expect(strategyLabSolved(STRATEGY_LAB_DEFAULTS)).toBe(false);
+    const over = labOutcome({ ...LAB_CHALLENGE, size: 3 });
+    expect(over.bust).toBe(8);
+    expect(k(over.final)).toBe(77);
+    expect(over.book.capital[8] / 1e6).toBeCloseTo(1.1, 2);
+    // Size scales profit and capital alike.
+    expect(labBook('all', 2, 1).total).toBeCloseTo(2 * labBook('all', 1, 1).total, 3);
+    expect(labBook('all', 2, 1).peakCapital).toBeCloseTo(2 * labBook('all', 1, 1).peakCapital, 3);
+  });
+
+  it('walks the rules forward: the spread and Metro rules fail, the Ridgeback desk does not', () => {
+    const n = strategyLabNumbers();
+    expect(n.walked).toEqual([null, 0, 14, 0, 11, 11, 11]);
+    expect(k(n.spreadWalk.hindsight.total)).toBe(68);
+    expect(k(n.spreadWalk.walk.total)).toBe(-352);
+    expect(k(-n.winters[3].pnl)).toBe(206);
+    expect(n.metroWalk.hindsight.trades.length).toBe(0);
+    expect(n.metroWalk.walk.total / 1e6).toBeCloseTo(-1.2, 2);
+    expect(n.fairY3).toBeCloseTo(0.16, 2);
+    expect(n.fairY4).toBeCloseTo(1.11, 2);
+    expect(n.janFwd).toBeCloseTo(0.74, 1);
+    expect(n.janY3).toBeCloseTo(3.02, 2);
+    expect(n.ridgeWalk.walk.total).toBeCloseTo(n.ridgeWalk.hindsight.total, 6);
+    expect(n.growth).toBeCloseTo(0.12, 9);
+    expect(n.takeaway).toBeCloseTo(3.05, 9);
+    expect(labWalk('ridgeback').walk.total / 1e6).toBeCloseTo(4.6, 2);
+    expect(labWinterHdd().map((x) => Math.round(x))).toEqual([-37, -452, 610, -440, 495, 67, -233, 103]);
   });
 });

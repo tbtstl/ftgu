@@ -57,6 +57,43 @@ export interface SeasonalOptions {
    * the working gas required twelve months later.
    */
   startMonth?: number;
+  /** Use the faster shortest-path search (the same optimum, possibly a different tie among equally good solutions). */
+  fast?: boolean;
+  /**
+   * For a plan that starts after April: working gas each field keeps in reserve on March 31, and
+   * what the operators would accept to give it up, $/MMBtu. Without it a plan drawn in midwinter
+   * would happily empty storage in March, because nothing after March asks for that gas.
+   */
+  springFloor?: { level: Partial<StorageState>; value: number };
+  /**
+   * Each field's most injection and withdrawal in each gas-year month (April first), Bcf, in place
+   * of the flat monthly rates — for instance from `monthlyRates` along an expected inventory path,
+   * since a filling field injects more slowly and an emptying one withdraws more slowly.
+   */
+  rates?: Partial<Record<FieldId, { inject: number[]; withdraw: number[] }>>;
+}
+
+/**
+ * A field's injection and withdrawal limits for each gas-year month, Bcf, if its inventory follows
+ * `inventory` (13 values, April 1 to March 31): the daily limits of Lesson 3.4 summed along the
+ * path, times the monthly rate shares.
+ */
+export function monthlyRates(spec: StorageSpec, inventory: number[]): { inject: number[]; withdraw: number[] } {
+  const inject: number[] = [];
+  const withdraw: number[] = [];
+  for (let m = 0; m < 12; m++) {
+    const n = GAS_MONTH_DAYS[m];
+    let inj = 0;
+    let wd = 0;
+    for (let d = 0; d < n; d++) {
+      const x = inventory[m] + ((inventory[m + 1] - inventory[m]) * (d + 0.5)) / n;
+      inj += injectCapacity(spec, Math.min(x, spec.workingBcf - 0.5));
+      wd += withdrawCapacity(spec, Math.max(x, 0.5));
+    }
+    inject.push(inj * MONTHLY_RATE_SHARE.inject);
+    withdraw.push(wd * MONTHLY_RATE_SHARE.withdraw);
+  }
+  return { inject, withdraw };
 }
 
 export const SEASONAL_COSTS = { injectCost: 0.05, withdrawCost: 0.05, holdCostPerMonth: 0.02 };
@@ -112,6 +149,7 @@ export function seasonalPlan(o: SeasonalOptions = {}): SeasonalPlan {
   const arcs: FlowProblem['arcs'] = [];
   const supplies: SupplyStep[] = [];
   const demands: DemandStep[] = [];
+  const reserveAt: Array<{ field: FieldId; index: number; demand: number }> = [];
   for (let m = 0; m < 12; m++) for (const n of places) nodes.push(`${n}@${m}`);
   for (const f of FIELDS) {
     for (let m = 0; m <= 12; m++) {
@@ -122,11 +160,23 @@ export function seasonalPlan(o: SeasonalOptions = {}): SeasonalPlan {
     for (let m = 0; m < 12; m++) {
       const days = monthDays[m];
       arcs.push({ id: `${f}:carry${m}`, from: `${f}:out${m}`, to: `${f}:in${m + 1}`, cap: capOf(f), cost: costs.holdCostPerMonth });
-      arcs.push({ id: `${f}:inj${m}`, from: `${at}@${m}`, to: `${f}:in${m + 1}`, cap: specs[f].maxInjectBcfd * scale * MONTHLY_RATE_SHARE.inject * days, cost: costs.injectCost });
-      arcs.push({ id: `${f}:wd${m}`, from: `${f}:out${m}`, to: `${at}@${m}`, cap: specs[f].maxWithdrawBcfd * scale * MONTHLY_RATE_SHARE.withdraw * days, cost: costs.withdrawCost });
+      const gm = (m0 + m) % 12;
+      const injCap = o.rates?.[f]?.inject[gm] ?? specs[f].maxInjectBcfd * scale * MONTHLY_RATE_SHARE.inject * days;
+      const wdCap = o.rates?.[f]?.withdraw[gm] ?? specs[f].maxWithdrawBcfd * scale * MONTHLY_RATE_SHARE.withdraw * days;
+      arcs.push({ id: `${f}:inj${m}`, from: `${at}@${m}`, to: `${f}:in${m + 1}`, cap: injCap, cost: costs.injectCost });
+      arcs.push({ id: `${f}:wd${m}`, from: `${f}:out${m}`, to: `${at}@${m}`, cap: wdCap, cost: costs.withdrawCost });
     }
     supplies.push({ id: `${f}:start`, node: `${f}:in0`, cap: o.start?.[f] ?? capOf(f) * 0.25, cost: 0 });
     demands.push({ id: `${f}:end`, node: `${f}:out12`, cap: o.end?.[f] ?? capOf(f) * 0.25, value: 50 });
+    // The spring reserve: gas leaves the field's stock as March ends and comes back as April begins,
+    // so the operators keep it unless the market pays more than its value.
+    const reserve = o.springFloor?.level[f] ?? 0;
+    if (m0 !== 0 && reserve > 0) {
+      const k = 12 - m0;
+      reserveAt.push({ field: f, index: k, demand: demands.length });
+      demands.push({ id: `${f}:reserve`, node: `${f}:in${k}`, cap: reserve, value: o.springFloor!.value });
+      supplies.push({ id: `${f}:reserve-back`, node: `${f}:out${k}`, cap: reserve, cost: 0 });
+    }
   }
   for (let m = 0; m < 12; m++) {
     const days = monthDays[m];
@@ -135,10 +185,12 @@ export function seasonalPlan(o: SeasonalOptions = {}): SeasonalPlan {
     supplies.push({ id: `prod-sandhill@${m}`, node: `sandhill@${m}`, cap: (prod.sandhill ?? 0) * days, cost: PRODUCTION_COST.sandhill ?? 1.6 });
     for (const d of demandBlocks(temps[m], o.demand)) demands.push({ id: `${d.id}@${m}`, node: `${d.node}@${m}`, cap: d.cap * days, value: d.value });
   }
-  const sol = solveFlow({ nodes, arcs, supplies, demands });
+  const sol = solveFlow({ nodes, arcs, supplies, demands }, { fast: o.fast });
   const price = Object.fromEntries(places.map((n) => [n, Array.from({ length: 12 }, (_, m) => sol.prices[`${n}@${m}`])])) as Record<GasNodeId, number[]>;
   const storageFlow = Object.fromEntries(FIELDS.map((f) => [f, Array.from({ length: 12 }, (_, m) => (sol.flow[`${f}:inj${m}`] ?? 0) - (sol.flow[`${f}:wd${m}`] ?? 0))])) as Record<FieldId, number[]>;
   const inventory = Object.fromEntries(FIELDS.map((f) => [f, Array.from({ length: 13 }, (_, m) => sol.flow[`${f}:hold${m}`] ?? 0)])) as Record<FieldId, number[]>;
+  // The spring reserve leaves the hold arc for an instant; count it back in.
+  for (const r of reserveAt) inventory[r.field][r.index] += sol.served[r.demand];
   const totalInventory = inventory.saltflat.map((x, m) => x + inventory.hollowcreek[m]);
   const flow = Object.fromEntries(PIPELINES.map((p) => [p.id, Array.from({ length: 12 }, (_, m) => (sol.flow[`${p.id}@${m}`] ?? 0) / monthDays[m])]));
   const rationed = Array<number>(12).fill(0);
@@ -172,6 +224,8 @@ export interface MarketDayInput {
   demand?: DemandOptions;
   /** The storage fields' specs (default the world's). */
   specs?: Record<FieldId, StorageSpec>;
+  /** Use the faster shortest-path search. */
+  fast?: boolean;
 }
 
 /** Storage withdraws when the price is above its water value plus this, and injects when below it minus this, $/MMBtu. */
@@ -223,7 +277,7 @@ export function marketProblem(inp: MarketDayInput): FlowProblem {
 /** Clears one day. */
 export function marketDay(inp: MarketDayInput): MarketDay {
   const problem = marketProblem(inp);
-  const solution = solveFlow(problem);
+  const solution = solveFlow(problem, { fast: inp.fast });
   const at = (id: string, list: Array<{ id?: string }>, values: number[]) => values[list.findIndex((x) => x.id === id)] ?? 0;
   const storageFlow: StorageState = {
     saltflat: at('inj-saltflat', problem.demands, solution.served) - at('wd-saltflat', problem.supplies, solution.supplied),
@@ -295,6 +349,8 @@ export interface YearOptions {
   startDay?: number;
   /** Days to run (default 365). */
   days?: number;
+  /** Use the faster shortest-path search. */
+  fast?: boolean;
 }
 
 export interface YearDay {
@@ -502,7 +558,7 @@ export function simulateYear(o: YearOptions): YearDay[] {
       hollowcreek: waterValueOf(plan, 'hollowcreek', d, storage.hollowcreek, specs.hollowcreek.workingBcf, kappa),
     };
     const demand = typeof o.demand === 'function' ? o.demand(d) : o.demand;
-    const r = marketDay({ tempF: o.weather.temp[d], production: o.production?.(d), capacity: o.capacity?.(d), storage, waterValue, demand, specs });
+    const r = marketDay({ tempF: o.weather.temp[d], production: o.production?.(d), capacity: o.capacity?.(d), storage, waterValue, demand, specs, fast: o.fast });
     storage.saltflat = Math.max(0, Math.min(specs.saltflat.workingBcf, storage.saltflat + r.storageFlow.saltflat));
     storage.hollowcreek = Math.max(0, Math.min(specs.hollowcreek.workingBcf, storage.hollowcreek + r.storageFlow.hollowcreek));
     out.push({

@@ -75,7 +75,7 @@ interface Edge {
 const EPS = 1e-9;
 
 /** Min-cost flow by successive shortest paths; prices from shortest paths in the final residual graph. */
-export function solveFlow(p: FlowProblem): FlowSolution {
+export function solveFlow(p: FlowProblem, opts: { fast?: boolean } = {}): FlowSolution {
   const idx = new Map(p.nodes.map((n, i) => [n, i]));
   const N = p.nodes.length;
   const S = N;
@@ -100,27 +100,73 @@ export function solveFlow(p: FlowProblem): FlowSolution {
     if (v !== undefined && d.cap > 0) add(v, T, d.cap, -d.value, 'd', i);
   });
 
-  // Successive shortest paths (Bellman–Ford; the graph is tiny).
+  // Successive shortest paths. Each path is found with a queue-based Bellman–Ford (SPFA): only
+  // nodes whose distance just improved are re-examined. The residual graph never has a negative
+  // cycle, so this terminates; the visit cap is a guard against floating-point loops.
   const V = N + 2;
+  const dist = new Float64Array(V);
+  const prevNode = new Int32Array(V);
+  const prevEdge = new Int32Array(V);
+  const inQueue = new Uint8Array(V);
+  const queue = new Int32Array(V + 1);
   for (let iter = 0; iter < 10_000; iter++) {
-    const dist = Array<number>(V).fill(Infinity);
-    const prevNode = Array<number>(V).fill(-1);
-    const prevEdge = Array<number>(V).fill(-1);
+    dist.fill(Infinity);
+    prevNode.fill(-1);
+    prevEdge.fill(-1);
+    inQueue.fill(0);
     dist[S] = 0;
-    for (let k = 0; k < V; k++) {
-      let changed = false;
-      for (let u = 0; u < V; u++) {
-        if (dist[u] === Infinity) continue;
-        g[u].forEach((e, j) => {
-          if (e.cap > EPS && dist[u] + e.cost < dist[e.to] - 1e-12) {
-            dist[e.to] = dist[u] + e.cost;
-            prevNode[e.to] = u;
-            prevEdge[e.to] = j;
-            changed = true;
+    let head = 0;
+    let tail = 0;
+    let size = 0;
+    queue[tail] = S;
+    tail = (tail + 1) % queue.length;
+    size++;
+    inQueue[S] = 1;
+    let visits = 0;
+    if (!opts.fast) {
+      // Plain Bellman–Ford passes. Slower, but its tie-breaking is what the course's earlier
+      // lessons were checked against, so it stays the default.
+      for (let k = 0; k < V; k++) {
+        let changed = false;
+        for (let u = 0; u < V; u++) {
+          if (dist[u] === Infinity) continue;
+          const edges = g[u];
+          for (let j = 0; j < edges.length; j++) {
+            const e = edges[j];
+            if (e.cap > EPS && dist[u] + e.cost < dist[e.to] - 1e-12) {
+              dist[e.to] = dist[u] + e.cost;
+              prevNode[e.to] = u;
+              prevEdge[e.to] = j;
+              changed = true;
+            }
           }
-        });
+        }
+        if (!changed) break;
       }
-      if (!changed) break;
+      size = 0;
+    }
+    while (size > 0 && visits < 50 * V * V) {
+      const u = queue[head];
+      head = (head + 1) % queue.length;
+      size--;
+      inQueue[u] = 0;
+      visits++;
+      const du = dist[u];
+      const edges = g[u];
+      for (let j = 0; j < edges.length; j++) {
+        const e = edges[j];
+        if (e.cap > EPS && du + e.cost < dist[e.to] - 1e-12) {
+          dist[e.to] = du + e.cost;
+          prevNode[e.to] = u;
+          prevEdge[e.to] = j;
+          if (!inQueue[e.to]) {
+            queue[tail] = e.to;
+            tail = (tail + 1) % queue.length;
+            size++;
+            inQueue[e.to] = 1;
+          }
+        }
+      }
     }
     if (dist[T] >= -1e-12 || dist[T] === Infinity) break;
     let push = Infinity;
@@ -157,21 +203,21 @@ export function solveFlow(p: FlowProblem): FlowSolution {
       if (a === b) continue;
       h[a].push({ to: b, cost: e.cost });
     }
-  const dist = Array<number>(N + 1).fill(Infinity);
-  dist[O] = 0;
+  const pdist = Array<number>(N + 1).fill(Infinity);
+  pdist[O] = 0;
   for (let k = 0; k <= N; k++) {
     let changed = false;
     for (let u = 0; u <= N; u++) {
-      if (dist[u] === Infinity) continue;
+      if (pdist[u] === Infinity) continue;
       for (const e of h[u])
-        if (dist[u] + e.cost < dist[e.to] - 1e-12) {
-          dist[e.to] = dist[u] + e.cost;
+        if (pdist[u] + e.cost < pdist[e.to] - 1e-12) {
+          pdist[e.to] = pdist[u] + e.cost;
           changed = true;
         }
     }
     if (!changed) break;
   }
-  const prices: Record<string, number> = Object.fromEntries(p.nodes.map((n, i) => [n, dist[i]]));
+  const prices: Record<string, number> = Object.fromEntries(p.nodes.map((n, i) => [n, pdist[i]]));
 
   const unserved: Record<string, number> = Object.fromEntries(p.nodes.map((n) => [n, 0]));
   p.demands.forEach((d, i) => (unserved[d.node] += d.cap - served[i]));
