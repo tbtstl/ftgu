@@ -61,13 +61,23 @@ button { font-family: inherit; letter-spacing: inherit; }
 
 /* Page shell: the home and course pages are one column; lessons get a thin header. */
 .col { max-width: calc(35rem + 48px); margin: 0 auto; padding: 0 24px; }
-.page { padding-top: 72px; padding-bottom: 16px; }
+.page { padding-top: 48px; padding-bottom: 16px; }
 .name { margin: 0; font-size: 16px; font-weight: 500; line-height: 1.5; }
 .dek { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .hdr { margin-top: 32px; }
-.lede { margin: 32px 0 0; }
-.lede-2 { margin: 16px 0 0; }
-.sec { margin-top: 48px; }
+.lede { margin: 24px 0 0; }
+/* The way back into the course: bordered like a challenge, the whole box one link. */
+.resume {
+  display: block; margin: 20px 0 0; padding: 14px 18px 16px; border: 1px solid var(--rule-strong); border-radius: 6px;
+  color: var(--text); text-decoration: none;
+}
+.resume:hover { color: var(--text); border-color: #cfcfca; }
+.resume:hover .resume-t { text-decoration: underline; text-decoration-color: rgba(17, 17, 17, .25); text-underline-offset: 3px; }
+.resume:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.resume-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.resume-t { display: block; margin-top: 4px; }
+.resume-c { display: block; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.sec { margin-top: 40px; }
 .label { margin: 0 0 8px; font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--muted); }
 
 .crumbs { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; font-size: 14px; line-height: 1.5; color: var(--muted); }
@@ -105,7 +115,7 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 
 /* Footer: a short rule and today's weather where the reader is. When the page is taller than
    the window it stays pinned to the bottom, with the page color behind it. */
-.sf { position: sticky; bottom: 0; margin-top: 48px; padding: 16px 0 24px; background: var(--bg); }
+.sf { position: sticky; bottom: 0; margin-top: 32px; padding: 12px 0 16px; background: var(--bg); }
 .sf::before { content: ''; display: block; width: 40px; height: 1px; background: var(--rule-strong); }
 .sf p { margin: 24px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--muted); }
 .sf a { color: var(--muted); }

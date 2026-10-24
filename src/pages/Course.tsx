@@ -3,6 +3,7 @@ import { CHAPTERS, getLesson, hasLesson, LESSONS } from '../course/registry';
 import { lessonHref } from '../course/router';
 import { useLastLesson, useProgress } from '../course/progress';
 import { Crumbs } from '../framework/Page';
+import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
 /** The electricity course: a short introduction, then the contents, chapter by chapter. */
@@ -33,13 +34,7 @@ export function Course() {
         Flip a switch and a lamp turns on. Somewhere, a generator works a little harder to keep up — and a market decided, minutes earlier, who would be paid to do
         it. This course explains both halves, from a single battery to a grid of your own.
       </p>
-      <p className="lede-2">
-        {current ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-        <a href={lessonHref(resume.id)}>
-          {resume.id} {resume.title}
-        </a>
-        .
-      </p>
+      <ResumeCard lesson={resume} started={!!current} />
 
       <section className="sec" aria-labelledby="contents">
         <h2 className="label" id="contents">

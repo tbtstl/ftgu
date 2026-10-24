@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { COURSES } from '../course/courses';
 import { getLesson, LESSONS } from '../course/registry';
-import { lessonHref } from '../course/router';
 import { useLastLesson } from '../course/progress';
+import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
 export function Home() {
@@ -24,13 +24,7 @@ export function Home() {
         Learn how real-world markets work by exploring the physical systems behind them. Experiment with interactive simulations, discover how constraints shape
         prices, and develop trading strategies from the ground up.
       </p>
-      <p className="lede-2">
-        {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-        <a href={lessonHref(lesson.id)}>
-          {lesson.id} {lesson.title}
-        </a>
-        .
-      </p>
+      <ResumeCard lesson={lesson} started={!!last} course={COURSES[0].title} />
 
       <section className="sec" aria-labelledby="courses">
         <h2 className="label" id="courses">

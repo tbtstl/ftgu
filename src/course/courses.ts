@@ -9,13 +9,15 @@ export interface CourseMeta {
   n: string;
   /** Short name for lists: "Natural gas". */
   name: string;
+  /** Full title, once the course exists. */
+  title?: string;
   /** Where the course lives, once it exists. */
   href?: string;
   lessons?: number;
 }
 
 export const COURSES: CourseMeta[] = [
-  { n: '01', name: 'Electricity & energy', href: courseHref(), lessons: LESSONS.length },
+  { n: '01', name: 'Electricity & energy', title: 'Electricity & Energy Markets', href: courseHref(), lessons: LESSONS.length },
   { n: '02', name: 'Natural gas' },
   { n: '03', name: 'Agricultural commodities' },
   { n: '04', name: 'Oil & petroleum' },
