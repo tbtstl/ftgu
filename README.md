@@ -31,12 +31,12 @@ runs the engine unit tests and a smoke test that renders every lesson and exerci
 The site is a free, read-only resource and stores nothing about its readers: progress (solved
 challenges and the last lesson opened) stays in the reader's own browser.
 
-The footer on the home and course pages shows today's weather where the reader is. That comes
-from `functions/api/weather.ts`, a Cloudflare Pages Function: deploy `dist/` to Cloudflare Pages
-with the `functions/` directory alongside, and it estimates the place from the request, rounds
-it to about 10 km, and asks [Open-Meteo](https://open-meteo.com/) for the forecast (cached for 30
-minutes per place). Elsewhere, or if there's no estimate, the footer is simply hidden. In
-development, `npm run dev` answers the same request with a fixed sample.
+The footer on the home and course pages shows today's weather where the reader is, without
+asking: the browser's time zone names a city (`America/New_York` → New York), and
+`src/pages/zones.ts`, generated from the time zone database's `zone.tab`, gives its coordinates.
+A small target beside the city asks the browser for the reader's actual location instead,
+rounded to about 10 km and kept only for the visit. The forecast comes straight from
+[Open-Meteo](https://open-meteo.com/), so the site works on any static host.
 
 ## How it's built
 

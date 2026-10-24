@@ -1,7 +1,7 @@
 // Smoke test: every lesson renders without throwing, shows its title, and has at least one
 // demonstration and one challenge. Interactive checks live in each chapter's own tests.
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { LESSONS } from '../src/course/registry';
@@ -15,6 +15,11 @@ function pathOf(id: string) {
   const [c, m] = id.split('.');
   return `../src/lessons/ch${c}/L${c}_${m}.tsx`;
 }
+
+// The home and course footers fetch a forecast; keep tests offline.
+beforeAll(() => {
+  vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+});
 
 describe('home', () => {
   it('lists every course', () => {
