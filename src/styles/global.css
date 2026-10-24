@@ -99,6 +99,7 @@ button { font-family: inherit; letter-spacing: inherit; }
 .crumb-sep { padding: 0 8px; }
 .crumbs a, .sh-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--muted); text-decoration: none; }
 .crumbs a:hover, .sh-link:hover { color: var(--text); }
+.crumb-icon { margin-left: -2px; }
 .crumbs [aria-current] { color: var(--text); font-variant-numeric: tabular-nums; }
 .sh {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 24px;

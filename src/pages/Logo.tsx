@@ -1,29 +1,29 @@
 import { useState } from 'react';
 import { GRAPHIC } from '../framework/tokens';
-import { RUNNER_PATH, RUNNER_SIZE } from './runner';
+import { RunnerMark } from '../framework/RunnerMark';
+import { LOGO_INK, setLogoColor, useLogoColor } from '../course/logoColor';
 
 // The colors the runner bursts into: the ink, then the figures' concept tones.
-const COLORS = ['#111111', GRAPHIC.blue, GRAPHIC.orange, GRAPHIC.green, GRAPHIC.violet, GRAPHIC.teal, GRAPHIC.red, GRAPHIC.gold];
+const COLORS = [LOGO_INK, GRAPHIC.blue, GRAPHIC.orange, GRAPHIC.green, GRAPHIC.violet, GRAPHIC.teal, GRAPHIC.red, GRAPHIC.gold];
 
 /**
  * The runner beside the site's name. Each click bursts it into a new color as it dashes a step
- * forward and settles back, in 200 ms. Purely for fun; the color isn't remembered.
+ * forward and settles back, in 200 ms. The color is remembered, and the runner in the lesson
+ * header wears it too; this is the only place it changes.
  */
 export function Logo() {
-  const [color, setColor] = useState(COLORS[0]);
+  const color = useLogoColor();
   const [burst, setBurst] = useState(0);
 
   const next = () => {
-    const others = COLORS.filter((c) => c !== color);
-    setColor(others[Math.floor(Math.random() * others.length)]);
+    const others = COLORS.filter((c) => c.toLowerCase() !== color.toLowerCase());
+    setLogoColor(others[Math.floor(Math.random() * others.length)]);
     setBurst((b) => b + 1);
   };
 
   return (
-    <button type="button" className="logo" onClick={next} aria-label="From The Ground Up logo: click for a new color" style={{ color }}>
-      <svg key={burst} className={burst > 0 ? 'logo-mark dash' : 'logo-mark'} viewBox={`0 0 ${RUNNER_SIZE} ${RUNNER_SIZE}`} aria-hidden="true">
-        <path fill="currentColor" fillRule="evenodd" d={RUNNER_PATH} />
-      </svg>
+    <button type="button" className="logo" onClick={next} aria-label="From The Ground Up logo: click for a new color">
+      <RunnerMark key={burst} size={40} className={burst > 0 ? 'logo-mark dash' : 'logo-mark'} />
     </button>
   );
 }

@@ -29,7 +29,7 @@ runs the engine unit tests and a smoke test that renders every lesson and exerci
 ## Hosting
 
 The site is a free, read-only resource and stores nothing about its readers: progress (solved
-challenges and the last lesson opened) stays in the reader's own browser.
+challenges and the last lesson opened) and the logo's color stay in the reader's own browser.
 
 The footer on the home and course pages shows today's weather where the reader is, without
 asking: the browser's time zone names a city (`America/New_York` → New York), and
