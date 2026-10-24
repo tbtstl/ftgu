@@ -11,6 +11,7 @@ import { backtestVirtuals, forecastSpreads, peakForecast, settleVirtuals, spread
 import { basis, congestion, ftrDaily, knownDayAhead, matches, meanByHour, meanWindForecast, spreadPositionDaily } from '../src/engines/strategy/basis';
 import { batteryDay, batteryHistory, forecastBatteryPnL, levelsFor, ruleSchedule } from '../src/engines/strategy/batteryTrading';
 import { optimizeArbitrage } from '../src/engines/strategy/arbitrage';
+import { solveLP, type Sense } from '../src/engines/market/lp';
 import {
   EVENING_HOURS,
   OFF_PEAK_HOURS,
@@ -29,6 +30,9 @@ import { maxDrawdown, summarize, valueAtRisk } from '../src/engines/strategy/ris
 const H = standardHistory();
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const avg = (xs: number[]) => sum(xs) / xs.length;
+/** Days 73 and 120: the two evenings when the real-time price passed $2,000. */
+const SPIKES = [72, 119];
+const withoutSpikes = <T,>(xs: T[]) => xs.filter((_, i) => !SPIKES.includes(i));
 
 // ---------------------------------------------------------------------------
 describe('distribution engine', () => {
@@ -71,6 +75,33 @@ describe('positions engine (6.1)', () => {
     expect(alt[10]).toBeCloseTo(1200);
     const def = at(base);
     expect(Math.max(...def) - Math.min(...def)).toBeGreaterThan(1);
+    // Over the sliders' whole range, only Lakeside at 100–300 MW can be flat at $1,200 — so the
+    // question says the plant needn't run at full output.
+    const gens = new Set<number>();
+    for (const flexible of [false, true])
+      for (let genMW = 0; genMW <= 400; genMW += 10)
+        for (let incMW = -300; incMW <= 300; incMW += 10)
+          for (let cfdMW = -400; cfdMW <= 400; cfdMW += 10) {
+            const c = at({ ...base, genMW, incMW, cfdMW, flexible });
+            if (Math.max(...c) - Math.min(...c) < 0.5 && Math.abs(c[0] - 1200) < 0.5) gens.add(genMW);
+          }
+    expect(Math.min(...gens)).toBe(100);
+    expect(Math.max(...gens)).toBe(300);
+    expect(gens.has(400)).toBe(false);
+  });
+  it('matches the description of the history', () => {
+    const temps = H.map((d) => d.temp);
+    expect(Math.round(avg(temps.slice(0, 30)))).toBe(16);
+    expect(Math.round(avg(temps.slice(90)))).toBe(27);
+    expect(Math.min(...H.map((d) => d.gas))).toBe(0.85);
+    expect(Math.max(...H.map((d) => d.gas))).toBe(1.48);
+    const spikes = H.filter((d) => Math.max(...d.rt) > 2000);
+    expect(spikes.map((d) => d.day + 1)).toEqual([73, 120]);
+    for (const d of spikes) {
+      expect(d.outages.length).toBeGreaterThan(0);
+      expect(d.rt.indexOf(Math.max(...d.rt))).toBeGreaterThanOrEqual(17);
+    }
+    expect(Math.max(...H.flatMap((d) => d.da))).toBeLessThan(2000);
   });
   it('matches the prose at 17:00', () => {
     const run = (b: Partial<Book>) => bookHistory(H, { ...base, ...b }, 17, 36).map((x) => x.total);
@@ -82,6 +113,7 @@ describe('positions engine (6.1)', () => {
     expect(Math.round(H[72].rt[17])).toBe(325);
     const top3 = [...gen].sort((a, b) => b - a).slice(0, 3);
     expect(Math.round((100 * sum(top3)) / sum(gen))).toBe(61);
+    expect(Math.round(avg(withoutSpikes(gen)))).toBe(1100);
     const genCfd = run({ cfdMW: 400 });
     expect(Math.round(Math.min(...genCfd))).toBe(-4512);
     expect(genCfd.indexOf(Math.min(...genCfd))).toBe(70);
@@ -92,6 +124,11 @@ describe('positions engine (6.1)', () => {
     expect(inc.filter((v) => v < 0).length).toBe(67);
     expect(Math.round(Math.min(...inc))).toBe(-79002);
     expect(inc.indexOf(Math.min(...inc))).toBe(72);
+    // The counterexample: a 300 MW dec, long the spike, pays mostly because of days 73 and 120.
+    const dec = run({ genMW: 0, incMW: -300 });
+    expect(dec.filter((v) => v > 0).length).toBe(67);
+    expect(Math.round(avg(dec))).toBe(1245);
+    expect(Math.round(avg(withoutSpikes(dec)))).toBe(162);
   });
 });
 
@@ -128,6 +165,10 @@ describe('spreads engine (6.2)', () => {
     expect(spreadsByHour(H)[19].filter((v) => v >= 30).length).toBe(18);
     expect(spreadsByHour(H)[19].filter((v) => v < -30).length).toBe(5);
     expect(Math.round(h19.min)).toBe(-161);
+    // Without days 73 and 120, 19:00's mean spread is $14.88: those two days supply over two-thirds of its total.
+    const calm19 = withoutSpikes(spreadsByHour(H)[19]);
+    expect(avg(calm19).toFixed(2)).toBe('14.88');
+    expect(1 - sum(calm19) / sum(spreadsByHour(H)[19])).toBeGreaterThan(2 / 3);
     const cells = H.flatMap((d) => d.da.map((p, h) => ({ v: d.rt[h] - p, d: d.day, h })));
     const top = [...cells].sort((x, y) => Math.abs(y.v) - Math.abs(x.v)).slice(0, 29);
     expect(Math.round(sum(top.map((c) => c.v)))).toBe(16759);
@@ -136,6 +177,17 @@ describe('spreads engine (6.2)', () => {
     expect(top.every((c) => c.h >= 17 && c.h <= 21)).toBe(true);
     expect(new Set(top.map((c) => c.d)).size).toBe(11);
     expect(H.filter((d) => d.outages.length > 0).length).toBe(15);
+    // Outages drive the tail: 9 of its 11 days had one (both $2,000 evenings lost Mill Creek), and
+    // those days carry essentially all of the tail's total.
+    const tailDays = [...new Set(top.map((c) => c.d))];
+    expect(tailDays.filter((i) => H[i].outages.length > 0).length).toBe(9);
+    expect(H[72].outages).toEqual(['cc2']);
+    expect(H[119].outages).toEqual(['cc2']);
+    expect(sum(top.filter((c) => H[c.d].outages.length > 0).map((c) => c.v)) / sum(top.map((c) => c.v))).toBeGreaterThan(0.99);
+    const calm = tailDays.filter((i) => H[i].outages.length === 0);
+    expect(calm.map((i) => i + 1).sort((a, b) => a - b)).toEqual([100, 115]);
+    expect(calm.map((i) => Math.abs(Math.round((100 * H[i].demand[19]) / H[i].demandForecast[19] - 100))).sort()).toEqual([2, 6]);
+    for (const i of calm) expect(Math.abs(H[i].rt[19] - H[i].da[19])).toBeGreaterThan(100);
   });
   it('matches the prose about the backtests, and the challenge is reachable', () => {
     const def = backtestVirtuals(H, { rule: 'median', window: 10, threshold: 1, mw: 10, costPerMWh: 0.5 });
@@ -157,11 +209,31 @@ describe('spreads engine (6.2)', () => {
     const tailDays = [102, 2, 50, 37, 29, 114, 24, 99, 65];
     const rest = good.pnl.filter((_, i) => ![119, 72, ...tailDays].includes(i + good.firstIndex));
     expect(Math.round(sum(rest))).toBe(22);
-    // The challenge: positive after ≥ $1 costs, still positive without the two best days.
-    expect(total - ranked[0].v - ranked[1].v).toBeGreaterThan(0);
-    expect(sum(def.pnl)).toBeLessThan(0);
     expect(H.filter((d) => peakForecast(d) >= 1500).length).toBe(41);
   });
+  // The lesson's predicate: after costs of at least $1, positive, and at least $10,000 without its two best days.
+  const challenge = (bt: ReturnType<typeof backtestVirtuals>, cost: number) => {
+    const total = sum(bt.pnl);
+    const best2 = [...bt.pnl].sort((a, b) => b - a).slice(0, 2).filter((v) => v > 0);
+    return cost >= 1 && bt.tradedDays >= 20 && total > 0 && total - sum(best2) >= 10000;
+  };
+  it('the challenge: default unsolved, the trailing mean solves it', () => {
+    expect(challenge(backtestVirtuals(H, { rule: 'median', window: 10, threshold: 1, mw: 10, costPerMWh: 0.5 }), 0.5)).toBe(false);
+    expect(challenge(backtestVirtuals(H, { rule: 'median', window: 10, threshold: 1, mw: 10, costPerMWh: 1 }), 1)).toBe(false);
+    expect(challenge(backtestVirtuals(H, { rule: 'mean', window: 30, threshold: 2, mw: 10, costPerMWh: 1 }), 1)).toBe(true);
+  });
+  it('the challenge: no trailing median solves it, as the success text says', () => {
+    // Positions don't depend on the cost, and every day's P&L falls as the cost rises, so $1 is the easiest case.
+    // A higher threshold trades a subset of the same hours, so once fewer than 20 days trade, higher thresholds can't solve it either.
+    const filters = [undefined, (d: (typeof H)[number]) => peakForecast(d) >= 1500, (d: (typeof H)[number]) => d.gas >= 1.2];
+    for (const filter of filters)
+      for (let window = 5; window <= 60; window++)
+        for (let threshold = 0; threshold <= 20; threshold += 0.5) {
+          const bt = backtestVirtuals(H, { rule: 'median', window, threshold, mw: 10, costPerMWh: 1, filter });
+          expect(challenge(bt, 1)).toBe(false);
+          if (bt.tradedDays < 20) break;
+        }
+  }, 60000);
 });
 
 describe('basis engine (6.3)', () => {
@@ -187,6 +259,20 @@ describe('basis engine (6.3)', () => {
     expect(w200.length).toBe(6);
     expect(night(w200)).toBeLessThanOrEqual(-10);
     expect(night(H.filter((d) => meanWindForecast(d) >= 190))).toBeGreaterThan(-10);
+    // Challenge a: 200 MW is the lowest level on the slider (50–300 in steps of 10) at which the belief holds.
+    const holds = (level: number) => {
+      const ds = H.filter((d) => matches(d, { kind: 'windy', level }));
+      return ds.length > 0 && night(ds) <= -10;
+    };
+    const levels = Array.from({ length: 26 }, (_, i) => 50 + 10 * i);
+    expect(levels.find(holds)).toBe(200);
+    expect(holds(150)).toBe(false); // the default level is unsolved
+    // On outage days, Metro's afternoon premium is far larger in real time than day-ahead.
+    const out = H.filter((d) => matches(d, { kind: 'outage', level: 0 }));
+    expect(out.length).toBe(15);
+    const metroAft = (m: 'da' | 'rt') => avg(AFT.map((h) => meanByHour(out, (d) => basis(d, 'metro', m))[h]));
+    expect(metroAft('da').toFixed(2)).toBe('13.33');
+    expect(metroAft('rt').toFixed(2)).toBe('43.02');
     const metro = (ds: typeof H, hs: number[]) => avg(hs.map((h) => meanByHour(ds, (d) => basis(d, 'metro', 'da'))[h]));
     expect(metro(H, AFT).toFixed(2)).toBe('11.79');
     expect(metro(H, EVENING_HOURS).toFixed(2)).toBe('24.11');
@@ -214,9 +300,18 @@ describe('basis engine (6.3)', () => {
     const cc2 = H.map((d, i) => (d.outages.includes('cc2') ? aft[i] : 0));
     expect(H.filter((d) => d.outages.includes('cc2')).length).toBe(6);
     expect(Math.round(sum(cc2))).toBe(22553);
-    // Challenge b: default (Metro evening, every day) loses; Metro afternoon, every day, wins.
-    expect(sum(spreadPositionDaily(H, 'metro', EVENING_HOURS, 10, { kind: 'all', level: 0 }, 0.5))).toBeLessThan(0);
-    expect(sum(aft)).toBeGreaterThan(0);
+    expect(sum(aft) - sum(cc2)).toBeCloseTo(-7441, 0);
+  });
+  it('challenge b: the FTR breaks even at the first figure’s average evening premium, to the nearest 25 cents', () => {
+    const be = avg(H.flatMap((d) => EVENING_HOURS.map((h) => congestion(d, 'metro', 'da')[h])));
+    // The first figure's Metro evening readout (day-ahead, every day) is the same number.
+    expect(avg(EVENING_HOURS.map((h) => meanByHour(H, (d) => basis(d, 'metro', 'da'))[h]))).toBeCloseTo(be, 9);
+    const solved = (price: number) => Math.abs(price - be) <= 0.125 + 1e-9;
+    expect(solved(15)).toBe(false); // the default
+    const answers = Array.from({ length: 161 }, (_, i) => i * 0.25).filter(solved);
+    expect(answers).toEqual([24]);
+    expect(sum(ftrDaily(H, 'metro', EVENING_HOURS, 10, 24))).toBeGreaterThan(0);
+    expect(sum(ftrDaily(H, 'metro', EVENING_HOURS, 10, 24.25))).toBeLessThan(0);
   });
 });
 
@@ -246,26 +341,77 @@ describe('battery trading engine (6.4)', () => {
       return hs.some((h) => o.schedule[h] > 0.5);
     };
     const MORNING = [6, 7, 8, 9, 10, 11];
+    // The prose gives the prices; the reader computes the margins.
+    expect(Math.min(...d.da)).toBe(28);
+    expect(Math.max(...MORNING.map((h) => d.da[h])).toFixed(2)).toBe('46.57');
+    expect(Math.max(...EVENING_HOURS.map((h) => d.da[h])).toFixed(2)).toBe('55.34');
+    // The challenge: the smallest whole-dollar wear that skips the morning but still sells in the evening.
+    const smallest = (bb: typeof b) => {
+      const LL = levelsFor(bb, 30);
+      const s2 = (wear: number, hs: number[]) => hs.some((h) => optimizeArbitrage(d.da, bb, { degradationPerMWh: wear, levels: LL }).schedule[h] > 0.5);
+      for (let wear = 1; wear <= 40; wear++) if (!s2(wear, MORNING) && s2(wear, EVENING_HOURS) && s2(wear - 1, MORNING)) return wear;
+      return -1;
+    };
     expect(sells(5, MORNING)).toBe(true); // default: not solved
+    expect(sells(13, MORNING)).toBe(true);
     expect(sells(14, MORNING)).toBe(false);
     expect(sells(14, EVENING_HOURS)).toBe(true);
-    expect(sells(21, MORNING) || !sells(21, EVENING_HOURS)).toBe(false);
+    expect(smallest(b)).toBe(14);
+    // It is the margin rounded up, at other efficiencies too: the equation predicts it.
+    for (const eff of [0.7, 0.95]) expect(smallest({ ...b, efficiency: eff })).toBe(Math.ceil(46.57 - 28 / eff));
+    expect(smallest({ ...b, energyMWh: 800 })).toBe(14);
   });
   it('matches the prose for the 120 days', () => {
-    const L = levelsFor(b, 6);
+    // The 120-day figure uses 12 state-of-charge steps per hour of duration.
+    const L = levelsFor(b, 12);
     const hist = batteryHistory(H, b, 5, L);
     const tot = (k: 'daOptimal' | 'rule' | 'daPlanAtRt' | 'rtOptimal') => sum(hist.map((x) => x[k]));
-    expect(Math.round(tot('daOptimal'))).toBe(739527);
+    expect(Math.round(tot('daOptimal'))).toBe(783469);
     expect(Math.round(tot('rule'))).toBe(663878);
-    expect(Math.round(tot('daPlanAtRt'))).toBe(2149042);
-    expect(Math.round(tot('rtOptimal'))).toBe(2428588);
-    expect(((tot('daOptimal') * 365) / 120 / 100000).toFixed(2)).toBe('22.49');
-    expect(Math.round(hist[72].daPlanAtRt + hist[119].daPlanAtRt)).toBe(1202566);
-    expect(hist.filter((x) => x.daPlanAtRt < x.daOptimal).length).toBe(73);
-    expect(batteryHistory(H, b, 20, L).filter((x) => x.cycles < 0.01).length).toBe(74);
+    expect(Math.round((100 * tot('rule')) / tot('daOptimal'))).toBe(85);
+    expect(Math.round(tot('daPlanAtRt'))).toBe(2306696);
+    expect((tot('daPlanAtRt') / tot('daOptimal')).toFixed(1)).toBe('2.9');
+    expect(Math.round(tot('rtOptimal'))).toBe(2584733);
+    expect(((tot('daOptimal') * 365) / 120 / 100000).toFixed(2)).toBe('23.83');
+    expect(Math.round(hist[72].daPlanAtRt + hist[119].daPlanAtRt)).toBe(1298555);
+    // Without days 73 and 120 the real-time plan earns less than those two days did, but still more than day-ahead.
+    const calm = withoutSpikes(hist);
+    expect(Math.round(sum(calm.map((x) => x.daPlanAtRt)))).toBe(1008141);
+    expect(Math.round(sum(calm.map((x) => x.daOptimal)))).toBe(723980);
+    expect(hist[72].daPlanAtRt + hist[119].daPlanAtRt).toBeGreaterThan(sum(calm.map((x) => x.daPlanAtRt)));
+    expect(hist.filter((x) => x.daPlanAtRt < x.daOptimal).length).toBe(74);
+    const wear20 = batteryHistory(H, b, 20, L);
+    expect(wear20.filter((x) => x.cycles < 0.01).length).toBe(74);
+    expect(sum(wear20.map((x) => x.rule))).toBeLessThan(0.1 * tot('rule'));
     const eight = { ...b, energyMWh: 800 };
-    const t8 = sum(batteryHistory(H, eight, 5, levelsFor(eight, 6)).map((x) => x.daOptimal));
-    expect(t8 / tot('daOptimal')).toBeLessThan(1.15);
+    const t8 = sum(batteryHistory(H, eight, 5, levelsFor(eight, 12)).map((x) => x.daOptimal));
+    expect(Math.round(100 * (t8 / tot('daOptimal') - 1))).toBe(14);
+    // Profit scales exactly with power at a fixed duration, as the prose says (so the figure has no power control).
+    const big = { ...b, powerMW: 200, energyMWh: 800 };
+    const h200 = batteryHistory(H, big, 5, levelsFor(big, 12));
+    for (const k of ['daOptimal', 'rule', 'daPlanAtRt', 'rtOptimal'] as const) expect(sum(h200.map((x) => x[k]))).toBeCloseTo(2 * tot(k), 3);
+  });
+  it('the 120-day grid is within 0.2% of the exact day-ahead optimum', () => {
+    // The exact optimum as a linear program: charge c_t and discharge d_t, 0–100 MW, storage 0–400 MWh.
+    const eta = Math.sqrt(0.85);
+    const exact = (prices: number[]) => {
+      const n = prices.length;
+      const A: number[][] = [];
+      const rhs: number[] = [];
+      const sense: Sense[] = [];
+      for (let t = 0; t < n; t++) {
+        const row = Array.from({ length: 2 * n }, (_, j) => (j <= t ? eta : j >= n && j - n <= t ? -1 / eta : 0));
+        A.push(row, row);
+        rhs.push(400, 0);
+        sense.push('<=', '>=');
+      }
+      const c = [...prices, ...prices.map((p) => -(p - 5))];
+      return -solveLP({ c, A, b: rhs, sense, ub: Array<number>(2 * n).fill(100) }).objective;
+    };
+    const lp = sum(H.map((d) => exact(d.da)));
+    const grid = sum(batteryHistory(H, b, 5, levelsFor(b, 12)).map((x) => x.daOptimal));
+    expect(grid / lp).toBeGreaterThan(0.998);
+    expect(grid / lp).toBeLessThanOrEqual(1 + 1e-9);
   });
   it('stays finite at the sliders’ extremes', () => {
     for (const power of [10, 200])
@@ -316,6 +462,8 @@ describe('hedging engine (6.5)', () => {
     expect(Math.round(Math.min(...u))).toBe(-268847);
     expect(u.indexOf(Math.min(...u))).toBe(116);
     expect(Math.round(valueAtRisk(u))).toBe(52011);
+    // VaR is the loss exceeded on 6 of the 120 days.
+    expect(u.filter((v) => v < -valueAtRisk(u)).length).toBe(6);
     const d = H[116];
     expect(d.temp).toBe(33);
     expect(Math.round(d.da[18])).toBe(250);
@@ -341,6 +489,10 @@ describe('hedging engine (6.5)', () => {
     let withoutCfd = 0;
     for (let on = 0; on <= 400; on += 10) for (let off = 0; off <= 300; off += 10) if (ok(margins(on, off, 0))) withoutCfd++;
     expect(withoutCfd).toBe(0);
+    // And none without an on-peak block: the CfD covers only five hours.
+    let withoutOnPeak = 0;
+    for (let off = 0; off <= 300; off += 10) for (let cfd = 0; cfd <= 200; cfd += 10) if (ok(margins(0, off, cfd))) withoutOnPeak++;
+    expect(withoutOnPeak).toBe(0);
   });
 });
 
@@ -369,6 +521,7 @@ describe('lab engine (6.6)', () => {
     expect(Math.round(def[119])).toBe(-63384);
     expect(Math.round(Math.min(...def))).toBe(-63384);
     expect(Math.round(def[72])).toBe(-22752);
+    expect(Math.round(sum(def) - def[72] - def[119])).toBe(14286);
     expect(Math.round(maxDrawdown(def).drawdown)).toBe(76437);
     const stopped = applyStopLoss(def, 1000);
     expect(Math.round(sum(stopped.pnl))).toBe(-81023);
@@ -402,10 +555,17 @@ describe('lab engine (6.6)', () => {
       expect(share).toBeLessThan(0.72);
     }
   });
-  it('the challenge is reachable and the default does not solve it', () => {
-    const ok = (p: number[]) => sum(p) >= 10000 && maxDrawdown(p).drawdown < 5000;
-    expect(ok(labDailyPnL(H, { strategy: 'spread', window: 5, threshold: 2, costPerMWh: 0.5, mw: 10 }))).toBe(false);
-    expect(ok(labDailyPnL(H, { strategy: 'spread', window: 30, threshold: 10, costPerMWh: 1, mw: 10 }))).toBe(true);
+  it('the challenge: the largest position limit that keeps every day within $20,000', () => {
+    const unit = labDailyPnL(H, { strategy: 'spread', window: 5, threshold: 2, costPerMWh: 0.5, mw: 1 });
+    const worst = (mw: number, stop: number) => Math.min(...applyStopLoss(unit.map((v) => v * mw), stop).pnl);
+    // The lesson's predicate: within the limit at this size, beyond it one megawatt more.
+    const solved = (mw: number, stop = 0) => mw < 50 && worst(mw, stop) >= -20000 && worst(mw + 1, stop) < -20000;
+    expect(solved(10)).toBe(false); // the default
+    expect(Array.from({ length: 50 }, (_, i) => i + 1).filter((mw) => solved(mw))).toEqual([3]);
+    // The stop-loss doesn't change the answer: it can't stop a loss that arrives in one day.
+    for (const stop of [1000, 5000, 20000]) expect(solved(3, stop)).toBe(true);
+    // 20,000 / 6,338 per MW: the worst day scales with the position.
+    expect(Math.round(Math.min(...unit))).toBe(-6338);
     expect(summarize(labDailyPnL(H, { strategy: 'battery', window: 60, threshold: 0, costPerMWh: 3, mw: 50 })).total).toBeGreaterThan(0);
   });
 });
@@ -469,4 +629,89 @@ describe('chapter 6 lessons at the extremes', () => {
       cleanup();
     }, 60000);
   }
+});
+
+// ---------------------------------------------------------------------------
+// The challenges in the lessons themselves: unsolved at the defaults, solved by the intended answer.
+
+describe('chapter 6 challenges in the lessons', () => {
+  const load = async (n: number) => {
+    const Lesson = (await modules[`../src/lessons/ch6/L6_${n}.tsx`]()).default;
+    return render(createElement(Lesson));
+  };
+  const solvedCount = (view: ReturnType<typeof render>) => view.container.querySelectorAll('.chal-s.ok').length;
+  const slide = async (view: ReturnType<typeof render>, label: string, value: number, index = 0) => {
+    const input = view.getAllByLabelText(label)[index] as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: String(value) } });
+    });
+  };
+  const press = async (view: ReturnType<typeof render>, text: string) => {
+    const button = Array.from(view.container.querySelectorAll<HTMLButtonElement>('.seg button')).find((b) => b.textContent === text)!;
+    await act(async () => {
+      fireEvent.click(button);
+    });
+  };
+
+  it('6.1: hedging 300 MW of Lakeside with a 300 MW inc', async () => {
+    const view = await load(1);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Lakeside output', 300);
+    await slide(view, 'Virtual position', 300);
+    expect(solvedCount(view)).toBe(1);
+    cleanup();
+  });
+  it('6.2: the trailing mean over 30 days, a $2 threshold, $1 costs', async () => {
+    const view = await load(2);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Transaction cost', 1);
+    expect(solvedCount(view)).toBe(0); // the default median rule doesn't get there
+    await press(view, 'Trailing mean');
+    await slide(view, 'Lookback window', 30);
+    await slide(view, 'Threshold', 2);
+    expect(solvedCount(view)).toBe(1);
+    cleanup();
+  });
+  it('6.3: 200 MW of wind, and an FTR at $24', async () => {
+    const view = await load(3);
+    expect(solvedCount(view)).toBe(0);
+    await press(view, 'Windy');
+    await slide(view, 'Daily mean wind forecast at least', 210);
+    expect(solvedCount(view)).toBe(0); // the belief holds, but not at the lowest level
+    await slide(view, 'Daily mean wind forecast at least', 200);
+    expect(solvedCount(view)).toBe(1);
+    await slide(view, 'FTR auction price', 24.25);
+    expect(solvedCount(view)).toBe(1);
+    await slide(view, 'FTR auction price', 24);
+    expect(solvedCount(view)).toBe(2);
+    cleanup();
+  });
+  it('6.4: $14 of wear on day 61', async () => {
+    const view = await load(4);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Degradation cost', 15);
+    expect(solvedCount(view)).toBe(0); // skips the morning, but isn't the smallest
+    await slide(view, 'Degradation cost', 14);
+    expect(solvedCount(view)).toBe(1);
+    cleanup();
+  });
+  it('6.5: an on-peak block and the evening CfD', async () => {
+    const view = await load(5);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'On-peak block bought', 200);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Evening CfD bought', 150);
+    expect(solvedCount(view)).toBe(1);
+    cleanup();
+  });
+  it('6.6: a 3 MW position limit', async () => {
+    const view = await load(6);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Position limit', 2);
+    expect(solvedCount(view)).toBe(0);
+    await slide(view, 'Stop-loss', 1000);
+    await slide(view, 'Position limit', 3);
+    expect(solvedCount(view)).toBe(1);
+    cleanup();
+  });
 });

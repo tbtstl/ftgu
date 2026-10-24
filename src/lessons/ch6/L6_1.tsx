@@ -20,6 +20,7 @@ import {
   Slider,
   Tn,
   hour as fmtHour,
+  lessonHref,
   linePath,
   niceDomain,
   niceTicks,
@@ -130,16 +131,18 @@ function PayoffChart({ book, rt }: { book: Book; rt: number }) {
         real-time price, $/MWh
       </text>
       <text className="ax" x={6} y={288}>
-        DA − RT
+        inc earns DA − RT
       </text>
     </svg>
   );
 }
 
 const DAYS = standardHistory();
+/** Days 73 and 120 (indices 72 and 119): the two evenings when the real-time price passed $2,000. */
+const SPIKE_DAYS = [72, 119];
 
 /** Daily P&L as bars, one per historical day, with the few days that leave the scale drawn as capped bars. */
-function DailyBars({ values, ariaLabel }: { values: number[]; ariaLabel: string }) {
+function DailyBars({ values, title, ariaLabel }: { values: number[]; title: string; ariaLabel: string }) {
   const lo = Math.min(0, quantile(values, 0.03));
   const hi = Math.max(0, quantile(values, 0.97));
   const [d0, d1] = niceDomain(lo === hi ? -1 : lo, lo === hi ? 1 : hi, 4);
@@ -152,7 +155,7 @@ function DailyBars({ values, ariaLabel }: { values: number[]; ariaLabel: string 
   return (
     <svg className="chart" viewBox="0 0 640 230" role="img" aria-label={ariaLabel}>
       <text className="ax" x={x0} y={12}>
-        P&amp;L per day
+        {title}
       </text>
       <GridY y={y} ticks={niceTicks(d0, d1, 4)} x0={x0} x1={x1} format={kusd} baseline={0} />
       {values.map((v, i) => {
@@ -222,6 +225,8 @@ export default function Lesson() {
     .map((r) => ({ ...r, stats: summarize(r.xs) }));
   const total = summarize(hist.total);
   const losing = hist.total.filter((v) => v < 0).length;
+  // The same days without the two evenings when a trip sent the real-time price past $2,000.
+  const calm = summarize(hist.total.filter((_, i) => !SPIKE_DAYS.includes(i)));
   const money = (v: number) => <Tn tone={v < 0 ? 'red' : v > 0 ? 'green' : 'ink'}>{usd(v)}</Tn>;
 
   return (
@@ -238,8 +243,18 @@ export default function Lesson() {
         can be traced back to something physical. That makes them a fair place to learn, and a dangerous place to get confident.
       </P>
       <P>
-        Start with a single hour. The day-ahead market has already cleared it at <K c="price">$40</K> per MWh. The real-time price won’t be known until the hour
-        arrives. A trading desk can hold three kinds of position going into that hour:
+        The 120 days run from spring into summer: the first month averages about 16 °C, the last about 27 °C. The gas price moves from day to day, between 0.85 and
+        1.48 times a reference price, and that day’s <b>gas multiplier</b> scales the cost of every gas plant. Each day has day-ahead prices, cleared on the
+        forecasts, and real-time prices, cleared on what actually happened. Plants trip only in real time, so the day-ahead market never sees an outage coming, and on
+        two hot evenings, days 73 and 120, a trip sent the real-time price above $2,000. Positions that gain when the evening price spikes happened to pay well in
+        this history. Real markets often charge a premium for that kind of insurance: in their tightest hours, day-ahead prices tend to sit above the average
+        real-time price.
+      </P>
+      <P>
+        Start with a single hour. The day-ahead market has already cleared it at <K c="price">$40</K> per MWh at the region’s trading hub. A <b>hub</b>, as <a href={lessonHref('5.3')}>Lesson 5.3</a> described, is a
+        published price where contracts are written and traded, usually an average of many nodes’ prices; in our region it’s the price the region would have
+        without congestion, and every price in this chapter is a hub price unless we say otherwise. The real-time price won’t be known until the hour arrives. A
+        trading desk can hold three kinds of position going into that hour:
       </P>
       <P>
         <K tone="orange">Physical generation.</K> The desk runs the Lakeside combined-cycle plant, which costs $36 to produce a megawatt-hour at today’s gas price, and
@@ -305,8 +320,8 @@ export default function Lesson() {
       </P>
       <P>
         Add an inc of the same size as Lakeside’s output and the slopes cancel. The desk now earns $4 on every megawatt-hour, whatever happens in real time — exactly
-        what it would have earned by selling the plant’s output in the day-ahead market, as in Lesson 4.5. Selling the CfD instead locks in $6, the gap between the
-        strike and the plant’s cost. A generator that has hedged its whole output no longer cares where the price goes, and that’s the point.
+        what it would have earned by selling the plant’s output in the day-ahead market, as in <a href={lessonHref('4.5')}>Lesson 4.5</a>. Selling the CfD instead
+        locks in $6, the gap between the strike and the plant’s cost. A generator that has hedged its whole output no longer cares where the price goes, and that’s the point.
       </P>
       <P>
         Now tick the box. A gas plant doesn’t have to run: when the price is below its cost it can simply switch off. Its payoff bends at $36 and can no longer fall
@@ -317,7 +332,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Build a book that makes exactly $1,200 this hour, whatever the real-time price turns out to be."
+        question="Build a book that makes exactly $1,200 this hour, whatever the real-time price turns out to be. Lakeside doesn’t have to run at full output."
         solved={solved}
         status={
           flat
@@ -342,49 +357,56 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the book from <FigRef to="Trading Desk Simulator">the first demonstration</FigRef> is held in one hour of every day of the simulated
-        history, with Lakeside’s cost moving with each day’s gas price. Change the book there, or the hour here:
+        history, with Lakeside’s cost moving with each day’s gas price. Its three positions come with it, so you can change the book, or the hour, here. When the
+        book holds more than one position, a table splits the profit between them:
       </P>
 
       <Figure name="Trading Desk Simulator · 120 days" scenario={s}>
         <DailyBars
           values={hist.total}
-          ariaLabel={`The book’s profit at ${fmtHour(hour)} on each of 120 simulated days. Average ${usd(total.mean)} per day; worst day ${usd(total.worst)}, best day ${usd(total.best)}.`}
+          title={`P&L at ${fmtHour(hour)}, each day`}
+          ariaLabel={`The book’s profit at ${fmtHour(hour)} on each of 120 simulated days. Average ${usd(total.mean)} per day, or ${usd(calm.mean)} without days 73 and 120; worst day ${usd(total.worst)}, best day ${usd(total.best)}.`}
         />
+        <Slider label="Lakeside output" tone="orange" value={gen} min={0} max={400} step={10} onChange={(v) => s.set({ gen: v })} display={`${gen} MW`} />
+        <Slider label="Virtual position" tone="violet" value={inc} min={-300} max={300} step={10} onChange={(v) => s.set({ inc: v })} display={virtualLabel(inc)} />
+        <Slider label="CfD at $42" tone="teal" value={cfd} min={-400} max={400} step={10} onChange={(v) => s.set({ cfd: v })} display={cfdLabel(cfd)} />
         <Slider label="Hour of the day" value={hour} min={0} max={23} onChange={(v) => s.set({ hour: v })} display={fmtHour(hour)} />
         <Readouts
           items={[
             { label: 'average per day', value: usd(total.mean), tone: total.mean < 0 ? 'red' : 'green' },
+            { label: 'without days 73 and 120', value: usd(calm.mean), tone: calm.mean < 0 ? 'red' : 'green' },
             { label: 'worst day', value: usd(total.worst), tone: total.worst < 0 ? 'red' : 'ink' },
-            { label: 'best day', value: usd(total.best), tone: total.best > 0 ? 'green' : 'ink' },
             { label: 'losing days', value: `${losing} of ${hist.total.length}` },
           ]}
         />
-        <DataTable
-          caption="Profit by position, per day"
-          rows={rows}
-          rowKey={(r) => r.id}
-          columns={[
-            {
-              label: 'Position',
-              cell: (r) => (
-                <>
-                  <span className="sw" style={{ background: r.color, marginRight: 8, verticalAlign: '-1px' }} />
-                  {r.name}
-                </>
-              ),
-            },
-            { label: 'Average', cell: (r) => money(r.stats.mean) },
-            { label: 'Worst day', cell: (r) => money(r.stats.worst) },
-            { label: 'Best day', cell: (r) => money(r.stats.best) },
-          ]}
-          footer={['Whole book', money(total.mean), money(total.worst), money(total.best)]}
-        />
+        {rows.length > 1 && (
+          <DataTable
+            caption={`Profit by position at ${fmtHour(hour)}, per day`}
+            rows={rows}
+            rowKey={(r) => r.id}
+            columns={[
+              {
+                label: 'Position',
+                cell: (r) => (
+                  <>
+                    <span className="sw" style={{ background: r.color, marginRight: 8, verticalAlign: '-1px' }} />
+                    {r.name}
+                  </>
+                ),
+              },
+              { label: 'Average', cell: (r) => money(r.stats.mean) },
+              { label: 'Worst day', cell: (r) => money(r.stats.worst) },
+              { label: 'Best day', cell: (r) => money(r.stats.best) },
+            ]}
+          />
+        )}
       </Figure>
 
       <P>
-        At the starting settings, Lakeside sells 400 MW at 17:00 every day without any hedge. It makes $2,595 on an average day and loses money on 35 days of the 120,
-        when gas is expensive and the price is low. Its best day, day 73, earns $109,800: a plant tripped on a hot evening and the real-time price reached $325. Its three
-        best days earn 61% of its profit over the 120: an unhedged generator lives on a handful of days like that one.
+        At the starting settings, Lakeside sells 400 MW at 17:00 every day without any hedge. In that one hour it makes $2,595 on an average day, and it loses money
+        on 35 days of the 120, when gas is expensive and the price is low. Its best day, day 73, earns $109,800: a plant tripped on a hot evening and the
+        real-time price reached $325. Its three best days earn 61% of its profit over the 120 days: an unhedged generator lives on a handful of days like that one.
+        Without days 73 and 120, its average falls to $1,100.
       </P>
       <P>
         Sell a 400 MW CfD as well and the spike disappears from both sides. The worst day is now day 71, a loss of $4,512, when gas was 1.48 times its reference price
@@ -394,8 +416,10 @@ export default function Lesson() {
       </P>
       <P>
         Finally, zero the plant and hold a 300 MW inc on its own. It wins on 53 days, loses on 67, and its worst day, again day 73, costs $79,002. A trader holding it
-        isn’t hedging anything; they’re betting that real-time prices will come in below day-ahead. In the next lesson we’ll ask whether that bet, or its opposite,
-        can be made to pay — and what the spreads between the two prices really look like in the history.
+        isn’t hedging anything; they’re betting that real-time prices will come in below day-ahead. Flip it to a 300 MW dec and the bet reverses: it wins on 67 days
+        and averages $1,245 a day, but without days 73 and 120 it averages only $162. Being long the evening spike paid in this history, but mostly because of two
+        evenings. In the next lesson we’ll ask whether that bet, or its opposite, can be made to pay — and what the spreads between the two prices really look like
+        in the history.
       </P>
     </LessonPage>
   );

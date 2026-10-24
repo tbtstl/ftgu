@@ -14,6 +14,7 @@ import {
   Legend,
   LessonPage,
   Op,
+  lessonHref,
   P,
   Readouts,
   Slider,
@@ -46,6 +47,12 @@ const X1 = 628;
 const SLOT = (X1 - X0) / 24;
 const xc = (h: number) => X0 + (h + 0.5) * SLOT;
 const xb = (h: number) => X0 + h * SLOT;
+
+const FRONTIER_E = Array.from({ length: 33 }, (_, k) => k * 50);
+/** Lowest achievable peak at each energy capacity on the frontier chart, for a battery of `power` MW. */
+function frontierFor(power: number): number[] {
+  return FRONTIER_E.map((e) => lowestPeak(NET, { powerMW: power, energyMWh: e, efficiency: 0.85 }));
+}
 
 const DEFAULT_SCHEDULE: number[] = Array.from({ length: 24 }, (_, h) => (h >= 1 && h <= 3 ? -100 : h === 16 || h === 17 ? 100 : 0));
 const CHALLENGE = { power: 100, energy: 200, target: 1215 };
@@ -182,10 +189,9 @@ export default function Lesson() {
   const cap = lowestPeak(NET, b2);
   const best = withBattery(NET, { id: 'b2', ...b2, soc0: 0 }, shaveSchedule(NET, b2, cap));
   const powerBound = b2.powerMW > 0 && cap <= PEAK - b2.powerMW + 0.5;
-  const frontier = useMemo(() => {
-    const es = Array.from({ length: 33 }, (_, k) => k * 50);
-    return [50, 100, 200, 400].map((p) => ({ p, ys: es.map((e) => lowestPeak(NET, { powerMW: p, energyMWh: e, efficiency: 0.85 })) }));
-  }, []);
+  const frontier = useMemo(() => [50, 100, 200, 400].map((p) => ({ p, ys: frontierFor(p) })), []);
+  // The current power rating's own curve, whatever its value.
+  const live = useMemo(() => frontierFor(s2.state.power), [s2.state.power]);
   const xE = scale(0, 1600, X0, X1);
   const yP = scale(900, 1300, 196, 26);
 
@@ -204,12 +210,13 @@ export default function Lesson() {
   return (
     <LessonPage id="3.4">
       <P>
-        The duck curve from the last lesson has a deep belly in the middle of the day and a steep neck in the evening. If only some of that midday energy could be saved for a
-        few hours, both problems would shrink at once. That’s what a battery does. It’s the first plant in this chapter that is neither a source of energy nor a customer, but a
-        bit of both at different times.
+        The last lesson ended on the duck curve’s steep evening neck, and on the question of how to move energy from the hours when the grid has plenty to the hours when it’s
+        short. That’s what a battery does. We met batteries briefly in <a href={lessonHref('3.2')}>Lesson 3.2</a>, catching a falling frequency; this is the first time we
+        schedule one, as a plant that is neither a source of energy nor a customer, but a bit of both at different times.
       </P>
       <P>
-        Here is the region’s net load on the reference day — demand minus Ridge wind and Valley solar — with a battery connected to the grid. The battery starts the day empty.
+        Here is the region’s net load on the reference day — demand minus Ridge wind and Valley solar at today’s sizes, so there’s no deep midday belly yet, and the hours of
+        plenty are the small hours of the night — with a battery connected to the grid. The battery starts the day empty.
         Drag the bars in the middle chart up to discharge in an hour, or down to charge. The dashed outlines are what you ask for; the solid bars are what the battery can
         actually do, given how full it is:
       </P>
@@ -341,28 +348,40 @@ export default function Lesson() {
           yFormat={(v) => fmt(v)}
           height={240}
         />
-        <svg className="chart" viewBox="0 0 640 230" role="img" aria-label="Lowest achievable peak against energy capacity, for batteries of 50, 100, 200 and 400 MW.">
+        <svg
+          className="chart"
+          viewBox="0 0 640 230"
+          role="img"
+          aria-label={`Lowest achievable peak against energy capacity, for a ${s2.state.power} MW battery and, for comparison, batteries of 50, 100, 200 and 400 MW.`}
+        >
           <text className="ax" x={X0} y={14}>
             Lowest possible peak, MW
           </text>
           <GridY y={yP} ticks={[900, 1000, 1100, 1200, 1300]} x0={X0} x1={X1} format={(v) => fmt(v)} />
-          {frontier.map((f) => (
-            <g key={f.p}>
-              <path
-                d={linePath(
-                  f.ys.map((_, k) => xE(k * 50)),
-                  f.ys.map((v) => yP(Math.max(900, v))),
-                )}
-                fill="none"
-                stroke={f.p === s2.state.power ? GRAPHIC.red : '#b5b5b5'}
-                strokeWidth={f.p === s2.state.power ? 3 : 2}
-                strokeLinejoin="round"
-              />
-              <text className="ax ax-e" x={X1 - 2} y={yP(Math.max(900, f.ys[f.ys.length - 1])) - 6}>
-                {f.p} MW
+          {frontier
+            .filter((f) => f.p !== s2.state.power)
+            .map((f) => {
+              const yEnd = yP(Math.max(900, f.ys[f.ys.length - 1]));
+              const crowded = s2.state.power > 0 && Math.abs(yEnd - yP(Math.max(900, live[live.length - 1]))) < 14;
+              return (
+                <g key={f.p}>
+                  <path d={linePath(FRONTIER_E.map(xE), f.ys.map((v) => yP(Math.max(900, v))))} fill="none" stroke="#b5b5b5" strokeWidth={2} strokeLinejoin="round" />
+                  {!crowded && (
+                    <text className="ax ax-e" x={X1 - 2} y={yEnd - 6}>
+                      {f.p} MW
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          {s2.state.power > 0 && (
+            <g>
+              <path d={linePath(FRONTIER_E.map(xE), live.map((v) => yP(Math.max(900, v))))} fill="none" stroke={GRAPHIC.red} strokeWidth={3} strokeLinejoin="round" />
+              <text className="lab" x={X1 - 2} y={yP(Math.max(900, live[live.length - 1])) - 6} textAnchor="end" style={{ fill: GRAPHIC.red, paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 4 }}>
+                {s2.state.power} MW
               </text>
             </g>
-          ))}
+          )}
           <circle cx={xE(Math.min(1600, s2.state.energy))} cy={yP(Math.max(900, cap))} r={6} fill={GRAPHIC.red} stroke="#fcfcfb" strokeWidth={2} />
           <line className="base" x1={X0} x2={X1} y1={196} y2={196} />
           {[0, 400, 800, 1200, 1600].map((e) => (
@@ -377,17 +396,17 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'duration', value: s2.state.power > 0 ? `${fmt(s2.state.energy / s2.state.power, 1)} h` : '—' },
-            { label: 'lowest possible peak', value: mw(cap) },
             { label: 'cut from the peak', value: mw(PEAK - cap) },
-            { label: 'what limits it', value: s2.state.power === 0 || s2.state.energy === 0 ? '—' : powerBound ? 'power' : 'energy', tone: powerBound ? 'red' : 'gold' },
           ]}
         />
         <Slider label="Power rating" tone="red" value={s2.state.power} min={0} max={400} step={25} onChange={(v) => s2.set({ power: v })} display={mw(s2.state.power)} />
         <Slider label="Energy capacity" tone="gold" value={s2.state.energy} min={0} max={1600} step={50} onChange={(v) => s2.set({ energy: v })} display={mwh(s2.state.energy)} />
         <Caption>
-          {powerBound
-            ? `The cap sits exactly ${mw(s2.state.power)} below the peak: more energy wouldn’t help, only more power would.`
-            : `The battery runs out of energy before it runs out of power: it can hold the peak to ${mw(cap)}, and a larger battery would cut deeper.`}
+          {s2.state.power === 0 || s2.state.energy === 0
+            ? 'With no power or no energy to work with, the battery can’t touch the peak.'
+            : powerBound
+              ? `The cap sits exactly ${mw(s2.state.power)} below the peak: more energy wouldn’t help, only more power would.`
+              : `The battery runs out of energy before it runs out of power: it can hold the peak to ${mw(cap)}, and a larger battery would cut deeper.`}
         </Caption>
       </Figure>
 
@@ -398,10 +417,11 @@ export default function Lesson() {
         more, and the third another {mwh(cut(PEAK - 300) - cut(PEAK - 200))}.
       </P>
       <P>
-        That’s why a battery sized for the evening peak is usually a few hours long, and why the same battery can do several jobs: the fast frequency response of Lesson 3.2
-        needs plenty of power but very little energy, while shifting the midday solar of Lesson 3.3 into the evening needs hours of storage. Whatever the job, a battery adds
+        That’s why a battery sized for the evening peak is usually a few hours long, and why the same battery can do several jobs: the fast frequency response of{' '}
+        <a href={lessonHref('3.2')}>Lesson 3.2</a> needs plenty of power but very little energy, while shifting the midday solar of{' '}
+        <a href={lessonHref('3.3')}>Lesson 3.3</a> into the evening needs hours of storage. Whatever the job, a battery adds
         a {pct(1 - 0.85)} loss to the energy it handles, so it only makes sense when the energy is worth more at the time it comes out than when it went in. In a market, that
-        difference in value is a difference in price, and Lesson 6.4 schedules a battery to earn it. In the next lesson we’ll look at a way to move energy through time that needs
+        difference in value is a difference in price, and <a href={lessonHref('6.4')}>Lesson 6.4</a> schedules a battery to earn it. In the next lesson we’ll look at a way to move energy through time that needs
         no storage at all: moving the demand itself.
       </P>
     </LessonPage>

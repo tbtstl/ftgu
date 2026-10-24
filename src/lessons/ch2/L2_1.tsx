@@ -3,7 +3,6 @@ import {
   Caption,
   Challenge,
   Controls,
-  DataTable,
   Eq,
   FUEL,
   Figure,
@@ -17,9 +16,7 @@ import {
   P,
   Readouts,
   Slider,
-  Swatch,
   TimeChart,
-  Tn,
   fmt,
   hour,
   lessonHref,
@@ -69,6 +66,16 @@ export const NUCLEAR_CARBON = (() => {
   return -1;
 })();
 
+/** The screening figure's opening settings, and its challenge: the carbon price at which nuclear first wins at 7,000 hours. */
+export const SCREENING_DEFAULTS = { carbon: 0, hours: 7000 };
+export function carbonSolved(carbon: number): boolean {
+  return carbon === NUCLEAR_CARBON;
+}
+
+/** The two contenders at 7,000 hours with no carbon price, $ per MWh. */
+export const CC_AT_BASELOAD = screeningCost(MIX_TECH.gasCC, BASELOAD_HOURS, 0);
+export const NUC_AT_BASELOAD = screeningCost(MIX_TECH.nuclear, BASELOAD_HOURS, 0);
+
 // Wind and solar can't choose their hours: place them at the reference day's capacity factors.
 const DAY_CF = { wind: WIND_CF.reduce((s, v) => s + v, 0) / 24, solar: SOLAR_CF.reduce((s, v) => s + v, 0) / 24 };
 
@@ -110,7 +117,7 @@ export default function Lesson() {
   if (cur.curtailed > 0.5) caption += ` ${mw(cur.curtailed)} of wind and solar output has nowhere to go and is turned away.`;
 
   // Screening curve.
-  const s2 = useScenario('screening', { carbon: 0, hours: 7000 });
+  const s2 = useScenario('screening', SCREENING_DEFAULTS);
   const { carbon, hours } = s2.state;
   const x = SX;
   const y = SY;
@@ -131,11 +138,10 @@ export default function Lesson() {
     return linePath(hs.map(SX), hs.map((h) => SY(Math.min(330, screeningCost(MIX_TECH[cheapestAt(h, carbon)], h, carbon)))));
   }, [carbon]);
   const best = cheapestAt(hours, carbon);
-  const rows = SCREEN.map((f) => ({ f, cost: screeningCost(MIX_TECH[f], hours, carbon), can: hours <= maxHours(f) })).sort((a, b) => Number(b.can) - Number(a.can) || a.cost - b.cost);
   const nucAt = screeningCost(MIX_TECH.nuclear, BASELOAD_HOURS, carbon);
   const ccAt = screeningCost(MIX_TECH.gasCC, BASELOAD_HOURS, carbon);
   const baseBest = cheapestAt(BASELOAD_HOURS, carbon);
-  const solved2 = carbon === NUCLEAR_CARBON;
+  const solved2 = carbonSolved(carbon);
   const g = MIX_TECH[best];
 
   return (
@@ -146,11 +152,19 @@ export default function Lesson() {
         appear in every chapter, so it’s worth meeting them properly.
       </P>
       <P>
+        First, the two units every plant is described in. As <a href={lessonHref('1.1')}>Lesson 1.1</a> showed, a megawatt (MW) measures{' '}
+        <K c="power">power</K>, a rate: how fast energy is being delivered at a given moment. The <K c="energy">energy</K> itself is power multiplied by time, and at grid
+        scale it’s counted in megawatt-hours (MWh): 1,440 MW for an hour — the region’s demand in its busiest hour — is 1,440 MWh, and a 400 MW plant running flat out
+        for a whole day produces 9,600 MWh. A plant’s size is a number of megawatts, but what it produces and sells is megawatt-hours, so its fuel bill and its emissions
+        are counted per megawatt-hour.
+      </P>
+      <P>
         On the coast at Harbor sits <b>Harbor Point</b>, a 400 MW nuclear plant. Out to the West is <b>Ironwood</b>, a 300 MW coal plant. Two gas-fired combined-cycle
         plants do much of the flexible work: <b>Lakeside</b> (400 MW) at Central, and the smaller, less efficient <b>Mill Creek</b> (250 MW) in Metro, the region’s city.
         Behind them stand the 200 MW <b>Eastgate</b> gas peaker in the East and <b>Old Quay</b>, an 80 MW oil plant in Metro. The hills of the North have the{' '}
         <b>Falls</b> hydro plant (150 MW) and the <b>Ridge</b> wind farm (350 MW), and the East has the <b>Valley</b> solar farm (400 MW). Here is the region, with
-        each plant at its site. Select one to see how it runs:
+        each plant at its site and size. Select one to see its running cost and emissions per megawatt-hour, and its <b>ramp rate</b>, the most its output can change in
+        an hour:
       </P>
 
       <Figure name="Region map" onReset={() => setPlant(null)}>
@@ -162,7 +176,6 @@ export default function Lesson() {
           <>
             <Readouts
               items={[
-                { label: 'capacity', value: mw(picked.capacity) },
                 { label: 'cost to run, per MWh', value: usd(picked.marginalCost), tone: 'green' },
                 { label: 'output change per hour', value: picked.variable ? 'weather' : mw(picked.rampRate) },
                 { label: 'CO₂ per MWh', value: `${fmt(picked.emissions, 2)} t` },
@@ -173,11 +186,11 @@ export default function Lesson() {
             </Caption>
           </>
         ) : (
-          <Caption>Select a plant on the map to see its size, its running cost and how quickly it can change its output.</Caption>
+          <Caption>Select a plant on the map to see its running cost, its emissions and its ramp rate: how quickly it can change its output.</Caption>
         )}
       </Figure>
       <P>
-        Add them up and the region has 2,530 MW of generating capacity. On the reference day we’ll use throughout the course, demand peaks at 1,440 MW at 7 p.m. Why build
+        Add them up and the region has 2,530 MW of generating capacity. On the reference day we’ll use throughout the course, demand peaks at 1,440 MW at 19:00. Why build
         three-quarters more capacity than the region ever uses at once? To find out, let’s pretend we can build the region’s fleet from scratch. The builder in the next demonstration starts
         with the region’s actual mix of technologies. Each slider sets how many megawatts of one technology to build, and the chart shows them dispatched hour by hour
         against the reference day’s demand — cheapest to run first, as we’ll see markets do in <a href={lessonHref('4.3')}>Lesson 4.3</a>. Try removing the coal
@@ -197,7 +210,7 @@ export default function Lesson() {
           ariaLabel={`Generation by technology over the reference day against demand. Firm capacity ${mw(r.firm)} against a peak of ${mw(PEAK)}; ${mwh(r.unserved)} unserved; ${mwh(r.curtailed)} curtailed.`}
           stack={stack}
           series={[{ values: SYSTEM_DEMAND, color: '#333', width: 2.5 }]}
-          refLines={r.firm <= Y_MAX - 60 ? [{ y: r.firm, color: '#6b6b6b', dash: '6 4', label: `firm capacity ${mw(r.firm)}` }] : []}
+          refLines={r.firm <= Y_MAX - 60 ? [{ y: r.firm, color: '#6b6b6b', dash: '6 4', label: 'firm capacity' }] : []}
           yMin={0}
           yMax={Y_MAX}
           yLabel="MW"
@@ -217,56 +230,33 @@ export default function Lesson() {
               max={BUILDER_RANGE[f]}
               step={10}
               onChange={(v) => s1.set({ [f]: v } as Partial<Mix>)}
-              display={mw(mix[f])}
+              display={mix[f] > 0 ? `${mw(mix[f])} · CF ${pct(r.capacityFactor[f])}` : mw(0)}
             />
           ))}
         </Controls>
         <Readouts
           items={[
             { label: `firm capacity, for a ${mw(PEAK)} peak`, value: mw(r.firm), tone: r.firm >= PEAK ? undefined : 'red' },
-            { label: 'cost of the day', value: millions(r.totalCost), tone: 'green' },
+            { label: r.totalCost > 0 ? `cost of the day, ${pct(r.fixedCost / r.totalCost)} of it fixed` : 'cost of the day', value: millions(r.totalCost), tone: 'green' },
             { label: 'CO₂ emitted', value: `${fmt(r.emissions)} t` },
-            { label: 'unserved', value: mwh(r.unserved), tone: r.unserved > 0.5 ? 'red' : undefined },
-            { label: 'curtailed', value: mwh(r.curtailed) },
           ]}
-        />
-        <DataTable
-          caption="Each technology over the reference day"
-          rows={SLIDER_ORDER.map((f) => ({ f }))}
-          rowKey={(row) => row.f}
-          rowClass={(row) => (mix[row.f] > 0 ? '' : 'dim')}
-          columns={[
-            {
-              label: 'Technology',
-              cell: (row) => (
-                <>
-                  <Swatch color={FUEL[row.f]} />
-                  {FUEL_LABEL[row.f]}
-                </>
-              ),
-            },
-            { label: 'Built', cell: (row) => mw(mix[row.f]) },
-            { label: <Tn tone="gold">Energy</Tn>, cell: (row) => mwh(r.energy[row.f]) },
-            { label: 'Capacity factor', cell: (row) => (mix[row.f] > 0 ? pct(r.capacityFactor[row.f]) : '—') },
-            { label: <Tn tone="green">Fixed cost</Tn>, cell: (row) => usd(r.fixedBy[row.f]) },
-            { label: <Tn tone="green">Running cost</Tn>, cell: (row) => usd(r.variableBy[row.f]) },
-          ]}
-          footer={['Total', mw(r.nameplate), mwh(MIX_FUELS.reduce((t, f) => t + r.energy[f], 0)), '', usd(r.fixedCost), usd(r.variableCost)]}
         />
       </Figure>
 
       <P>
         A plant’s <b>nameplate capacity</b> is the most it can produce. What it actually produces depends on when it’s needed, and the fairest summary is its{' '}
-        <K c="energy">capacity factor</K>: the energy it delivered, divided by the energy it would have delivered running flat out. With the region’s mix, Harbor Point
+        <K c="energy">capacity factor</K>, shown as CF beside each slider: the energy it delivered, divided by the energy it would have delivered running flat out — its
+        megawatt-hours over the day, divided by its megawatts times 24 hours. With the region’s mix, Harbor Point
         and Falls run all day, a capacity factor of 100%. Ridge wind reaches 37% and Valley solar 26%, because that’s what the day’s wind and sunshine allow. Ironwood coal
         reaches 71%, the gas combined-cycle plants only 13%, and Eastgate and Old Quay don’t run at all. Scrub across the chart to see which plant is the last one switched
         on in each hour: overnight it’s coal, and in the evening it’s gas.
       </P>
       <P>
-        The table splits each plant’s costs in two. The <K c="price">running cost</K> — mostly fuel — is paid for every megawatt-hour produced, and ranges from $0 for wind
+        The cost of the day comes in two parts. The <K c="price">running cost</K> — mostly fuel — is paid for every megawatt-hour produced, and ranges from $0 for wind
         and sunlight to $165 for oil. The <K c="price">fixed cost</K> is the price of having the plant at all: construction, financing, staff and upkeep, spread out as so
-        many dollars per megawatt per year whether it runs or not. With the region’s mix, the day costs $1.78 million, and $1.40 million of that, 79%, is fixed. Harbor
-        Point is the extreme case: the cheapest plant in the region to run, at $9 per megawatt-hour, and by far the most expensive to own, at $603,000 a day.
+        many dollars per megawatt per year: a charge on the plant’s megawatts, paid whether it produces any megawatt-hours or not. The cost of the day adds the two
+        together. With the region’s mix, the day costs $1.78 million, and $1.40 million of that, 79%, is fixed. Harbor
+        Point is the extreme case: the cheapest plant that burns fuel, at $9 per megawatt-hour, and by far the most expensive to own, at $603,000 a day.
       </P>
       <P>
         Wind and solar have almost no running cost, so whatever they produce displaces fuel. In our numbers that roughly pays for them: take Ridge and Valley away and the
@@ -280,17 +270,15 @@ export default function Lesson() {
       </P>
       <P>
         Plants break down and need maintenance. Our model gives each technology an <b>availability</b>, the share of the time it’s in working order: 92% for nuclear and
-        gas peakers, 90% for combined-cycle plants, 85% for coal and oil, and 95% for hydro. And wind and solar produce only what the weather allows. At 7 p.m. on the
+        gas peakers, 90% for combined-cycle plants, 85% for coal and oil, and 95% for hydro. And wind and solar produce only what the weather allows. At 19:00 on the
         reference day the sun has set and Ridge wind is producing 40% of its capacity, but on a still winter evening it might produce nothing. Planners therefore count{' '}
-        <b>firm capacity</b>: the capacity of every plant that doesn’t depend on the weather, scaled by its availability. Real planners usually credit wind and solar with a
-        fraction of their capacity, based on how much they can be expected to produce when demand is highest; we’ll be strict and give them none. The region’s firm capacity is 1,603 MW, 11% above
-        the peak, and that margin is what the spare plants are for.
+        <b>firm capacity</b>: in our model, the capacity of every plant that doesn’t depend on the weather, scaled by its availability. The region’s firm capacity is
+        1,603 MW, 11% above the peak, and that margin is what the spare plants are for.
       </P>
       <P>
         Firm and flexible aren’t the same thing, either. Harbor Point is firm, but it can’t follow demand: like most nuclear plants it runs at a steady output, and in our
         model it never drops below 90% of its capacity — the flat band at the bottom of the chart. Gas, coal, oil and hydro plants are <b>dispatchable</b>: the operator can
-        raise and lower them on instruction. Wind and solar can only be turned down, which is called <b>curtailment</b>. Spinning generators also store energy in their rotating mass,
-        which steadies the grid’s frequency for a few crucial seconds after a power plant suddenly trips; we’ll come back to that inertia in <a href={lessonHref('3.2')}>Lesson 3.2</a>.
+        raise and lower them on instruction. Wind and solar can only be turned down, which is called <b>curtailment</b>.
       </P>
 
       <Challenge
@@ -300,6 +288,10 @@ export default function Lesson() {
         status={`Right now: firm capacity ${mw(r.firm)}, ${fmt(r.emissions)} t of CO₂, and a cost of ${millions(r.totalCost)}${r.unserved > 0.5 ? `, with ${mwh(r.unserved)} unserved` : ''}.`}
         success={`Solved: ${mw(r.firm)} of firm capacity, ${fmt(r.emissions)} t of CO₂ and ${millions(r.totalCost)} for the day. The trick is to give the two jobs to different plants: low-carbon plants for the energy, and cheap-to-build plants that seldom run for the firm capacity.`}
       />
+      <P>
+        Fleets that pass can cost nearly a quarter less than the region’s own, so why didn’t the region build one? Real plants are built over decades, under fuel prices and
+        expectations that have since changed, and a single breezy reference day flatters wind: a real fleet also has to get through still, cloudy weeks.
+      </P>
 
       <H2>Why build more than one kind?</H2>
       <P>
@@ -316,7 +308,7 @@ export default function Lesson() {
       <P>
         Plotting this against the hours run gives a <b>screening curve</b> for each technology, a classic tool of power-system planning. The next chart draws one for each
         technology that doesn’t depend on the weather; each line ends at the most hours a year that technology is available. The carbon price adds a charge for each tonne of CO₂
-        emitted, as an emissions tax or a cap-and-trade market would:
+        emitted, as an emissions tax or a cap-and-trade market would, and the hours slider picks the number of hours at which to compare them:
       </P>
 
       <Figure name="Generation Portfolio Builder · screening curves" scenario={s2}>
@@ -381,29 +373,6 @@ export default function Lesson() {
           <Op>=</Op>
           <K c="price">${screeningCost(g, hours, carbon).toFixed(2)}</K>
         </Eq>
-        <DataTable
-          caption={`Average cost per MWh at ${hours} hours a year`}
-          rows={rows}
-          rowKey={(row) => row.f}
-          rowClass={(row) => (row.f === best ? 'hl' : row.can ? '' : 'dim')}
-          columns={[
-            {
-              label: 'Technology',
-              cell: (row) => (
-                <>
-                  <Swatch color={FUEL[row.f]} />
-                  {FUEL_LABEL[row.f]}
-                  {row.f === best && (
-                    <span style={{ marginLeft: 8, fontSize: 12 }}>
-                      <Tn tone="green">cheapest</Tn>
-                    </span>
-                  )}
-                </>
-              ),
-            },
-            { label: `Cost at ${fmt(hours)} h`, cell: (row) => (row.can ? `$${row.cost.toFixed(2)}` : `can’t run ${fmt(hours)} h`) },
-          ]}
-        />
       </Figure>
 
       <P>
@@ -421,14 +390,14 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`Find the lowest whole-dollar carbon price at which nuclear is the cheapest way to run a plant ${fmt(BASELOAD_HOURS)} hours a year.`}
+        question={`With no carbon price, a plant run ${fmt(BASELOAD_HOURS)} hours a year costs $${CC_AT_BASELOAD.toFixed(2)} per MWh as combined-cycle gas and $${NUC_AT_BASELOAD.toFixed(2)} as nuclear. Gas emits ${MIX_TECH.gasCC.emissions} t of CO₂ per MWh; nuclear emits none. Work out the lowest whole-dollar carbon price at which nuclear becomes the cheapest way to run a plant ${fmt(BASELOAD_HOURS)} hours a year, then set the carbon price to check.`}
         solved={solved2}
         status={
           baseBest === 'nuclear'
             ? `At $${carbon} per tonne nuclear is the cheapest at ${fmt(BASELOAD_HOURS)} hours — but is that the lowest such price?`
             : `At $${carbon} per tonne and ${fmt(BASELOAD_HOURS)} hours, ${FUEL_LABEL[baseBest].toLowerCase()} costs $${screeningCost(MIX_TECH[baseBest], BASELOAD_HOURS, carbon).toFixed(2)} per MWh and nuclear $${nucAt.toFixed(2)}.`
         }
-        success={`Solved. At $${NUCLEAR_CARBON} per tonne, nuclear costs $${nucAt.toFixed(2)} per MWh at ${fmt(BASELOAD_HOURS)} hours a year and combined-cycle gas $${ccAt.toFixed(2)}: the carbon charge on gas’s 0.37 t per MWh just outweighs nuclear’s higher fixed cost.`}
+        success={`Solved. Nuclear’s $${(NUC_AT_BASELOAD - CC_AT_BASELOAD).toFixed(2)} disadvantage divided by gas’s ${MIX_TECH.gasCC.emissions} t per MWh is $${((NUC_AT_BASELOAD - CC_AT_BASELOAD) / MIX_TECH.gasCC.emissions).toFixed(2)} a tonne, so it takes $${NUCLEAR_CARBON}: then nuclear costs $${nucAt.toFixed(2)} per MWh and combined-cycle gas $${ccAt.toFixed(2)}. A carbon price works by adding to the running cost of the plants that emit.`}
       />
 
       <P>

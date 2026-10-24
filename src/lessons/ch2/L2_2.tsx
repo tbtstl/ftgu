@@ -2,12 +2,12 @@ import type { KeyboardEvent } from 'react';
 import {
   Caption,
   Challenge,
-  DataTable,
   Eq,
   Figure,
   Frac,
   H2,
   K,
+  Legend,
   LessonPage,
   Op,
   P,
@@ -16,13 +16,15 @@ import {
   Slider,
   Sub,
   Sup,
-  Tn,
   fmt,
   lessonHref,
   pct,
   useScenario,
 } from '../../framework';
 import { lineLoss } from '../../engines/physics/losses';
+import { findIslands } from '../../engines/physics/powerflow';
+import { REGION, nodeName } from '../../model/networks';
+import { LINE_STYLE, RegionMap } from '../shared/RegionMap';
 import { energizeFeeders, type FeederSection, type FeederSource, type FeederSwitch } from '../../engines/ops/feeder';
 
 // ---------------------------------------------------------------------------------------------
@@ -52,6 +54,24 @@ export const CIRCUITS_AT_138 = (() => {
   for (let n = 1; n <= 6; n++) if (chain(138, n, 13.8).tx.share < 0.01) return n;
   return -1;
 })();
+
+/** The circuits challenge: the line at 138 kV, on the fewest circuits that keep its losses under 1%. */
+export function circuitsSolved(s: { txKV: string; circuits: number }): boolean {
+  return s.txKV === '138' && s.circuits === CIRCUITS_AT_138;
+}
+
+/** The Grid Constructor's opening settings: the region's actual voltages, on one circuit. */
+export const CHAIN_DEFAULTS = { txKV: '345' as TxKV, circuits: 1, feederKV: '13.8' as FeederKV };
+
+// ---------------------------------------------------------------------------------------------
+// The region's transmission grid on the map: which substations are still connected.
+
+/** Substations cut off from the largest connected piece of the grid when `out` lines are out of service. */
+export function cutOff(out: string[]): string[] {
+  const islands = findIslands(REGION, out);
+  const main = islands.reduce((a, b) => (b.length > a.length ? b : a));
+  return islands.filter((g) => g !== main).flat();
+}
 
 // ---------------------------------------------------------------------------------------------
 // Two radial feeders out of the Metro substation, four sections each, with a tie between their ends.
@@ -157,9 +177,18 @@ function dots(amps: number) {
 }
 
 export default function Lesson() {
-  const s1 = useScenario('chain', { txKV: '345' as TxKV, circuits: 1, feederKV: '13.8' as FeederKV });
+  const s1 = useScenario('chain', CHAIN_DEFAULTS);
   const c = chain(Number(s1.state.txKV), s1.state.circuits, Number(s1.state.feederKV));
-  const solved1 = s1.state.txKV === '138' && s1.state.circuits === CIRCUITS_AT_138;
+  const solved1 = circuitsSolved(s1.state);
+
+  const sMap = useScenario('network', { out: [] as string[] });
+  const cut = cutOff(sMap.state.out);
+  const toggleMapLine = (id: string) => sMap.set((p) => ({ out: toggle(p.out, id) }));
+  let mapCaption: string;
+  if (cut.length) mapCaption = `${cut.map((id) => nodeName(REGION, id)).join(' and ')} ${cut.length > 1 ? 'are' : 'is'} cut off from the rest of the grid.`;
+  else if (sMap.state.out.length)
+    mapCaption = `With ${sMap.state.out.length} line${sMap.state.out.length > 1 ? 's' : ''} out, every substation is still connected to every other: the power has another way round.`;
+  else mapCaption = 'Every substation is joined to the grid by at least two lines.';
 
   const s2 = useScenario<FeederFigureState>('feeders', { out: [], faults: ['F1-2'], flipped: [] });
   const fs = feederState(s2.state);
@@ -218,7 +247,8 @@ export default function Lesson() {
       <P>
         Here is one path through our region. Lakeside sends 300 MW over the 100 km line from Central to Metro. One of Metro’s distribution feeders carries 5 MW about 3 km
         out into a neighborhood, and a service transformer feeds ten homes, each drawing 2.4 kW at the evening peak, over 40 m of low-voltage cable. Each stage keeps its own
-        conductor whatever voltage you choose, so only the voltage changes. Pick a voltage for the transmission line and for the feeder:
+        conductor whatever voltage you choose, so only the voltage changes. Pick a voltage for the transmission line and for the feeder, and set how many parallel
+        circuits share the transmission line’s 300 MW:
       </P>
 
       <Figure name="Grid Constructor" scenario={s1}>
@@ -332,29 +362,45 @@ export default function Lesson() {
             { label: 'reaches the homes', value: pct(c.delivered, 1) },
           ]}
         />
-        <DataTable
-          caption="Each stage of the path"
-          rows={[
-            { stage: 'Transmission line', v: `${s1.state.txKV} kV`, p: '300 MW', i: `${fmt(c.tx.amps)} A${c.n > 1 ? ` on each of ${c.n}` : ''}`, loss: `${fmt(c.tx.lossMW, 2)} MW` },
-            { stage: 'Distribution feeder', v: `${s1.state.feederKV} kV`, p: '5 MW', i: `${fmt(c.fd.amps)} A`, loss: kwOrMw(c.fd.lossMW) },
-            { stage: 'Service cable', v: '240 V', p: '24 kW', i: `${fmt(c.sv.amps)} A`, loss: `${fmt(c.sv.lossMW * 1e6)} W` },
-          ]}
-          rowKey={(r) => r.stage}
-          columns={[
-            { label: 'Stage', cell: (r) => r.stage },
-            { label: <Tn tone="blue">Voltage</Tn>, cell: (r) => r.v },
-            { label: 'Carries', cell: (r) => r.p },
-            { label: <Tn tone="orange">Current</Tn>, cell: (r) => r.i },
-            { label: <Tn tone="red">Lost</Tn>, cell: (r) => r.loss },
-          ]}
-        />
       </Figure>
 
       <P>
         At the voltages our region actually uses — 345 kV for the line and 13.8 kV for the feeder — the transmission line loses 0.76% of what it carries, the feeder 2.4% and the
         service cable 1.7%, and 95.3% of Lakeside’s output reaches the homes. The feeder loses three times the share the transmission line does, over a thirtieth of the
-        distance, because its voltage is twenty-five times lower. Drop the transmission line to 69 kV and its current rises fivefold, so its losses rise twenty-five-fold, to 19% of
-        everything it carries. Drop the feeder to 4.16 kV and it loses a quarter of its power.
+        distance. To see why, take the current in each conductor from <a href={lessonHref('1.5')}>Lesson 1.5</a>, <K c="power">P</K> ÷ (√3 × <K c="voltage">V</K>),
+        work out the loss in all three conductors, 3 <K c="current">I</K>
+        <Sup>2</Sup>
+        <K c="resistance">R</K>, and divide by the power sent. The √3s cancel, and what’s left is simple:
+      </P>
+      <Eq label="Share of the power lost">
+        <Frac
+          top={
+            <K c="power">
+              P<Sub>loss</Sub>
+            </K>
+          }
+          bottom={<K c="power">P</K>}
+        />
+        <Op>=</Op>
+        <Frac
+          top={
+            <>
+              <K c="power">P</K> <K c="resistance">R</K>
+            </>
+          }
+          bottom={
+            <>
+              <K c="voltage">V</K>
+              <Sup>2</Sup>
+            </>
+          }
+        />
+      </Eq>
+      <P>
+        The feeder’s voltage is twenty-five times lower, which on its own would make its share 625 times larger. But it carries a sixtieth of the power, 5 MW against 300,
+        and its 3 km of wire has under a third of the line’s resistance, 0.9 ohms against 3. Together those bring the ratio down to about three. Drop the transmission line
+        to 69 kV and its voltage falls fivefold, so its share of losses rises twenty-five-fold, to 19% of everything it carries. Drop the feeder to 4.16 kV and it loses a
+        quarter of its power.
       </P>
       <P>
         Why not use high voltage everywhere, then? Because insulating it is expensive. A 345 kV line needs its conductors several meters apart, hung from tall towers on a
@@ -392,28 +438,48 @@ export default function Lesson() {
       </Eq>
       <Challenge
         id="a"
-        question="Suppose the line from Central to Metro could only be built at 138 kV. What is the fewest parallel circuits that would keep its losses below 1%?"
+        question={`Suppose the line from Central to Metro could only be built at 138 kV, 2.5 times lower than today’s 345 kV. At 345 kV, one circuit loses ${pct(chain(345, 1, 13.8).tx.share, 2)}. Use the two formulas to predict the fewest parallel circuits that would keep the losses at 138 kV below 1%, then set them to check.`}
         solved={solved1}
         status={
           s1.state.txKV !== '138'
             ? 'Set the transmission voltage to 138 kV first.'
             : `With ${c.n} circuit${c.n > 1 ? 's' : ''} at 138 kV, the line loses ${pct(c.tx.share, 2)}.`
         }
-        success={`Solved. ${CIRCUITS_AT_138} circuits at 138 kV lose ${pct(chain(138, CIRCUITS_AT_138, 13.8).tx.share, 2)}, while a single circuit at 345 kV loses ${pct(chain(345, 1, 13.8).tx.share, 2)}. Raising the voltage 2.5 times does more than adding four extra circuits.`}
+        success={`Solved. At 138 kV a single circuit loses 2.5² = 6.25 times the share it would at 345 kV, ${pct(chain(138, 1, 13.8).tx.share, 2)}, and splitting the current over n circuits divides that by n: it takes ${CIRCUITS_AT_138} to get under 1%, at ${pct(chain(138, CIRCUITS_AT_138, 13.8).tx.share, 2)}. Raising the voltage 2.5 times does more than four extra circuits.`}
       />
 
       <H2>Meshed and radial</H2>
       <P>
         Voltage isn’t the only difference between the stages. The transmission grid is <b>meshed</b>: its lines form loops, so there’s more than one path between any two
-        substations. Our region has six transmission substations — North, East, Central, Harbor, West and Metro — joined by eight lines, and Metro is fed by three of
-        them: a 345 kV line from Central, and 230 kV lines from East and from West.
+        substations. The next demonstration draws our region’s transmission grid over the map of <a href={lessonHref('2.1')}>Lesson 2.1</a>: six substations — North,
+        East, Central, Harbor, West and Metro — joined by eight lines, the thicker ones at 345 kV and the thinner at 230 kV. Metro, where most of the customers are, is fed
+        by three of them: a 345 kV line from Central, and 230 kV lines from East and from West. Click a line to take it out of service:
+      </P>
+
+      <Figure name="Grid Constructor · the transmission grid" scenario={sMap}>
+        <Legend
+          items={[
+            { label: '345 kV line', color: LINE_STYLE[345].color, kind: 'line' as const },
+            { label: '230 kV line', color: LINE_STYLE[230].color, kind: 'line' as const },
+            { label: 'Substation', color: '#4a4a4a' },
+          ]}
+        />
+        <RegionMap network={{ out: sMap.state.out, onToggle: toggleMapLine }} />
+        <Caption>{mapCaption}</Caption>
+      </Figure>
+
+      <P>
+        Take any one line out and every substation is still connected to every other: the power simply goes another way round. It takes two outages to cut off North,
+        East or Harbor, each joined to the grid by two lines, and no two outages can cut off Metro. That redundancy is what a meshed grid is for, and where the power
+        actually goes when it has several ways round is the subject of <a href={lessonHref('2.4')}>Lesson 2.4</a>.
       </P>
       <P>
         Distribution is almost always <b>radial</b>. Each feeder leaves its substation through a circuit breaker and branches outward like a tree, with exactly one path
         from the substation to each customer. Radial feeders are cheap to build and simple to protect, and most homes and businesses sit somewhere along one. The
         price is fragility. In the next demonstration, the Metro substation feeds two feeders of four sections each, serving 4,000 customers between them. Switches between the sections
-        normally stay closed; a <b>tie switch</b> between the far ends of the two feeders normally stays open. Click a transmission line to take it out of service, a
-        section to place or clear a fault, and a switch to open or close it:
+        normally stay closed; a <b>tie switch</b> between the far ends of the two feeders normally stays open. A <b>fault</b> is an accidental path for current — a branch
+        fallen across the wires, a failed cable — and it draws an enormous current. Click a transmission line to take it out of service, a section to place or clear a
+        fault, and a switch to open or close it:
       </P>
 
       <Figure name="Grid Constructor · when something breaks" scenario={s2}>
@@ -565,24 +631,18 @@ export default function Lesson() {
             ● closed switch · ○ open switch · ■ breaker · numbers: customers on each section
           </text>
         </svg>
-        <Readouts
-          items={[
-            { label: 'customers with power', value: fmt(fs.customersOn) },
-            { label: 'without power', value: fmt(fs.customersOff), tone: fs.customersOff > 0 ? 'red' : undefined },
-            { label: 'breakers tripped', value: String(fs.tripped.length) },
-          ]}
-        />
+        <Readouts items={[{ label: `customers without power, of ${fmt(TOTAL_CUSTOMERS)}`, value: fmt(fs.customersOff), tone: fs.customersOff > 0 ? 'red' : undefined }]} />
         <Caption>{caption}</Caption>
       </Figure>
 
       <P>
-        Take any one of the transmission lines out, or even two, and nobody notices: the substation is still connected to the grid through the others. Whether the
-        remaining lines can carry Metro’s whole demand is another question, which we’ll take up in <a href={lessonHref('2.5')}>Lesson 2.5</a>, but no customer is
-        disconnected. That is what the mesh buys.
+        The three transmission lines at the top of the drawing are the substation’s links to the mesh. Take any one of them out, or even two, and nobody on the feeders
+        notices: the substation is still connected to the grid through the others. Whether the remaining lines can carry Metro’s whole demand is another question, which
+        we’ll take up in <a href={lessonHref('2.5')}>Lesson 2.5</a>, but no customer is disconnected.
       </P>
       <P>
-        The feeder is a different story. A fault — a branch across the wires, a failed cable — draws an enormous current, and the breaker at the head of the feeder opens
-        to stop it. In our simple feeder that breaker is the only protection, so it takes all 2,000 customers on Feeder 1 off with it; real feeders add
+        The feeder is a different story. When a fault strikes, the breaker at the head of the feeder opens to stop its enormous current. In our simple feeder that
+        breaker is the only protection, so it takes all 2,000 customers on Feeder 1 off with it; real feeders add
         fuses and reclosers farther out to limit the damage. Restoring them is a matter of
         isolating the fault: open the switches on either side of the faulted section, and the breaker can close again onto the healthy sections upstream. The sections
         beyond the fault can then be fed backwards from the neighboring feeder, through the tie. Crews do this by hand, and on feeders with automated switches it can happen

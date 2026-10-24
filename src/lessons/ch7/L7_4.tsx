@@ -18,6 +18,7 @@ import {
   hour,
   lessonHref,
   mw,
+  pct,
   priceFill,
   usd,
   useScenario,
@@ -30,11 +31,9 @@ import { SOLAR_CF, SYSTEM_DEMAND, WIND_CF } from '../../model/profiles';
 
 const EFFICIENCY = 0.85;
 const BUDGET = 150;
-const TARGET_SAVINGS = 25000;
 const OUTAGE = 'center-city';
 const NODES = ['north', 'east', 'center', 'harbor', 'west', 'city'] as const;
 type NodeId = (typeof NODES)[number];
-const REFERENCE: NodeId = 'center';
 
 function gens(h: number): OpfGenerator[] {
   return STANDARD_FLEET.map((g) => ({
@@ -68,6 +67,19 @@ function day(batteries: SitedBattery[], lineIn: boolean, lmp: 'all' | 'none' | s
 }
 const bat = (node: string, powerMW: number, durationH = 4): SitedBattery => ({ node, powerMW, durationH, efficiency: EFFICIENCY });
 
+/** Generation cost the day saves with this battery (four hours), $; negative when the battery raises it. */
+export function sitingSavings(node: string, powerMW: number, lineIn: boolean): number {
+  return day([], lineIn, 'none').cost - day([bat(node, powerMW)], lineIn, 'none').cost;
+}
+/** Challenge 7.4: a site so poor that the battery raises the system’s cost. */
+export const sitingSolved = (savings: number) => savings < -0.5;
+
+/**
+ * Homes whose dependable capacity adds up to 50 MW: 50 MW ÷ the 3.39 kW per home that Lesson 7.2's
+ * 1,000-home fleet can promise at 18:00 on 95% of evenings (checked in tests/ch7.test.ts).
+ */
+const HOMES_PER_50_MW = 15000;
+
 // Numbers quoted in the prose: 50 MW / 4 h, with the Central–Metro line out.
 const BASE = day([], false, 'all');
 const BASE_IN = day([], true, 'none');
@@ -75,38 +87,51 @@ const AT_CITY = day([bat('city', 50)], false, 'all');
 const AT_CENTER = day([bat('center', 50)], false, ['center']);
 const ALL_CITY = day([bat('city', BUDGET)], false, 'none');
 const metroPeak = (d: SitingDay) => Math.max(...d.hours.map((x) => x.lmp.city ?? 0));
+/** Reference splits of the 150 MW budget, quoted after the second demonstration. */
+export const BUDGET_REF = {
+  allCity: BASE.cost - ALL_CITY.cost,
+  allEast: BASE.cost - day([bat('east', BUDGET)], false, 'none').cost,
+  first25: BASE.cost - day([bat('city', 25)], false, 'none').cost,
+  last25: day([bat('city', BUDGET - 25)], false, 'none').cost - ALL_CITY.cost,
+  half: BASE.cost - day([bat('city', BUDGET / 2), bat('east', BUDGET / 2)], false, 'none').cost,
+  /** MW that every two-site split beating all-at-Metro keeps at Metro and East together (checked in tests/ch7.test.ts). */
+  keepBehind: 100,
+};
 const REF = {
   baseCongested: BASE.congestedHours,
   baseInCongested: BASE_IN.congestedHours,
   extraCost: BASE.cost - BASE_IN.cost,
   metroPeak: metroPeak(BASE),
   centerAtPeak: BASE.hours[19].lmp.center,
+  eastAtPeak: BASE.hours[19].lmp.east,
   savingsCity: BASE.cost - AT_CITY.cost,
   savingsCenter: BASE.cost - AT_CENTER.cost,
   revenueCity: AT_CITY.revenue[0],
   revenueCenter: AT_CENTER.revenue[0],
   metroPeakWith: metroPeak(AT_CITY),
   congestedWith: AT_CITY.congestedHours,
-  allCity: BASE.cost - ALL_CITY.cost,
   inService: BASE_IN.cost - day([bat('city', 50)], true, 'none').cost,
 };
 
 const LABEL_POS: Record<string, 'above' | 'below' | 'left' | 'right'> = { north: 'above', east: 'above', center: 'above', harbor: 'left', west: 'below', city: 'right' };
+/** The region drawn 20% shorter than its usual 600 × 400, so the figure fits beside the prose. */
+const MAP_H = 340;
+const mapY = (y: number) => 58 + (y - 70) * 0.8;
 
 export default function Lesson() {
-  const s = useScenario('siting', { node: 'city' as NodeId, power: 50, duration: 4, lineIn: false, at: 19 });
-  const { node, power, duration, lineIn, at } = s.state;
+  const s = useScenario('siting', { node: 'city' as NodeId, power: 50, lineIn: false, at: 19 });
+  const { node, power, lineIn, at } = s.state;
   const h = Math.min(23, Math.max(0, at));
 
   const base = useMemo(() => day([], lineIn, 'all'), [lineIn]);
-  const withBat = useMemo(() => day([bat(node, power, duration)], lineIn, 'all'), [node, power, duration, lineIn]);
-  const atRef = useMemo(() => (node === REFERENCE ? withBat : day([bat(REFERENCE, power, duration)], lineIn, [REFERENCE])), [node, power, duration, lineIn, withBat]);
+  const withBat = useMemo(() => day([bat(node, power)], lineIn, 'all'), [node, power, lineIn]);
   const savings = base.cost - withBat.cost;
   const revenue = withBat.revenue[0] ?? 0;
-  const refRevenue = atRef.revenue[0] ?? 0;
   const sched = withBat.battery[node] ?? Array<number>(24).fill(0);
   const hr = withBat.hours[h];
   const lmp = (n: string) => Math.round(hr.lmp[n] ?? 0);
+  const solved = sitingSolved(savings);
+  const nodeAt19 = withBat.hours[19].lmp[node] ?? 0;
 
   // Second figure: a fixed budget split between two sites.
   const s2 = useScenario('budget', { a: 'city' as NodeId, b: 'east' as NodeId, split: 150 });
@@ -116,7 +141,6 @@ export default function Lesson() {
     const d = day([bat(s2.state.a, aMW), bat(s2.state.b, bMW)], false, 'none');
     return { savings: BASE.cost - d.cost, congested: d.congestedHours };
   }, [s2.state.a, s2.state.b, aMW, bMW]);
-  const solved = split.savings >= TARGET_SAVINGS;
 
   const nodeOptions = NODES.map((n) => ({ value: n, label: nodeName(REGION, n) }));
 
@@ -131,11 +155,14 @@ export default function Lesson() {
         We’ll use the course’s six-node region with its standard fleet and the reference day’s demand, spread across the nodes in their usual shares. On a normal day the
         region has room to spare: with every line in service, {REF.baseInCongested === 0 ? 'no line reaches its limit in any hour' : `lines reach their limits in only ${REF.baseInCongested} hours`}. So suppose the Central–Metro line — Metro’s biggest supply line,
         rated at 600 MW — is out of service for a season of rebuilding. Metro must now import over the smaller lines from West and East. In this scenario the network is
-        congested in {REF.baseCongested} of the 24 hours, Metro’s price reaches ${fmt(REF.metroPeak)} per MWh in the evening while Central’s is ${fmt(REF.centerAtPeak)},
-        and the system spends {usd(REF.extraCost)} more on generation over the day than with the line in service.
+        congested in {REF.baseCongested} of the 24 hours, and in every one of them the line at its limit is West–Metro. Metro’s price reaches ${fmt(REF.metroPeak)} per
+        MWh in the evening while Central’s is ${fmt(REF.centerAtPeak)}, and the system spends {usd(REF.extraCost)} more on generation over the day than with the line in
+        service.
       </P>
       <P>
-        Now add a battery. To keep the comparison about location rather than trading skill, each battery follows the same simple rule: it charges during the six
+        Now add a battery. The sizes in this lesson are grid-scale: 50 MW is about what {fmt(HOMES_PER_50_MW)} homes like those in{' '}
+        <a href={lessonHref('7.2')}>Lesson 7.2</a> can dependably deliver for an hour at 18:00, and a four-hour battery keeps that up for four hours. We’ll come back
+        to home batteries at the end of the lesson. To keep the comparison about location rather than trading skill, each battery follows the same simple rule: it charges during the six
         lowest-demand hours of the night and discharges at full power during the highest-demand hours of the evening. In the power flow, its charging is extra load at
         its node and its discharge is negative load. Pick a node and a size, and drag across the chart to see any hour:
       </P>
@@ -145,11 +172,11 @@ export default function Lesson() {
         <NetworkView
           ariaLabel={`The region at ${hour(h)} with a ${power} MW battery at ${nodeName(REGION, node)}. Prices: ${NODES.map((n) => `${nodeName(REGION, n)} $${lmp(n)}`).join(', ')}.`}
           width={600}
-          height={400}
+          height={MAP_H}
           nodes={REGION.nodes.map((n) => ({
             id: n.id,
             x: n.x,
-            y: n.y,
+            y: mapY(n.y),
             r: 34,
             label: n.name,
             labelPos: LABEL_POS[n.id],
@@ -171,16 +198,19 @@ export default function Lesson() {
           {power > 0 &&
             (() => {
               const n = REGION.nodes.find((x) => x.id === node)!;
+              const ny = mapY(n.y);
               const mwNow = sched[h];
               const text = mwNow > 0.5 ? `discharging ${fmt(mwNow)} MW` : mwNow < -0.5 ? `charging ${fmt(-mwNow)} MW` : 'idle';
-              const left = n.x > 300;
+              // Beside the node, or under Metro, where the space beside it is taken by lines.
+              const cx = node === 'city' ? n.x : n.x > 300 ? n.x - 104 : n.x + 104;
+              const top = node === 'city' ? ny + 40 : ny + 18;
               return (
                 <g>
-                  <rect x={left ? n.x - 168 : n.x + 40} y={n.y + 18} width={128} height={38} rx={6} fill="#f1f6ea" stroke={FUEL.battery} strokeWidth={1.5} />
-                  <text x={left ? n.x - 104 : n.x + 104} y={n.y + 34} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 600, fill: '#3f7a1e' }}>
+                  <rect x={cx - 64} y={top} width={128} height={38} rx={6} fill="#f1f6ea" stroke={FUEL.battery} strokeWidth={1.5} />
+                  <text x={cx} y={top + 16} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 600, fill: '#3f7a1e' }}>
                     {power} MW battery
                   </text>
-                  <text x={left ? n.x - 104 : n.x + 104} y={n.y + 49} textAnchor="middle" className="ax">
+                  <text x={cx} y={top + 31} textAnchor="middle" className="ax">
                     {text}
                   </text>
                 </g>
@@ -200,7 +230,7 @@ export default function Lesson() {
           yMin={0}
           yMax={Math.max(120, Math.ceil(Math.max(metroPeak(base), metroPeak(withBat), ...withBat.hours.map((x) => x.lmp[node] ?? 0)) / 20) * 20)}
           yFormat={(v) => '$' + v}
-          height={220}
+          height={160}
           series={[
             { values: base.hours.map((x) => x.lmp.city ?? 0), color: '#9a9a9a', kind: 'step', width: 2, dash: '6 4' },
             ...(node !== 'city' ? [{ values: withBat.hours.map((x) => x.lmp[node] ?? 0), color: '#ab70b6', kind: 'step' as const, width: 2 }] : []),
@@ -209,33 +239,14 @@ export default function Lesson() {
           cursor={h}
           onScrub={(i) => s.set({ at: i })}
         />
-        <TimeChart
-          ariaLabel="The battery's schedule: charging overnight, discharging at the evening peak."
-          yLabel="Battery, MW (up: discharging)"
-          yFormat={(v) => String(v)}
-          height={130}
-          series={[{ values: sched, color: FUEL.battery, kind: 'bar' }]}
-          cursor={h}
-          onScrub={(i) => s.set({ at: i })}
-        />
         <Readouts
           items={[
             { label: 'generation cost saved per day', value: usd(savings), tone: savings >= 0 ? 'green' : 'red' },
-            { label: `battery’s revenue at ${nodeName(REGION, node)}`, value: usd(revenue), tone: 'green' },
-            { label: `same battery at ${nodeName(REGION, REFERENCE)}`, value: usd(refRevenue) },
+            { label: `battery’s revenue at ${nodeName(REGION, node)}`, value: usd(revenue), tone: revenue >= 0 ? 'green' : 'red' },
             { label: 'congested hours', value: `${base.congestedHours} → ${withBat.congestedHours}` },
           ]}
         />
-        <Slider label="Battery power" tone="red" value={power} min={0} max={150} step={25} onChange={(v) => s.set({ power: v })} display={mw(power)} />
-        <Segmented
-          label="Battery duration"
-          value={String(duration)}
-          onChange={(v) => s.set({ duration: Number(v) })}
-          options={[
-            { value: '2', label: '2 hours' },
-            { value: '4', label: '4 hours' },
-          ]}
-        />
+        <Slider label="Battery power (four hours)" tone="red" value={power} min={0} max={150} step={25} onChange={(v) => s.set({ power: v })} display={mw(power)} />
         <Checkbox label="Central–Metro line in service" checked={lineIn} onChange={(v) => s.set({ lineIn: v })} />
       </Figure>
 
@@ -251,6 +262,20 @@ export default function Lesson() {
         to dear ones at the system price — and Central’s evening price never rises much, because Central is where the cheap power is. The system saves{' '}
         {usd(REF.savingsCenter)} and the battery earns {usd(REF.revenueCenter)}. The hardware is identical. Its value isn’t.
       </P>
+
+      <Challenge
+        id="a"
+        question="With the Central–Metro line out, one node is such a poor site that the battery would raise the system’s generation cost for the day. Predict which from the full line and the map’s evening prices, then move the battery there to check."
+        solved={solved}
+        status={
+          lineIn
+            ? 'Take the Central–Metro line out of service again: with it in, every node is the same.'
+            : power <= 0
+              ? 'Give the battery some power.'
+              : `At ${nodeName(REGION, node)}, the battery saves the system ${usd(savings)} a day.`
+        }
+        success={`Solved: at ${nodeName(REGION, node)}, the ${power} MW battery raises the day’s generation cost by ${usd(-savings)}. West sits on the sending end of the full West–Metro line, so in the evening its power is stranded behind the constraint: its price at 19:00 is $${fmt(nodeAt19, 2)}, the lowest in the region. A battery there can only shift cheap power that couldn’t reach Metro anyway, and it loses ${pct(1 - EFFICIENCY)} of it on every round trip. Storage is worth most behind a binding line, not merely near it.`}
+      />
       <P>
         Two side effects deserve a look. First, the count of congested hours goes up, from {REF.baseCongested} to {REF.congestedWith}: a battery at Metro charging at
         night adds load behind the same constraint, and in a few overnight hours that is enough to fill the lines — but at prices far lower than the evening congestion it
@@ -262,7 +287,8 @@ export default function Lesson() {
       <H2>Spending a fixed budget</H2>
       <P>
         Suppose a utility can install {BUDGET} MW of four-hour storage this year, at up to two sites, and wants the largest reduction in the system’s cost. Putting
-        everything at Metro, the obvious choice, saves {usd(REF.allCity)} a day. Choose two sites and how to split the {BUDGET} MW between them:
+        everything at Metro, the obvious choice, saves {usd(BUDGET_REF.allCity)} a day. Choose two sites and how to split the {BUDGET} MW between them, and compare
+        each split with all of it at Metro:
       </P>
 
       <Figure name="Battery Siting Optimizer · a fixed budget" scenario={s2}>
@@ -294,30 +320,38 @@ export default function Lesson() {
         </svg>
         <Readouts
           items={[
-            { label: 'generation cost saved per day', value: usd(split.savings), tone: split.savings >= TARGET_SAVINGS ? 'green' : 'ink' },
+            { label: 'generation cost saved per day', value: usd(split.savings), tone: split.savings > BUDGET_REF.allCity + 0.5 ? 'green' : 'ink' },
+            { label: 'compared with all at Metro', value: `${split.savings - BUDGET_REF.allCity >= 0 ? '+' : '−'}${usd(Math.abs(split.savings - BUDGET_REF.allCity))}` },
             { label: 'congested hours', value: `${REF.baseCongested} → ${split.congested}` },
           ]}
         />
       </Figure>
 
-      <Challenge
-        id="a"
-        question={`Split ${BUDGET} MW of four-hour storage between two sites so that the system saves at least ${usd(TARGET_SAVINGS)} a day — within about 2% of the best any split can do.`}
-        solved={solved}
-        status={`This split saves ${usd(split.savings)} a day.`}
-        success={`Solved: ${usd(split.savings)} a day. Most of the storage belongs behind the constraint, but once Metro’s evening congestion is mostly relieved, the last few tens of megawatts there are worth less than the same megawatts elsewhere.`}
-      />
-
       <P>
-        The best splits put most of the budget at Metro, or next door at East, which feeds Metro over its own line, and the rest somewhere else. That is the general
-        pattern of storage siting: value is highest right behind a constraint, but it’s finite. The congestion is only so deep, and once the batteries have shaved it off,
-        more batteries in the same place mostly compete with each other.
+        Storage at Metro runs into diminishing returns quickly. Its first 25 MW saves {usd(BUDGET_REF.first25)} a day; the last 25 MW of the {BUDGET} saves only {usd(BUDGET_REF.last25)}, because
+        by then the batteries are competing to shave the same few evening hours. So moving part of the budget elsewhere does a little better than putting it all at
+        Metro — {BUDGET / 2} MW at Metro and {BUDGET / 2} MW at East save {usd(BUDGET_REF.half)} — and every split that beats all-at-Metro still keeps at least{' '}
+        {BUDGET_REF.keepBehind} MW at Metro and East together.
+      </P>
+      <P>
+        East is the surprise: all {BUDGET} MW there saves {usd(BUDGET_REF.allEast)} a day, nearly as much as at Metro, though East’s own line into Metro never fills.
+        Its value comes from <K>shift factors</K>, the idea behind the redispatch in{' '}
+        <a href={lessonHref('5.2')}>Lesson 5.2</a>: a megawatt moved from one node to another splits across every path between them, and the share that crosses a
+        given line is the shift factor on that line. East sends power on to Metro, so a megawatt more of demand at East would leave it less to send, and Metro would
+        draw more over the full West–Metro line — less than a megawatt more of demand at Metro itself would, but a good part of it. East’s LMP (
+        <a href={lessonHref('5.3')}>Lesson 5.3</a>) charges for exactly that share of the congestion. At the evening peak it is ${fmt(REF.eastAtPeak)}, much closer
+        to Metro’s ${fmt(REF.metroPeak)} than to Central’s ${fmt(REF.centerAtPeak)}, and a battery discharging at East relieves West–Metro too, though less than one at
+        Metro does.
+      </P>
+      <P>
+        That is the general pattern of storage siting: value is highest right behind a constraint, but it’s finite. The congestion is only so deep, and once the
+        batteries have shaved it off, more batteries in the same place mostly compete with each other.
       </P>
       <P>
         This is exactly where distributed batteries have an edge over a single big plant. Home batteries in Metro already sit behind Metro’s constraint, spread through
-        the city’s neighborhoods. Grid operators are starting to work out how to use them that way: ERCOT, for instance, has proposed a phase of its aggregated-DER pilot
-        aimed specifically at dispatching aggregated storage by location to help relieve transmission congestion. Doing it with thousands of batteries, though, means
-        scheduling thousands of batteries — which is the subject of the <a href={lessonHref('7.5')}>next lesson</a>.
+        the city’s neighborhoods. Whether a market lets an aggregator offer them by location is a matter of its rules, which we’ll compare in{' '}
+        <a href={lessonHref('7.6')}>Lesson 7.6</a>. Doing it with thousands of batteries, though, means scheduling thousands of batteries — which is the subject of
+        the <a href={lessonHref('7.5')}>next lesson</a>.
       </P>
     </LessonPage>
   );

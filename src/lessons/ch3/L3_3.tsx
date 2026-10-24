@@ -4,12 +4,14 @@ import {
   Button,
   Caption,
   Challenge,
+  FigRef,
   Figure,
   FUEL,
   H2,
   K,
   Legend,
   LessonPage,
+  lessonHref,
   P,
   Readouts,
   Segmented,
@@ -85,7 +87,7 @@ const FLEET_RAMP = STANDARD_FLEET.filter((g) => !g.variable).reduce((s, g) => s 
 const available = (s: Schedule) => s.windAvail.reduce((a, b) => a + b, 0) + s.solarAvail.reduce((a, b) => a + b, 0);
 
 // ---------------------------------------------------------------------------
-// Figure 1: the whole fleet, every plant free to glide down to zero.
+// Figure 1: the whole fleet, every plant but Harbor Point free to glide down to zero.
 
 function SchedulerFigure() {
   const sc = useScenario('scheduler', { day: 'clear' as DayId, solar: 400, wind: 350 });
@@ -142,7 +144,6 @@ const COMMIT_SOLAR = 1600;
 const COMMIT_WIND = 350;
 const DEFAULT_PLAN: Commitment = { cc1: hoursOn(6, 23), cc2: hoursOn(7, 22) };
 const ALL_DAY: Commitment = { cc1: hoursOn(0, 24), cc2: hoursOn(0, 24) };
-const CURTAIL_TARGET = 5100;
 const ROWS = [
   { id: 'cc1' as const, name: plant('cc1').name, color: FUEL.gasCC, y: 26 },
   { id: 'cc2' as const, name: plant('cc2').name, color: CC2_COLOR, y: 78 },
@@ -289,12 +290,19 @@ const CURTAIL_START = (() => {
   return 2400;
 })();
 const DEFAULT_COMMIT = scheduleCommitted(COMMIT_DAY, COMMIT_SOLAR, COMMIT_WIND, DEFAULT_PLAN);
+/** Curtailment with both combined-cycle plants offline: what Harbor Point's and Ironwood's minimums alone force out, a floor no plan can beat. */
+export const MUST_RUN_FLOOR = scheduleCommitted(COMMIT_DAY, COMMIT_SOLAR, COMMIT_WIND, { cc1: hoursOn(0, 0), cc2: hoursOn(0, 0) }).curtailedMWh;
+
+/** The challenge: every hour served, and no wind or solar turned away beyond what the must-run plants force out. */
+export function commitSolves(s: Schedule): boolean {
+  return s.shortfallMWh < 0.5 && s.curtailedMWh <= MUST_RUN_FLOOR + 0.5;
+}
 const NET_PEAK = (id: DayId) => Math.max(...scheduleDay(weatherDay(id), 400, 350).net);
 
 export default function Lesson() {
   const commitSc = useScenario<Commitment>('commit', { cc1: DEFAULT_PLAN.cc1, cc2: DEFAULT_PLAN.cc2 });
   const s = scheduleCommitted(COMMIT_DAY, COMMIT_SOLAR, COMMIT_WIND, commitSc.state);
-  const solved = s.shortfallMWh < 0.5 && s.curtailedMWh <= CURTAIL_TARGET;
+  const solved = commitSolves(s);
 
   return (
     <LessonPage id="3.3">
@@ -324,9 +332,9 @@ export default function Lesson() {
       <P>
         Not every plant can follow, though. Harbor Point nuclear runs best at a steady output: in our model it can’t go below {plant('nuc').minOutput} MW or change by more than{' '}
         {plant('nuc').rampRate} MW an hour. Some nuclear plants, notably in France, do follow demand, but most run flat out: their fuel is cheap and nearly all of their costs
-        are fixed, so there’s little to save by turning down. Raise the solar capacity and, past about {fmt(CURTAIL_START)} MW, the midday net load drops below what the
-        inflexible plants must produce anyway. The only way to keep the grid balanced is to turn some of the wind and solar away — <b>curtailment</b>. It costs nothing in fuel,
-        but it throws away energy the region paid to be able to produce. In a market, these are the hours when prices can fall below zero, a story for Lesson 5.5.
+        are fixed, so there’s little to save by turning down. Raise the solar capacity and, past about {fmt(CURTAIL_START)} MW, the midday net load drops below what
+        Harbor Point must produce anyway. The only way to keep the grid balanced is to turn some of the wind and solar away — <b>curtailment</b>. It costs nothing in fuel,
+        but it throws away energy the region paid to be able to produce. In a market, these are the hours when prices can fall below zero, a story for <a href={lessonHref('5.5')}>Lesson 5.5</a>.
       </P>
 
       <H2>The duck</H2>
@@ -340,16 +348,18 @@ export default function Lesson() {
       <P>
         Solar does nothing for the hour that matters most. Demand peaks at 19:00, when the panels produce nothing, so however much solar the region builds, the evening still
         needs dispatchable plants — or wind, which on this region’s typical day blows harder after dark. That’s the essential difference between the two kinds of plant: a{' '}
-        <K tone="orange">dispatchable</K> plant’s capacity is there when you call on it, while an intermittent plant’s capacity is there when the weather says so.
+        <K>dispatchable</K> plant’s capacity is there when you call on it, while an intermittent plant’s capacity is there when the weather says so.
       </P>
 
       <H2>Committing plants</H2>
       <P>
-        This scheduler lets every thermal plant glide down to zero and back up like a dimmer switch. Real ones can’t. A combined-cycle plant that’s running has a{' '}
+        <FigRef to="Generation Scheduler">The first scheduler</FigRef> let every plant but Harbor Point glide down to zero and back up like a dimmer switch. Real coal and gas
+        plants can’t. A combined-cycle plant that’s running has a{' '}
         <b>minimum stable output</b> — we’ll assume {pct(MIN_STABLE_SHARE)} of capacity, a typical figure — and to go lower it has to shut down. Shutting down and restarting
         takes hours and costs money, so a large part of scheduling is deciding, well ahead of time, which plants will be online in each hour. Operators call this{' '}
         <b>unit commitment</b>, and every day they solve it as a large optimization problem covering every plant for the day ahead. Here you’ll solve a small piece of it by
-        hand.
+        hand. To keep the piece small, the next demonstration leaves out the cost of starting a plant and the hours it must stay off once stopped: a plant can go offline and
+        come back in any hour, for free.
       </P>
       <P>
         Here is the calm, sunny day with {fmt(COMMIT_SOLAR)} MW of solar, four times today’s. Ironwood coal stays online all day, never below its {plant('coal').minOutput} MW
@@ -361,18 +371,22 @@ export default function Lesson() {
 
       <P>
         With both plants online through the middle of the day, nothing goes unserved, but they hold {fmt(MIN_STABLE_SHARE * (plant('cc1').capacity + plant('cc2').capacity))}{' '}
-        MW of output the grid doesn’t need, and {mwh(DEFAULT_COMMIT.curtailedMWh)} of wind and solar is turned away to make room for them. Taking them offline at midday frees
-        that room. The catch is the evening: a plant has to be online, and already climbing, before the sun goes down.
+        MW of output the grid doesn’t need, and {mwh(DEFAULT_COMMIT.curtailedMWh)} of wind and solar is turned away. Not all of that is their doing. Harbor Point and Ironwood
+        can’t go below their own minimums either, and on this day they alone push {mwh(MUST_RUN_FLOOR)} off the grid, a floor no commitment plan can get under. The other{' '}
+        {mwh(DEFAULT_COMMIT.curtailedMWh - MUST_RUN_FLOOR)} is turned away to make room for the gas plants, and taking them offline at midday frees it. The catch is the
+        evening: a plant has to be online, and already climbing, before the sun goes down.
       </P>
 
       <Challenge
         id="a"
-        question={`Plan Lakeside and Mill Creek so the calm, sunny day is served with no unserved demand at all, while turning away no more than ${mwh(CURTAIL_TARGET)} of wind and solar.`}
+        question={`Plan Lakeside and Mill Creek so the calm, sunny day is served with no unserved demand at all, and the gas plants push no wind or solar off the grid: turn away no more than the ${mwh(MUST_RUN_FLOOR)} that Harbor Point and Ironwood force out on their own.`}
         solved={solved}
         status={
-          s.shortfallMWh > 0.5 ? `Right now ${mwh(s.shortfallMWh)} of demand goes unserved.` : `Every hour is served, but ${mwh(s.curtailedMWh)} of wind and solar is turned away.`
+          s.shortfallMWh > 0.5
+            ? `Right now ${mwh(s.shortfallMWh)} of demand goes unserved.`
+            : `Every hour is served, but the gas plants push ${mwh(s.curtailedMWh - MUST_RUN_FLOOR)} of wind and solar off the grid.`
         }
-        success="Solved. Taking the plants offline once the morning climb is over makes room for the solar, but they have to be back online, at their minimum and ready to climb, by late afternoon: the evening outruns a plant that starts any later."
+        success="Solved. Neither plant is needed before late afternoon: the sun covers the morning climb, and every hour one spends online in the middle of the day pushes solar off the grid. But one of them has to come back at 17:00 exactly: an hour earlier, its minimum output still pushes solar off; an hour later, the evening outruns the fleet."
       />
 
       <P>

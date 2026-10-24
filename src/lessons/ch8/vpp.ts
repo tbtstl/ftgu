@@ -16,6 +16,11 @@ export const REGULATION_SHARE = 0.01;
 export const SHORTAGE_PRICE = 300;
 /** Round-trip efficiency of the home batteries. */
 export const VPP_EFFICIENCY = 0.88;
+/**
+ * Installed cost of a home battery, $ per kWh of storage: an illustrative figure, roughly what US
+ * homeowners pay before incentives (grid-scale storage costs far less per kWh).
+ */
+export const HOME_BATTERY_COST_PER_KWH = 1000;
 
 /** Contingency reserve: enough to replace the largest plant on the grid. */
 export function reserveRequirement(sys: GridSystem): number {
@@ -127,10 +132,41 @@ export function vppRevenue(d: CapstoneDesign, services = d.vpp.services): VppRes
   return { totalMW, totalMWh: totalMW * d.vpp.hours, heldMW, energy, services: svc, revenue: { energy: e, reserve, regulation, total: e + reserve + regulation }, sys, base };
 }
 
-/** Daily revenue at each services share from 0 to 100% in 5% steps. */
-export function splitSweep(d: CapstoneDesign): Array<{ services: number; total: number }> {
+export interface SplitPoint {
+  /** Share of the fleet's power held back for services, 0–1. */
+  services: number;
+  energy: number;
+  reserve: number;
+  regulation: number;
+  total: number;
+}
+
+/** Daily revenue, by stream, at each services share from 0 to 100% in 5% steps. */
+export function splitSweep(d: CapstoneDesign): SplitPoint[] {
   return Array.from({ length: 21 }, (_, i) => {
     const s = i / 20;
-    return { services: s, total: vppRevenue(d, s).revenue.total };
+    const r = vppRevenue(d, s).revenue;
+    return { services: s, energy: r.energy, reserve: r.reserve, regulation: r.regulation, total: r.total };
   });
+}
+
+export type SplitReason = 'energy' | 'reserve' | 'regulation';
+
+/**
+ * Where the revenue curve peaks, and which stream falls most if the VPP holds back one step more
+ * (null when the peak is at 100%). Energy arbitrage always shrinks as power is held back; a
+ * service's revenue falls only when its price does, as the VPP's own offers push it down.
+ */
+export function splitAnswer(sweep: SplitPoint[]): { best: SplitPoint; next: SplitPoint | null; reason: SplitReason | null } {
+  const best = sweep.reduce((a, b) => (b.total > a.total + 1e-9 ? b : a));
+  const i = sweep.indexOf(best);
+  const next = sweep[i + 1] ?? null;
+  if (!next) return { best, next, reason: null };
+  const drops: Array<[SplitReason, number]> = [
+    ['energy', next.energy - best.energy],
+    ['reserve', next.reserve - best.reserve],
+    ['regulation', next.regulation - best.regulation],
+  ];
+  const reason = drops.reduce((a, b) => (b[1] < a[1] - 1e-9 ? b : a))[0];
+  return { best, next, reason };
 }

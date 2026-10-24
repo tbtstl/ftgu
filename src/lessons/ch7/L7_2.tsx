@@ -27,7 +27,6 @@ import {
   linePath,
   mix,
   mw,
-  mwh,
   pct,
   scale,
   useScenario,
@@ -65,6 +64,7 @@ function dependable(d: Draws, confidence: number) {
 const REF_TODAY = fleetToday(HOMES, DAY, 1, 1000);
 const REF_1000 = draws(1000, false);
 const REF_10 = draws(10, false);
+const REF_50 = draws(50, false);
 const REF = {
   nameplate: REF_TODAY.nameplateKW / 1000,
   at18: REF_TODAY.totalKW[PEAK_HOUR] / 1000,
@@ -72,6 +72,7 @@ const REF = {
   offline: REF_TODAY.online.filter((o) => !o).length,
   ratio1000: dependable(REF_1000, 0.95) / REF_1000.mean,
   ratio10: dependable(REF_10, 0.95) / REF_10.mean,
+  short50: 1 - dependable(REF_50, 0.95) / REF_50.mean,
   dep1000: dependable(REF_1000, 0.95) / 1000,
   exp1000: REF_1000.mean / 1000,
   sharedPlateau: dependable(draws(2000, true), 0.95) / draws(2000, true).mean,
@@ -90,7 +91,7 @@ export default function Lesson() {
   const offline = today.online.filter((o) => !o).length;
   const atReserve = today.online.reduce((s, o, i) => s + (o && today.availableKW[h * n + i] < 0.05 ? 1 : 0), 0);
 
-  const cols = n <= 10 ? 10 : n <= 100 ? 20 : 40;
+  const cols = n <= 10 ? 10 : n <= 100 ? 20 : 50;
   const cell = 560 / cols;
   const rows = Math.ceil(n / cols);
   const gridH = rows * cell;
@@ -113,7 +114,8 @@ export default function Lesson() {
     [conf],
   );
   const prevRatio = b.state.size > 0 ? curves[0][b.state.size - 1] : 0;
-  const solved = !shared && Math.abs(conf - 0.95) < 1e-9 && ratio >= 0.9 && prevRatio < 0.9;
+  // The challenge: the smallest fleet whose shortfall is at most half the 50-home fleet's.
+  const solved = !shared && Math.abs(conf - 0.95) < 1e-9 && 1 - ratio <= REF.short50 / 2 && 1 - prevRatio > REF.short50 / 2;
 
   // Histogram of per-home availability.
   const X0 = 60;
@@ -124,12 +126,12 @@ export default function Lesson() {
   for (const t of d.totals) counts[Math.min(bins - 1, Math.max(0, Math.floor((t / size / 6) * bins)))]++;
   const maxShare = Math.max(0.05, ...counts.map((c) => c / d.totals.length));
   const yTop = Math.ceil(maxShare * 20) / 20;
-  const ys = scale(0, yTop, 200, 30);
+  const ys = scale(0, yTop, 184, 26);
   const perHome = (v: number) => v / size;
 
   // Curve of dependable ÷ expected against fleet size (log axis).
   const cx = scale(Math.log10(10), Math.log10(2000), 70, 590);
-  const cy = scale(0.5, 1, 200, 30);
+  const cy = scale(0.5, 1, 184, 26);
 
   return (
     <LessonPage id="7.2">
@@ -194,7 +196,7 @@ export default function Lesson() {
           yMin={0}
           yMax={Math.max(0.01, (today.nameplateKW / 1000) * 1.1)}
           yFormat={(v) => fmt(v, n <= 10 ? 3 : n <= 100 ? 2 : 1)}
-          height={220}
+          height={200}
           series={[
             { values: today.totalKW.map((v) => v / 1000), color: FUEL.battery, kind: 'area', opacity: 0.35 },
             { values: today.totalKW.map((v) => v / 1000), color: FUEL.battery, width: 2.5 },
@@ -203,21 +205,10 @@ export default function Lesson() {
           cursor={h}
           onScrub={(i) => a.set({ at: i })}
         />
-        <TimeChart
-          ariaLabel={`Energy stored above owners' reserves in reachable homes: ${mwh(today.energyKWh[h] / 1000, 2)} at ${hour(h)}.`}
-          yLabel="Stored above reserves, MWh"
-          yMin={0}
-          yFormat={(v) => fmt(v, n <= 10 ? 3 : n <= 100 ? 2 : 1)}
-          height={150}
-          series={[{ values: today.energyKWh.map((v) => v / 1000), color: '#c99a1e', width: 2.5 }]}
-          cursor={h}
-          onScrub={(i) => a.set({ at: i })}
-        />
         <Readouts
           items={[
             { label: 'nameplate (sum of inverters)', value: mw(today.nameplateKW / 1000, n <= 100 ? 2 : 1) },
             { label: `can deliver at ${hour(h)}`, value: mw(today.totalKW[h] / 1000, n <= 100 ? 2 : 1), tone: 'red' },
-            { label: 'stored above reserves', value: mwh(today.energyKWh[h] / 1000, n <= 100 ? 2 : 1), tone: 'gold' },
             { label: 'homes unreachable', value: fmt(offline) },
           ]}
         />
@@ -236,15 +227,25 @@ export default function Lesson() {
         the most valuable hours — the evening peak — fall right on that downslope.
       </P>
       <P>
+        That downslope belongs to the owner first. The chart counts every kilowatt-hour above an owner’s reserve as available, but that energy was going to run the
+        house through the evening. A battery that empties itself for the grid at 18:00 can’t then run its own home at 19:00 and 20:00, so the household imports the
+        difference — on a time-of-use tariff like the one in the <a href={lessonHref('7.1')}>previous lesson</a>, at the peak price. That is the owner’s{' '}
+        <K c="price">opportunity cost</K>, and an aggregator has to cover it, and then some, to make enrolling worthwhile. Programs do this in different ways: some
+        share the revenue the fleet earns with its owners, some pay a fixed amount each month or season, and some credit the owner’s electricity bill — in each case
+        in return for letting the aggregator call on the battery within agreed limits.
+      </P>
+      <P>
         Now switch between 10, 100 and 1,000 homes, and press “New day” a few times. With ten homes, one unreachable house or one family running the dryer at the wrong
         moment changes the total visibly. With a thousand, the day-to-day changes almost vanish. That is the central fact of aggregation, and it deserves a closer look.
       </P>
 
       <H2>Many small, independent surprises</H2>
       <P>
-        Each home’s contribution at 18:00 is a random quantity: zero if it’s unreachable, otherwise whatever its battery and reserve allow on that day. If the homes behave
-        independently, their surprises tend to cancel. The average of the sum grows in proportion to the number of homes, <i>N</i>, but its typical spread grows only as
-        √<i>N</i>. Relative to its size, the fleet gets steadier as it grows — the <b>law of large numbers</b>:
+        Each home’s contribution at 18:00 is a random quantity: zero if it’s unreachable, otherwise whatever its battery and reserve allow on that day. As the fleet
+        grows, the average contribution per home settles toward its expected value — the <b>law of large numbers</b>. How quickly it settles depends on independence.
+        If the homes behave independently, their surprises partly cancel: some homes come in above their average on a given evening while others come in below. The
+        expected total grows in proportion to the number of homes, <i>N</i>, but its typical spread grows only as √<i>N</i>, so the spread relative to the total
+        shrinks like 1/√<i>N</i>:
       </P>
       <Eq label="Relative spread of a fleet's total falls as one over the square root of the number of homes">
         <Frac top={<span>spread of the total</span>} bottom={<span>expected total</span>} />
@@ -262,7 +263,7 @@ export default function Lesson() {
       <Figure name="DER Aggregator · diversity" scenario={b}>
         <svg
           className="chart"
-          viewBox="0 0 640 236"
+          viewBox="0 0 640 220"
           role="img"
           aria-label={`Distribution over ${DAYS} simulated evenings of what a ${size}-home fleet can deliver per home. Expected ${kw(perHome(d.mean), 2)}, dependable ${kw(perHome(dep), 2)} per home.`}
         >
@@ -276,24 +277,24 @@ export default function Lesson() {
             const v = c / d.totals.length;
             return v > 0 ? <rect key={i} x={x0 + 0.5} y={ys(v)} width={Math.max(0.5, x1 - x0 - 1)} height={ys(0) - ys(v)} fill={FUEL.battery} opacity={0.75} /> : null;
           })}
-          <line x1={xs(perHome(d.mean))} x2={xs(perHome(d.mean))} y1={30} y2={200} stroke="#333" strokeWidth={2} />
-          <text className="lab" x={xs(perHome(d.mean)) + 4} y={40}>
+          <line x1={xs(perHome(d.mean))} x2={xs(perHome(d.mean))} y1={26} y2={184} stroke="#333" strokeWidth={2} />
+          <text className="lab" x={xs(perHome(d.mean)) + 4} y={36}>
             expected
           </text>
-          <line x1={xs(perHome(dep))} x2={xs(perHome(dep))} y1={30} y2={200} stroke="#c4382f" strokeWidth={2} strokeDasharray="6 4" />
-          <text className="lab" x={xs(perHome(dep)) - 4} y={58} textAnchor="end" style={{ fill: '#c4382f' }}>
+          <line x1={xs(perHome(dep))} x2={xs(perHome(dep))} y1={26} y2={184} stroke="#c4382f" strokeWidth={2} strokeDasharray="6 4" />
+          <text className="lab" x={xs(perHome(dep)) - 4} y={52} textAnchor="end" style={{ fill: '#c4382f' }}>
             dependable
           </text>
-          <line x1={xs(perHome(d.nameplate))} x2={xs(perHome(d.nameplate))} y1={30} y2={200} stroke="#777" strokeWidth={1.5} strokeDasharray="2 3" />
-          <text className="lab" x={xs(perHome(d.nameplate)) - 4} y={76} textAnchor="end">
+          <line x1={xs(perHome(d.nameplate))} x2={xs(perHome(d.nameplate))} y1={26} y2={184} stroke="#777" strokeWidth={1.5} strokeDasharray="2 3" />
+          <text className="lab" x={xs(perHome(d.nameplate)) - 4} y={68} textAnchor="end">
             nameplate
           </text>
           {[0, 1, 2, 3, 4, 5, 6].map((v) => (
-            <text key={v} className="ax ax-m" x={xs(v)} y={218}>
+            <text key={v} className="ax ax-m" x={xs(v)} y={202}>
               {v}
             </text>
           ))}
-          <text className="ax ax-e" x={X1} y={234}>
+          <text className="ax ax-e" x={X1} y={216}>
             kW per home at 18:00
           </text>
         </svg>
@@ -305,21 +306,20 @@ export default function Lesson() {
             { label: 'fleet dependable capacity', value: mw(dep / 1000, size < 200 ? 3 : 2) },
           ]}
         />
-        <svg className="chart" viewBox="0 0 640 236" role="img" aria-label="Dependable capacity as a share of expected capacity, against fleet size, with and without weather shared by all homes.">
+        <svg className="chart" viewBox="0 0 640 220" role="img" aria-label="Dependable capacity as a share of expected capacity, against fleet size, with and without weather shared by all homes.">
           <text className="ax" x={70} y={16}>
             Dependable ÷ expected
           </text>
           <GridY y={cy} ticks={[0.5, 0.6, 0.7, 0.8, 0.9, 1]} x0={70} x1={590} format={(v) => pct(v)} />
-          <line x1={70} x2={590} y1={cy(0.9)} y2={cy(0.9)} stroke="#999" strokeDasharray="3 4" />
           <path d={linePath(SIZES.map((s) => cx(Math.log10(s))), curves[1].map((v) => cy(Math.max(0.5, v))))} fill="none" stroke="#8a8a8a" strokeWidth={2} strokeDasharray="7 5" />
           <path d={linePath(SIZES.map((s) => cx(Math.log10(s))), curves[0].map((v) => cy(Math.max(0.5, v))))} fill="none" stroke={FUEL.battery} strokeWidth={3} />
           <circle cx={cx(Math.log10(size))} cy={cy(Math.max(0.5, ratio))} r={6} fill={shared ? '#8a8a8a' : FUEL.battery} stroke="#fcfcfb" strokeWidth={2} />
           {SIZES.map((s) => (
-            <text key={s} className="ax ax-m" x={cx(Math.log10(s))} y={218}>
+            <text key={s} className="ax ax-m" x={cx(Math.log10(s))} y={202}>
               {fmt(s)}
             </text>
           ))}
-          <text className="ax ax-e" x={590} y={234}>
+          <text className="ax ax-e" x={590} y={216}>
             Homes in the fleet
           </text>
         </svg>
@@ -358,10 +358,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="With each home’s weather independent and 95% confidence, find the smallest fleet that can promise at least 90% of its expected capacity."
+        question={`With each home’s weather independent and 95% confidence, a 50-home fleet can promise all but ${pct(REF.short50, 1)} of its expected capacity. Use the 1/√N rule to predict the smallest fleet that halves that shortfall, then check it.`}
         solved={solved}
-        status={`A fleet of ${fmt(size)} homes can promise ${pct(ratio, 1)} of its expected capacity${shared ? ', with weather shared' : ''}${Math.abs(conf - 0.95) > 1e-9 ? `, at ${pct(conf)} confidence` : ''}.`}
-        success={`Solved. ${fmt(size)} homes reach ${pct(ratio, 1)}, while the next size down manages only ${pct(prevRatio, 1)}. Past this point, each extra home adds almost its full expected contribution to what the fleet can promise.`}
+        status={`A fleet of ${fmt(size)} homes falls ${pct(1 - ratio, 1)} short of its expected capacity${shared ? ', with weather shared' : ''}${Math.abs(conf - 0.95) > 1e-9 ? `, at ${pct(conf)} confidence` : ''}.`}
+        success={`Solved. Four times the homes, half the shortfall: ${fmt(size)} homes fall ${pct(1 - ratio, 1)} short, against ${pct(REF.short50, 1)} for 50. Halving it again takes four times as many homes again — averaging keeps helping, but more and more slowly.`}
       />
 
       <P>
@@ -371,7 +371,8 @@ export default function Lesson() {
         software update that knocks a manufacturer’s devices offline — and an aggregator has to plan for them separately.
       </P>
       <P>
-        Grid operators face the same question when they accredit capacity — deciding how much each resource counts toward having enough supply at the peak — and their
+        Grid operators face the same question when they accredit capacity — deciding how much each resource counts toward having enough supply at the peak, as the
+        capacity auction in <a href={lessonHref('4.6')}>Lesson 4.6</a> did for its plants — and their
         methods are more elaborate than a single percentile. But the lesson carries over: nameplate capacity is what the fleet owns, and{' '}
         <K c="power">
           dependable capacity<Sub>95%</Sub>

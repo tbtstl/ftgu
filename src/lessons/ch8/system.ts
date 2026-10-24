@@ -10,7 +10,7 @@ import { findIslands } from '../../engines/physics/powerflow';
 import { makeGenerator } from '../../model/fleet';
 import { LOAD_SHAPE, SOLAR_CF, WIND_CF } from '../../model/profiles';
 import type { Generator, LoadKind, Network } from '../../model/types';
-import { BATTERY_CAPEX, CORRIDOR, LOAD_KINDS, SITE, SUBSTATION_COST, TECH, lineCostPerKm, type CapstoneDesign, type WeatherId } from './capstone';
+import { BATTERY_CAPEX, CORRIDOR, LOAD_KINDS, SITE, SUBSTATION_COST, TECH, defaultDesign, lineCostPerKm, type CapstoneDesign, type WeatherId } from './capstone';
 
 export const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -561,10 +561,19 @@ export function lineCapex(lengthKm: number, limit: number): number {
   return lengthKm * lineCostPerKm(limit);
 }
 
+/** Capital cost of the 8.4 transition plan, by resource. */
+export function transitionCapexParts(d: CapstoneDesign): { wind: number; solar: number; storage: number; total: number } {
+  const a = transitionAdditions(d);
+  const of = (fuel: string) => (a.gens ?? []).filter((g) => g.fuel === fuel).reduce((s, g) => s + plantCapex(g), 0);
+  const wind = of('wind');
+  const solar = of('solar');
+  const storage = (a.batteries ?? []).reduce((s, b) => s + batteryCapex(b.powerMW, b.energyMWh), 0);
+  return { wind, solar, storage, total: wind + solar + storage };
+}
+
 /** Capital cost of the 8.4 transition plan's plants and battery. */
 export function transitionCapex(d: CapstoneDesign): number {
-  const a = transitionAdditions(d);
-  return (a.gens ?? []).reduce((s, g) => s + plantCapex(g), 0) + (a.batteries ?? []).reduce((s, b) => s + batteryCapex(b.powerMW, b.energyMWh), 0);
+  return transitionCapexParts(d).total;
 }
 
 /** What the base design would cost to build today (illustrative overnight costs). */
@@ -573,6 +582,25 @@ export function capitalCost(d: CapstoneDesign): CapitalTally {
   const lines = d.lines.reduce((s, l) => s + lineCapex(CORRIDOR[l.id].lengthKm, l.limit), 0);
   const generation = d.gens.reduce((s, g) => s + plantCapex(g), 0);
   return { substations, lines, generation, storage: 0, total: substations + lines + generation };
+}
+
+/**
+ * Capital spent on anything the starting design doesn't have: new substations, new lines, higher
+ * ratings on its lines, new plants and bigger ones. Removing what was there saves nothing here.
+ */
+export function newCapital(d: CapstoneDesign): number {
+  const s = defaultDesign();
+  const subs = d.nodes.filter((n) => !s.nodes.includes(n)).length * SUBSTATION_COST;
+  const lines = d.lines.reduce((acc, l) => {
+    const km = CORRIDOR[l.id].lengthKm;
+    const was = s.lines.find((x) => x.id === l.id);
+    return acc + (was ? Math.max(0, lineCapex(km, l.limit) - lineCapex(km, was.limit)) : lineCapex(km, l.limit));
+  }, 0);
+  const gens = d.gens.reduce((acc, g) => {
+    const was = s.gens.find((x) => x.id === g.id);
+    return acc + plantCapex({ ...g, capacity: Math.max(0, g.capacity - (was?.capacity ?? 0)) });
+  }, 0);
+  return subs + lines + gens;
 }
 
 // ---------------------------------------------------------------------------

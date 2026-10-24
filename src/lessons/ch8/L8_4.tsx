@@ -1,8 +1,10 @@
 import { useDeferredValue, useMemo, useState } from 'react';
-import { Button, Caption, Challenge, DataTable, FUEL, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, TimeChart, Tn, fmt, hour, mw, mwh, pct, signed, usd } from '../../framework';
-import { defaultDesign, updateCapstone, useCapstone, type CapstoneDesign, type Transition, type WeatherId } from './capstone';
-import { HOURS, STORAGE_SLICES, WEATHER, WEATHER_IDS, argmax, availability, checkSystem, emissions, outputByFuel, runMarket, siteName, systemOf, type MarketRun } from './system';
-import { EmptyNote, FUEL_NAME, FUEL_ORDER, NodePicker, ResetGridButton } from './ui';
+import { Button, Caption, Challenge, DataTable, FUEL, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, TimeChart, Tn, fmt, hour, lessonHref, mw, mwh, pct, priceFill, signed, usd } from '../../framework';
+import { TECH, defaultDesign, updateCapstone, useCapstone, type CapstoneDesign, type Transition, type WeatherId } from './capstone';
+import { WIND_MAX, WIND_STEP, siting, sitingSolved } from './challenges';
+import { constrainedLines } from './strategy';
+import { HOURS, STORAGE_SLICES, WEATHER, WEATHER_IDS, argmax, availability, checkSystem, emissions, outputByFuel, runMarket, siteName, systemOf, transitionCapexParts, windCF, type MarketRun } from './system';
+import { EmptyNote, FUEL_NAME, FUEL_ORDER, GridControls, GridMap, GridStrip, NodePicker, dollars } from './ui';
 
 type Resource = 'wind' | 'solar' | 'storage';
 
@@ -29,10 +31,7 @@ function metrics(run: MarketRun) {
     unserved: run.summary.unservedMWh,
     margin: c.capacity.margin,
     congested: run.summary.congestedHours,
-    rent: run.summary.congestionRent,
     avg: run.summary.averagePrice,
-    peak: run.summary.peakPrice.price,
-    negative: run.summary.negativeHours,
     curtailed: curtailed(run),
     co2: emissions(run),
     coal: run.sys.gens.filter((g) => g.fuel === 'coal').reduce((a, g) => a + (run.summary.units[g.id]?.mwh ?? 0), 0),
@@ -48,7 +47,9 @@ export default function Lesson() {
   const [dayPick, setDay] = useState<WeatherId | null>(null);
   const day = dayPick ?? live.weather;
   const t = live.transition;
-  const setT = (patch: Partial<Transition>) => updateCapstone((x) => ({ ...x, transition: { ...x.transition, ...patch } }));
+  const setT = (patch: Partial<Transition>, key?: string) => updateCapstone((x) => ({ ...x, transition: { ...x.transition, ...patch } }), { lesson: '8.4', key });
+  // The siting what-if: one wind farm on a scratch copy of the grid, starting from the plan's.
+  const [wf, setWf] = useState(() => ({ node: t.windNode, mw: Math.min(WIND_MAX, Math.round(t.windMW / WIND_STEP) * WIND_STEP) }));
 
   const runs = useMemo(() => {
     if (!d.nodes.length) return null;
@@ -66,36 +67,39 @@ export default function Lesson() {
   const solarNode = pick(t.solarNode, first);
   const storageNode = pick(t.storageNode, first);
   const start = defaultDesign().transition;
+  const wfNode = pick(wf.node, first);
+  const sit = useMemo(() => (d.nodes.length && d.nodes.includes(wfNode) ? siting(d, day, wfNode, wf.mw) : null), [d, day, wfNode, wf.mw]);
+  const sitSolved = useMemo(() => !!sit?.ok && sitingSolved(d, day, wfNode, wf.mw), [sit, d, day, wfNode, wf.mw]);
 
   if (!runs) {
     return (
       <LessonPage id="8.4">
-        <P>The transition simulator needs a grid to add renewables to, and yours has no substations. Build one in Lesson 8.1, or reset your grid to the starting design.</P>
-        <Figure name="Energy Transition Simulator" actions={<ResetGridButton />}>
+        <P>
+          The transition simulator needs a grid to add renewables to, and yours has no substations. Build one in <a href={lessonHref('8.1')}>Lesson 8.1</a>, or reset your
+          grid to the starting design.
+        </P>
+        <Figure name="Energy Transition Simulator" actions={<GridControls lesson="8.4" />}>
           <EmptyNote>Nothing to simulate.</EmptyNote>
         </Figure>
-        <Challenge id="a" question="Cut your grid’s emissions by at least half." solved={false} status="Your grid has no substations yet." success="" />
+        <Challenge id="a" question="Find the smallest wind farm that halves your grid’s emissions." solved={false} status="Your grid has no substations yet." success="" />
       </LessonPage>
     );
   }
 
-  const { before, after, mb, ma, mn } = runs;
+  const { after, noStore, mb, ma, mn } = runs;
   const byFuel = outputByFuel(after);
   const batt = after.storage.find((s) => s.id === 'tr-battery');
   if (batt) byFuel.battery = batt.schedule.map((x) => Math.max(0, x));
   const fuels = FUEL_ORDER.filter((f) => byFuel[f] && byFuel[f].some((v) => v > 0.5));
   const charging = HOURS.map((h) => after.demand[h] + Math.max(0, -(batt?.schedule[h] ?? 0)));
   const cut = mb.co2 > 0 ? 1 - ma.co2 / mb.co2 : 0;
-  const solved = mb.co2 > 0 && cut >= 0.5 && ma.congested <= mb.congested && ma.unserved <= 0.5;
+  const capex = transitionCapexParts(live);
 
   const rows: Array<{ k: string; b: string; a: string; ch: string; better?: boolean }> = [
     { k: 'Unserved energy', b: mwh(mb.unserved), a: mwh(ma.unserved), ch: signed(ma.unserved - mb.unserved) + ' MWh', better: ma.unserved <= mb.unserved },
     { k: 'Reserve margin at the peak', b: pct(mb.margin), a: pct(ma.margin), ch: signed((ma.margin - mb.margin) * 100) + ' pts', better: ma.margin >= mb.margin },
     { k: 'Hours with congestion', b: String(mb.congested), a: String(ma.congested), ch: signed(ma.congested - mb.congested), better: ma.congested <= mb.congested },
-    { k: 'Congestion rent', b: usd(mb.rent), a: usd(ma.rent), ch: (ma.rent >= mb.rent ? '+' : '') + usd(ma.rent - mb.rent), better: ma.rent <= mb.rent },
     { k: 'Average price', b: usd(mb.avg, 2), a: usd(ma.avg, 2), ch: (ma.avg >= mb.avg ? '+' : '') + usd(ma.avg - mb.avg, 2), better: ma.avg <= mb.avg },
-    { k: 'Highest price', b: usd(mb.peak), a: usd(ma.peak), ch: (ma.peak >= mb.peak ? '+' : '') + usd(ma.peak - mb.peak), better: ma.peak <= mb.peak },
-    { k: 'Hours with negative prices', b: String(mb.negative), a: String(ma.negative), ch: signed(ma.negative - mb.negative) },
     { k: 'Wind and solar turned away', b: mwh(mb.curtailed), a: mwh(ma.curtailed), ch: signed(ma.curtailed - mb.curtailed) + ' MWh', better: ma.curtailed <= mb.curtailed },
     { k: 'Emissions, tonnes of CO₂', b: fmt(mb.co2), a: fmt(ma.co2), ch: mb.co2 > 0 ? signed(-cut * 100) + '%' : '—', better: ma.co2 <= mb.co2 },
   ];
@@ -109,35 +113,35 @@ export default function Lesson() {
     .filter((c) => c.s && c.s.mwh > 1)
     .map((c) => ({ label: c.label, price: c.s.revenue / c.s.mwh }));
 
-  // Storage figure.
+  // Storage figure: the plan with its battery against the same plan without it, so the gap is the battery's alone.
   const sNode = batt?.node ?? storageNode;
-  const pBefore = before.hours.map((h) => h.lmp[sNode] ?? 0);
+  const pNoBatt = noStore.hours.map((h) => h.lmp[sNode] ?? 0);
   const pAfter = after.hours.map((h) => h.lmp[sNode] ?? 0);
   const used = batt ? Math.max(...batt.schedule.map(Math.abs)) : 0;
   const dischargedMWh = batt ? batt.schedule.reduce((a, x) => a + Math.max(0, x), 0) : 0;
-  const yTop = Math.max(60, ...pBefore, ...pAfter);
+  const yTop = Math.max(60, ...pNoBatt, ...pAfter);
+  // An hour where the battery moves its own price the "wrong" way, usually because it changes whether the hour can be kept N-1 secure.
+  const against = batt ? HOURS.find((h) => (batt.schedule[h] > 0.5 && pAfter[h] > pNoBatt[h] + 0.5) || (batt.schedule[h] < -0.5 && pAfter[h] < pNoBatt[h] - 0.5)) : undefined;
+  const againstSecurity = against !== undefined && noStore.hours[against].secure !== after.hours[against].secure;
 
   return (
     <LessonPage id="8.4">
+      <GridStrip d={live} lesson="8.4" />
       <P>
         The grid you’ve built runs mostly on fuel. In this lesson we’ll add wind, solar and batteries to it and measure the change in the three ways that matter to the
         people who run a grid — reliability, congestion and prices — as well as the one that’s usually the reason for the change: emissions.
       </P>
       <P>
         Wind and solar enter the market engine of the last lesson as plants that offer slightly below zero, with output each hour limited by the weather of your chosen day
-        (Lesson 8.2). A battery enters as a schedule: it charges in cheap hours and discharges in dear ones at its own node. The starting plan adds {fmt(start.windMW)} MW of
+        (<a href={lessonHref('8.2')}>Lesson 8.2</a>). A battery enters as a schedule: it charges in cheap hours and discharges in dear ones at its own node. The starting plan adds {fmt(start.windMW)} MW of
         wind at {siteName(start.windNode)}, {fmt(start.solarMW)} MW of solar at {siteName(start.solarNode)} and a {fmt(start.storageMW)} MW, {start.storageHours}-hour
-        battery at {siteName(start.storageNode)}. Edit any of them in the next demonstration; its table compares your grid before and after on the same day:
+        battery at {siteName(start.storageNode)}. Edit any of them in the next demonstration — the plan is saved in your grid — and its table compares your grid before
+        and after on the same day:
       </P>
 
       <Figure
         name="Energy Transition Simulator"
-        actions={
-          <>
-            <Button onClick={() => setT({ windMW: 0, solarMW: 0, storageMW: 0 })}>Remove all additions</Button>
-            <ResetGridButton />
-          </>
-        }
+        actions={<GridControls lesson="8.4" />}
       >
         <Segmented<WeatherId> label="Day" value={day} onChange={setDay} options={WEATHER_IDS.map((w) => ({ value: w, label: WEATHER[w].label }))} />
         <Legend
@@ -167,23 +171,27 @@ export default function Lesson() {
         />
         {res === 'wind' && (
           <>
-            <Slider label="New wind" tone="teal" value={t.windMW} min={0} max={1000} step={50} onChange={(v) => setT({ windMW: v, windNode })} display={mw(t.windMW)} />
+            <Slider label="New wind" tone="teal" value={t.windMW} min={0} max={1000} step={50} onChange={(v) => setT({ windMW: v, windNode }, 'wind')} display={mw(t.windMW)} />
             <NodePicker label="Wind farm site" nodes={live.nodes} value={windNode} onChange={(n) => setT({ windNode: n })} />
           </>
         )}
         {res === 'solar' && (
           <>
-            <Slider label="New solar" tone="gold" value={t.solarMW} min={0} max={1000} step={50} onChange={(v) => setT({ solarMW: v, solarNode })} display={mw(t.solarMW)} />
+            <Slider label="New solar" tone="gold" value={t.solarMW} min={0} max={1000} step={50} onChange={(v) => setT({ solarMW: v, solarNode }, 'solar')} display={mw(t.solarMW)} />
             <NodePicker label="Solar farm site" nodes={live.nodes} value={solarNode} onChange={(n) => setT({ solarNode: n })} />
           </>
         )}
         {res === 'storage' && (
           <>
-            <Slider label="Battery power" tone="red" value={t.storageMW} min={0} max={500} step={25} onChange={(v) => setT({ storageMW: v, storageNode })} display={mw(t.storageMW)} />
-            <Slider label="Hours of storage" tone="gold" value={t.storageHours} min={1} max={8} onChange={(v) => setT({ storageHours: v })} display={`${t.storageHours} h · ${fmt(t.storageMW * t.storageHours)} MWh`} />
+            <Slider label="Battery power" tone="red" value={t.storageMW} min={0} max={500} step={25} onChange={(v) => setT({ storageMW: v, storageNode }, 'storage')} display={mw(t.storageMW)} />
+            <Slider label="Hours of storage" tone="gold" value={t.storageHours} min={1} max={8} onChange={(v) => setT({ storageHours: v }, 'hours')} display={`${t.storageHours} h · ${fmt(t.storageMW * t.storageHours)} MWh`} />
             <NodePicker label="Battery site" nodes={live.nodes} value={storageNode} onChange={(n) => setT({ storageNode: n })} />
           </>
         )}
+        <Caption>
+          The plan’s capital cost: <Tn tone="green">{dollars(capex.total)}</Tn>
+          {capex.total > 0 ? ` — ${dollars(capex.wind)} for wind, ${dollars(capex.solar)} for solar and ${dollars(capex.storage)} for storage.` : '.'}
+        </Caption>
         <DataTable
           caption="Your grid before and after the transition"
           rows={rows}
@@ -204,7 +212,9 @@ export default function Lesson() {
         hours they produce most.
         {negHour
           ? ` At ${hour(negHour.hour)} prices go below zero. When the grid has more zero-fuel power than it can use or export from a node, the cheapest way to serve one more megawatt there is to turn away a little less wind or sun, which offers at −$5 or −$2 — so that becomes the price.`
-          : ' On this day prices never go below zero.'}
+          : ' On this day prices never go below zero.'}{' '}
+        None of it is free, either: at the costs of <a href={lessonHref('8.1')}>Lesson 8.1</a>, the plan’s wind, solar and battery cost {dollars(capex.total)} to build,
+        before any lines they might need.
       </P>
       <P>
         Congestion often gets worse, not better. Renewables go where the wind blows and the sun shines, and their power has to travel to the customers; the lines out of a
@@ -237,44 +247,120 @@ export default function Lesson() {
           : ''}
       </P>
 
+      <P>
+        In the next demonstration, place a single wind farm on your grid with nothing else added. It works on a scratch copy, so the plan in{' '}
+        <FigRef to="Energy Transition Simulator">the first demonstration</FigRef> stays as it is unless you choose to use the wind farm in it. Click a substation to
+        put the farm there. Each substation shows its average price over the day with the farm in place, and each line the number of hours it limits the dispatch:
+      </P>
+
+      <Figure
+        name="Energy Transition Simulator · siting"
+        onReset={() => setWf({ node: t.windNode, mw: Math.min(WIND_MAX, Math.round(t.windMW / WIND_STEP) * WIND_STEP) })}
+        actions={
+          <Button onClick={() => setT({ windMW: wf.mw, windNode: wfNode })} disabled={!sit || (t.windMW === wf.mw && t.windNode === wfNode)}>
+            Use in my plan
+          </Button>
+        }
+      >
+        {sit ? (
+          (() => {
+            const windy = argmax(windCF(day));
+            const hoursOn = Object.fromEntries(constrainedLines(sit.after).map((x) => [x.id, x.hours]));
+            const farmCost = wf.mw * 1000 * TECH.wind.capexPerKW;
+            return (
+              <>
+                <GridMap
+                  d={d}
+                  ariaLabel={`A ${fmt(wf.mw)} MW wind farm at ${siteName(wfNode)} on the ${WEATHER[day].label.toLowerCase()}: emissions ${pct(Math.max(0, sit.cut))} lower than with nothing added, ${sit.after.summary.congestedHours} congested hours against ${sit.before.summary.congestedHours}.`}
+                  nodeInfo={(n) => {
+                    const p = sit.after.summary.nodePrice[n] ?? 0;
+                    return { value: usd(p), sub: 'average', fill: priceFill(p) };
+                  }}
+                  flows={sit.after.hours[windy]?.flows}
+                  lineLabel={(id) => (hoursOn[id] ? `${hoursOn[id]} h` : '')}
+                  plants={sit.after.sys.gens}
+                  selectedNode={wfNode}
+                  onNodeClick={(n) => setWf((x) => ({ ...x, node: n }))}
+                />
+                <Slider
+                  label="Wind farm"
+                  tone="teal"
+                  value={wf.mw}
+                  min={0}
+                  max={WIND_MAX}
+                  step={WIND_STEP}
+                  onChange={(v) => setWf((x) => ({ ...x, mw: v }))}
+                  display={`${mw(wf.mw)} at ${siteName(wfNode)}`}
+                />
+                <Readouts
+                  items={[
+                    { label: 'emissions, against nothing added', value: sit.cut > 0.0005 ? signed(-sit.cut * 100) + '%' : '0%', tone: sit.cut >= 0.5 ? 'green' : undefined },
+                    { label: 'hours with congestion', value: `${sit.before.summary.congestedHours} → ${sit.after.summary.congestedHours}`, tone: sit.after.summary.congestedHours > sit.before.summary.congestedHours ? 'red' : undefined },
+                    { label: 'wind turned away', value: mwh(curtailed(sit.after)) },
+                    { label: 'capital cost', value: dollars(farmCost) },
+                  ]}
+                />
+              </>
+            );
+          })()
+        ) : (
+          <EmptyNote>Your grid has no substations to build on.</EmptyNote>
+        )}
+      </Figure>
+
       <Challenge
         id="a"
-        question={
-          <>
-            Using <FigRef to="Energy Transition Simulator">the first demonstration</FigRef>, cut your grid’s emissions on the chosen day by at least half, without adding
-            hours of congestion or leaving any demand unserved.
-          </>
+        question={`On the ${WEATHER[day].label.toLowerCase()}, what is the smallest wind farm, in steps of ${WIND_STEP} MW, that by itself cuts your grid’s emissions by at least half without adding hours of congestion? Choose the site first: the map shows where coal runs and which lines are already full.`}
+        solved={sitSolved}
+        status={
+          !sit
+            ? 'Your grid has no substations yet.'
+            : sit.ok
+              ? `${mw(wf.mw)} at ${siteName(wfNode)} does it — but so does ${mw(wf.mw - WIND_STEP)}.`
+              : `${mw(wf.mw)} at ${siteName(wfNode)} cuts emissions by ${pct(Math.max(0, sit.cut))}, with ${sit.after.summary.congestedHours} congested hours against ${sit.before.summary.congestedHours}.`
         }
-        solved={solved}
-        status={`Emissions are ${pct(Math.max(0, cut))} lower than before (${fmt(ma.co2)} against ${fmt(mb.co2)} tonnes), with ${ma.congested} congested hours against ${mb.congested} before.`}
-        success={`Solved: emissions down ${pct(cut)}, with ${ma.congested} congested hours against ${mb.congested}. New power connected where it competes directly with the coal plant displaces coal; the same megawatts behind a congested line mostly get turned away.`}
+        success={
+          sit
+            ? `Solved: ${mw(wf.mw)} at ${siteName(wfNode)} cuts emissions by ${pct(sit.cut)} with ${sit.after.summary.congestedHours} congested hours against ${sit.before.summary.congestedHours}, and ${WIND_STEP} MW less falls short. Wind cuts emissions only where its power can reach the hours and places that coal would otherwise serve; the same megawatts behind full lines are mostly turned away.`
+            : ''
+        }
       />
+
+      <P>
+        A farm behind lines that are already full in the hours the wind blows has its output turned away, however large it is. One whose power can flow toward the
+        demand displaces the dearest fuel-burning plant running in each hour, which is coal only when coal is the plant at the margin. Even a site next to the coal
+        plant can disappoint, if the farm’s output congests the lines out of it.
+      </P>
 
       <H2>What the battery does</H2>
       <P>
-        Each battery schedules itself with the dynamic program of Lesson 6.4, against the prices at its own node. But a big battery changes the very prices it plans
+        Each battery schedules itself with the dynamic program of <a href={lessonHref('6.4')}>Lesson 6.4</a>, against the prices at its own node. But a big battery changes the very prices it plans
         against: charging raises them, discharging lowers them. So the engine adds it in {WORDS[STORAGE_SLICES] ?? STORAGE_SLICES} equal slices. Each slice optimizes against the prices left by
         the slices before it, the day is cleared again, and the battery keeps the slice only if it then earns more than it did without it. That is a simple stand-in for the
-        many small, competing decisions of a real market, not an equilibrium. Here is your battery at {siteName(sNode)}:
+        many small, competing decisions of a real market, not an equilibrium. Here is your battery at {siteName(sNode)}, with its controls from{' '}
+        <FigRef to="Energy Transition Simulator">the first demonstration</FigRef> repeated so you can change it here:
       </P>
 
-      <Figure name="Energy Transition Simulator · storage" actions={<ResetGridButton />}>
+      <Figure name="Energy Transition Simulator · storage" actions={<GridControls lesson="8.4" />}>
+        <Slider label="Battery power" tone="red" value={t.storageMW} min={0} max={500} step={25} onChange={(v) => setT({ storageMW: v, storageNode }, 'storage')} display={mw(t.storageMW)} />
+        <Slider label="Hours of storage" tone="gold" value={t.storageHours} min={1} max={8} onChange={(v) => setT({ storageHours: v }, 'hours')} display={`${t.storageHours} h · ${fmt(t.storageMW * t.storageHours)} MWh`} />
+        <NodePicker label="Battery site" nodes={live.nodes} value={storageNode} onChange={(n) => setT({ storageNode: n })} />
         {t.storageMW > 0 && batt ? (
           <>
             <Legend
               items={[
-                { label: `Price at ${siteName(sNode)} before`, color: '#9a9a9a', kind: 'line', dashed: true },
-                { label: 'After', color: '#3f7a1e', kind: 'line' },
+                { label: `Price at ${siteName(sNode)} without the battery`, color: '#9a9a9a', kind: 'line', dashed: true },
+                { label: 'With the battery', color: '#3f7a1e', kind: 'line' },
               ]}
             />
             <TimeChart
-              ariaLabel={`Price at ${siteName(sNode)} before and after the transition.`}
+              ariaLabel={`Price at ${siteName(sNode)} over the day under your plan, with its battery and without it.`}
               series={[
-                { values: pBefore.map((p) => Math.min(300, p)), color: '#9a9a9a', kind: 'step', dash: '6 4' },
+                { values: pNoBatt.map((p) => Math.min(300, p)), color: '#9a9a9a', kind: 'step', dash: '6 4' },
                 { values: pAfter.map((p) => Math.min(300, p)), color: '#3f7a1e', kind: 'step', width: 2.5 },
               ]}
               yLabel={`Price at ${siteName(sNode)}, $ per MWh`}
-              yMin={Math.min(0, ...pAfter, ...pBefore)}
+              yMin={Math.min(0, ...pAfter, ...pNoBatt)}
               yMax={Math.min(300, yTop * 1.1)}
               yFormat={(v) => '$' + fmt(v)}
             />
@@ -289,7 +375,6 @@ export default function Lesson() {
               items={[
                 { label: 'earned over the day', value: usd(batt.revenue), tone: batt.revenue >= 0 ? 'green' : 'red' },
                 { label: 'energy delivered', value: mwh(dischargedMWh), tone: 'gold' },
-                { label: 'most power used', value: `${fmt(used)} of ${fmt(t.storageMW)} MW` },
               ]}
             />
             <Caption>
@@ -299,17 +384,21 @@ export default function Lesson() {
             </Caption>
           </>
         ) : (
-          <EmptyNote>
-            Your plan has no battery. Add one with the storage controls in <FigRef to="Energy Transition Simulator">the first demonstration</FigRef>.
-          </EmptyNote>
+          <EmptyNote>Your plan has no battery. Give it some power with the slider.</EmptyNote>
         )}
       </Figure>
 
       <P>
         A battery also pays for every round trip. Ours return {pct(BATTERY_EFFICIENCY)} of the energy they take in, so a megawatt-hour bought for $30 has to sell for
-        at least {usd(30 / BATTERY_EFFICIENCY, 2)} just to break even, and a price gap narrower than {pct(1 / BATTERY_EFFICIENCY - 1)} isn’t worth trading at all. Look at
-        the prices the battery leaves behind. Its charging lifts the cheapest hours and its discharging trims the dearest, so the gap between them — the only thing
-        a battery earns from — narrows the more storage a node has. The first megawatts of storage at a node earn the most; each one after earns less. That makes{' '}
+        at least {usd(30 / BATTERY_EFFICIENCY, 2)} just to break even, and a price gap narrower than {pct(1 / BATTERY_EFFICIENCY - 1)} isn’t worth trading at all. Now
+        compare the two price lines in this demonstration: the dashed one is the same plan without its battery, so the difference between them is the battery’s
+        doing alone. Its charging lifts the cheapest hours and its discharging trims the dearest
+        {batt && against !== undefined
+          ? againstSecurity
+            ? ` — except at ${hour(against)}, where it changes whether the grid can be kept N-1 secure that hour, and with it which dispatch runs`
+            : ` — except at ${hour(against)}, where it changes how the hour is dispatched and the price moves the other way`
+          : ''}
+        . So the gap between cheap and dear hours — the only thing a battery earns from — narrows the more storage a node has. The first megawatts of storage at a node earn the most; each one after earns less. That makes{' '}
         <K c="energy">storage</K> at many small sites, each facing its own local prices, a natural complement to a few big batteries. The next lesson builds exactly that:
         thousands of home batteries, run together as one virtual power plant.
       </P>

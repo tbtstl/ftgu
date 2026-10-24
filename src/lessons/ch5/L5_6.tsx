@@ -4,16 +4,21 @@ import {
   Challenge,
   Checkbox,
   DataTable,
+  Eq,
   FUEL,
   Figure,
   H2,
+  K,
   LessonPage,
   NetworkView,
+  Op,
   P,
   Readouts,
   Segmented,
   Slider,
+  Sub,
   Swatch,
+  Tn,
   fmt,
   lessonHref,
   loadingColor,
@@ -24,6 +29,7 @@ import {
   usd,
   useScenario,
 } from '../../framework';
+import { lmpComponents, shadowPrices, type BindingConstraint } from '../../engines/market/lmpComponents';
 import { dcopf } from '../../engines/market/opf';
 import { checkDispatch, contingencyScan, fleetOffers, nodalLoads, type ContingencyCase } from '../../engines/market/networkDispatch';
 import { STANDARD_FLEET, fleetById } from '../../model/fleet';
@@ -47,6 +53,23 @@ function secureSolve(contingencies: string[], rating: number, lmp = true) {
   return dcopf(REGION, GENS, LOADS, { contingencies, emergencyRating: rating, lmp });
 }
 
+/** The secure dispatch with its binding constraints' shadow prices. */
+function securePriced(contingencies: string[], rating: number) {
+  const opts = { contingencies, emergencyRating: rating };
+  const r = dcopf(REGION, GENS, LOADS, opts);
+  return { r, cons: shadowPrices(REGION, GENS, LOADS, opts, r) };
+}
+
+/** The most heavily loaded line before anything trips. */
+function busiest(flows: Record<string, number>) {
+  return REGION.lines.reduce<{ id: string; loading: number }>(
+    (b, l) => (Math.abs(flows[l.id]) / l.limit > b.loading ? { id: l.id, loading: Math.abs(flows[l.id]) / l.limit } : b),
+    { id: '', loading: 0 },
+  );
+}
+
+const constraintName = (c: BindingConstraint) => `the flow on ${lineName(c.line)}${c.outage ? ` if ${lineName(c.outage)} trips` : ''}`;
+
 /** The worst post-outage loading across all single-line outages. */
 function worstOverall(cases: ContingencyCase[]) {
   return cases.reduce<{ outage: string; line: string; loading: number } | null>((w, c) => {
@@ -67,7 +90,13 @@ const LABEL_OFFSET: Record<string, [number, number]> = {
 };
 
 // Secure dispatches against every single-line outage, for the prose.
-const SECURE_100 = secureSolve(LINES, 1);
+const PRICED_100 = securePriced(LINES, 1);
+const SECURE_100 = PRICED_100.r;
+const SECURE_CON = PRICED_100.cons[0];
+const SECURE_PARTS = lmpComponents(REGION, 'center', SECURE_100.lmp.center, PRICED_100.cons);
+const SECURE_BUSIEST = busiest(SECURE_100.flows);
+const PRICED_125 = securePriced(LINES, 1.25);
+const SECURE_POST_WC = checkDispatch(REGION, GENS, SECURE_100.dispatch, LOADS, { outages: ['center-city'] }).flows['west-city'];
 const SECURITY_COST: Record<number, number> = Object.fromEntries([1, 1.1, 1.2, 1.3].map((k) => [k, (k === 1 ? SECURE_100 : secureSolve(LINES, k, false)).cost - BASE.cost]));
 const CHEAP_SCAN_100 = contingencyScan(REGION, GENS, BASE.dispatch, LOADS, LINES, { emergencyRating: 1 });
 const LOSS_CC = CHEAP_SCAN_100.find((c) => c.outage === 'center-city')!;
@@ -76,6 +105,27 @@ const LOSS_CC = CHEAP_SCAN_100.find((c) => c.outage === 'center-city')!;
 const PUZZLE_RATING = 1.1;
 const PUZZLE_OPT = secureSolve(LINES, PUZZLE_RATING, false);
 const PUZZLE_FIXED = { nuc: 400, wind: GENS.find((g) => g.id === 'wind')!.capacity, solar: 0, hydro: 150, oil: 0 };
+
+export type PuzzleState = { coal: number; cc2: number; ct: number };
+export const PUZZLE_DEFAULTS: PuzzleState = { coal: 300, cc2: 50, ct: 0 };
+
+/** The hand dispatch, with Lakeside making up the difference. */
+export function puzzleDispatch(st: PuzzleState): Record<string, number> {
+  const hand: Record<string, number> = { ...PUZZLE_FIXED, coal: st.coal, cc2: st.cc2, ct: st.ct };
+  hand.cc1 = DEMAND - Object.values(hand).reduce((t, v) => t + v, 0);
+  return hand;
+}
+
+/** The challenge: Lakeside within range, nothing over its limit before or after any single outage, within 1% of the optimizer. */
+export function puzzleSolved(st: PuzzleState): boolean {
+  const hand = puzzleDispatch(st);
+  if (hand.cc1 < -1e-6 || hand.cc1 > fleetById('cc1').capacity + 1e-6) return false;
+  const base = checkDispatch(REGION, GENS, hand, LOADS);
+  if ((base.worst?.loading ?? 0) > 1 + 1e-6) return false;
+  const scan = contingencyScan(REGION, GENS, hand, LOADS, LINES, { emergencyRating: PUZZLE_RATING });
+  if (scan.some((c) => (c.worst?.loading ?? 0) > 1 + 1e-6)) return false;
+  return base.cost / PUZZLE_OPT.cost - 1 <= 0.01;
+}
 
 type Mode = 'cheap' | 'secure';
 
@@ -90,7 +140,8 @@ export default function Lesson() {
   const rating = s.state.rating / 100;
   const chosen = LINES.filter((id) => s.state[`k:${id}`] !== false);
   const chosenKey = chosen.join(',');
-  const secure = useMemo(() => secureSolve(chosenKey ? chosenKey.split(',') : [], rating), [chosenKey, rating]);
+  const priced = useMemo(() => securePriced(chosenKey ? chosenKey.split(',') : [], rating), [chosenKey, rating]);
+  const secure = priced.r;
   const alone = useMemo(() => Object.fromEntries(LINES.map((id) => [id, secureSolve([id], rating, false).cost - BASE.cost])), [rating]);
   const shown = s.state.mode === 'secure' && secure.feasible ? secure : BASE;
   const scanCheap = contingencyScan(REGION, GENS, BASE.dispatch, LOADS, LINES, { emergencyRating: rating });
@@ -113,14 +164,19 @@ export default function Lesson() {
     caption = post.overloads.length
       ? `With ${lineName(trip)} gone, ${post.overloads.map((o) => `${lineName(o.id)} carries ${fmt(Math.abs(o.flow))} MW against an emergency limit of ${fmt(o.limit)}`).join(', and ')}.`
       : `With ${lineName(trip)} gone, its flow spreads over the other lines, and every one stays within its emergency limit.`;
+  } else if (s.state.mode === 'secure' && secure.feasible) {
+    const cons = priced.cons.filter((c) => c.outage);
+    caption =
+      secure.binding.length === 0 && cons.length
+        ? `Secure dispatch, before anything trips. No line is full, yet prices differ, because ${cons.length > 1 ? 'these constraints bind' : 'one constraint binds'}: ${cons.map(constraintName).join('; ')}. Click a line to see the flows the instant after it fails.`
+        : `Secure dispatch, before anything trips. Click a line to see the flows the instant after it fails.`;
   } else {
-    caption = `${s.state.mode === 'secure' ? 'Secure' : 'Cheapest'} dispatch, before anything trips. Click a line to see the flows the instant after it fails.`;
+    caption = 'Cheapest dispatch, before anything trips. Click a line to see the flows the instant after it fails.';
   }
 
   // ---- Figure 2: the puzzle.
-  const h = useScenario('puzzle', { coal: 300, cc2: 50, ct: 0 });
-  const hand: Record<string, number> = { ...PUZZLE_FIXED, coal: h.state.coal, cc2: h.state.cc2, ct: h.state.ct };
-  hand.cc1 = DEMAND - Object.values(hand).reduce((t, v) => t + v, 0);
+  const h = useScenario('puzzle', PUZZLE_DEFAULTS);
+  const hand = puzzleDispatch(h.state);
   const lakesideOk = hand.cc1 >= -1e-6 && hand.cc1 <= fleetById('cc1').capacity + 1e-6;
   const handBase = checkDispatch(REGION, GENS, hand, LOADS);
   const handScan = contingencyScan(REGION, GENS, hand, LOADS, LINES, { emergencyRating: PUZZLE_RATING });
@@ -130,26 +186,28 @@ export default function Lesson() {
   ];
   const failing = bars.filter((b) => b.worst && b.worst.loading > 1 + 1e-6);
   const gap = handBase.cost / PUZZLE_OPT.cost - 1;
-  const solved = lakesideOk && failing.length === 0 && gap <= 0.01;
+  const solved = puzzleSolved(h.state);
   const BX = scale(0, 2, 250, 560);
 
   return (
     <LessonPage id="5.6">
       <P>
-        In Lesson 5.1, a line was already out of service, and the optimizer simply dispatched around it. That’s the easy case. The hard case is a line that is in
-        service right now and might fail in the next second, from a lightning strike, a tree, or a faulty breaker. When it does, its flow moves onto the remaining
-        lines instantly, according to the same physics that splits power between paths. No plant can change its output that fast. If the new flows push another line
-        past what it can survive, protective relays may take that one out too, and, as we saw in Lesson 2.6, that’s how blackouts cascade.
+        In <a href={lessonHref('5.1')}>Lesson 5.1</a>, a line was already out of service, and the optimizer simply dispatched around it. The harder case is a line that
+        is in service now and might fail in the next second. <a href={lessonHref('2.6')}>Lesson 2.6</a> covered it: a tripped line’s flow moves onto the others
+        instantly, faster than any plant can respond, so operators follow the <b>N-1 criterion</b> and dispatch <i>preventively</i>, choosing outputs before anything
+        trips so that whichever line goes, the flows left behind are already acceptable. At the evening peak the cheapest dispatch fails that test four times, and the
+        preventive one passes it for about a third more.
       </P>
       <P>
-        Operators therefore follow the <b>N−1 criterion</b>: the grid must stay within its limits after the loss of any single element. The usual way to meet it is
-        preventive. The operator dispatches now so that whichever line trips, the flows left behind are already acceptable. That adds constraints to the optimization:
-        for every outage on a list of contingencies, and every line that remains, the flow after the outage must stay within that line’s emergency limit. The result is
-        called <b>security-constrained</b> optimal power flow, or, in a market, security-constrained economic dispatch.
+        A market builds that preventive dispatch into its optimization. For every outage on a list of contingencies, and every line that remains, the flow after the
+        outage must stay within that line’s emergency limit — a limit, at least as high as the normal one, that the line can carry for the short time it takes to
+        redispatch. The result is called <b>security-constrained</b> optimal power flow, or, in a market, security-constrained economic dispatch. What’s new here is
+        its effect on the market: what security costs, outage by outage, and what it does to prices.
       </P>
       <P>
         Here is the reference evening again, every line in service: {mw(DEMAND)} of demand, Ridge wind at {mw(PUZZLE_FIXED.wind)}. Click any line to see what would happen
-        the instant after it tripped, then switch to the secure dispatch and try again:
+        the instant after it tripped, then switch to the secure dispatch and try again. The secure dispatch costs more, and the difference is the <b>cost of
+        security</b>. Each node is shaded by its price:
       </P>
 
       <Figure name="Grid Optimization Challenge" scenario={s}>
@@ -207,6 +265,64 @@ export default function Lesson() {
             },
           ]}
         />
+      </Figure>
+
+      <P>
+        The cheapest dispatch fails the same four outages as in Lesson 2.6; the worst is Central–Metro, whose loss would leave West–Metro carrying{' '}
+        {fmt(Math.abs(LOSS_CC.flows['west-city']))} MW against its 300 MW limit. The secure dispatch is the optimizer’s answer when every outage is a constraint. It runs
+        Mill Creek flat out, starts the Eastgate peaker, and backs Ironwood down to its floor, so that even with Central–Metro gone, West–Metro ends up exactly at its
+        limit. That insurance costs{' '}
+        {usd(SECURITY_COST[1])} an hour, about {pct(SECURITY_COST[1] / BASE.cost)} more than the cheapest dispatch. That’s far more than security usually costs on
+        a real grid, where a big city is fed by many parallel lines. Our toy region has a single main artery into Metro, so protecting against its loss is unusually
+        expensive.
+      </P>
+
+      <H2>Prices without a full line</H2>
+      <P>
+        Now look at the prices in the secure dispatch. Before anything trips, no line is full — the busiest, {lineName(SECURE_BUSIEST.id)}, carries{' '}
+        {pct(SECURE_BUSIEST.loading)} of its limit — yet prices run from {usd(SECURE_100.lmp.west, 2)} at West to {usd(SECURE_100.lmp.city, 2)} in Metro. The
+        constraint doing it is one the optimizer added: {constraintName(SECURE_CON)}. West–Metro carries {fmt(Math.abs(SECURE_100.flows['west-city']))} MW now, but
+        the instant Central–Metro failed it would carry {fmt(Math.abs(SECURE_POST_WC))} MW, exactly its limit. So that constraint has a shadow price, just as a full
+        line does: {usd(SECURE_CON.mu, 2)}, what the dispatch would save each hour with one more megawatt of that limit. The formula of{' '}
+        <a href={lessonHref('5.3')}>Lesson 5.3</a> prices it with one change: the PTDF is measured on the grid as it would be after the outage. Of a megawatt sent
+        from Central to Metro, {fmt(SECURE_PARTS.city.terms[0].ptdf, 2)} MW would cross West–Metro with Central–Metro gone, so, with Central’s{' '}
+        {usd(SECURE_100.lmp.center)} as λ,
+      </P>
+      <Eq label={`Price in Metro: ${usd(SECURE_PARTS.city.energy)} plus ${usd(SECURE_CON.mu, 2)} times ${fmt(SECURE_PARTS.city.terms[0].ptdf, 4)} equals ${usd(SECURE_100.lmp.city, 2)}`}>
+        <K c="price">
+          LMP<Sub>Metro</Sub>
+        </K>
+        <Op>=</Op>
+        <K tone="blue">{usd(SECURE_PARTS.city.energy)}</K>
+        <Op>+</Op>
+        <Tn tone="red">{usd(SECURE_CON.mu, 2)}</Tn>
+        <Op>×</Op>
+        <span>{fmt(SECURE_PARTS.city.terms[0].ptdf, 4)}</span>
+        <Op>=</Op>
+        <K c="price">{usd(SECURE_100.lmp.city, 2)}</K>
+      </Eq>
+      <P>
+        West’s PTDF on the same constraint is negative, {fmt(SECURE_PARTS.west.terms[0].ptdf, 2)}: a megawatt more of demand at West would draw power toward West, and
+        less of it would leave for Metro over West–Metro. Extra demand there relieves the constraint, so West’s price, {usd(SECURE_100.lmp.west, 2)}, is below
+        Central’s. A contingency constraint separates prices exactly the way a full line does, because to the optimizer it is one: a line that would be over its limit
+        if another one failed. Many of the constraints that separate real nodal prices are of this kind, and the lists of binding constraints that operators publish
+        name both parts, the line being watched and the outage it’s protected against.
+      </P>
+
+      <H2>Which outages matter</H2>
+      <P>
+        The next demonstration lists the eight single-line outages. For each, it shows the worst line the instant afterward, with the cheapest dispatch and with the secure
+        one, and what securing against that outage alone would cost. The boxes choose which outages the secure dispatch protects against, and the slider sets the
+        emergency rating:
+      </P>
+
+      <Figure name="Grid Optimization Challenge · which outages matter" scenario={s}>
+        <Readouts
+          items={[
+            { label: 'cost of security per hour', value: Number.isFinite(securityCost) ? usd(securityCost) : '—', tone: 'red' },
+            { label: 'Metro’s price, secure dispatch', value: secure.feasible ? usd(secure.lmp.city ?? 0, 2) : '—', tone: 'green' },
+          ]}
+        />
         <Slider
           label="Emergency rating, as a share of the normal limit"
           value={s.state.rating}
@@ -240,35 +356,18 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The cheapest dispatch is the merit order from Chapter 4, and as it stands it overloads nothing. But trip Central–Metro and its{' '}
-        {fmt(Math.abs(BASE.flows['center-city']))} MW reroute at once: West–Metro would carry {fmt(Math.abs(LOSS_CC.flows['west-city']))} MW against its 300 MW
-        limit, and North–East {fmt(Math.abs(LOSS_CC.flows['north-east']))} against 300. Three other outages would overload a line too, by a few
-        percent. The grid is fine until something goes wrong, and then it isn’t.
-      </P>
-      <P>
-        The secure dispatch is the optimizer’s answer when every one of those outages is a constraint. It runs Mill Creek flat out, starts the Eastgate peaker, and
-        backs Ironwood down to its floor, so that even with Central–Metro gone, West–Metro ends up exactly at its limit. That insurance costs{' '}
-        {usd(SECURITY_COST[1])} an hour, about {pct(SECURITY_COST[1] / BASE.cost)} more than the cheapest dispatch.
-      </P>
-
-      <H2>Which outages matter</H2>
-      <P>
         The last column of the table prices each contingency on its own. Half of them cost nothing: the cheapest dispatch already survives them. Three cost a few
         hundred dollars an hour. Central–Metro, the region’s main artery into Metro, accounts for nearly all of it. That’s typical. Operators analyze thousands of
         possible outages continuously, but at any moment only a handful of them actually constrain the dispatch, and it’s those few that the market software carries as
         constraints. Untick a box and the optimizer stops protecting against that outage; the cost of security falls accordingly, and so does the grid’s safety margin.
       </P>
       <P>
-        Look at the prices on the map, too. In the secure dispatch, no line is full before anything trips, yet prices range from{' '}
-        {usd(SECURE_100.lmp.west)} at West to {usd(SECURE_100.lmp.city)} in Metro. A contingency
-        constraint prices congestion exactly the way a full line does, because to the optimizer it is one: a line that would be over its limit if another one failed.
-        Many of the constraints that separate real nodal prices are of this kind.
-      </P>
-      <P>
         The other lever is the emergency limit. A conductor takes minutes to heat up, so most lines can carry more than their normal rating for a short time — commonly
         somewhere between fifteen minutes and a few hours — while operators redispatch to bring flows back down. Raise the emergency rating and watch the cost of
-        security fall: at 110% it’s {usd(SECURITY_COST[1.1])} an hour, at 120% {usd(SECURITY_COST[1.2])}, and at 130% {usd(SECURITY_COST[1.3])}. Each step trades a little security margin for a lot of money, which is why emergency ratings are set
-        carefully, line by line, by engineers who know the equipment.
+        security fall: at 110% it’s {usd(SECURITY_COST[1.1])} an hour, at 120% {usd(SECURITY_COST[1.2])}, and at 130% {usd(SECURITY_COST[1.3])}. The prices hold
+        still until 125%, where Eastgate is no longer needed, the shadow price drops to {usd(PRICED_125.cons[0].mu, 2)} and Metro’s price to{' '}
+        {usd(PRICED_125.r.lmp.city, 2)}. Each step trades a little security margin for a lot of money, which is why emergency ratings are set carefully, line by
+        line, by engineers who know the equipment.
       </P>
 
       <H2>The challenge</H2>
@@ -321,7 +420,6 @@ export default function Lesson() {
           items={[
             { label: 'your dispatch, per hour', value: usd(handBase.cost), tone: 'green' },
             { label: 'Lakeside makes up', value: mw(hand.cc1), tone: lakesideOk ? undefined : 'red' },
-            { label: 'situations failing', value: String(failing.length), tone: failing.length ? 'red' : undefined },
             { label: 'cheapest secure dispatch', value: usd(PUZZLE_OPT.cost) },
           ]}
         />
@@ -366,9 +464,9 @@ export default function Lesson() {
 
       <P>
         You’ve now done by hand, on six substations and eight lines, what grid operators’ market software does for thousands of nodes, lines and contingencies:
-        day-ahead, when it decides which plants to start, and again every five minutes in real time. Everything in this chapter came out of that one optimization — the
-        redispatch around a bottleneck, the different prices at every node, the congestion rent that funds transmission rights, the price spikes when reserves run out,
-        and the negative prices when there’s nowhere for the power to go.
+        day-ahead, when it decides which plants to start, and again every five minutes in real time. Nearly everything in this chapter came out of that one
+        optimization — the redispatch around a bottleneck, the different prices at every node, the congestion rent that funds transmission rights, the scarcity of a
+        load pocket, the negative prices when there’s nowhere for the power to go, and now prices set by lines that aren’t even full.
       </P>
       <P>
         Those price differences across places and across time are exactly what traders try to anticipate. <a href={lessonHref('6.1')}>Chapter 6</a> looks at how they do

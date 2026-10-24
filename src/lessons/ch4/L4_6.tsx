@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
-  DataTable,
   FUEL,
   Figure,
   GRAPHIC,
@@ -14,9 +13,7 @@ import {
   P,
   Readouts,
   Slider,
-  Swatch,
   TEXT,
-  Tn,
   lessonHref,
   linePath,
   mw,
@@ -93,22 +90,29 @@ export default function Lesson() {
   return (
     <LessonPage id="4.6">
       <P>
-        Every market in this chapter has traded the same product: energy, in megawatt-hours. But in <a href={lessonHref('3.2')}>Lesson 3.2</a> we saw that the grid needs more than energy. When a plant
-        trips, frequency falls within seconds, and something has to make up the loss — which means some plants must be running below their full output, or ready to
-        start, with capacity held in hand. A grid that schedules every megawatt for energy has none of that cushion.
+        Every market in this chapter has traded the same product: energy, in megawatt-hours, priced in dollars per megawatt-hour ($/MWh) produced. But the grid needs
+        more than energy. When a plant trips, frequency falls within seconds. As we saw in <a href={lessonHref('3.2')}>Lesson 3.2</a>, what catches it in those first
+        seconds is the inertia of the spinning machines, which slows the fall, and their governors, which open up automatically. Over the following minutes the operator
+        has to replace the lost plant outright, as you did in the control room of <a href={lessonHref('3.6')}>Lesson 3.6</a>, so the governors can back off and be
+        ready for the next trip. Both steps need plants running below their full output, or ready to start, with capacity held in hand. A grid that schedules every
+        megawatt for energy has none of that cushion.
       </P>
       <P>
-        Markets treat that cushion as products of their own, called <b>ancillary services</b>. The two that matter most are <b>regulation</b>, capacity a plant moves up
-        and down every few seconds on the operator’s signal to follow the small, constant wobbles between supply and demand, and <b>operating reserve</b>, capacity held
-        back to replace a plant that fails. Our model counts as reserve whatever a plant can add within 30 minutes of a call, given its ramp rate; Eastgate, for instance,
-        can deliver 100 MW. Operators usually set the reserve requirement to cover the largest single thing that could go wrong — for our region, losing all{' '}
+        Markets treat that cushion as products of their own, called <b>ancillary services</b>: services that keep the grid stable, sold alongside the energy itself.
+        The two that matter most are <b>regulation</b>, capacity a plant moves up and down every few seconds on the automatic generation control (AGC) signal you
+        watched in <a href={lessonHref('3.6')}>Lesson 3.6</a>, to follow the small, constant wobbles between supply and demand, and <b>operating reserve</b>, capacity held back to replace a plant that
+        fails over the following minutes — the spare room the control room’s reserve readout tracked. Our model counts as reserve whatever a plant can add within 30
+        minutes of a call, given its ramp rate, the speed at which it can raise its output; Eastgate, for instance, can deliver 100 MW. Operators usually set the{' '}
+        <b>reserve requirement</b>, the reserve that must be held at all times, to cover the largest single thing that could go wrong — for our region, losing all{' '}
         {LARGEST_UNIT.capacity} MW of Harbor Point nuclear at once.
       </P>
       <P>
         Holding capacity back isn’t free, even if it costs the plant nothing directly. A megawatt Lakeside keeps in reserve is a megawatt it isn’t selling as energy, so
         someone more expensive has to produce it instead. Modern markets therefore clear energy and reserves together in one optimization, called{' '}
-        <b>co-optimization</b>, and price each by what one more megawatt of it costs the system. Here is the evening peak on the reference day. Each bar is a plant’s
-        capacity, divided between energy, regulation and reserve. Raise the reserve requirement until it covers Harbor Point:
+        <b>co-optimization</b>, and price each by what one more megawatt of it costs the system. Energy is still priced per MWh. Reserve and regulation are priced
+        per <b>MW-hour</b>: a payment for each megawatt held back for an hour, whether or not it’s called on. Here is the evening peak on the reference day. Each bar is
+        a plant’s capacity, divided between energy, regulation and reserve; the last slider is a price the operator puts on falling short, which we’ll come to. Raise
+        the reserve requirement until it covers Harbor Point:
       </P>
 
       <Figure name="Grid Services Auction" scenario={s1}>
@@ -187,7 +191,6 @@ export default function Lesson() {
             { label: 'energy price per MWh', value: p(r.energyPrice), tone: 'green' },
             { label: 'reserve price per MW-hour', value: p(r.reservePrice), tone: 'green' },
             { label: 'regulation price per MW-hour', value: p(r.regulationPrice), tone: 'green' },
-            { label: 'shortfall', value: ok ? mw(short, 1) : '—', tone: short > 0.01 ? 'red' : 'ink' },
           ]}
         />
         <Caption>{msg}</Caption>
@@ -195,22 +198,32 @@ export default function Lesson() {
 
       <P>
         With 200 MW of reserve required, the operator barely notices. Eastgate and Old Quay aren’t needed for energy at this hour anyway, so they hold most of the reserve
-        at their $1 offer, and the energy price stays at Mill Creek’s $42. Raise the requirement to {LARGEST_UNIT.capacity} MW and the picture changes. The idle peakers
-        can’t cover it alone, so Falls hydro, Lakeside and the others must each hold some capacity back, and Eastgate has to start producing energy to replace it. The
-        energy price jumps to $88, and the reserve price to $69: the $88 the system now pays for the replacement energy, less the $20 Falls hydro would have charged to
-        produce it, plus its $1 offer. That’s the <K c="price">opportunity cost</K> of the last megawatt of reserve, and every plant holding reserve is paid it.
+        at their offer of $1 per MW-hour, and the energy price stays at Mill Creek’s $42 per MWh. Raise the requirement to {LARGEST_UNIT.capacity} MW and the picture
+        changes. The idle peakers can’t cover it alone, so Falls hydro, Lakeside and the others must each hold some capacity back, and Eastgate has to start producing
+        energy to replace it. The energy price jumps to $88 per MWh, and the reserve price to $69 per MW-hour. Lakeside and Mill Creek would give up less by holding
+        back more, but like every plant except Falls hydro they’re already holding back all they can ramp up within 30 minutes, so the last megawatt of reserve comes
+        from Falls hydro. Its price is the $88 the system now pays for the replacement energy, less the $20 Falls hydro would have charged to produce it, plus its $1
+        offer. That’s the <K c="price">opportunity cost</K> of the last megawatt of reserve, the value of the energy given up to hold it, and every plant holding
+        reserve is paid it.
+      </P>
+      <P>
+        Regulation is priced the same way, but fewer plants can provide it: only running plants that can follow the AGC signal second by second — here Ironwood, the
+        two combined-cycle plants and Falls hydro, with about 49 MW between them. At the starting settings, 1,440 MW of demand and 200 MW of reserve, the 20 MW of
+        regulation required costs $11 per MW-hour, against reserve’s $1. Drag the regulation requirement to 50 MW, and the region falls short at any demand, however
+        much else stands idle; then set it back to 20.
       </P>
       <P>
         Now push demand higher. Past a certain point the fleet simply can’t produce the energy and also hold the reserve, and the operator runs short. It doesn’t
-        stop dispatching: it accepts the shortfall but prices every missing megawatt at a high administrative <b>shortage price</b>, and because the last megawatt of
-        energy now comes out of reserve, the energy price rises above it too. This is <b>scarcity pricing</b>, and it’s where the extreme real-time prices in the last
-        lesson came from. ERCOT, which runs most of Texas’s grid, adds a scarcity charge to its energy price that rises as reserves shrink, with an offer cap of several
-        thousand dollars per megawatt-hour.
+        stop dispatching: it accepts the shortfall but prices every missing megawatt at a high <b>shortage price</b>, set by rule rather than by any offer, and because the last megawatt of
+        energy now comes out of reserve, the energy price rises above it too. With the region short, drag the price of a shortfall: the reserve price moves with it
+        dollar for dollar, and the energy price stays just above it, since nothing but the rule is setting them now. This is <b>scarcity pricing</b>, and it’s where the extreme real-time prices in the last
+        lesson came from. ERCOT, which runs most of Texas’s grid, adds a scarcity charge to its energy price that rises as reserves shrink, up to its{' '}
+        <b>offer cap</b> — the highest price any seller may offer — of several thousand dollars per megawatt-hour.
       </P>
 
       <Challenge
         id="a"
-        question={`Set the reserve requirement to cover the loss of Harbor Point nuclear, then find the highest demand the region can meet without running short.`}
+        question={`Set the reserve requirement to cover the loss of Harbor Point nuclear. What’s the highest demand the region can then meet without running short? Work it out from the fleet’s capacity, at the foot of the chart, before you drag.`}
         solved={solved1}
         status={
           reserve < LARGEST_UNIT.capacity
@@ -241,7 +254,8 @@ export default function Lesson() {
       <P>
         There are two broad answers. An <b>energy-only</b> market, like ERCOT’s, lets scarcity prices rise high enough to close the gap and leaves investors to bear the
         risk. A <b>capacity market</b>, like the one PJM runs for much of the eastern United States, pays plants separately for being available, through an auction held
-        well before the year in question. The operator sets a target — here 2,000 MW, about 15% above the highest peak forecast in our history — and a sloped demand
+        well before the year in question. Its prices are in dollars per <b>MW-day</b>: a payment for each megawatt a plant commits to have available, for each day of
+        that year. The operator sets a target — here 2,000 MW, about 15% above the highest peak forecast in our history — and a sloped demand
         curve: it pays a capped price when capacity falls well short of the target, less as capacity approaches and passes it, and nothing once there’s 10% to
         spare. Each plant offers the
         capacity it can be counted on for at the peak, at the price it needs to stay available beyond what it expects to earn from energy. The existing plants, long since
@@ -301,30 +315,8 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Your offer" tone="green" value={offer} min={0} max={150} onChange={(v) => s2.set({ offer: v })} display={`$${offer} per MW-day`} />
-        <DataTable
-          caption="Capacity offers in the auction, cheapest first"
-          rows={steps}
-          rowKey={(o) => o.id}
-          rowClass={(o) => (o.id === 'new' ? 'hl' : (auc.awarded[o.id] ?? 0) > 0 ? '' : 'dim')}
-          columns={[
-            {
-              label: 'Plant',
-              cell: (o) => (
-                <>
-                  <Swatch color={COLOR[o.id]} />
-                  {o.id === 'new' ? 'Your new peaker' : NAME[o.id]}
-                </>
-              ),
-            },
-            { label: 'Counted at the peak', cell: (o) => mw(o.mw, 1) },
-            { label: <Tn tone="green">Offer, per MW-day</Tn>, cell: (o) => usd(o.price) },
-            { label: 'Bought', cell: (o) => ((auc.awarded[o.id] ?? 0) > 0 ? mw(auc.awarded[o.id], 1) : '—') },
-          ]}
-        />
         <Readouts
           items={[
-            { label: 'capacity price per MW-day', value: usd(auc.price, 2), tone: 'green' },
-            { label: 'capacity bought', value: mw(auc.cleared, 1) },
             { label: 'your plant clears', value: `${mw(yours, 0)} of ${mw(NEW_MW, 0)}` },
             { label: 'your capacity payments per year', value: usd(yours * auc.price * 365), tone: 'green' },
           ]}
@@ -347,13 +339,14 @@ export default function Lesson() {
       />
 
       <P>
-        Like the energy auction in Lesson 4.4, the capacity auction pays one price to everyone it accepts, so the best offer is still the true need: offer too high and
-        the curve buys someone else. And like reserves, capacity is paid for being there rather than for producing. Between them, energy, ancillary services and
-        capacity cover most of what a power plant sells.
+        Like the energy auction in <a href={lessonHref('4.4')}>Lesson 4.4</a>, the capacity auction pays one price to everyone it accepts, so the best offer is still the
+        true need: offer too high and the curve buys someone else. And like reserves, capacity is paid for being there rather than for producing. Between them, energy,
+        ancillary services and capacity cover most of what a power plant sells. Power plants aren’t the only sellers, though. As{' '}
+        <a href={lessonHref('3.5')}>Lesson 3.5</a> promised, many markets let demand response — customers paid to cut their use when the grid is short — provide
+        reserves and capacity alongside the plants; our model leaves it out.
       </P>
       <P>
-        Apart from a glimpse of congestion rent in Lesson 4.2, this chapter has treated the region as a single point, where a megawatt-hour from Ironwood serves Metro
-        as well as one from Mill Creek. The transmission lines from Chapter 2 don’t always allow that. In <a href={lessonHref('5.1')}>Chapter 5</a> we put the network back, and prices start to depend on
+        This chapter has treated the region as a single point, where a megawatt-hour from Ironwood serves Metro as well as one from Mill Creek. The transmission lines from Chapter 2 don’t always allow that. In <a href={lessonHref('5.1')}>Chapter 5</a> we put the network back, and prices start to depend on
         where you are.
       </P>
     </LessonPage>

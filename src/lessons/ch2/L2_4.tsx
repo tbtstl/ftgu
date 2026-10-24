@@ -2,12 +2,13 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
-  DataTable,
   Eq,
   Figure,
   Frac,
+  GRAPHIC,
   H2,
   K,
+  Legend,
   LessonPage,
   NetworkView,
   Op,
@@ -15,6 +16,7 @@ import {
   Segmented,
   Slider,
   Sub,
+  TEXT,
   fmt,
   lessonHref,
   mw,
@@ -36,6 +38,42 @@ function triangle(xAC: number): Network {
 export function triangleFlows(pA: number, pB: number, xAC: number) {
   return dcPowerFlow(triangle(xAC), { A: pA, B: pB, C: -(pA + pB) }).flows;
 }
+
+/**
+ * The scale of the triangle's relative reactances, for drawing phase angles: every 100 MW across a
+ * line of reactance 1.00 takes 5° of angle difference (flow = angle difference ÷ reactance).
+ */
+export const DEG_PER_MW = 0.05;
+
+/** Each node's voltage phase angle in degrees, measured from C's (the DC power flow's angles). */
+export function triangleAngles(pA: number, pB: number, xAC: number): Record<'A' | 'B' | 'C', number> {
+  const f = triangleFlows(pA, pB, xAC);
+  const xBC = THREE_NODE.lines.find((l) => l.id === 'BC')!.reactance;
+  return { A: f.AC * xAC * DEG_PER_MW, B: f.BC * xBC * DEG_PER_MW, C: 0 };
+}
+
+/** A small dial beside a node: the needle sits at the node's phase angle; the dashed spoke is C's. */
+function AngleDial({ x, y, deg }: { x: number; y: number; deg: number }) {
+  const r = 21;
+  const a = (deg * Math.PI) / 180;
+  return (
+    <g aria-hidden="true">
+      <circle cx={x} cy={y} r={r} fill="#fff" stroke={GRAPHIC.violet} strokeWidth={1.2} />
+      <line x1={x} y1={y} x2={x + r} y2={y} stroke="#b4b4b4" strokeWidth={1.2} strokeDasharray="2 2" />
+      <line x1={x} y1={y} x2={x + (r - 2) * Math.cos(a)} y2={y - (r - 2) * Math.sin(a)} stroke={TEXT.violet} strokeWidth={2.4} strokeLinecap="round" />
+      <circle cx={x} cy={y} r={2.2} fill={TEXT.violet} />
+      <text x={x} y={y + r + 16} textAnchor="middle" style={{ fontSize: 13, fontWeight: 500, fill: TEXT.violet }}>
+        {fmt(deg, 1)}°
+      </text>
+    </g>
+  );
+}
+
+/** The dials at the figure's opening settings (A at 300 MW, B off, all reactances 1.00), and with A–C's reactance at 4. */
+export const DEFAULT_ANGLES = triangleAngles(300, 0, 1);
+export const STIFF_ANGLES = triangleAngles(300, 0, 4);
+
+const DIAL_AT: Record<'A' | 'B' | 'C', [number, number]> = { A: [42, 100], B: [558, 100], C: [378, 300] };
 
 // ---------------------------------------------------------------------------------------------
 // The region, with one transfer to Metro and an adjustable West–Metro reactance.
@@ -88,6 +126,7 @@ export default function Lesson() {
   const s1 = useScenario('triangle', { pA: 300, pB: 0, xAC: 1 });
   const { pA, pB, xAC } = s1.state;
   const f1 = triangleFlows(pA, pB, xAC);
+  const ang = triangleAngles(pA, pB, xAC);
 
   const s2 = useScenario('region', { source: 'harbor' as Source, mw: 100, xWM: 1.4 });
   const { source, mw: sent, xWM } = s2.state;
@@ -98,7 +137,6 @@ export default function Lesson() {
   }, [source, xWM]);
   const solved = zeroFlowSolved(s2.state);
   const fWC = flows[CHALLENGE_LINE];
-  const rows = [...REGION.lines].sort((a, b) => Math.abs(shares[b.id]) - Math.abs(shares[a.id]));
   const wcFrom = fWC >= 0 ? 'West' : 'Central';
   const wcTo = fWC >= 0 ? 'Central' : 'West';
 
@@ -110,21 +148,16 @@ export default function Lesson() {
         one town rather than another; the power divides among the available paths according to their electrical properties.
       </P>
       <P>
-        Calculating exactly how alternating current divides across a large grid — an <b>AC power flow</b> — means solving a set of nonlinear equations for the voltage and
-        phase at every node. Electricity markets, and many planning studies, use a simplification called <b>DC power flow</b>. Despite the name, it’s still a model of an AC grid. It
-        keeps only the dominant effect: on high-voltage lines, a line’s <K c="resistance">reactance</K> — its opposition to alternating current, caused by the magnetic field
-        around it — is much larger than its resistance, and the power it carries is roughly proportional to the difference in voltage <K c="phase">phase angle</K> between its
-        ends, divided by its reactance. The approximation ignores losses and assumes voltages stay near their normal values, and it is accurate enough that the markets
-        of Chapter 5 are built on it.
-      </P>
-      <P>
         Here is the smallest network with a choice of paths: generators at A and B, all the demand at C, and three lines between them. To start, only A is producing, so its
-        power can reach C directly, or by way of B. Change the reactance of the direct line:
+        power can reach C directly, or by way of B. What decides the split is each line’s <K c="resistance">reactance</K>: its opposition to alternating current, caused by
+        the magnetic field around it. The reactances here are relative: the other two lines count as 1.00 each, and the direct line’s is a multiple of theirs. Change the
+        reactance of the direct line:
       </P>
 
       <Figure name="Power Flow Simulator" scenario={s1}>
+        <Legend items={[{ label: 'Voltage phase angle, measured from C’s', color: GRAPHIC.violet, kind: 'line' as const }]} />
         <NetworkView
-          ariaLabel={`Three nodes. A produces ${pA} MW and B ${pB} MW for the demand at C. Line A–C carries ${fmt(Math.abs(f1.AC))} MW, A–B ${fmt(Math.abs(f1.AB))} MW, B–C ${fmt(Math.abs(f1.BC))} MW.`}
+          ariaLabel={`Three nodes. A produces ${pA} MW and B ${pB} MW for the demand at C. Line A–C carries ${fmt(Math.abs(f1.AC))} MW, A–B ${fmt(Math.abs(f1.AB))} MW, B–C ${fmt(Math.abs(f1.BC))} MW. Phase angles: A ${fmt(ang.A, 1)}°, B ${fmt(ang.B, 1)}°, C 0°.`}
           width={600}
           height={380}
           flowScale={0.25}
@@ -161,6 +194,9 @@ export default function Lesson() {
           <text className="ax ax-m" x={300} y={132}>
             x = 1.00
           </text>
+          {(['A', 'B', 'C'] as const).map((n) => (
+            <AngleDial key={n} x={DIAL_AT[n][0]} y={DIAL_AT[n][1]} deg={ang[n]} />
+          ))}
         </NetworkView>
         <Slider label="Output at A" tone="red" value={pA} min={0} max={400} step={10} onChange={(v) => s1.set({ pA: v })} display={mw(pA)} />
         <Slider label="Output at B" tone="red" value={pB} min={0} max={400} step={10} onChange={(v) => s1.set({ pB: v })} display={mw(pB)} />
@@ -200,9 +236,23 @@ export default function Lesson() {
 
       <P>
         With all three reactances equal, the direct path has half the reactance of the detour through B, so it carries twice as much: two thirds of A’s 300 MW, or 200
-        MW, against 100 MW the long way round. Power divides among parallel paths in inverse proportion to their reactance, just as current divides among parallel resistors
-        in <a href={lessonHref('1.1')}>Lesson 1.1</a>. Raise the direct line’s reactance to 4 and only a third of the power takes it; cut it to 0.25 and 89% does. Either
-        way, some power always takes the detour.
+        MW, against 100 MW the long way round. Power divides among parallel paths in inverse proportion to their reactance: half the reactance, twice the power. (Current
+        divides between parallel resistors by the same rule; the two lamps of <a href={lessonHref('1.1')}>Lesson 1.1</a> were identical, so theirs split evenly.) Raise the
+        direct line’s reactance to 4 and only a third of the power takes it; cut it to 0.25 and 89% does. Either way, some power always takes the detour.
+      </P>
+      <P>
+        Why reactance rather than resistance? Calculating exactly how alternating current divides across a large grid — an <b>AC power flow</b> — means solving a set of
+        nonlinear equations for the voltage and phase at every node. Electricity markets, and many planning studies, use a simplification called <b>DC power flow</b>.
+        Despite the name, it’s still a model of an AC grid. It keeps only the dominant effect: on high-voltage lines, reactance is much larger than resistance, and the
+        power a line carries is roughly proportional to the difference in voltage <K c="phase">phase angle</K> between its ends, divided by its reactance. The
+        approximation ignores losses and assumes voltages stay near their normal values, and it is accurate enough that the markets of Chapter 5 are built on it. Every
+        demonstration in this lesson uses it.
+      </P>
+      <P>
+        The dials beside the triangle’s nodes show each node’s phase angle, measured from C’s. We’ve scaled the reactances so that every 100 MW crossing a line of reactance 1.00
+        takes {fmt(100 * DEG_PER_MW)}° of angle across it. With only A producing, A runs {fmt(DEFAULT_ANGLES.A)}° ahead of C and B {fmt(DEFAULT_ANGLES.B)}° ahead: the{' '}
+        {fmt(DEFAULT_ANGLES.A)}° across A–C drives 200 MW, and each {fmt(DEFAULT_ANGLES.B)}° step along the detour 100 MW. Raise the reactance of A–C to 4 and A has to
+        run {fmt(STIFF_ANGLES.A)}° ahead to push its power through.
       </P>
       <P>
         Now let B produce as well. Because the DC model is linear, the flows from each generator simply add. B’s power, too, splits between its direct line and a detour,
@@ -213,7 +263,8 @@ export default function Lesson() {
 
       <H2>A megawatt injected here</H2>
       <P>
-        The course region is the same idea on a larger scale. Its six substations are joined by eight lines: 345 kV lines from North to Central, Harbor to Central, Harbor
+        The course region is the same idea on a larger scale. Its six substations, which we drew over the map in <a href={lessonHref('2.2')}>Lesson 2.2</a>, are joined
+        by eight lines: 345 kV lines from North to Central, Harbor to Central, Harbor
         to West and Central to Metro, and 230 kV lines from North to East, West to Central, East to Metro and West to Metro. Each plant from{' '}
         <a href={lessonHref('2.1')}>Lesson 2.1</a> connects at one of them: Falls hydro and Ridge wind in the North, Eastgate and Valley solar in the East, Lakeside at
         Central, Harbor Point at Harbor, Ironwood in the West, and Mill Creek and Old Quay in Metro, where 55% of the demand is.
@@ -284,18 +335,6 @@ export default function Lesson() {
           <Op>=</Op>
           <K c="power">{fmt(fWC, 1)} MW</K>
         </Eq>
-        <DataTable
-          caption={`How power sent from ${nodeName(REGION, source)} to Metro spreads over the lines`}
-          rows={rows}
-          rowKey={(l) => l.id}
-          rowClass={(l) => (l.id === CHALLENGE_LINE ? 'hl' : '')}
-          columns={[
-            { label: 'Line', cell: (l) => lineName(l.id) },
-            { label: 'PTDF', cell: (l) => fmt(Math.abs(shares[l.id]), 3) },
-            { label: 'Share of the transfer', cell: (l) => pct(Math.abs(shares[l.id]), 1) },
-            { label: 'Direction', cell: (l) => (Math.abs(flows[l.id]) < 0.05 ? '—' : flows[l.id] > 0 ? `${nodeName(REGION, l.from)} → ${nodeName(REGION, l.to)}` : `${nodeName(REGION, l.to)} → ${nodeName(REGION, l.from)}`) },
-          ]}
-        />
         <Caption>
           {nodeName(REGION, source)} hosts {PLANTS_AT[source]}. Of every megawatt it sends, {pct(Math.abs(shares['center-city']), 1)} arrives over the Central–Metro line,{' '}
           {pct(Math.abs(shares['west-city']), 1)} over West–Metro and {pct(Math.abs(shares['east-city']), 1)} over East–Metro.
@@ -318,11 +357,11 @@ export default function Lesson() {
       <P>
         Operators can’t route power, but they can change the paths. A series capacitor installed on a line cancels part of its reactance and draws more flow onto it; a
         series reactor does the opposite; and a phase-shifting transformer can push flow around a loop in either direction. The second slider changes the reactance of the West–Metro
-        line, as such a device would.
+        line, as such a device would. Like the triangle’s, the region’s reactances are relative: West–Metro’s normal 1.40 is twice that of the Central–Metro line.
       </P>
       <Challenge
         id="a"
-        question="Send at least 100 MW from Harbor to Metro, and adjust the West–Metro line until the West–Central line carries no power at all."
+        question="Send at least 100 MW from Harbor to Metro. To empty the West–Central line, should the West–Metro line’s reactance go up or down? Decide first, then adjust it until the West–Central line carries no power at all."
         solved={solved}
         status={
           source !== 'harbor'
@@ -335,8 +374,8 @@ export default function Lesson() {
       />
       <P>
         Lowering the West–Metro reactance makes the route through West more attractive, so power that used to cross from West to Central stays on the western route.
-        Somewhere around a reactance of 0.65 the two routes are perfectly balanced. It’s the same balance as in a Wheatstone bridge, the circuit used to compare
-        resistances, and it illustrates the deepest point of this lesson: what a line carries depends on every other line in the network.
+        Somewhere around a reactance of 0.65 the two routes are perfectly balanced. That balance illustrates the deepest point of this lesson: what a line carries depends
+        on every other line in the network.
       </P>
       <P>
         That has an uncomfortable consequence. Every line has a limit, and with power spreading over every path, a line can fill up because of a transaction that, on

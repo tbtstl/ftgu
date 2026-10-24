@@ -43,7 +43,10 @@ const DAYS: Record<DayKey, { index: number; label: string }> = {
 const HISTORY = standardHistory();
 const AVERAGES = dailyAverages(HISTORY);
 const RT_LIGHT = '#9bbf6f';
-const CAP = 90;
+const CAP = 100;
+const RATIO_STEP = 5;
+/** Day 73: Mill Creek breaks down on a hot evening. */
+const OUTAGE = 72;
 
 export default function Lesson() {
   const s1 = useScenario('tomorrow', { day: 'mild' as DayKey, ratio: 100, revealed: false });
@@ -62,7 +65,14 @@ export default function Lesson() {
 
   const s2State = s2.state;
   const bt = useMemo(() => hedgeBacktest(HISTORY, s2State.ratio / 100, s2State.shape), [s2State.ratio, s2State.shape]);
-  const solved = bt.worstPerMWh < CAP;
+  // Challenge: the smallest flat block that keeps every day under the cap.
+  const flat = s2State.shape === 'flat';
+  const smaller = useMemo(() => hedgeBacktest(HISTORY, Math.max(0, s2State.ratio - RATIO_STEP) / 100, 'flat'), [s2State.ratio]);
+  const solved = flat && bt.worstPerMWh < CAP && (s2State.ratio <= 0 || smaller.worstPerMWh >= CAP);
+  const od = HISTORY[OUTAGE];
+  const odBlock = dayAheadPurchase(od, s2State.ratio / 100, 'flat')[0];
+  const spikeHours = od.rt.map((p, h) => (p > 2000 ? h : -1)).filter((h) => h >= 0);
+  const spikeUse = spikeHours.map((h) => od.demand[h] * RETAILER_SHARE);
 
   // Figure 2 geometry.
   const x = scale(0, HISTORY.length - 1, 64, 608);
@@ -76,21 +86,23 @@ export default function Lesson() {
   return (
     <LessonPage id="4.5">
       <P>
-        The auction in the last lesson cleared a single hour, with demand known exactly. A real grid can’t wait until the hour arrives to decide who runs. As Lesson 4.3
-        noted, starting a thermal plant costs money and many can’t run below a minimum output once on; a coal plant can take the better part of a day to start from
+        The auction in the last lesson cleared a single hour, with demand known exactly. A real grid can’t wait until the hour arrives to decide who runs. As{' '}
+        <a href={lessonHref('4.3')}>Lesson 4.3</a> noted, starting a thermal plant costs money and many can’t run below a minimum output once on; a coal plant can take the better part of a day to start from
         cold, and even a gas plant needs time to warm up. So the operator has to
         choose most of tomorrow’s schedule today, on a forecast — and then correct it as tomorrow actually happens.
       </P>
       <P>
-        Markets handle this with two auctions. The <b>day-ahead market</b> closes the morning before: buyers bid for each hour of the next day, generators offer, and the
-        operator clears all 24 hours at once on forecast demand and weather, deciding which plants to start. The <b>real-time market</b> then runs continuously — every
+        Markets handle this with two auctions. The <b>day-ahead market</b> closes the morning before. Buyers bid for each hour of the next day, basing their bids on forecasts of
+        what their customers will use; generators offer, wind and solar farms on forecasts of the weather; and the operator clears all 24 hours at once on those bids and
+        offers, deciding which plants to start. The <b>real-time market</b> then runs continuously — every
         five minutes in American markets — re-dispatching plants to match what customers actually use, with whatever is actually available. Each
         has its own <K c="price">price</K>.
       </P>
       <P>
         The two are tied together by the rule of <b>two settlements</b>. Whatever you buy or sell day-ahead is paid at the day-ahead price. Any difference between that
-        and what you actually produce or consume is settled at the real-time price. You are the retailer from Lesson 4.2, serving a fifth of the region’s customers.
-        Choose a day, decide how much of tomorrow’s forecast use to buy day-ahead, then reveal what really happened:
+        and what you actually produce or consume is settled at the real-time price. You are the retailer from{' '}
+        <a href={lessonHref('4.2')}>Lesson 4.2</a>, serving a fifth of the region’s customers. Choose a day, decide how much of tomorrow’s forecast use to buy
+        day-ahead, then reveal what really happened. Once it’s revealed, drag across either chart to see how any hour settles:
       </P>
 
       <Figure
@@ -199,7 +211,7 @@ export default function Lesson() {
       <P>
         Buying the forecast leaves only the forecast’s errors to settle in real time. On the mild Tuesday those errors are small and roughly cancel: you pay $186,502
         day-ahead and a further $488 in real time. Had you bought nothing day-ahead, you’d have paid $183,258 — the real-time price happened to be a little lower that
-        day. In the heat wave, real time was cheaper again, by $53,883: demand came in below the forecast the day-ahead market cleared on, and so did the evening’s
+        day. In the heat wave, real time was cheaper again, by $53,883: demand came in below the forecast that buyers had bid day-ahead, and so did the evening’s
         prices.
       </P>
       <P>
@@ -216,7 +228,7 @@ export default function Lesson() {
         energy it didn’t produce — the price of the replacement power the operator had to find.
       </P>
       <P>
-        That’s also what makes the virtual trades from Lesson 4.2 possible. A trader who expects real time to come in above day-ahead buys day-ahead and sells the same
+        That’s also what makes the virtual trades from <a href={lessonHref('4.2')}>Lesson 4.2</a> possible. A trader who expects real time to come in above day-ahead buys day-ahead and sells the same
         amount back in real time; it never touches a megawatt-hour, but its bets nudge the two prices toward each other.
       </P>
       <P>
@@ -290,25 +302,37 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Most days, the two prices are almost the same: on 57 of the 120, their daily averages are within a dollar of each other, and real time comes out cheaper about as
+        On nearly half the days, the two prices are almost the same: on 57 of the 120, their daily averages are within a dollar of each other, and real time comes out cheaper about as
         often as dearer. But real time has a long tail. On a handful of days a forecast miss or a breakdown sends it soaring, and the two days Mill Creek failed on a hot
         evening account for more than three quarters of the difference between the two averages. Over the whole period the real-time price averages $42.91 against $36.91 day-ahead. In real markets, the
         trading we just described tends to shrink that average gap; our simulated history has no traders to close it.
       </P>
+      <P>
+        The simplest purchase to arrange is one flat block: the same number of megawatts in every hour of the day. But your customers use the most in the evening, which
+        is exactly when the spikes come. Before you choose One flat block and drag, think about how big the block must be to cover those evenings.
+      </P>
 
       <Challenge
         id="a"
-        question={`Find a day-ahead strategy that keeps your average cost below $${CAP} per MWh on every one of the 120 days.`}
+        question={`Buy one flat block. What’s the smallest block, in steps of ${RATIO_STEP}% of the forecast, that keeps your average cost under $${CAP} per MWh on every one of the 120 days?`}
         solved={solved}
-        status={`Right now your most expensive day is day ${bt.worstDay + 1}, at ${usd(bt.worstPerMWh, 2)} per MWh.`}
-        success={`Solved. Your most expensive day is now day ${bt.worstDay + 1}, at ${usd(bt.worstPerMWh, 2)} per MWh, and over the 120 days you pay ${usd(bt.totalAllRealTime - bt.total)} less than you would buying everything in real time.`}
+        status={
+          !flat
+            ? 'Switch to one flat block first.'
+            : bt.worstPerMWh >= CAP
+              ? `With a flat block of ${s2State.ratio}%, your most expensive day is day ${bt.worstDay + 1}, at ${usd(bt.worstPerMWh, 2)} per MWh.`
+              : `A flat block of ${s2State.ratio}% keeps every day under $${CAP}. Would a smaller one?`
+        }
+        success={`Solved. A flat block has to come close to what your customers use in the evening, when the spikes come. On day ${OUTAGE + 1}, when Mill Creek broke down, ${s2State.ratio}% of the forecast is ${mw(odBlock)} in every hour, against the ${mw(Math.min(...spikeUse))}–${mw(Math.max(...spikeUse))} your customers used in the hours real time passed $2,000. Any less, and too much of that evening is bought at the spike price.`}
       />
 
       <P>
-        Buying close to the forecast caps the damage from real-time spikes, and a flat block only does the same if you buy well above the forecast — it buys too much at
-        night and too little in the evening, exactly when the spikes come. But look at which day ends up most expensive. It’s the heat wave, when the day-ahead price itself
-        was high. A day-ahead purchase protects you against the gap between forecast and reality; it can’t protect you against a price that’s high in both markets. That
-        takes contracts signed weeks or months in advance, which is where Chapter 6 picks up.
+        A flat block buys too much at night and too little in the evening, so it only caps the spikes if you buy well above the forecast. Switch back to following the
+        forecast and far less does the job: bought hour by hour, 95% of the forecast keeps every day under $100. That makes a day-ahead purchase insurance
+        against spikes rather than a dependable saving: buying the forecast costs more than buying in real time on 56 of the 120 days, and about four fifths of what it
+        saves over the whole period comes from the two days Mill Creek failed. And look at which day is now the most expensive. It’s the heat wave, when the day-ahead
+        price itself was high. A day-ahead purchase protects you against the gap between forecast and reality; it can’t protect you against a price that’s high in both
+        markets. That takes contracts signed weeks or months in advance, which is where Chapter 6 picks up.
       </P>
       <P>
         Those spikes all have the same cause: the grid running out of spare capacity. An operator doesn’t wait for that to happen. It holds capacity back, ready to step

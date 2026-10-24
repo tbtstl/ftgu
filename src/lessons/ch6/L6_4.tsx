@@ -21,6 +21,7 @@ import {
   Swatch,
   TimeChart,
   Tn,
+  lessonHref,
   linePath,
   niceDomain,
   niceTicks,
@@ -29,7 +30,7 @@ import {
   useScenario,
 } from '../../framework';
 import { optimizeArbitrage } from '../../engines/strategy/arbitrage';
-import { batteryHistory, levelsFor, ruleSchedule } from '../../engines/strategy/batteryTrading';
+import { batteryHistory, levelsFor, ruleSchedule, type BatteryDay } from '../../engines/strategy/batteryTrading';
 import { standardHistory } from '../../model/history';
 
 const DAYS = standardHistory();
@@ -48,6 +49,37 @@ const STRATEGIES = [
   { id: 'rule', name: 'Cheapest and dearest hours rule', color: GRAPHIC.blue, dash: '2 3' },
 ] as const;
 type StrategyId = (typeof STRATEGIES)[number]['id'];
+
+// The battery's power is fixed at 100 MW: at a fixed duration, every schedule and profit scales
+// exactly with the power, so a power control would only rescale the answers. Twelve
+// state-of-charge steps per hour of duration keep the default battery within 0.2% of the exact
+// optimum. Results are cached for the session: revisiting a setting is instant.
+const POWER = 100;
+/** Days 73 and 120 (indices 72 and 119): the two evenings when the real-time price passed $2,000. */
+const SPIKE_DAYS = [72, 119];
+const histCache = new Map<string, BatteryDay[]>();
+function batteryDays(hours: number, eff: number, wear: number): BatteryDay[] {
+  const key = `${hours}|${eff}|${wear}`;
+  let v = histCache.get(key);
+  if (!v) {
+    const b = { powerMW: POWER, energyMWh: POWER * hours, efficiency: eff / 100, soc0: 0 };
+    v = batteryHistory(DAYS, b, wear, levelsFor(b, 12));
+    if (histCache.size > 200) histCache.clear();
+    histCache.set(key, v);
+  }
+  return v;
+}
+
+/** The optimal schedule for one day's day-ahead prices, with a fine state-of-charge grid. */
+function planDay(day: number, hours: number, eff: number, wear: number) {
+  const b = { powerMW: POWER, energyMWh: POWER * hours, efficiency: eff / 100, soc0: 0 };
+  return optimizeArbitrage(DAYS[day].da, b, { degradationPerMWh: wear, levels: levelsFor(b, 30) });
+}
+
+/** Does the schedule sell in any of these hours? */
+function sellsIn(schedule: number[], hs: number[]): boolean {
+  return hs.some((h) => schedule[h] > 0.5);
+}
 
 function kusd(v: number): string {
   if (v === 0) return '$0';
@@ -112,37 +144,35 @@ function CumulativeChart({ series, ariaLabel }: { series: Array<{ values: number
 }
 
 export default function Lesson() {
-  const s = useScenario('battery', { day: CHALLENGE_DAY, power: 100, hours: 4, eff: 85, wear: 5 });
-  const { day, power, hours, eff, wear } = s.state;
-  const battery = { powerMW: power, energyMWh: power * hours, efficiency: eff / 100, soc0: 0 };
+  const s = useScenario('battery', { day: CHALLENGE_DAY, hours: 4, eff: 85, wear: 5 });
+  const { day, hours, eff, wear } = s.state;
+  const battery = { powerMW: POWER, energyMWh: POWER * hours, efficiency: eff / 100, soc0: 0 };
   const prices = DAYS[day].da;
 
-  const opt = useMemo(() => {
-    const b = { powerMW: power, energyMWh: power * hours, efficiency: eff / 100, soc0: 0 };
-    return optimizeArbitrage(DAYS[day].da, b, { degradationPerMWh: wear, levels: levelsFor(b, 30) });
-  }, [day, power, hours, eff, wear]);
+  const opt = useMemo(() => planDay(day, hours, eff, wear), [day, hours, eff, wear]);
   const rule = ruleSchedule(prices, battery, hours, wear);
   const cheapest = Math.min(...prices);
   const dearest = Math.max(...prices);
   const eta = eff / 100;
   const bestMargin = dearest - cheapest / eta;
-  const morningSells = MORNING.some((h) => opt.schedule[h] > 0.5);
-  const eveningSells = EVENING.some((h) => opt.schedule[h] > 0.5);
-  const solved = day === CHALLENGE_DAY && !morningSells && eveningSells;
+  const morningSells = sellsIn(opt.schedule, MORNING);
+  const eveningSells = sellsIn(opt.schedule, EVENING);
+  // The challenge: the smallest whole-dollar wear at which day 61's battery skips the morning but still sells in the evening.
+  const candidate = day === CHALLENGE_DAY && !morningSells && eveningSells;
+  const morningAtLower = useMemo(() => candidate && wear >= 1 && sellsIn(planDay(day, hours, eff, wear - 1).schedule, MORNING), [candidate, day, hours, eff, wear]);
+  const solved = candidate && morningAtLower;
+  const morningMargin = Math.max(...MORNING.map((h) => prices[h])) - cheapest / eta;
+  const eveningMargin = Math.max(...EVENING.map((h) => prices[h])) - cheapest / eta;
   const sameAsRule = rule.profit >= opt.profit - Math.max(1, 0.02 * Math.abs(opt.profit));
 
   // 120 days, computed from deferred values so the sliders stay responsive.
-  const dPower = useDeferredValue(power);
   const dHours = useDeferredValue(hours);
   const dEff = useDeferredValue(eff);
   const dWear = useDeferredValue(wear);
-  const hist = useMemo(() => {
-    const b = { powerMW: dPower, energyMWh: dPower * dHours, efficiency: dEff / 100, soc0: 0 };
-    return batteryHistory(DAYS, b, dWear, levelsFor(b, 6));
-  }, [dPower, dHours, dEff, dWear]);
+  const hist = useMemo(() => batteryDays(dHours, dEff, dWear), [dHours, dEff, dWear]);
   const totals = Object.fromEntries(STRATEGIES.map((st) => [st.id, hist.reduce((a, d) => a + d[st.id], 0)])) as Record<StrategyId, number>;
-  const spikes = Object.fromEntries(STRATEGIES.map((st) => [st.id, hist[72][st.id] + hist[119][st.id]])) as Record<StrategyId, number>;
-  const perKwYear = (v: number) => (dPower > 0 ? (v * 365) / DAYS.length / (dPower * 1000) : 0);
+  const withoutSpikes = Object.fromEntries(STRATEGIES.map((st) => [st.id, totals[st.id] - SPIKE_DAYS.reduce((a, i) => a + hist[i][st.id], 0)])) as Record<StrategyId, number>;
+  const perKwYear = (v: number) => (v * 365) / DAYS.length / (POWER * 1000);
   const idle = hist.filter((d) => d.cycles < 0.01).length;
   const worseInRt = hist.filter((d) => d.daPlanAtRt < d.daOptimal).length;
   const money = (v: number) => <Tn tone={v < 0 ? 'red' : 'green'}>{usd(v)}</Tn>;
@@ -156,10 +186,10 @@ export default function Lesson() {
         selling the same thing at different prices.
       </P>
       <P>
-        The battery in the next demonstration starts at 100 MW and four hours, so it stores 400 MWh. Its round-trip <K c="energy">efficiency</K> is 85%: of every megawatt-hour bought, 0.85
+        The battery in the next demonstration can charge or discharge at up to 100 MW, and starts with four hours of storage at that rate, 400 MWh. Its round-trip <K c="energy">efficiency</K> is 85%: of every megawatt-hour bought, 0.85
         comes back out. And every megawatt-hour it discharges costs $5 of <b>degradation</b> — the wear that slowly uses up a battery’s life, which an owner has to
-        treat as a cost of cycling. We’ll give the battery perfect foresight of one day’s day-ahead prices and ask the optimizer from the shared engines for its most
-        profitable schedule. Choose a day and a battery:
+        treat as a cost of cycling. We’ll give the battery perfect foresight of one day’s day-ahead prices and find its most profitable schedule. Choose a day and
+        a battery:
       </P>
 
       <Figure name="Battery Trading Optimizer" scenario={s}>
@@ -207,8 +237,7 @@ export default function Lesson() {
           onChange={(v) => s.set({ day: v })}
           display={`day ${day + 1} · ${WEEKDAY[DAYS[day].weekday]}`}
         />
-        <Slider label="Power" tone="red" value={power} min={10} max={200} step={10} onChange={(v) => s.set({ power: v })} display={`${power} MW`} />
-        <Slider label="Duration" tone="gold" value={hours} min={1} max={8} onChange={(v) => s.set({ hours: v })} display={`${hours} h · ${power * hours} MWh`} />
+        <Slider label="Duration" tone="gold" value={hours} min={1} max={8} onChange={(v) => s.set({ hours: v })} display={`${hours} h · ${POWER * hours} MWh`} />
         <Slider label="Round-trip efficiency" tone="gold" value={eff} min={60} max={95} onChange={(v) => s.set({ eff: v })} display={`${eff}%`} />
         <Slider label="Degradation cost" tone="red" value={wear} min={0} max={40} onChange={(v) => s.set({ wear: v })} display={`$${wear} per MWh`} />
         <Caption>
@@ -222,7 +251,7 @@ export default function Lesson() {
 
       <P>
         On day 61 the optimizer makes $8,513 with almost two full cycles. It charges overnight at $28, sells into the morning peak at $46.57, charges again in the
-        middle of the day when the price falls back to $28, and sells again in the evening, when the price reaches $55.34. (The 1.90 rather than 2 cycles is the optimizer’s own rounding: it moves energy in steps of a few megawatt-hours, so it charges and discharges at slightly less than full power.)
+        middle of the day when the price falls back to $28, and sells again in the evening, when the price reaches $55.34.
       </P>
       <P>
         A simple rule — charge in the four cheapest hours, sell in the four dearest — makes $4,960. It sees one cheap stretch and one dear one, so it cycles once and
@@ -251,29 +280,32 @@ export default function Lesson() {
         <Tn tone="red">wear</Tn>
       </Eq>
       <P>
-        On day 61, the morning cycle earns $46.57 − $28 / 0.85 = $13.63 per megawatt-hour before wear, and the evening cycle $22.40 at its best hour. A cycle whose
-        margin is below the wear cost loses money even though it buys low and sells high.
+        On day 61, the battery buys at $28, and sells at $46.57 in the morning and at up to $55.34 in the evening. A cycle whose margin is below the wear cost loses
+        money even though it buys low and sells high.
       </P>
 
       <Challenge
         id="a"
-        question="On day 61, find a degradation cost at which the battery skips the morning peak but still trades the evening one."
+        question="On day 61, what’s the smallest whole-dollar degradation cost at which the battery skips the morning peak but still trades the evening one? Work it out with the margin equation, then check it."
         solved={solved}
         status={
           day !== CHALLENGE_DAY
             ? `You’re looking at day ${day + 1}; go back to day 61.`
             : morningSells
               ? `At $${wear} of wear, the battery still sells in the morning.`
-              : `At $${wear} of wear, the battery doesn’t sell in the evening either.`
+              : !eveningSells
+                ? `At $${wear} of wear, the battery doesn’t sell in the evening either.`
+                : `At $${wear} of wear the battery skips the morning. Would a smaller whole-dollar cost do it too?`
         }
-        success={`Solved. With $${wear} of wear on every megawatt-hour, the morning cycle’s margin no longer pays for itself, while the evening’s higher price still does. Degradation doesn’t stop a battery trading; it stops the marginal cycles first.`}
+        success={`Solved. The morning cycle earns ${usd(morningMargin, 2)} per megawatt-hour before wear, so $${wear} is the first whole-dollar cost it can’t cover, while the evening’s ${usd(eveningMargin, 2)} still can. Degradation doesn’t stop a battery trading; it stops the marginal cycles first.`}
       />
 
       <P>
         The other sliders act through the same comparison. Lower the efficiency and every megawatt-hour sold needs more bought: at 70%, energy bought at $28 costs $40
-        by the time it’s delivered, and day 61’s morning cycle earns only $6.57 before wear. Raise the power and the battery can fill and empty faster, which matters
-        on days whose peaks are short and sharp. Raise the duration and it can carry more energy into the evening, but only if the evening has enough dear hours to
-        sell it in. Every one of these choices is a trade between what the battery costs to build and how much of each day’s price shape it can capture.
+        by the time it’s delivered, and day 61’s morning cycle earns only $6.57 before wear. We’ve held the power at 100 MW because power changes a battery’s size
+        but not its shape: at a fixed duration, a 200 MW battery follows the same schedule at twice the rate and makes exactly twice the profit. Duration is
+        different. Raise it and the battery can carry more energy into the evening, but only if the evening has enough dear hours to sell it in. Every one of these
+        choices is a trade between what the battery costs to build and how much of each day’s price shape it can capture.
       </P>
       <P>
         Notice, too, that nothing here required a forecast of anything except the day’s own prices. The optimizer knows exactly where the cheap and dear hours fall,
@@ -282,9 +314,9 @@ export default function Lesson() {
 
       <H2>The value of foresight</H2>
       <P>
-        Perfect foresight of day-ahead prices isn’t quite available. A battery has to bid before the day-ahead market clears, so this schedule is an upper bound
-        on what it could earn there. But once the day-ahead prices are published, the operator does know them a day in advance. It can plan on them, run the plan
-        in real time, and be paid real-time prices. In the next demonstration, the battery from{' '}
+        A battery can’t really see the day-ahead prices before it trades in that market: its offers are due before the market clears, so the optimal schedule is
+        an upper bound on what it could earn there. What its owner can do is wait for the day-ahead prices to be published, plan the next day around them, and run
+        that plan in real time, paid real-time prices. In the next demonstration, the battery from{' '}
         <FigRef to="Battery Trading Optimizer">the first demonstration</FigRef> runs four ways across all 120 days:
       </P>
 
@@ -310,7 +342,7 @@ export default function Lesson() {
             },
             { label: '120 days', cell: (r) => money(totals[r.id]) },
             { label: 'per kW-year', cell: (r) => <Tn tone={totals[r.id] < 0 ? 'red' : 'green'}>{usd(perKwYear(totals[r.id]), 2)}</Tn> },
-            { label: 'days 73 and 120', cell: (r) => money(spikes[r.id]) },
+            { label: 'without days 73 and 120', cell: (r) => money(withoutSpikes[r.id]) },
           ]}
         />
         <Readouts
@@ -324,25 +356,30 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With the starting battery, perfect day-ahead foresight earns $739,527 in 120 days, or $22.49 per kilowatt of power per year — the unit storage revenues are
-        usually quoted in. The simple rule earns $663,878, about 90% as much. The plan run against real-time prices earns $2,149,042, nearly three times as much, and
-        perfect foresight of real-time prices would have earned $2,428,588.
+        With the starting battery, perfect day-ahead foresight earns $783,469 in 120 days, or $23.83 per kilowatt of power per year — the unit storage revenues are
+        usually quoted in. The simple rule earns $663,878, about 85% as much. The plan run against real-time prices earns $2,306,696, nearly three times as much, and
+        perfect foresight of real-time prices would have earned $2,584,733.
       </P>
       <P>
-        That looks like a decisive case for real time, until you read the last column. $1,202,566 of the real-time plan’s earnings came on days 73 and 120, the two
-        evenings when the real-time price passed $2,000. On 73 of the 120 days, real-time prices paid the plan <i>less</i> than day-ahead prices would have. A battery
-        that stays out of the day-ahead market is holding the same position as the dec trader of Lesson 6.2: long the evening spike. In this history, that was very
+        That looks like a decisive case for real time, until you read the last column. Days 73 and 120, the two evenings when the real-time price passed $2,000,
+        earned the real-time plan $1,298,555, more than its other 118 days put together; without them it earns $1,008,141. That’s still more than the day-ahead
+        optimum’s $723,980, because the plan is long every real-time surprise, not only the two largest. But on 74 of the 120 days, real-time prices paid it{' '}
+        <i>less</i> than day-ahead prices would have. A battery
+        that stays out of the day-ahead market is holding the same position as the dec trader of <a href={lessonHref('6.2')}>Lesson 6.2</a>: long the evening
+        spike. In this history, that was very
         profitable. It is not the same thing as arbitrage.
       </P>
       <P>
-        The gap between the top two lines is the value of knowing real-time prices in advance, and it’s the reason storage operators spend so much effort on
+        The gap between the top two lines is the value of knowing real-time prices in advance, and it’s the reason battery owners spend so much effort on
         forecasting. Now raise the degradation cost. At $20 per megawatt-hour, the day-ahead optimizer sits idle on 74 of the 120 days, while the simple rule, which
-        cycles whatever the margin, turns most of its profit into wear. Lengthening the battery has the opposite problem: going from four hours to eight adds little,
-        because there are only so many dear hours in a day to sell into.
+        cycles whatever the margin, turns most of its profit into wear. Lengthening the battery has the opposite problem: going from four hours to eight doubles the
+        energy but adds only 14% to the day-ahead profit, because there are only so many dear hours in a day to sell into.
       </P>
       <P>
-        A battery’s owner usually can’t wait for the right days. It has loans to repay and wants a steady income, so it may sell part of its capacity forward, or
-        lease it to a retailer who needs evening energy. The next lesson takes the other side of that trade: a retailer with customers on fixed prices, and the
+        Real batteries rarely live on arbitrage alone: they also earn from the ancillary services of{' '}
+        <a href={lessonHref('4.6')}>Lesson 4.6</a>, regulation and operating reserve, which pay for capacity held ready rather than energy moved. And a battery’s
+        owner usually can’t wait for the right days. It has loans to repay and wants a steady income, so it may sell part of its capacity forward, or lease it to a
+        retailer who needs evening energy. The next lesson takes the other side of that trade: a retailer with customers on fixed prices, and the
         forwards, contracts and spot purchases it uses to keep its margin from being swept away by a single bad evening.
       </P>
     </LessonPage>
