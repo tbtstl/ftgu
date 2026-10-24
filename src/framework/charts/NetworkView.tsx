@@ -111,7 +111,7 @@ export function NetworkView({
             style={interactive ? { cursor: 'pointer' } : undefined}
           >
             {interactive && <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={28} />}
-            <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col} strokeWidth={l.out ? 4 : 10} strokeLinecap="round" strokeDasharray={l.out ? '6 8' : undefined} />
+            <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col} strokeWidth={l.out ? 3 : 6} strokeLinecap="round" strokeDasharray={l.out ? '6 8' : undefined} />
             {moving && (
               <path
                 d={d}
@@ -122,7 +122,7 @@ export function NetworkView({
               />
             )}
             {text && (
-              <text className="lab" x={mx} y={my} textAnchor="middle" style={{ paintOrder: 'stroke', stroke: '#f8f8f8', strokeWidth: 4 }}>
+              <text className="lab" x={mx} y={my} textAnchor="middle" style={{ paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 4 }}>
                 {text}
               </text>
             )}
@@ -146,9 +146,9 @@ export function NetworkView({
             onKeyDown={key(onNodeClick, n.id)}
             style={interactive ? { cursor: 'pointer' } : undefined}
           >
-            <circle cx={n.x} cy={n.y} r={r} fill={n.fill ?? '#fff'} stroke={n.dead ? '#9a9a9a' : '#555'} strokeWidth={1.5} strokeDasharray={n.dead ? '4 4' : undefined} />
+            <circle cx={n.x} cy={n.y} r={r} fill={n.fill ?? '#fff'} stroke={n.dead ? '#9a9a9a' : '#111'} strokeWidth={1} strokeDasharray={n.dead ? '4 4' : undefined} />
             {n.value && (
-              <text x={n.x} y={n.sub ? n.y + 5 : n.y + 6} textAnchor="middle" style={{ fontFamily: 'var(--display)', fontSize: r > 32 ? 20 : 15, fontWeight: 600, fill: '#222' }}>
+              <text x={n.x} y={n.sub ? n.y + 5 : n.y + 6} textAnchor="middle" style={{ fontFamily: 'var(--sans)', fontSize: r > 32 ? 18 : 14, fontWeight: 500, fill: '#111' }}>
                 {n.value}
               </text>
             )}
@@ -158,7 +158,7 @@ export function NetworkView({
               </text>
             )}
             {n.label && (
-              <text x={lx} y={ly} textAnchor={anchor} style={{ fontFamily: 'var(--display)', fontSize: 15, fontWeight: 600, fill: n.labelColor ?? '#444' }}>
+              <text x={lx} y={ly} textAnchor={anchor} style={{ fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 500, fill: n.labelColor ?? '#111' }}>
                 {n.label}
               </text>
             )}

@@ -313,7 +313,7 @@ export default function Lesson() {
           <line x1={70} x2={590} y1={cy(0.9)} y2={cy(0.9)} stroke="#999" strokeDasharray="3 4" />
           <path d={linePath(SIZES.map((s) => cx(Math.log10(s))), curves[1].map((v) => cy(Math.max(0.5, v))))} fill="none" stroke="#8a8a8a" strokeWidth={2} strokeDasharray="7 5" />
           <path d={linePath(SIZES.map((s) => cx(Math.log10(s))), curves[0].map((v) => cy(Math.max(0.5, v))))} fill="none" stroke={FUEL.battery} strokeWidth={3} />
-          <circle cx={cx(Math.log10(size))} cy={cy(Math.max(0.5, ratio))} r={6} fill={shared ? '#8a8a8a' : FUEL.battery} stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={cx(Math.log10(size))} cy={cy(Math.max(0.5, ratio))} r={6} fill={shared ? '#8a8a8a' : FUEL.battery} stroke="#fcfcfb" strokeWidth={2} />
           {SIZES.map((s) => (
             <text key={s} className="ax ax-m" x={cx(Math.log10(s))} y={218}>
               {fmt(s)}

@@ -348,7 +348,7 @@ export default function Lesson() {
           <path d={stepLine(DEMANDS.map(HX), bare.map(HY))} fill="none" stroke="#9a9a9a" strokeWidth={2} strokeDasharray="7 5" />
           <path d={stepLine(DEMANDS.map(HX), costs.map(HY))} fill="none" stroke="#6d9c37" strokeWidth={4} strokeLinejoin="round" />
           <line className="cur" x1={HX(h.state.demand)} x2={HX(h.state.demand)} y1={36} y2={220} />
-          <circle cx={HX(h.state.demand)} cy={HY(hCost)} r={6} fill="#6d9c37" stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={HX(h.state.demand)} cy={HY(hCost)} r={6} fill="#6d9c37" stroke="#fcfcfb" strokeWidth={2} />
         </svg>
         <Readouts
           items={[
@@ -426,7 +426,7 @@ export default function Lesson() {
           <text className="ax ax-e" x={FX(500)} y={326}>
             Rights from A to C, MW
           </text>
-          <circle cx={FX(q.state.fA)} cy={FY(q.state.fB)} r={7} fill={fits ? '#d0702a' : '#f8f8f8'} stroke="#d0702a" strokeWidth={3} />
+          <circle cx={FX(q.state.fA)} cy={FY(q.state.fB)} r={7} fill={fits ? '#d0702a' : '#fcfcfb'} stroke="#d0702a" strokeWidth={3} />
           <g>
             <text x={360} y={60} style={{ fontSize: 13, fontWeight: 500, fill: '#333' }}>
               On the day

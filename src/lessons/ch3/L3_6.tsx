@@ -102,7 +102,7 @@ function Grid({ s }: { s: CRState }) {
         const g = GEN_LABEL[n.id];
         const text = genText(s, n.id);
         return text ? (
-          <text key={n.id} className="ax" x={n.x + g.dx} y={n.y + 10 + g.dy} textAnchor={g.anchor} style={{ paintOrder: 'stroke', stroke: '#f8f8f8', strokeWidth: 4 }}>
+          <text key={n.id} className="ax" x={n.x + g.dx} y={n.y + 10 + g.dy} textAnchor={g.anchor} style={{ paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 4 }}>
             {text}
           </text>
         ) : null;

@@ -274,7 +274,7 @@ export default function Lesson() {
             Typical error in the planner’s estimates
           </text>
           <line className="cur" x1={x(e2)} x2={x(e2)} y1={30} y2={220} />
-          <circle cx={x(e2)} cy={y(Math.min(yTop, pt.mean * 100))} r={6} fill={TEXT.green} stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={x(e2)} cy={y(Math.min(yTop, pt.mean * 100))} r={6} fill={TEXT.green} stroke="#fcfcfb" strokeWidth={2} />
         </svg>
         <Legend
           items={[

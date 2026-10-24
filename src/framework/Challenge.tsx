@@ -35,23 +35,21 @@ export function Challenge({
 
   return (
     <div className="chal" data-fig-focus={figure}>
-      <div className="chal-h">Challenge</div>
+      <div className="chal-h">
+        <span>Challenge</span>
+        <span className={solved ? 'chal-st ok' : 'chal-st'}>
+          {solved && (
+            <svg width="12" height="12" viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M3 9.5 L7.5 14 L15 4.5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+          {solved ? 'Solved' : 'Unsolved'}
+        </span>
+      </div>
       <p className="chal-q">{question}</p>
-      {solved ? (
-        <div className="chal-s ok" role="status">
-          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-            <path d="M3 9.5 L7.5 14 L15 4.5" fill="none" stroke="#3f6f1b" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span>{success}</span>
-        </div>
-      ) : (
-        <div className="chal-s" role="status">
-          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-            <circle cx="9" cy="9" r="6.5" fill="none" stroke="#9a9a9a" strokeWidth="2" />
-          </svg>
-          <span>{status}</span>
-        </div>
-      )}
+      <div className={solved ? 'chal-s ok' : 'chal-s'} role="status">
+        {solved ? success : status}
+      </div>
     </div>
   );
 }

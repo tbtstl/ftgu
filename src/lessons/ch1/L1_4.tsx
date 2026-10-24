@@ -106,8 +106,8 @@ const XFMR_X = [92, 240, 370, 496];
 function Xfmr({ x }: { x: number }) {
   return (
     <g>
-      <circle cx={x - 6} cy={120} r={9} fill="#f8f8f8" stroke="#555" strokeWidth={2} />
-      <circle cx={x + 6} cy={120} r={9} fill="#f8f8f8" stroke="#555" strokeWidth={2} />
+      <circle cx={x - 6} cy={120} r={9} fill="#fcfcfb" stroke="#555" strokeWidth={2} />
+      <circle cx={x + 6} cy={120} r={9} fill="#fcfcfb" stroke="#555" strokeWidth={2} />
       <circle cx={x - 6} cy={120} r={9} fill="none" stroke="#555" strokeWidth={2} />
     </g>
   );
@@ -224,12 +224,12 @@ export default function Lesson() {
 
           {ac ? (
             <g>
-              <circle cx={76} cy={150} r={24} fill="#f8f8f8" stroke="#555" strokeWidth={2} />
+              <circle cx={76} cy={150} r={24} fill="#fcfcfb" stroke="#555" strokeWidth={2} />
               <path d="M63 150 C67 138, 72 138, 76 150 S85 162, 89 150" fill="none" stroke="#555" strokeWidth={2} />
             </g>
           ) : (
             <g>
-              <rect x={50} y={124} width={52} height={52} fill="#f8f8f8" />
+              <rect x={50} y={124} width={52} height={52} fill="#fcfcfb" />
               <line x1={76} y1={124} x2={76} y2={142} stroke="#9a9a9a" strokeWidth={4} />
               <line x1={76} y1={158} x2={76} y2={176} stroke="#9a9a9a" strokeWidth={4} />
               <line x1={56} y1={142} x2={96} y2={142} stroke="#444" strokeWidth={3} />
@@ -475,9 +475,9 @@ export default function Lesson() {
           {XFMR_X.map((x) => (
             <Xfmr key={x} x={x} />
           ))}
-          <circle cx={40} cy={120} r={18} fill="#f8f8f8" stroke="#555" strokeWidth={2} />
+          <circle cx={40} cy={120} r={18} fill="#fcfcfb" stroke="#555" strokeWidth={2} />
           <path d="M30 120 C33 112, 37 112, 40 120 S47 128, 50 120" fill="none" stroke="#555" strokeWidth={2} />
-          <path d="M556 158 L556 132 L580 112 L604 132 L604 158 Z" fill="#f8f8f8" stroke="#555" strokeWidth={2} strokeLinejoin="round" />
+          <path d="M556 158 L556 132 L580 112 L604 132 L604 158 Z" fill="#fcfcfb" stroke="#555" strokeWidth={2} strokeLinejoin="round" />
           <rect x={574} y={142} width={12} height={16} fill="#9a9a9a" />
           {chain.map((st) => (
             <g key={st.id}>

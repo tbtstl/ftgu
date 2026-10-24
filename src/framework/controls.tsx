@@ -15,9 +15,10 @@ export interface SliderProps {
 }
 
 /**
- * The course's slider: one compact row — label, track with a small round knob, value — so a
- * figure's sliders stack tightly with their tracks lined up. In narrow spots the track wraps
- * under the label.
+ * The course's slider: one compact row — muted label, hairline track, value — so a figure's
+ * sliders stack tightly with their tracks lined up. The thumb is a short vertical rule, like the
+ * demand and price markers in the charts, and only the value carries the concept's color. In
+ * narrow spots the track wraps under the label.
  */
 export function Slider({ label, value, min, max, step = 1, onChange, display, tone = 'gray', disabled }: SliderProps) {
   const id = useId();
@@ -27,11 +28,11 @@ export function Slider({ label, value, min, max, step = 1, onChange, display, to
   return (
     <div className={'ctl slide' + (disabled ? ' dim' : '')}>
       <div className="ctl-in">
-        <label htmlFor={id} className="ctl-l" style={{ color }}>
+        <label htmlFor={id} className="ctl-l">
           {label}
         </label>
         <div className={`sl ${knob}`}>
-          <div className="sl-fill" style={{ width: `calc((100% - 14px) * ${f})` }} />
+          <div className="sl-fill" style={{ width: `calc((100% - 12px) * ${f})` }} />
           <input
             id={id}
             type="range"
@@ -56,7 +57,7 @@ export interface SegmentedOption<T extends string> {
   label: ReactNode;
 }
 
-/** A row of mutually exclusive buttons, like an iOS segmented control. */
+/** A choice between a few options, set as text: the chosen one is ink and underlined. */
 export function Segmented<T extends string>({
   label,
   options,

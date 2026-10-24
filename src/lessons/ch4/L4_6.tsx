@@ -283,7 +283,7 @@ export default function Lesson() {
           </text>
           <path d={curve} fill="none" stroke="#333" strokeWidth={2.5} strokeLinejoin="round" />
           <line x1={60} x2={cx(auc.cleared)} y1={cy(auc.price)} y2={cy(auc.price)} stroke={TEXT.green} strokeWidth={2} />
-          <circle cx={cx(auc.cleared)} cy={cy(auc.price)} r={6} fill={TEXT.green} stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={cx(auc.cleared)} cy={cy(auc.price)} r={6} fill={TEXT.green} stroke="#fcfcfb" strokeWidth={2} />
           <text x={66} y={cy(auc.price) + 17} style={{ fontSize: 13, fontWeight: 600, fill: TEXT.green }}>
             ${auc.price.toFixed(2)}
           </text>

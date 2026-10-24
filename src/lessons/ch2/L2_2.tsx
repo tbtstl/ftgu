@@ -139,7 +139,7 @@ function House({ x, y, lit }: { x: number; y: number; lit: boolean }) {
 /** Transformer symbol: two overlapping circles on a horizontal line at (x, y). */
 function Xfmr({ x, y, r = 11 }: { x: number; y: number; r?: number }) {
   return (
-    <g fill="#f8f8f8" stroke="#555" strokeWidth={1.8}>
+    <g fill="#fcfcfb" stroke="#555" strokeWidth={1.8}>
       <circle cx={x - r * 0.6} cy={y} r={r} />
       <circle cx={x + r * 0.6} cy={y} r={r} />
     </g>
@@ -265,7 +265,7 @@ export default function Lesson() {
             </text>
           ))}
           {/* generator */}
-          <circle cx={44} cy={118} r={20} fill="#f8f8f8" stroke="#555" strokeWidth={1.8} />
+          <circle cx={44} cy={118} r={20} fill="#fcfcfb" stroke="#555" strokeWidth={1.8} />
           <path d="M32 118 C36 108, 40 108, 44 118 S52 128, 56 118" fill="none" stroke="#555" strokeWidth={1.8} />
           <line x1={64} y1={118} x2={86} y2={118} stroke="#9a9a9a" strokeWidth={4} />
           <Xfmr x={100} y={118} />
@@ -517,7 +517,7 @@ export default function Lesson() {
                         <path
                           d={`M${x0 + SEC_W / 2 + 3} ${y0 - 20} L${x0 + SEC_W / 2 - 7} ${y0 + 2} L${x0 + SEC_W / 2 - 1} ${y0 + 2} L${x0 + SEC_W / 2 - 4} ${y0 + 20} L${x0 + SEC_W / 2 + 7} ${y0 - 3} L${x0 + SEC_W / 2 + 1} ${y0 - 3} Z`}
                           fill="#c4382f"
-                          stroke="#f8f8f8"
+                          stroke="#fcfcfb"
                           strokeWidth={1}
                           strokeLinejoin="round"
                         />

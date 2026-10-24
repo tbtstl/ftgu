@@ -86,7 +86,7 @@ export function priceFill(p: number): string {
 /** Mix a hex color toward the page background; amount 0 = background, 1 = the color. */
 export function tint(hex: string, amount = 0.3): string {
   const n = parseInt(hex.slice(1), 16);
-  const c = [n >> 16, (n >> 8) & 255, n & 255].map((x) => 248 + (x - 248) * amount) as [number, number, number];
+  const c = [n >> 16, (n >> 8) & 255, n & 255].map((x) => 252 + (x - 252) * amount) as [number, number, number];
   return rgb(c);
 }
 

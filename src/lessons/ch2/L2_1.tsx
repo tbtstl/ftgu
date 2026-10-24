@@ -365,7 +365,7 @@ export default function Lesson() {
           <line className="cur" x1={x(hours)} x2={x(hours)} y1={20} y2={250} />
           {SCREEN.filter((f) => hours <= maxHours(f)).map((f) => {
             const c = screeningCost(MIX_TECH[f], hours, carbon);
-            return c <= 300 ? <circle key={f} cx={x(hours)} cy={y(c)} r={f === best ? 6 : 4} fill={FUEL[f]} stroke="#f8f8f8" strokeWidth={2} /> : null;
+            return c <= 300 ? <circle key={f} cx={x(hours)} cy={y(c)} r={f === best ? 6 : 4} fill={FUEL[f]} stroke="#fcfcfb" strokeWidth={2} /> : null;
           })}
         </svg>
         <Slider label="Carbon price" tone="green" value={carbon} min={0} max={150} onChange={(v) => s2.set({ carbon: v })} display={`$${carbon} per tonne`} />

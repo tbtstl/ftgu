@@ -269,7 +269,7 @@ export default function Lesson() {
           ))}
           {bt.perMWh.map((v, i) =>
             v > yHi || v < yLo ? (
-              <circle key={i} cx={x(i)} cy={y(clip(v))} r={4} fill="#333" stroke="#f8f8f8" strokeWidth={1.5} />
+              <circle key={i} cx={x(i)} cy={y(clip(v))} r={4} fill="#333" stroke="#fcfcfb" strokeWidth={1.5} />
             ) : null,
           )}
           {[1, 30, 60, 90, 120].map((t) => (

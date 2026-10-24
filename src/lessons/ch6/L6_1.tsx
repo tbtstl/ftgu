@@ -115,7 +115,7 @@ function PayoffChart({ book, rt }: { book: Book; rt: number }) {
       {book.incMW !== 0 && <path d={path('virtual')} fill="none" stroke={COLORS.virtual} strokeWidth={2} strokeDasharray="7 4" />}
       {book.cfdMW !== 0 && <path d={path('cfd')} fill="none" stroke={COLORS.cfd} strokeWidth={2} strokeDasharray="2 3" />}
       <line className="cur" x1={x(rt)} x2={x(rt)} y1={20} y2={236} />
-      <circle cx={x(rt)} cy={y(here.total)} r={6} fill={here.total < 0 ? GRAPHIC.red : GRAPHIC.green} stroke="#f8f8f8" strokeWidth={2} />
+      <circle cx={x(rt)} cy={y(here.total)} r={6} fill={here.total < 0 ? GRAPHIC.red : GRAPHIC.green} stroke="#fcfcfb" strokeWidth={2} />
       {xTicks.map((p) => (
         <g key={p}>
           <text className="ax ax-m" x={x(p)} y={254}>

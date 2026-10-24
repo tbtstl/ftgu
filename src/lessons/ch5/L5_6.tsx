@@ -309,7 +309,7 @@ export default function Lesson() {
                   x={inside ? BX(v) - 6 : BX(v) + 6}
                   y={y + 15}
                   textAnchor={inside ? 'end' : 'start'}
-                  style={inside ? { fontSize: 12, fill: '#fff', fontWeight: 500 } : { fontSize: 12, fill: '#333', paintOrder: 'stroke', stroke: '#f8f8f8', strokeWidth: 4 }}
+                  style={inside ? { fontSize: 12, fill: '#fff', fontWeight: 500 } : { fontSize: 12, fill: '#333', paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 4 }}
                 >
                   {b.worst ? `${pct(b.worst.loading)} ${lineName(b.worst.id)}` : ''}
                 </text>

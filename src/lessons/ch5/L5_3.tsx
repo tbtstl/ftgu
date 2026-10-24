@@ -221,9 +221,9 @@ export default function Lesson() {
           <path d={curve('B')} fill="none" stroke="#ab70b6" strokeWidth={3} strokeDasharray="8 5" strokeLinejoin="round" />
           <path d={curve('A')} fill="none" stroke="#4590ce" strokeWidth={2} strokeLinejoin="round" />
           <line className="cur" x1={x(demand)} x2={x(demand)} y1={40} y2={220} />
-          <circle cx={x(demand)} cy={y(Math.min(180, lmp('C')))} r={6} fill="#e48850" stroke="#f8f8f8" strokeWidth={2} />
-          <circle cx={x(demand)} cy={y(Math.min(180, lmp('B')))} r={5} fill="#ab70b6" stroke="#f8f8f8" strokeWidth={2} />
-          <circle cx={x(demand)} cy={y(Math.min(180, lmp('A')))} r={4} fill="#4590ce" stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={x(demand)} cy={y(Math.min(180, lmp('C')))} r={6} fill="#e48850" stroke="#fcfcfb" strokeWidth={2} />
+          <circle cx={x(demand)} cy={y(Math.min(180, lmp('B')))} r={5} fill="#ab70b6" stroke="#fcfcfb" strokeWidth={2} />
+          <circle cx={x(demand)} cy={y(Math.min(180, lmp('A')))} r={4} fill="#4590ce" stroke="#fcfcfb" strokeWidth={2} />
         </svg>
         <Slider label="Demand at C" tone="orange" value={demand} min={100} max={600} step={10} onChange={(v) => s.set({ demand: v })} display={mw(demand)} />
       </Figure>

@@ -211,7 +211,7 @@ export default function Lesson() {
             strokeLinejoin="round"
           />
           <line className="cur" x1={X(demand)} x2={X(demand)} y1={30} y2={236} />
-          <circle cx={X(demand)} cy={yOf(now.energyPrice)} r={6} fill="#3f7a1e" stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={X(demand)} cy={yOf(now.energyPrice)} r={6} fill="#3f7a1e" stroke="#fcfcfb" strokeWidth={2} />
         </svg>
         <Readouts
           items={[

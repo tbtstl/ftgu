@@ -120,11 +120,11 @@ function TripFigure() {
         <path d={full} fill="none" stroke={GRAPHIC.teal} strokeWidth={2} opacity={0.3} strokeLinejoin="round" />
         <path d={bold} fill="none" stroke={GRAPHIC.teal} strokeWidth={3} strokeLinejoin="round" />
         <line x1={X0} x2={X1} y1={y(settledHz)} y2={y(settledHz)} stroke={GRAPHIC.teal} strokeWidth={1} strokeDasharray="2 4" />
-        <circle cx={xT(r.nadirT)} cy={y(r.nadir)} r={5} fill="#f8f8f8" stroke={GRAPHIC.teal} strokeWidth={2} />
+        <circle cx={xT(r.nadirT)} cy={y(r.nadir)} r={5} fill="#fcfcfb" stroke={GRAPHIC.teal} strokeWidth={2} />
         <text className="lab" x={xT(r.nadirT) + 9} y={y(r.nadir) + 16}>
           nadir {r.nadir.toFixed(2)} Hz
         </text>
-        <circle cx={xT(now.t)} cy={y(now.f)} r={5} fill={GRAPHIC.teal} stroke="#f8f8f8" strokeWidth={2} />
+        <circle cx={xT(now.t)} cy={y(now.f)} r={5} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={2} />
         <line className="base" x1={X0} x2={X1} y1={216} y2={216} />
         {[0, 5, 10, 15, 20, 25, 30].map((t) => (
           <text key={t} className="ax ax-m" x={xT(t)} y={234}>
@@ -242,7 +242,7 @@ function InverterFigure({ onState }: { onState: (s: { share: number; shed: numbe
         <path d={linePath(SHARES.map(xS), SWEEP_NONE.map(yN))} fill="none" stroke="#8a8a8a" strokeWidth={2} strokeDasharray="6 5" />
         {ffr > 0 && <path d={linePath(SHARES.map(xS), curve.map(yN))} fill="none" stroke={GRAPHIC.teal} strokeWidth={3} />}
         <line className="cur" x1={xS(sh)} x2={xS(sh)} y1={24} y2={170} />
-        <circle cx={xS(sh)} cy={yN(Math.max(59.2, withFfr.nadir))} r={6} fill={GRAPHIC.teal} stroke="#f8f8f8" strokeWidth={2} />
+        <circle cx={xS(sh)} cy={yN(Math.max(59.2, withFfr.nadir))} r={6} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={2} />
         <line className="base" x1={X0} x2={X1} y1={170} y2={170} />
         {[0, 0.2, 0.4, 0.6, 0.8].map((s) => (
           <text key={s} className="ax ax-m" x={xS(s)} y={188}>

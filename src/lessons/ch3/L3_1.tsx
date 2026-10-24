@@ -123,7 +123,7 @@ function GameChart({ s }: { s: GameState }) {
       <GridY y={yF} ticks={[59.5, 60, 60.5]} x0={X0} x1={X1} format={(v) => v.toFixed(1)} />
       <path d={freq} fill="none" stroke={GRAPHIC.teal} strokeWidth={2} strokeLinejoin="round" />
       <line className="cur" x1={xMin(s.t)} x2={xMin(s.t)} y1={22} y2={330} />
-      <circle cx={xMin(s.t)} cy={yF(clampF(f))} r={5} fill={out ? GRAPHIC.red : GRAPHIC.teal} stroke="#f8f8f8" strokeWidth={2} />
+      <circle cx={xMin(s.t)} cy={yF(clampF(f))} r={5} fill={out ? GRAPHIC.red : GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={2} />
       <line className="base" x1={X0} x2={X1} y1={330} y2={330} />
       {[0, 6, 12, 18, 24].map((hh) => (
         <text key={hh} className="ax ax-m" x={xMin(hh * 60)} y={350}>
@@ -327,7 +327,7 @@ function TimeScales() {
         )}
         {fAxis}
         <path d={linePath(xs, samples.map((p) => yf(Math.max(fLo, Math.min(fHi, p.f)))))} fill="none" stroke={GRAPHIC.teal} strokeWidth={2.5} strokeLinejoin="round" />
-        <circle cx={lx(Math.max(T0, sum.nadirT))} cy={yf(Math.max(fLo, sum.nadir))} r={5} fill={GRAPHIC.teal} stroke="#f8f8f8" strokeWidth={2} />
+        <circle cx={lx(Math.max(T0, sum.nadirT))} cy={yf(Math.max(fLo, sum.nadir))} r={5} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={2} />
       </svg>
       <svg className="chart" viewBox="0 0 640 200" role="img" aria-label={`Where the extra ${step} MW comes from over time: kinetic energy first, then governors, then AGC and dispatch.`}>
         <text className="ax" x={X0} y={14}>

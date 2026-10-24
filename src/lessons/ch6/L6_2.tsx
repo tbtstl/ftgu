@@ -100,7 +100,7 @@ function SpreadBoxes({ selected, onSelect }: { selected: number; onSelect: (h: n
             <rect x={cx(h) - slot * 0.3} width={slot * 0.6} y={y(cl(s.q75))} height={Math.max(1, y(cl(s.q25)) - y(cl(s.q75)))} fill={on ? '#cfcfcf' : '#e2e2e2'} stroke={col} strokeWidth={1} />
             <line x1={cx(h) - slot * 0.3} x2={cx(h) + slot * 0.3} y1={y(cl(s.median))} y2={y(cl(s.median))} stroke="#333" strokeWidth={2} />
             {!meanOff && (
-              <path d={`M${cx(h)} ${y(s.mean) - 5} L${cx(h) + 5} ${y(s.mean)} L${cx(h)} ${y(s.mean) + 5} L${cx(h) - 5} ${y(s.mean)} Z`} fill={GRAPHIC.green} stroke="#f8f8f8" strokeWidth={1} />
+              <path d={`M${cx(h)} ${y(s.mean) - 5} L${cx(h) + 5} ${y(s.mean)} L${cx(h)} ${y(s.mean) + 5} L${cx(h) - 5} ${y(s.mean)} Z`} fill={GRAPHIC.green} stroke="#fcfcfb" strokeWidth={1} />
             )}
             {meanOff && (
               <text className="ax ax-m" x={cx(h)} y={24} style={{ fill: '#3f7a1e', fontWeight: 500 }}>
@@ -247,7 +247,7 @@ function EquityChart({ pnl, firstIndex, best }: { pnl: number[]; firstIndex: num
         const right = bx > 470;
         return (
           <g key={b.day}>
-            <circle cx={bx} cy={by} r={4.5} fill={b.v >= 0 ? GRAPHIC.green : GRAPHIC.red} stroke="#f8f8f8" strokeWidth={1.5} />
+            <circle cx={bx} cy={by} r={4.5} fill={b.v >= 0 ? GRAPHIC.green : GRAPHIC.red} stroke="#fcfcfb" strokeWidth={1.5} />
             <text className="ax" x={right ? bx - 8 : bx + 8} y={by + 14} style={{ textAnchor: right ? 'end' : 'start', fill: '#333' }}>
               day {b.day + 1}: {short(b.v)}
             </text>

@@ -363,7 +363,7 @@ export default function Lesson() {
               </text>
             </g>
           ))}
-          <circle cx={xE(Math.min(1600, s2.state.energy))} cy={yP(Math.max(900, cap))} r={6} fill={GRAPHIC.red} stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={xE(Math.min(1600, s2.state.energy))} cy={yP(Math.max(900, cap))} r={6} fill={GRAPHIC.red} stroke="#fcfcfb" strokeWidth={2} />
           <line className="base" x1={X0} x2={X1} y1={196} y2={196} />
           {[0, 400, 800, 1200, 1600].map((e) => (
             <text key={e} className="ax ax-m" x={xE(e)} y={212}>

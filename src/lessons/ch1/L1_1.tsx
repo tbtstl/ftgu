@@ -15,7 +15,7 @@ function watts(p: number) {
 function Battery({ label }: { label: string }) {
   return (
     <g>
-      <rect x={54} y={116} width={52} height={68} fill="#f8f8f8" />
+      <rect x={54} y={116} width={52} height={68} fill="#fcfcfb" />
       <line x1={80} y1={116} x2={80} y2={140} stroke="#9a9a9a" strokeWidth={4} />
       <line x1={80} y1={160} x2={80} y2={184} stroke="#9a9a9a" strokeWidth={4} />
       <line x1={60} y1={140} x2={100} y2={140} stroke="#444" strokeWidth={3} />

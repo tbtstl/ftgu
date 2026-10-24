@@ -64,13 +64,13 @@ export function Figure<T extends object>({ name, children, scenario, onReset, pl
           {play && (
             <button type="button" className="tbtn icb" aria-label={play.playing ? 'Pause animation' : 'Play animation'} onClick={play.toggle}>
               {play.playing ? (
-                <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-                  <rect x="4" y="3" width="3.5" height="12" rx="1" fill="#444" />
-                  <rect x="10.5" y="3" width="3.5" height="12" rx="1" fill="#444" />
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                  <rect x="1" y="0.5" width="2.5" height="9" rx="0.6" fill="currentColor" />
+                  <rect x="6.5" y="0.5" width="2.5" height="9" rx="0.6" fill="currentColor" />
                 </svg>
               ) : (
-                <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-                  <path d="M5 3 L15 9 L5 15 Z" fill="#444" />
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                  <path d="M1.5 0.8 L9 5 L1.5 9.2 Z" fill="currentColor" />
                 </svg>
               )}
             </button>
@@ -128,11 +128,11 @@ export function Figure<T extends object>({ name, children, scenario, onReset, pl
             if (e.detail === 0) requestAnimationFrame(() => slot?.querySelector<HTMLElement>('figure')?.focus({ preventScroll: true }));
           }}
         >
+          <svg className="fig-mark-a" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
           <span className="fig-mark-n">{index >= 0 ? `Demonstration ${index + 1}` : 'Demonstration'}</span>
-          <span className="fig-mark-t">{name}</span>
-          <span className="fig-mark-a" aria-hidden="true">
-            {active ? 'shown beside' : 'show'} →
-          </span>
+          <span className="fig-mark-t">{active ? `${name}, at right` : name}</span>
         </button>
       )}
       {slot ? createPortal(figure, slot) : figure}

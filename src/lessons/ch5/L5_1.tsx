@@ -283,13 +283,13 @@ function SolverView({ coal, cc2, showPath }: { coal: number; cc2: number; showPa
       ))}
       {BEST && (
         <g>
-          <circle cx={PX(BEST[0])} cy={PY(BEST[1])} r={8} fill="#6d9c37" stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={PX(BEST[0])} cy={PY(BEST[1])} r={8} fill="#6d9c37" stroke="#fcfcfb" strokeWidth={2} />
           <text x={PX(BEST[0]) - 14} y={PY(BEST[1]) - 14} textAnchor="end" style={{ fontSize: 13, fontWeight: 500, fill: '#3f7a1e', paintOrder: 'stroke', stroke: '#fbfbf7', strokeWidth: 4 }}>
             cheapest: {usd(planeCost(BEST))} an hour
           </text>
         </g>
       )}
-      <circle cx={PX(coal)} cy={PY(cc2)} r={7} fill={ok ? '#d0702a' : '#f8f8f8'} stroke="#d0702a" strokeWidth={3} />
+      <circle cx={PX(coal)} cy={PY(cc2)} r={7} fill={ok ? '#d0702a' : '#fcfcfb'} stroke="#d0702a" strokeWidth={3} />
     </svg>
   );
 }

@@ -330,7 +330,7 @@ export default function Lesson() {
           </text>
           <path d={linePath(sweep.ls.map(X), sweep.cost.map(Y))} fill="none" stroke="#c4382f" strokeWidth={3} strokeLinejoin="round" />
           <line className="cur" x1={X(limit)} x2={X(limit)} y1={36} y2={230} />
-          <circle cx={X(limit)} cy={Y(congestion)} r={6} fill="#c4382f" stroke="#f8f8f8" strokeWidth={2} />
+          <circle cx={X(limit)} cy={Y(congestion)} r={6} fill="#c4382f" stroke="#fcfcfb" strokeWidth={2} />
         </svg>
         <Slider label="Limit on line Central–Metro" tone="red" value={limit} min={MIN_LIMIT} max={RATED} step={10} onChange={(v) => s.set({ limit: v })} display={mw(limit)} />
         <Readouts items={[{ label: 'cost of congestion per hour', value: usd(congestion), tone: 'red' }]} />
