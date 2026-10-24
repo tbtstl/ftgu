@@ -186,3 +186,55 @@ export function angularMomentumWind(latDeg: number, rotation = 1): number {
 export function surfaceSpeed(latDeg: number, rotation = 1): number {
   return OMEGA * rotation * EARTH_RADIUS_M * Math.cos((latDeg * Math.PI) / 180);
 }
+
+export interface CirculationCell {
+  name: 'Hadley' | 'Ferrel' | 'Polar';
+  from: number;
+  to: number;
+  /** Thermally direct cells rise on their warm side and sink on their cold side. */
+  direct: boolean;
+}
+
+export interface WindBelt {
+  name: string;
+  from: number;
+  to: number;
+  /** The direction the surface wind blows from. */
+  fromThe: 'east' | 'west';
+}
+
+export interface Circulation {
+  /** Poleward edge of the Hadley cell (Held–Hou), degrees. */
+  hadleyEdge: number;
+  cells: CirculationCell[];
+  belts: WindBelt[];
+  /** Latitude of the subtropical jet: above the Hadley cell's poleward edge, degrees. */
+  jetLat: number;
+  /** What the jet would be if the poleward-moving air kept all its angular momentum, m/s. */
+  jetSpeedIdeal: number;
+}
+
+/**
+ * The three-cell picture of one hemisphere. Only the Hadley cell's reach is computed (from the
+ * rotation rate and the equator-to-pole contrast); the boundary between the Ferrel and polar
+ * cells is drawn at 60°, where it is observed on Earth. If the Hadley cell reaches past 60° it
+ * takes the whole hemisphere.
+ */
+export function circulation(rotation: number, contrast: number): Circulation {
+  const edge = hadleyEdgeDeg({ rotation, contrast });
+  const cells: CirculationCell[] = [];
+  const belts: WindBelt[] = [];
+  if (edge >= 60) {
+    cells.push({ name: 'Hadley', from: 0, to: 90, direct: true });
+    belts.push({ name: 'Easterlies', from: 0, to: 90, fromThe: 'east' });
+  } else {
+    cells.push({ name: 'Hadley', from: 0, to: edge, direct: true });
+    cells.push({ name: 'Ferrel', from: edge, to: 60, direct: false });
+    cells.push({ name: 'Polar', from: 60, to: 90, direct: true });
+    belts.push({ name: 'Trade winds', from: 0, to: edge, fromThe: 'east' });
+    belts.push({ name: 'Westerlies', from: edge, to: 60, fromThe: 'west' });
+    belts.push({ name: 'Polar easterlies', from: 60, to: 90, fromThe: 'east' });
+  }
+  const jetLat = Math.min(edge, 89);
+  return { hadleyEdge: edge, cells, belts, jetLat, jetSpeedIdeal: angularMomentumWind(jetLat, rotation) };
+}

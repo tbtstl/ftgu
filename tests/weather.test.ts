@@ -26,13 +26,22 @@ import {
   satVaporPressure,
   standardPressure,
 } from '../src/engines/weather/thermo';
-import { angularMomentumWind, coriolis, cycloneWind, geostrophicSpeed, hadleyEdgeDeg, inertialPeriodHours, steadyWind, windTrack } from '../src/engines/weather/dynamics';
+import { angularMomentumWind, circulation, coriolis, cycloneWind, geostrophicSpeed, hadleyEdgeDeg, inertialPeriodHours, steadyWind, windTrack } from '../src/engines/weather/dynamics';
 import { CALDER, MARLOW, RIDGE, anomalySd, normalTemp } from '../src/model/weather/region';
+import { DAYS, LEAD_MAX, YEARS, archive, dayIndex, dayInfo, expectedTemp, forecastTemp, knownShare, monthDays, ninoMonth, revealedShare, tempF } from '../src/model/weather/archive';
+import { ENSO_DEFAULTS, ensoHistory, ensoPeriod } from '../src/engines/weather/enso';
+import { frontPassage, frontWeather } from '../src/engines/weather/fronts';
+import { stormOutlook } from '../src/engines/weather/storms';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
 import { CONVECTION_DEFAULTS, capSolved, convectionAscent, periodSolved } from '../src/lessons/weather/ch1/L1_4';
 import { STORM_DEFAULTS, geostrophicSolved, noreasterSolved, windAtCalder } from '../src/lessons/weather/ch1/L1_5';
+import { jetSolved, tradesSolved } from '../src/lessons/weather/ch2/L2_1';
+import { FRONT_DEFAULTS, lagSolved, rainSolved } from '../src/lessons/weather/ch2/L2_2';
+import { INGREDIENT_DEFAULTS, floodSolved, leastLiftSolved } from '../src/lessons/weather/ch2/L2_3';
+import { PACIFIC_DEFAULTS, laNinaSolved, thresholdSolved } from '../src/lessons/weather/ch2/L2_4';
+import { STATION_DEFAULTS, steadiestSolved, steadyColdSolved } from '../src/lessons/weather/ch2/L2_5';
 
 describe('the Calder region', () => {
   it('gives Calder Bay a New York–like year', () => {
@@ -193,5 +202,149 @@ describe('chapter 1 challenges', () => {
     expect(noreasterSolved({ ...STORM_DEFAULTS, east: 100, north: -300 })).toBe(true);
     expect(noreasterSolved(STORM_DEFAULTS)).toBe(false);
     expect(windAtCalder(STORM_DEFAULTS).speed).toBeCloseTo(20, 0);
+  });
+});
+
+describe('the archive', () => {
+  it('reveals each day’s weather piece by piece, and its forecasts are calibrated', () => {
+    const a = archive();
+    expect(a.z.length).toBe(DAYS);
+    let s2 = 0;
+    let c1 = 0;
+    for (let d = 0; d < DAYS; d++) {
+      s2 += a.z[d] ** 2;
+      if (d) c1 += a.z[d] * a.z[d - 1];
+    }
+    expect(s2 / DAYS).toBeCloseTo(1, 1);
+    expect(c1 / s2).toBeGreaterThan(0.6);
+    expect(c1 / s2).toBeLessThan(0.72);
+    let total = 0;
+    for (let k = 0; k <= LEAD_MAX; k++) total += revealedShare(k);
+    expect(total).toBeCloseTo(1, 9);
+    for (const k of [1, 5, 10]) {
+      let inside = 0;
+      let n = 0;
+      for (let d = 400; d < DAYS; d += 3) {
+        const f = forecastTemp('calder', d, k);
+        if (Math.abs(tempF('calder', d) - f.mean) <= f.sd) inside++;
+        n++;
+      }
+      expect(inside / n).toBeGreaterThan(0.64);
+      expect(inside / n).toBeLessThan(0.72);
+    }
+    expect(knownShare(0)).toBe(1);
+    expect(knownShare(LEAD_MAX + 1)).toBe(0);
+  });
+  it('builds forecasts only from pieces revealed by the issue date', () => {
+    const a = archive();
+    const d = 5000;
+    for (let k = 1; k <= LEAD_MAX; k++) {
+      let s = 0;
+      for (let j = k; j <= LEAD_MAX; j++) s += a.piece[d * (LEAD_MAX + 1) + j];
+      expect(a.known[d * (LEAD_MAX + 2) + k]).toBeCloseTo(s, 12);
+    }
+  });
+  it('gives Calder Bay realistic degree days', () => {
+    const jan: number[] = [];
+    for (let y = 1; y <= YEARS; y++) {
+      const { start, days } = monthDays(y, 0);
+      let h = 0;
+      for (let i = 0; i < days; i++) h += Math.max(0, 65 - tempF('calder', start + i));
+      jan.push(h);
+    }
+    const mean = jan.reduce((s, x) => s + x, 0) / jan.length;
+    expect(mean).toBeGreaterThan(950);
+    expect(mean).toBeLessThan(1080);
+    expect(dayInfo(dayIndex(3, 1, 14))).toMatchObject({ year: 3, month: 1, dom: 14 });
+  });
+  it('makes El Niño winters mild at Calder Bay', () => {
+    let warm = 0;
+    let cold = 0;
+    let nw = 0;
+    let nc = 0;
+    for (let y = 1; y <= 40; y++) {
+      const nino = (ninoMonth(y, 11) + ninoMonth(y + 1, 0) + ninoMonth(y + 1, 1)) / 3;
+      const { start } = monthDays(y + 1, 0);
+      let t = 0;
+      for (let i = 0; i < 31; i++) t += tempF('calder', start + i) - expectedTemp('calder', start + i);
+      if (nino >= 0.5) {
+        warm += t / 31;
+        nw++;
+      }
+      if (nino <= -0.5) {
+        cold += t / 31;
+        nc++;
+      }
+    }
+    expect(nw).toBeGreaterThan(5);
+    expect(nc).toBeGreaterThan(5);
+    expect(warm / nw).toBeGreaterThan(cold / nc);
+  });
+});
+
+describe('ENSO', () => {
+  it('oscillates every few years', () => {
+    const p = ensoPeriod(ENSO_DEFAULTS);
+    expect(p.periodMonths!).toBeGreaterThan(36);
+    expect(p.periodMonths!).toBeLessThan(60);
+    expect(p.growing).toBe(false);
+    const h = ensoHistory(480);
+    const sd = Math.sqrt(h.reduce((s, x) => s + x.t * x.t, 0) / h.length);
+    expect(sd).toBeGreaterThan(0.6);
+    expect(sd).toBeLessThan(1);
+  });
+});
+
+describe('fronts and storms', () => {
+  it('rains briefly and hard at a cold front, long and light at a warm one', () => {
+    const cold = frontWeather({ kind: 'cold', coldC: 2, warmC: 16, warmDewC: 12, speed: 10 });
+    const warm = frontWeather({ kind: 'warm', coldC: 2, warmC: 16, warmDewC: 12, speed: 5 });
+    expect(cold.rainRateMmH).toBeGreaterThan(warm.rainRateMmH * 4);
+    expect(warm.rainHours).toBeGreaterThan(cold.rainHours * 5);
+    // A faster cold front rains harder for less time; the total is the same.
+    const fast = frontWeather({ kind: 'cold', coldC: 2, warmC: 16, warmDewC: 12, speed: 15 });
+    expect(fast.rainMm).toBeCloseTo(cold.rainMm, 6);
+    expect(cold.domeHpa).toBeGreaterThan(8);
+    const rec = frontPassage({ kind: 'cold', coldC: 2, warmC: 16, warmDewC: 12, speed: 10 });
+    expect(rec[0].tempC).toBeCloseTo(16, 1);
+    expect(rec[rec.length - 1].tempC).toBeCloseTo(2, 1);
+    expect(rec.reduce((s, h) => s + h.rainMm, 0)).toBeCloseTo(cold.rainMm, 0);
+  });
+  it('sorts storms by their ingredients', () => {
+    const base = { surfaceC: 30, dewC: 20, lapse: 7, liftKm: 3, shear: 5 };
+    expect(stormOutlook(base).kind).toBe('single');
+    expect(stormOutlook({ ...base, shear: 15 }).kind).toBe('multicell');
+    expect(stormOutlook({ ...base, shear: 25 }).kind).toBe('supercell');
+    expect(stormOutlook({ ...base, liftKm: 1 }).kind).toBe('capped');
+    expect(stormOutlook({ ...base, dewC: 12, lapse: 6 }).kind).toBe('stable');
+  });
+  it('chapter 2 challenges', () => {
+    expect(tradesSolved(0.85, 100)).toBe(true);
+    expect(tradesSolved(0.8, 100)).toBe(false);
+    expect(tradesSolved(0.9, 100)).toBe(false);
+    expect(jetSolved(0.7)).toBe(true);
+    expect(jetSolved(0.65)).toBe(false);
+    expect(rainSolved({ ...FRONT_DEFAULTS, warmC: 20, warmDewC: 18 })).toBe(true);
+    expect(rainSolved(FRONT_DEFAULTS)).toBe(false);
+    expect(rainSolved({ ...FRONT_DEFAULTS, speed: 20 })).toBe(false);
+    expect(lagSolved(8)).toBe(true);
+    expect(lagSolved(10)).toBe(false);
+    expect(leastLiftSolved({ ...INGREDIENT_DEFAULTS, liftKm: 2.7 })).toBe(true);
+    expect(leastLiftSolved({ ...INGREDIENT_DEFAULTS, liftKm: 2.8 })).toBe(false);
+    expect(floodSolved({ rate: 48, width: 10, cells: 3, speed: 4 })).toBe(true);
+    expect(floodSolved({ rate: 48, width: 10, cells: 3, speed: 4.5 })).toBe(false);
+    expect(thresholdSolved({ ...PACIFIC_DEFAULTS, coupling: 0.025 })).toBe(true);
+    expect(thresholdSolved({ ...PACIFIC_DEFAULTS, coupling: 0.03 })).toBe(false);
+    expect(laNinaSolved(1.8)).toBe(true);
+    expect(laNinaSolved(1.0)).toBe(false);
+    expect(steadyColdSolved({ latitude: 55, continentality: 0.35, elevation: 0 })).toBe(true);
+    expect(steadyColdSolved(STATION_DEFAULTS)).toBe(false);
+    expect(steadiestSolved(6)).toBe(true);
+    expect(steadiestSolved(0)).toBe(false);
+  });
+  it('places the Hadley cell’s edge with the rotation rate', () => {
+    expect(circulation(1, 1 / 3).cells.length).toBe(3);
+    expect(circulation(0.5, 1 / 3).cells.length).toBe(1);
+    expect(circulation(2, 1 / 3).hadleyEdge).toBeCloseTo(circulation(1, 1 / 3).hadleyEdge / 2, 0);
   });
 });
