@@ -4,7 +4,8 @@
 // York, at the coordinates the time zone database gives for it. That needs no permission and
 // no lookup. The small target beside the city asks the browser for the reader's actual
 // location instead; it's rounded to about 10 km, kept in memory for this visit only, and never
-// stored. The forecast comes straight from Open-Meteo. If anything fails, the footer hides.
+// stored. The forecast comes straight from Open-Meteo. If anything fails, the weather hides and
+// only the credit on the right remains.
 
 import { useEffect, useState } from 'react';
 
@@ -147,43 +148,56 @@ export function SiteFooter() {
     );
   };
 
-  if (!place || !weather) return null;
+  return (
+    <footer className="sf">
+      <div className="sf-row">
+        {place && weather ? <WeatherLine place={place} weather={weather} locating={locating} onLocate={locate} /> : <span />}
+        <p className="sf-credit">
+          created by{' '}
+          <a href="https://tbts.tl" target="_blank" rel="noopener">
+            tbts.tl
+          </a>
+        </p>
+      </div>
+    </footer>
+  );
+}
+
+function WeatherLine({ place, weather, locating, onLocate }: { place: Place; weather: Weather; locating: boolean; onLocate: () => void }) {
   const h = Math.floor(weather.daylightMinutes / 60);
   const m = weather.daylightMinutes % 60;
   const canLocate = place.name !== null && typeof navigator !== 'undefined' && 'geolocation' in navigator;
 
   return (
-    <footer className="sf">
-      <p>
-        <WeatherIcon icon={weather.icon} />
-        <span>
-          {weather.temperature}°{place.unit} and {weather.sky} {place.name ? 'in ' : ''}
-          <a href="https://open-meteo.com/" target="_blank" rel="noopener" title="Weather by Open-Meteo">
-            {place.name ?? 'near you'}
-          </a>
-        </span>
-        {canLocate && (
-          <button
-            type="button"
-            className={locating ? 'sf-locate busy' : 'sf-locate'}
-            onClick={locate}
-            aria-label="Use my location for the weather"
-            title="Use my location"
-            aria-busy={locating}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-              <circle cx="8" cy="8" r="4.5" />
-              <path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15" />
-              <circle className="sf-dot" cx="8" cy="8" r="1" />
-            </svg>
-          </button>
-        )}
-        <span aria-hidden="true">·</span>
-        <span>
-          {h}h {m}m of daylight today
-        </span>
-      </p>
-    </footer>
+    <p>
+      <WeatherIcon icon={weather.icon} />
+      <span>
+        {weather.temperature}°{place.unit} and {weather.sky} {place.name ? 'in ' : ''}
+        <a href="https://open-meteo.com/" target="_blank" rel="noopener" title="Weather by Open-Meteo">
+          {place.name ?? 'near you'}
+        </a>
+      </span>
+      {canLocate && (
+        <button
+          type="button"
+          className={locating ? 'sf-locate busy' : 'sf-locate'}
+          onClick={onLocate}
+          aria-label="Use my location for the weather"
+          title="Use my location"
+          aria-busy={locating}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="4.5" />
+            <path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15" />
+            <circle className="sf-dot" cx="8" cy="8" r="1" />
+          </svg>
+        </button>
+      )}
+      <span aria-hidden="true">·</span>
+      <span>
+        {h}h {m}m of daylight today
+      </span>
+    </p>
   );
 }
 

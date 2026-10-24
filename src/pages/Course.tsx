@@ -16,7 +16,7 @@ export function Course() {
   const resume = current ?? LESSONS[0];
 
   useEffect(() => {
-    document.title = 'Electricity & Energy Markets · FTGU';
+    document.title = 'FTGU | Electricity & Energy';
   }, []);
 
   return (

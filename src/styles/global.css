@@ -117,8 +117,10 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
    the window it stays pinned to the bottom, with the page color behind it. */
 .sf { position: sticky; bottom: 0; margin-top: 32px; padding: 12px 0 16px; background: var(--bg); }
 .sf::before { content: ''; display: block; width: 40px; height: 1px; background: var(--rule-strong); }
-.sf p { margin: 24px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--muted); }
+.sf-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 24px; margin-top: 24px; }
+.sf p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--muted); }
 .sf a { color: var(--muted); }
+.sf-credit { margin-left: auto; }
 .sf-icon { flex: none; fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .sf-flake { fill: var(--muted); stroke: none; }
 /* The target beside the city: a 44px hit area that doesn't push the line apart. */
