@@ -32,8 +32,8 @@ export function Course() {
       </header>
 
       <p className="lede">
-        Flip a switch and a lamp turns on. Somewhere, a generator works a little harder to keep up — and a market decided, minutes earlier, who would be paid to do
-        it. This course explains both halves, from a single battery to a grid of your own.
+        Flip a switch and a lamp turns on. Somewhere, a generator works a little harder to keep up — and a market decided, minutes earlier, who would be paid to
+        do it. This course explains both halves, from a single battery to a grid of your own.
       </p>
       <ResumeCard lesson={resume} started={!!current} />
 
@@ -61,33 +61,35 @@ export function Course() {
                     <span className="row-m">{status}</span>
                   </button>
                 </h3>
-                {isOpen && (
-                  <ol className="rows rows-in" id={`chapter-${c.n}`}>
-                    {c.lessons.map((l) => {
-                      const isDone = solved(l.id);
-                      const isCurrent = l.id === current?.id;
-                      const cls = 'row' + (isDone ? ' done' : '') + (isCurrent ? ' now' : '');
-                      const mark = isCurrent ? 'Up next' : isDone ? 'Done' : '';
-                      return (
-                        <li key={l.id}>
-                          {hasLesson(l.id) ? (
-                            <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
-                              <span className="row-n">{l.id}</span>
-                              <span className="row-t">{l.title}</span>
-                              <span className="row-m">{mark}</span>
-                            </a>
-                          ) : (
-                            <div className={cls + ' done'}>
-                              <span className="row-n">{l.id}</span>
-                              <span className="row-t">{l.title}</span>
-                              <span className="row-m">Soon</span>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
+                <div className={isOpen ? 'fold open' : 'fold'} id={`chapter-${c.n}`} inert={!isOpen}>
+                  <div className="fold-in">
+                    <ol className="rows rows-in">
+                      {c.lessons.map((l) => {
+                        const isDone = solved(l.id);
+                        const isCurrent = l.id === current?.id;
+                        const cls = 'row' + (isDone ? ' done' : '') + (isCurrent ? ' now' : '');
+                        const mark = isCurrent ? 'Up next' : isDone ? 'Done' : '';
+                        return (
+                          <li key={l.id}>
+                            {hasLesson(l.id) ? (
+                              <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
+                                <span className="row-n">{l.id}</span>
+                                <span className="row-t">{l.title}</span>
+                                <span className="row-m">{mark}</span>
+                              </a>
+                            ) : (
+                              <div className={cls + ' done'}>
+                                <span className="row-n">{l.id}</span>
+                                <span className="row-t">{l.title}</span>
+                                <span className="row-m">Soon</span>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                </div>
               </li>
             );
           })}

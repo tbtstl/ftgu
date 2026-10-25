@@ -110,7 +110,12 @@ button { font-family: inherit; letter-spacing: inherit; }
 /* Lists of rows (courses, contents, previous/next): number, title, a note on the right. */
 .rows { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
 .rows > li { border-top: 1px solid var(--rule); }
-.rows-in { margin-bottom: 12px; }
+.rows-in { margin: 0 0 12px 20px; }
+/* A chapter's lessons open and close smoothly rather than appearing all at once. */
+.fold { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 220ms ease; }
+.fold.open { grid-template-rows: 1fr; opacity: 1; }
+.fold-in { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .fold { transition: none; } }
 .rows-in > li { border-top: 0; }
 .row-h { margin: 0; font: inherit; }
 .row {
