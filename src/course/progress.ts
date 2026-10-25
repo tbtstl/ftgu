@@ -4,6 +4,7 @@
 // works without it.
 
 import { useSyncExternalStore } from 'react';
+import { CHALLENGES } from './challenges';
 
 const KEY = 'emc.progress.v1';
 const LAST_KEY = 'emc.last.v1';
@@ -49,6 +50,13 @@ export function markSolved(lessonId: string, challengeId: string) {
   const done = p[lessonId] ?? [];
   if (done.includes(challengeId)) return;
   write({ ...p, [lessonId]: [...done, challengeId] });
+}
+
+/** How many of a lesson's challenges are solved, out of how many it has. Done when they match. */
+export function lessonProgress(p: Progress, lessonId: string): { solved: number; total: number; done: boolean } {
+  const ids = CHALLENGES[lessonId] ?? [];
+  const solved = ids.filter((id) => p[lessonId]?.includes(id)).length;
+  return { solved, total: ids.length, done: ids.length > 0 && solved === ids.length };
 }
 
 /** Remember the lesson the reader is on. */

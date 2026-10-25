@@ -9,6 +9,8 @@ export interface CourseMeta {
   n: string;
   /** Short name for lists: "Natural gas". */
   name: string;
+  /** Full title: "Electricity & Energy Markets". */
+  title: string;
   /** Where the course lives, once it has lessons. */
   href?: string;
   lessons?: number;
@@ -19,6 +21,7 @@ export const COURSES: CourseMeta[] = OUTLINES.map((c, i) => {
   return {
     n: String(i + 1).padStart(2, '0'),
     name: c.short,
+    title: c.title,
     ...(written > 0 ? { href: courseHref(c.slug), lessons: written } : {}),
   };
 });

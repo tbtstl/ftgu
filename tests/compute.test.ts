@@ -3281,7 +3281,8 @@ describe('chip power', () => {
     it('is fast enough to redraw the curve', () => {
       const t = performance.now();
       procurementSweep({ ...PROCUREMENT_DEFAULTS, growth: 0.071 }, Array.from({ length: 81 }, (_, i) => i * 10));
-      expect(performance.now() - t).toBeLessThan(100);
+      // About 35 ms on its own; the margin covers the whole suite running at once.
+      expect(performance.now() - t).toBeLessThan(250);
     });
   });
 

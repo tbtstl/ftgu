@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { courseLessons, getCourse, getLesson, hasLesson } from '../course/registry';
 import { lessonHref } from '../course/router';
-import { useLastLesson, useProgress } from '../course/progress';
+import { lessonProgress, useLastLesson, useProgress } from '../course/progress';
 import { Crumbs } from '../framework/Page';
+import { RunnerMark } from '../framework/RunnerMark';
+import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
 /** A course page: a short introduction, then the contents, chapter by chapter. */
@@ -15,19 +17,18 @@ export function Course({ slug = 'electricity' }: { slug?: string }) {
   const LESSONS = courseLessons(slug);
   const CHAPTERS = course?.chapters ?? [];
   const [open, setOpen] = useState<Record<number, boolean>>(() => ({ [current?.chapter ?? 1]: true }));
-  const solved = (id: string) => (progress[id]?.length ?? 0) > 0;
   const resume = current ?? LESSONS.find((l) => hasLesson(l.id));
 
   useEffect(() => {
-    document.title = course ? `${course.title} · Ground Up` : 'Ground Up';
+    document.title = course ? `FTGU | ${course.title.split(':')[0]}` : 'From The Ground Up';
   }, [course]);
 
   if (!course) {
     return (
       <main className="col page">
-        <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: 'Not found' }]} />
+        <Crumbs items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: 'Not found' }]} />
         <p className="lede">
-          There’s no course at this address. <a href="#/">Back to Ground Up</a>
+          There’s no course at this address. <a href="#/">Back to the home page</a>
         </p>
         <SiteFooter />
       </main>
@@ -36,7 +37,7 @@ export function Course({ slug = 'electricity' }: { slug?: string }) {
 
   return (
     <main className="col page">
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: course.short }]} />
+      <Crumbs items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: course.short }]} />
 
       <header className="hdr">
         <h1 className="name">{course.title}</h1>
@@ -47,13 +48,7 @@ export function Course({ slug = 'electricity' }: { slug?: string }) {
 
       <p className="lede">{course.lede}</p>
       {resume ? (
-        <p className="lede-2">
-          {current ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-          <a href={lessonHref(resume.id)}>
-            {resume.num} {resume.title}
-          </a>
-          .
-        </p>
+        <ResumeCard lesson={resume} started={!!current} />
       ) : (
         <p className="lede-2">This course is being written. Its contents are below.</p>
       )}
@@ -65,8 +60,9 @@ export function Course({ slug = 'electricity' }: { slug?: string }) {
         <ol className="rows">
           {CHAPTERS.map((c) => {
             const isOpen = !!open[c.n];
-            const done = c.lessons.filter((l) => solved(l.id)).length;
-            const status = done === c.lessons.length ? 'Done' : done > 0 ? `${done} of ${c.lessons.length}` : `${c.lessons.length} lessons`;
+            const done = c.lessons.filter((l) => lessonProgress(progress, l.id).done).length;
+            const complete = done === c.lessons.length;
+            const status = complete ? 'Done' : done > 0 ? `${done} of ${c.lessons.length}` : `${c.lessons.length} lessons`;
             return (
               <li key={c.n}>
                 <h3 className="row-h">
@@ -79,36 +75,39 @@ export function Course({ slug = 'electricity' }: { slug?: string }) {
                   >
                     <span className="row-n">{c.n}</span>
                     <span className="row-t">{c.title}</span>
-                    <span className="row-m">{status}</span>
+                    <span className={complete ? 'row-m ok' : 'row-m'}>{status}</span>
                   </button>
                 </h3>
-                {isOpen && (
-                  <ol className="rows rows-in" id={`chapter-${c.n}`}>
-                    {c.lessons.map((l) => {
-                      const isDone = solved(l.id);
-                      const isCurrent = l.id === current?.id;
-                      const cls = 'row' + (isDone ? ' done' : '') + (isCurrent ? ' now' : '');
-                      const mark = isCurrent ? 'Up next' : isDone ? 'Done' : '';
-                      return (
-                        <li key={l.id}>
-                          {hasLesson(l.id) ? (
-                            <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
-                              <span className="row-n">{l.num}</span>
-                              <span className="row-t">{l.title}</span>
-                              <span className="row-m">{mark}</span>
-                            </a>
-                          ) : (
-                            <div className={cls + ' done'}>
-                              <span className="row-n">{l.num}</span>
-                              <span className="row-t">{l.title}</span>
-                              <span className="row-m">Soon</span>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
+                <div className={isOpen ? 'fold open' : 'fold'} id={`chapter-${c.n}`} inert={!isOpen}>
+                  <div className="fold-in">
+                    <ol className="rows rows-in">
+                      {c.lessons.map((l) => {
+                        const lp = lessonProgress(progress, l.id);
+                        const isCurrent = l.id === current?.id;
+                        const cls = 'row' + (lp.done ? ' done' : '') + (isCurrent ? ' now' : '');
+                        return (
+                          <li key={l.id}>
+                            {hasLesson(l.id) ? (
+                              <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
+                                <span className="row-n">{l.num}</span>
+                                <span className="row-t">{l.title}</span>
+                                <span className={lp.done ? 'row-m ok' : 'row-m'} aria-label={`${lp.solved} of ${lp.total} challenges solved`}>
+                                  {lp.solved}/{lp.total}
+                                </span>
+                              </a>
+                            ) : (
+                              <div className={cls + ' done'}>
+                                <span className="row-n">{l.num}</span>
+                                <span className="row-t">{l.title}</span>
+                                <span className="row-m">Soon</span>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                </div>
               </li>
             );
           })}

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { getChapter, getCourse, getLesson, neighbors, type LessonMeta } from '../course/registry';
 import { courseHref, lessonHref } from '../course/router';
 import { markVisited } from '../course/progress';
+import { RunnerMark } from './RunnerMark';
 import { TwoUpLayout, useWideViewport } from './twoUp';
 
 export const LessonContext = createContext<string>('');
@@ -14,9 +15,11 @@ export function useLessonId(): string {
 export interface Crumb {
   label: string;
   href?: string;
+  /** Shown in place of the label, which stays as the link's accessible name. */
+  icon?: ReactNode;
 }
 
-/** "Ground Up / Electricity / 4.4": the last crumb is the current page. */
+/** "From The Ground Up / Electricity / 4.4": the last crumb is the current page; a crumb may show an icon in place of its label. */
 export function Crumbs({ items }: { items: Crumb[] }) {
   return (
     <nav aria-label="Breadcrumb">
@@ -28,7 +31,13 @@ export function Crumbs({ items }: { items: Crumb[] }) {
                 /
               </span>
             )}
-            {c.href ? <a href={c.href}>{c.label}</a> : <span aria-current="page">{c.label}</span>}
+            {c.href ? (
+              <a href={c.href} aria-label={c.icon ? c.label : undefined} className={c.icon ? 'crumb-icon' : undefined}>
+                {c.icon ?? c.label}
+              </a>
+            ) : (
+              <span aria-current="page">{c.label}</span>
+            )}
           </li>
         ))}
       </ol>
@@ -36,14 +45,16 @@ export function Crumbs({ items }: { items: Crumb[] }) {
   );
 }
 
-/** The thin bar above a lesson: where it sits in the school, and a way back to the contents. */
+/** The thin bar above a lesson: the runner (home), where the lesson sits, and the contents. */
 export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean }) {
   const meta = getLesson(id);
   const course = getCourse(meta?.course ?? (id.includes('/') ? id.split('/')[0] : 'electricity'));
   const home = courseHref(course?.slug);
   return (
     <header className={wide ? 'sh wide' : 'sh'}>
-      <Crumbs items={[{ label: 'Ground Up', href: '#/' }, { label: course?.short ?? 'Course', href: home }, { label: meta?.num ?? id }]} />
+      <Crumbs
+        items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: course?.short ?? 'Course', href: home }, { label: meta?.num ?? id }]}
+      />
       <a className="sh-link" href={home}>
         Contents
       </a>
@@ -64,7 +75,7 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
   const { prev, next } = neighbors(id);
 
   useEffect(() => {
-    document.title = meta ? `${meta.num} ${meta.title} · Ground Up` : 'Ground Up';
+    document.title = meta ? `FTGU | ${meta.num} ${meta.title}` : 'From The Ground Up';
     if (meta) markVisited(meta.id);
   }, [meta]);
 

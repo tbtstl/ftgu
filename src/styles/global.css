@@ -1,4 +1,4 @@
-/* Design system: Ground Up. One narrow reading column in Inter, near-black on near-white,
+/* Design system: From The Ground Up (FTGU). One narrow reading column in Inter, near-black on near-white,
    muted gray for everything secondary, and faint rules only where rows need separating.
    Color is reserved for the concepts in the figures, and matching terms in the prose. */
 
@@ -61,13 +61,37 @@ button { font-family: inherit; letter-spacing: inherit; }
 
 /* Page shell: the home and course pages are one column; lessons get a thin header. */
 .col { max-width: calc(35rem + 48px); margin: 0 auto; padding: 0 24px; }
-.page { padding-top: 72px; padding-bottom: 16px; }
+.page { padding-top: 48px; padding-bottom: 16px; }
 .name { margin: 0; font-size: 16px; font-weight: 500; line-height: 1.5; }
 .dek { margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .hdr { margin-top: 32px; }
-.lede { margin: 32px 0 0; }
-.lede-2 { margin: 16px 0 0; }
-.sec { margin-top: 48px; }
+
+/* The logo beside the site's name. A click bursts it into a new color in 200 ms as the runner
+   dashes a step forward and settles back. */
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; margin: 0 -2px 0 -2px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.logo:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.logo-mark { width: 40px; height: 40px; }
+.logo-mark.dash { animation: logo-dash 200ms cubic-bezier(.3, .7, .4, 1); }
+@keyframes logo-dash { 0% { transform: none; } 40% { transform: translateX(3px) skewX(-8deg); } 100% { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .logo-mark.dash { animation: none; } }
+.lede { margin: 24px 0 0; }
+/* The way back into the course: bordered like a challenge, the whole box one link. */
+.resume {
+  display: block; margin: 20px 0 0; padding: 14px 18px 16px; border: 1px solid var(--rule-strong); border-radius: 6px;
+  color: var(--text); text-decoration: none;
+}
+.resume:hover { color: var(--text); border-color: #cfcfca; }
+.resume:hover .resume-t { text-decoration: underline; text-decoration-color: rgba(17, 17, 17, .25); text-underline-offset: 3px; }
+.resume:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.resume-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.resume-t { display: block; margin-top: 4px; }
+.resume-c { display: block; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.sec { margin-top: 40px; }
 .label { margin: 0 0 8px; font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--muted); }
 
 .crumbs { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; font-size: 14px; line-height: 1.5; color: var(--muted); }
@@ -75,6 +99,7 @@ button { font-family: inherit; letter-spacing: inherit; }
 .crumb-sep { padding: 0 8px; }
 .crumbs a, .sh-link { display: inline-flex; align-items: center; min-height: 44px; color: var(--muted); text-decoration: none; }
 .crumbs a:hover, .sh-link:hover { color: var(--text); }
+.crumb-icon { margin-left: -2px; }
 .crumbs [aria-current] { color: var(--text); font-variant-numeric: tabular-nums; }
 .sh {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 24px;
@@ -85,7 +110,12 @@ button { font-family: inherit; letter-spacing: inherit; }
 /* Lists of rows (courses, contents, previous/next): number, title, a note on the right. */
 .rows { list-style: none; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
 .rows > li { border-top: 1px solid var(--rule); }
-.rows-in { margin-bottom: 12px; }
+.rows-in { margin: 0 0 12px 20px; }
+/* A chapter's lessons open and close smoothly rather than appearing all at once. */
+.fold { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 220ms ease, opacity 220ms ease; }
+.fold.open { grid-template-rows: 1fr; opacity: 1; }
+.fold-in { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .fold { transition: none; } }
 .rows-in > li { border-top: 0; }
 .row-h { margin: 0; font: inherit; }
 .row {
@@ -100,15 +130,18 @@ button.row { cursor: pointer; }
 .row.done { color: var(--muted); }
 .row.now { font-weight: 500; }
 .row.now .row-m { color: var(--text); }
+.row-m.ok, .row.now .row-m.ok { color: #2f6b2a; }
 a.row:hover .row-t, button.row:hover .row-t { text-decoration: underline; text-decoration-color: rgba(17, 17, 17, .25); text-underline-offset: 3px; }
 a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
 /* Footer: a short rule and today's weather where the reader is. When the page is taller than
    the window it stays pinned to the bottom, with the page color behind it. */
-.sf { position: sticky; bottom: 0; margin-top: 48px; padding: 16px 0 24px; background: var(--bg); }
+.sf { position: sticky; bottom: 0; margin-top: 32px; padding: 12px 0 16px; background: var(--bg); }
 .sf::before { content: ''; display: block; width: 40px; height: 1px; background: var(--rule-strong); }
-.sf p { margin: 24px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--muted); }
+.sf-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 24px; margin-top: 24px; }
+.sf p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 20px; color: var(--muted); }
 .sf a { color: var(--muted); }
+.sf-credit { margin-left: auto; }
 .sf-icon { flex: none; fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .sf-flake { fill: var(--muted); stroke: none; }
 /* The target beside the city: a 44px hit area that doesn't push the line apart. */
@@ -325,7 +358,7 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 .chal { margin: 2em 0 1em; padding: 14px 18px 16px; border: 1px solid var(--rule-strong); border-radius: 6px; }
 .chal-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .chal-st { display: inline-flex; align-items: center; gap: 6px; }
-.chal-st.ok { color: #2f6b2a; }
+.chal-st.ok, .chal-h.ok { color: #2f6b2a; }
 .chal-q { margin: 4px 0 0; font-size: 16px; font-weight: 400; line-height: 1.6; }
 .chal-q b, .chal-q strong, .chal-q .k { font-weight: 400; }
 .chal-s { margin-top: 4px; font-size: 14px; line-height: 1.55; color: var(--muted); }

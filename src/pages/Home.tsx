@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import { COURSES } from '../course/courses';
 import { getCourse, getLesson, LESSONS } from '../course/registry';
-import { lessonHref } from '../course/router';
 import { useLastLesson } from '../course/progress';
+import { Logo } from './Logo';
+import { ResumeCard } from './ResumeCard';
 import { SiteFooter } from './SiteFooter';
 
 export function Home() {
@@ -10,28 +11,24 @@ export function Home() {
   const lesson = (last && getLesson(last)) || LESSONS[0];
 
   useEffect(() => {
-    document.title = 'Ground Up';
+    document.title = 'From The Ground Up';
   }, []);
 
   return (
     <main className="col page">
-      <header>
-        <h1 className="name">Ground Up</h1>
-        <p className="dek">Seven courses in how markets work</p>
+      <header className="brand">
+        <Logo />
+        <div>
+          <h1 className="name">From The Ground Up</h1>
+          <p className="dek">Understand markets from first principles.</p>
+        </div>
       </header>
 
       <p className="lede">
-        Ground Up teaches how the markets for real-world resources work, starting from the physical systems underneath them. You build an understanding of
-        supply, price and risk on that foundation, through simulations you can change.
+        Learn how real-world markets work by exploring the physical systems behind them. Experiment with interactive simulations, discover how constraints shape
+        prices, and develop trading strategies from the ground up.
       </p>
-      <p className="lede-2">
-        {last ? 'Continue where you left off: ' : 'Start with the first lesson: '}
-        <a href={lessonHref(lesson.id)}>
-          {lesson.course === 'electricity' ? '' : `${getCourse(lesson.course)?.short}: `}
-          {lesson.num} {lesson.title}
-        </a>
-        .
-      </p>
+      <ResumeCard lesson={lesson} started={!!last} course={getCourse(lesson.course)?.title} />
 
       <section className="sec" aria-labelledby="courses">
         <h2 className="label" id="courses">

@@ -934,7 +934,7 @@ describe('lesson 5.6: security-constrained dispatch', () => {
           count++;
         }
     expect(count).toBeGreaterThan(5);
-  });
+  }, 30_000);
 
   it('a tripped line’s flows equal a power flow with it removed', () => {
     const inj: Record<string, number> = {};

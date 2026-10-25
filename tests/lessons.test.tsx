@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { ALL_LESSONS, lessonModulePath, OUTLINES } from '../src/course/registry';
+import { CHALLENGES } from '../src/course/challenges';
 import { COURSES } from '../src/course/courses';
 import { Course } from '../src/pages/Course';
 import { Home } from '../src/pages/Home';
@@ -26,6 +27,18 @@ describe('home', () => {
     const { container, unmount } = render(<Home />);
     expect(container.querySelectorAll('.rows > li').length).toBe(COURSES.length);
     unmount();
+  });
+});
+
+describe('challenge table', () => {
+  const sources = import.meta.glob<string>(['../src/lessons/ch*/L*_*.tsx', '../src/lessons/*/ch*/L*_*.tsx'], { query: '?raw', import: 'default', eager: true });
+  it('lists every challenge id each lesson renders', () => {
+    for (const lesson of ALL_LESSONS) {
+      const src = sources[pathOf(lesson.id)];
+      if (!src) continue;
+      const ids = [...new Set(Array.from(src.matchAll(/<Challenge\b[^>]*?\bid="([^"]+)"/gs), (m) => m[1]))].sort();
+      expect(CHALLENGES[lesson.id], lesson.id).toEqual(ids);
+    }
   });
 });
 
