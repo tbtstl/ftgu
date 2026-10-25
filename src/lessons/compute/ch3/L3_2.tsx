@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
-  Eq,
   FigRef,
   Figure,
   GRAPHIC,
@@ -11,7 +10,6 @@ import {
   K,
   Legend,
   LessonPage,
-  Op,
   P,
   Readouts,
   Segmented,
@@ -26,10 +24,11 @@ import {
   tint,
   useScenario,
 } from '../../../framework';
-import { BANDWIDTH_EFFICIENCY, decodeStep, maxBatch, memoryPlan, prefillS, servingPoint, type ServeConfig, type ServingPoint } from '../../../engines/compute/inference';
+import { BANDWIDTH_EFFICIENCY, decodeStep, maxBatch, memoryPlan, prefillS, servingPoint, tensorParallelS, type ServeConfig, type ServingPoint } from '../../../engines/compute/inference';
 import type { Precision } from '../../../engines/compute/roofline';
 import { ACCELERATORS, type GpuId } from '../../../model/compute/hardware';
 import { MODELS, kvBytesPerToken, type ModelId } from '../../../model/compute/models';
+import { WORKLOADS, type ServingWorkload } from '../../../model/compute/workloads';
 
 // ---------------------------------------------------------------------------
 // The model: one copy of a language model on `tp` GPUs of one server, serving a batch of requests.
@@ -50,8 +49,8 @@ export interface ServeState {
 export const SERVE_DEFAULTS: ServeState = { model: '70B', gpu: 'A', tp: 4, precision: 'bf16', batchExp: 0, input: 1000, output: 300 };
 export const BATCH_EXP_MAX = 10;
 export const BATCH_EXP_STEP = 0.25;
-/** The challenge's limit on the time between a user's tokens, s. */
-export const TPOT_LIMIT = 0.04;
+/** The challenge's limit on the time between a user's tokens, s: the chat assistant's promise, kept through Lessons 3.4 and 3.5. */
+export const TPOT_LIMIT = (WORKLOADS.chat70 as ServingWorkload).tpotMax;
 export const LIMIT_DEFAULTS = { limitMs: 20 };
 
 /** The batch the slider asks for. */
@@ -139,7 +138,7 @@ export interface Cheapest {
 /**
  * Challenge b: the fewest GPU-hours per million output tokens for the 70B model on A-class GPUs in
  * BF16, with the chat assistant's prompts and replies, while every user gets a token at least every
- * 40 ms — over every split and every batch the slider can reach.
+ * TPOT_LIMIT (40 ms) — over every split and every batch the slider can reach.
  */
 export function cheapestA40(input = 1000, output = 300): Cheapest {
   let best: Cheapest = { tp: 0, batch: 0, gpuHoursPerM: Infinity, tpot: 0 };
@@ -156,10 +155,34 @@ export function cheapestA40(input = 1000, output = 300): Cheapest {
 
 const CHEAPEST = cheapestA40();
 
+/** The reply length at which the prose shows eight GPUs per copy overtaking four. */
+export const LONG_REPLY = 1500;
+
+/** The cheapest point within the chat promise for each split, at a given reply length (every batch the slider reaches). */
+export function cheapestBySplit(input = 1000, output = 300): Record<number, Cheapest> {
+  const out: Record<number, Cheapest> = {};
+  for (const tp of [2, 4, 8]) {
+    const c: ServeConfig = { model: '70B', gpu: 'A', tp, precision: 'bf16' };
+    let best: Cheapest = { tp, batch: 0, gpuHoursPerM: Infinity, tpot: 0 };
+    for (const b of sliderBatches(maxBatch(c, input + output))) {
+      const p = servingPoint(c, b, input, output);
+      if (p.fits && p.tpot <= TPOT_LIMIT && p.gpuHoursPerMTokens < best.gpuHoursPerM) best = { tp, batch: b, gpuHoursPerM: p.gpuHoursPerMTokens, tpot: p.tpot };
+    }
+    out[tp] = best;
+  }
+  return out;
+}
+
 export function cheapestSolved(s: ServeState): boolean {
   if (s.model !== '70B' || s.gpu !== 'A' || s.precision !== 'bf16' || s.input !== 1000 || s.output !== 300) return false;
   const r = runServe(s);
   return r.fits && r.point.tpot <= TPOT_LIMIT && r.point.gpuHoursPerMTokens <= CHEAPEST.gpuHoursPerM * 1.0001;
+}
+
+/** The smallest batch at which a decoding step is limited by arithmetic rather than memory (Infinity: none up to `max`). */
+export function computeBoundFrom(c: ServeConfig, context: number, max = 4096): number {
+  for (let b = 1; b <= max; b++) if (decodeStep(c, b, context).bound === 'compute') return b;
+  return Infinity;
 }
 
 /** Largest batch whose time per token stays within `limitS` (time per token grows with the batch). */
@@ -467,7 +490,6 @@ export default function Lesson() {
       perRequestMB: (1300 * kvBytesPerToken(MODELS['70B'])) / 1e6,
       twoRoom: memoryPlan(two),
       twoMax: maxBatch(two, 1300),
-      eight1: servingPoint(eight, 1, 1000, 300),
       eightBest: servingPoint(eight, best8, 1000, 300),
       eightBatch: best8,
       twoBest: servingPoint(two, maxBatch(two, 1300), 1000, 300),
@@ -477,13 +499,21 @@ export default function Lesson() {
       bTwoBest: servingPoint(bTwo, maxBatch(bTwo, 1300), 1000, 300),
       frontierBf16,
       frontierA8Max: maxBatch(frontierA8, 1300),
+      crossover: computeBoundFrom(c, 1000 + 300 / 2),
+      eightMax: maxBatch(eight, 1300),
+      eightFull: servingPoint(eight, maxBatch(eight, 1300), 1000, 300),
       at20: largestWithin(c, 0.02, 1000, 300),
       at16: largestWithin(c, 0.016, 1000, 300),
+      eightPrefill: prefillS(eight, 1000),
+      eightPrefillEx: tensorParallelS(eight, 1000),
+      longPerRequestMB: ((1000 + LONG_REPLY) * kvBytesPerToken(MODELS['70B'])) / 1e6,
+      long: cheapestBySplit(1000, LONG_REPLY),
     };
   }, []);
   const at20 = servingPoint(configOf(SERVE_DEFAULTS), ref.at20, 1000, 300);
   const userRate = (t: number) => fmt(1 / t);
   const bwPct = fmt(BANDWIDTH_EFFICIENCY * 100);
+  const limitText = `${fmt(TPOT_LIMIT * 1e3)} ms`;
 
   const statusA = s.model !== '400B'
     ? 'Choose the 400B model first.'
@@ -498,7 +528,7 @@ export default function Lesson() {
         : !r.fits
           ? 'The model doesn’t fit on that many A-class GPUs.'
           : p.tpot > TPOT_LIMIT
-            ? `Each user now waits ${msText(p.tpot)} per token, more than 40 ms.`
+            ? `Each user now waits ${msText(p.tpot)} per token, more than ${limitText}.`
             : `${ghText(p.gpuHoursPerMTokens)} GPU-hours per million tokens, with a token every ${msText(p.tpot)}. Can it cost less?`;
 
   return (
@@ -564,8 +594,10 @@ export default function Lesson() {
       <P>
         With one request, the step takes {msText(ref.one.point.tpot)}, and almost all of it is reading. The 70B model’s {gbText(ref.planA4.weightBytes / 1e9)} of BF16
         weights are split four ways, {gbText(ref.one.weightsGB)} on each GPU, and at the {bwPct}% of the A-class’s {ACCELERATORS.A.bandwidthTBs} TB/s that we assume a serving
-        engine reaches, that takes {msText(ref.one.weightReadS)}. The arithmetic for one token takes {msText(ref.one.point.step.computeS)}. The other{' '}
-        {msText(ref.one.point.step.commS)} is the four GPUs exchanging partial results, twice in each of the model’s 80 layers. The user sees a token every{' '}
+        engine reaches, that takes {msText(ref.one.weightReadS)}. The arithmetic for one token takes {msText(ref.one.point.step.computeS)}. Each GPU holds a
+        quarter of every layer’s matrices — a split called <b>tensor parallelism</b> — so each computes only part of every result, and the four must add their
+        parts together with an all-reduce (<a href={lessonHref('compute/2.5')}>Lesson 2.5</a>) twice in each of the model’s 80 layers: that is the other{' '}
+        {msText(ref.one.point.step.commS)}. The user sees a token every{' '}
         {msText(ref.one.point.tpot)}, about {userRate(ref.one.point.tpot)} a second — faster than anyone reads — and the first one after{' '}
         {msText(ref.one.point.ttft)}, of which {msText(ref.one.prefill)} is the prefill.
       </P>
@@ -587,8 +619,10 @@ export default function Lesson() {
         The cache also changes what the step spends its time on. At {fmt(ref.mb)} requests, reading the caches takes {msText(ref.fullRun.cacheReadS)} on top of the{' '}
         {msText(ref.fullRun.weightReadS)} for the weights, and the arithmetic has grown to {msText(ref.full.step.computeS)}, still inside the reading time. A step now
         takes {msText(ref.full.tpot)} and yields {fmt(ref.full.tokensPerS)} tokens a second, {fmt(ref.full.tokensPerS / ref.one.point.tokensPerS)} times the single
-        request’s rate, yet the matrix units reach only {fmt(ref.full.utilization * 100)}% of their peak. Unlike the shared weights of Lesson 2.3, which batching
-        turns compute-bound after a few hundred vectors, every request brings its own cache to read, so decoding stays bound by memory.
+        request’s rate, yet the matrix units reach only {fmt(ref.full.utilization * 100)}% of their peak. Unlike the shared weights of Lesson 2.3, every request
+        brings its own cache to read, so the reading keeps growing with the batch. The arithmetic grows faster still, and would overtake the reading at
+        about {fmt(ref.crossover)} requests — but memory fills at {fmt(ref.mb)}, long before that. Split the model over eight GPUs, which have room
+        for {fmt(ref.eightMax)}, and a full batch does become limited by arithmetic.
       </P>
       <P>
         Memory can be scarce enough to make a setup useless. Split the 70B model over two A-class GPUs and the weights leave only {gbText(ref.twoRoom.kvBytes / 1e9)}{' '}
@@ -605,8 +639,9 @@ export default function Lesson() {
       />
 
       <P>
-        Fewer bytes per weight help twice over. In FP8, the format Lesson 1.4 met, the 70B model’s weights halve, so the four A-class GPUs have room for{' '}
-        {fmt(ref.fp8Max)} conversations instead of {fmt(ref.mb)}, and every step reads half as much. Whether the model answers as well is a question for the people who
+        Fewer bytes per weight help twice over. In FP8, the format <a href={lessonHref('compute/1.4')}>Lesson 1.4</a> met, the 70B model’s weights halve, so the
+        four A-class GPUs have room for {fmt(ref.fp8Max)} conversations instead of {fmt(ref.mb)}, and every step reads half the bytes of weights — though not of
+        cache, which stays in BF16. Whether the model answers as well is a question for the people who
         trained it: eight bits per weight usually lose little, but not nothing.
       </P>
 
@@ -614,28 +649,36 @@ export default function Lesson() {
       <P>
         An operator renting out a model counts its output in tokens and its expense in GPU-hours, so the number that matters is{' '}
         <b>GPU-hours per million tokens</b>. Serving one request at a time, the four GPUs need {ghText(ref.one.point.gpuHoursPerMTokens)} GPU-hours to write a million
-        tokens. Filled to {fmt(ref.mb)} requests, they need {ghText(ref.full.gpuHoursPerMTokens)}: the same hardware, for the same hour, produces{' '}
-        {fmt(ref.one.point.gpuHoursPerMTokens / ref.full.gpuHoursPerMTokens)} times as much. The cost of a token is a property of how the GPUs are used, far more than of
-        the GPUs themselves.
+        tokens. A bigger batch gets far more out of the same hours, and the split decides how big it can be: two GPUs have room for {fmt(ref.twoMax)} conversations,
+        four for {fmt(ref.mb)}, eight for {fmt(ref.eightMax)}.
       </P>
 
       <Challenge
         id="b"
         figure="Inference Serving Simulator"
-        question="Serve the 70B model on A-class GPUs with BF16 weights, 1,000-token prompts and 300-token replies, giving every user a token at least every 40 ms, for the fewest GPU-hours per million tokens."
+        question={`Predict first: for the chat assistant — the 70B model on A-class GPUs with BF16 weights, 1,000-token prompts and 300-token replies, and a token at least every ${limitText} for every user, the promise Lessons 3.4 and 3.5 keep too — which split costs least per token: two, four or eight GPUs per copy? Then find the setup with the fewest GPU-hours per million tokens.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${CHEAPEST.tp} GPUs and ${fmt(CHEAPEST.batch)} requests, ${ghText(CHEAPEST.gpuHoursPerM)} GPU-hours per million tokens with a token every ${msText(CHEAPEST.tpot)}. Two GPUs barely have room for a batch; eight spend so long exchanging results that even ${fmt(ref.eightBatch)} requests, the most that stay within 40 ms, cost ${ghText(ref.eightBest.gpuHoursPerMTokens)} GPU-hours per million.`}
+        success={`Solved: ${CHEAPEST.tp} GPUs and ${fmt(CHEAPEST.batch)} requests, memory full: ${ghText(CHEAPEST.gpuHoursPerM)} GPU-hours per million tokens, with a token every ${msText(CHEAPEST.tpot)}. Eight GPUs have room for three times the batch, but a full one takes ${msText(ref.eightFull.tpot)} a token there, past the promise, and exchanging results among eight GPUs costs more than the bigger batch saves.`}
       />
 
       <P>
-        The answer is a balance. Two GPUs are cheaper per copy but have room for only {fmt(ref.twoMax)} conversations, so they need{' '}
-        {ghText(ref.twoBest.gpuHoursPerMTokens)} GPU-hours per million tokens. Eight GPUs read their share of the weights faster, but the exchanges grow with the
-        number of GPUs and with the batch: {msText(ref.eight1.step.commS)} of every step with a single request, and by the time the batch reaches{' '}
-        {fmt(ref.eightBatch)} the step has run into the 40 ms limit, at {ghText(ref.eightBest.gpuHoursPerMTokens)} GPU-hours per million. Change the accelerator and
-        the numbers move a long way. Two B-class GPUs hold the 70B model with room for {fmt(ref.bTwoMax)} conversations and serve it for{' '}
-        {ghText(ref.bTwoBest.gpuHoursPerMTokens)} GPU-hours per million tokens — but a B-class hour is a different thing from an A-class hour, and comparing them needs
-        prices, which come in Chapter 5.
+        Filled to {fmt(ref.mb)} requests, the four GPUs need {ghText(ref.full.gpuHoursPerMTokens)} GPU-hours per million tokens: the same hardware, for the same hour,
+        produces {fmt(ref.one.point.gpuHoursPerMTokens / ref.full.gpuHoursPerMTokens)} times as much as with one request. The cost of a token is a property of how the
+        GPUs are used, far more than of the GPUs themselves — and the best use is a balance. Two GPUs are cheaper per copy but hold so few conversations that they need{' '}
+        {ghText(ref.twoBest.gpuHoursPerMTokens)} GPU-hours per million tokens. Eight GPUs read their share of the weights faster, but every exchange of results now
+        involves eight, in each step and above all while reading a prompt: a 1,000-token prompt takes them {msText(ref.eightPrefill)}, {msText(ref.eightPrefillEx)} of it
+        in exchanges, or {fmt(8 * ref.eightPrefill * 1e3)} GPU-milliseconds against four GPUs’ {fmt(4 * ref.one.prefill * 1e3)}. And by {fmt(ref.eightBatch)} requests
+        their step has run into the {limitText} limit, at {ghText(ref.eightBest.gpuHoursPerMTokens)} GPU-hours per million.
+      </P>
+      <P>
+        The balance depends on the work, too. Lengthen the replies to {fmt(LONG_REPLY)} tokens in the first demonstration and each conversation’s cache grows to{' '}
+        {fmt(ref.longPerRequestMB)} MB, so four GPUs have room for only {fmt(ref.long[4].batch)}, while eight, with three times the room, hold{' '}
+        {fmt(ref.long[8].batch)}. With each prompt now spread over five times as many tokens of reply, sharing every step among more requests matters more than the
+        exchanges, and eight GPUs come out cheaper: {ghText(ref.long[8].gpuHoursPerM)} GPU-hours per million against {ghText(ref.long[4].gpuHoursPerM)}. Back at
+        300-token replies, change the accelerator and the numbers move further still. Two B-class GPUs hold the 70B model with room for {fmt(ref.bTwoMax)} conversations
+        and serve it for {ghText(ref.bTwoBest.gpuHoursPerMTokens)} GPU-hours per million tokens — but a B-class hour is a different thing from an A-class hour, and
+        comparing them needs prices, which come in Chapter 5.
       </P>
 
       <H2>Latency limits the batch</H2>
@@ -656,13 +699,9 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Limit on time per token" tone="teal" value={limitMs} min={5} max={60} onChange={(v) => lim.set({ limitMs: v })} display={`${limitMs} ms`} />
-        <Eq label="Throughput equals batch divided by step time">
-          <span>tokens per second</span>
-          <Op>≈</Op>
-          <span>batch ÷ step time</span>
-          <Op>=</Op>
-          <span>{within > 0 && atLimit ? `${fmt(within)} ÷ ${msText(atLimit.tpot)}` : '—'}</span>
-        </Eq>
+        <Caption>{`Plotted for the setup in the first demonstration: the ${MODELS[s.model].name} on ${s.tp} ${g.short} GPU${s.tp > 1 ? 's' : ''} with ${s.precision.toUpperCase()} weights, ${fmt(
+          s.input,
+        )}-token prompts and ${fmt(s.output)}-token replies.`}</Caption>
       </Figure>
 
       <P>

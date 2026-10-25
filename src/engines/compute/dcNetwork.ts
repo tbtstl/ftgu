@@ -5,7 +5,7 @@
 
 import { ACCELERATORS, type GpuId } from '../../model/compute/hardware';
 
-/** Ports on each switch (64 ports of 400 Gb/s, a 51.2 Tb/s switch). */
+/** Ports on each switch (64 ports of 400 Gb/s, a 25.6 Tb/s switch). */
 export const SWITCH_PORTS = 64;
 export const SWITCH_PRICE = 40_000;
 /** One optical transceiver; each switch-to-switch link needs two. */

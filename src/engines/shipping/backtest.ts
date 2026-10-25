@@ -5,7 +5,7 @@
 import { summarize, type PnlSummary } from '../strategy/risk';
 import type { ClassId } from '../../model/shipping/trades';
 import type { CycleMonth } from './cycle';
-import { forecastPath, DEFAULT_ASSUMPTIONS } from './forecast';
+import { forecastPath, DEFAULT_ASSUMPTIONS, type ForecastAssumptions } from './forecast';
 import { DAYS_PER_MONTH, monthAverage } from './indices';
 import { ffaSettlement, forwardPrice, longRun, type Side } from './ffa';
 
@@ -31,6 +31,8 @@ export interface BacktestOptions {
   /** Months to test, [from, to). */
   from: number;
   to: number;
+  /** The fundamentals rule's forecast assumptions (default: DEFAULT_ASSUMPTIONS). */
+  forecast?: ForecastAssumptions;
 }
 
 export interface Trade {
@@ -74,7 +76,7 @@ export function decide(o: BacktestOptions, index: number[], hist: CycleMonth[], 
       return null;
     }
     case 'fundamental': {
-      const f = forecastPath(o.cls, hist, t, 1, DEFAULT_ASSUMPTIONS)[0].tce;
+      const f = forecastPath(o.cls, hist, t, 1, o.forecast ?? DEFAULT_ASSUMPTIONS)[0].tce;
       // The forecast is of the market rate; the index carries the routes' premiums too.
       const scale = monthAverage(index, t) / Math.max(1, hist[t].tce);
       const expected = f * scale;

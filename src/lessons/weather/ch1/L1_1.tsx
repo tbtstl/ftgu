@@ -28,6 +28,7 @@ import {
   EARTH_ABSORPTIVITY,
   EARTH_ALBEDO,
   K0,
+  SIGMA,
   SOLAR_CONSTANT,
   latitudeBalance,
   planetBalance,
@@ -43,8 +44,16 @@ export function greenhouseSolved(p: PlanetInput): boolean {
   return p.solar === SOLAR_CONSTANT && Math.abs(p.albedo - EARTH_ALBEDO) < 1e-9 && Math.abs(planetBalance(p).surfaceK - EARTH_SURFACE_K) < 0.5;
 }
 
+/** The surface's own balance at 288 K: what it radiates, less the sunlight it absorbs, is what the atmosphere must send back down, W/m². */
+export function backRadiationNeeded(surfaceK = EARTH_SURFACE_K): number {
+  const today = planetBalance({ solar: SOLAR_CONSTANT, albedo: EARTH_ALBEDO, absorptivity: 0 });
+  return SIGMA * surfaceK ** 4 - today.absorbed;
+}
+
 /** The range of peak poleward heat transport estimated for the real Earth, PW. */
 export const REAL_TRANSPORT_PW: [number, number] = [5, 6];
+/** The transport setting the prose quotes before the second challenge, so the reader can predict from it. */
+export const QUOTED_TRANSPORT = 0.2;
 export function transportSolved(d: number): boolean {
   const pk = latitudeBalance(d).peakTransportPW;
   return pk >= REAL_TRANSPORT_PW[0] && pk <= REAL_TRANSPORT_PW[1];
@@ -211,14 +220,16 @@ export default function Lesson() {
   const p = s.state;
   const b = planetBalance(p);
   const solved = greenhouseSolved(p);
-  const surfC = b.surfaceK - K0;
+  const reset = p.solar === SOLAR_CONSTANT && Math.abs(p.albedo - EARTH_ALBEDO) < 1e-9;
 
   const l = useScenario('latitude', { transport: 0 });
   const d = l.state.transport;
   const bal = useMemo(() => latitudeBalance(d), [d]);
   const solved2 = transportSolved(d);
   const bare = planetBalance({ solar: SOLAR_CONSTANT, albedo: EARTH_ALBEDO, absorptivity: 0 });
+  const emits288 = SIGMA * EARTH_SURFACE_K ** 4;
   const noMove = latitudeBalance(0);
+  const quoted = latitudeBalance(QUOTED_TRANSPORT);
 
   return (
     <LessonPage id="weather/1.1">
@@ -236,7 +247,7 @@ export default function Lesson() {
         Sunlight reaches Earth’s distance from the Sun at about 1,361 watts on every square meter facing it. A sphere presents only a disk to the Sun, and the disk
         has a quarter of the sphere’s area, so averaged over the whole planet, day and night, the arrival is a quarter of that: 340 W/m². Part of it is reflected
         straight back by clouds, ice and bright ground. That share is the <b>albedo</b>, about 0.30 for Earth today. The rest is absorbed and warms the surface,
-        and a warm surface radiates infrared at a rate set by its <K tone={WX.temperature}>temperature</K> — σT⁴, the Stefan–Boltzmann law, with T in kelvins. The
+        and a warm surface radiates infrared at a rate set by its <K tone={WX.temperature}>temperature</K> — σT⁴, the Stefan–Boltzmann law, with T in kelvins and σ = 5.67 × 10⁻⁸ W/m² per K⁴. The
         planet settles at the temperature where what it radiates equals what it absorbs.
       </P>
       <P>
@@ -253,14 +264,7 @@ export default function Lesson() {
             { label: 'Infrared', color: IR },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'surface temperature', value: `${fmt(b.surfaceK)} K`, tone: WX.temperature },
-            { label: 'in Celsius', value: `${fmt(surfC)} °C`, tone: WX.temperature },
-            { label: 'sunlight absorbed', value: `${fmt(b.absorbed)} W/m²`, tone: WX.energy },
-            { label: 'infrared leaving to space', value: `${fmt(b.olr)} W/m²`, tone: WX.temperature },
-          ]}
-        />
+        <Readouts items={[{ label: 'infrared leaving to space, balancing the sunlight absorbed', value: `${fmt(b.olr)} W/m²`, tone: WX.temperature }]} />
         <Slider label="Sunlight at the planet" tone={WX.energy} value={p.solar} min={500} max={2000} step={1} onChange={(v) => s.set({ solar: v })} display={`${fmt(p.solar)} W/m²`} />
         <Slider label="Albedo" value={p.albedo} min={0} max={0.9} step={0.01} onChange={(v) => s.set({ albedo: v })} display={fmt(p.albedo, 2)} />
         <Slider
@@ -306,19 +310,24 @@ export default function Lesson() {
         Earth’s surface averages about 288 K, or 15 °C, some 33 degrees warmer than its effective temperature. The difference is the <b>greenhouse effect</b>. Water
         vapor, carbon dioxide and a few other gases let most sunlight through but absorb much of the infrared the surface emits. Whatever they absorb they re-emit,
         in every direction — half of it, in this simple model, back down. The surface is now warmed by the Sun and by the atmosphere above it, so it must reach a
-        higher temperature before the infrared that finally escapes to space matches the sunlight coming in.
+        higher temperature before the infrared that finally escapes to space matches the sunlight coming in. The surface keeps its own books, too: in balance, the
+        infrared it radiates equals the sunlight it absorbs plus what the atmosphere sends back down.
       </P>
 
       <Challenge
         id="a"
-        question="With today’s sunlight (1,361 W/m²) and albedo (0.30), how much of the surface’s infrared must the atmosphere absorb to give Earth’s observed average surface temperature of 288 K?"
+        question={`Predict first. At Earth’s observed 288 K, the surface radiates σ × 288⁴, about ${fmt(emits288)} W/m², but it absorbs only ${fmt(bare.absorbed)} W/m² of sunlight. How much infrared must the atmosphere send back down? Then, with today’s sunlight and albedo, find how much of the surface’s infrared the atmosphere must absorb to send that much, bringing the surface to 288 K.`}
         solved={solved}
         status={
-          p.solar !== SOLAR_CONSTANT || Math.abs(p.albedo - EARTH_ALBEDO) > 1e-9
-            ? 'First set the sunlight back to 1,361 W/m² and the albedo to 0.30.'
-            : `Right now the surface settles at ${fmt(b.surfaceK, 1)} K.`
+          !reset
+            ? 'First press Reset, or set the sunlight back to 1,361 W/m² and the albedo to 0.30.'
+            : p.absorptivity === 0
+              ? 'Predict the back-radiation first. Then raise the infrared absorbed by the atmosphere until it sends that much back down.'
+              : b.surfaceK < EARTH_SURFACE_K
+                ? 'The atmosphere isn’t sending enough back yet: the surface is still colder than 288 K.'
+                : 'That’s too much: the surface is now warmer than 288 K.'
         }
-        success={`Solved. At ${fmt(p.absorptivity * 100)}%, the surface emits ${fmt(b.surfaceEmission)} W/m², the atmosphere returns ${fmt(b.backRadiation)} W/m² of it, and the ${fmt(b.olr)} W/m² that leaves the top matches the sunlight absorbed. Notice that the balance at the top doesn’t depend on the atmosphere at all: what changes is how warm the surface must be to push that much infrared out.`}
+        success={`Solved: ${fmt(emits288)} − ${fmt(bare.absorbed)} = ${fmt(backRadiationNeeded())} W/m². Absorbing ${fmt(p.absorptivity * 100)}% of the surface’s infrared, the atmosphere takes in ${fmt(p.absorptivity * b.surfaceEmission)} W/m² and sends half of it, ${fmt(b.backRadiation)}, back down. Meanwhile the ${fmt(b.olr)} W/m² leaving the top still matches the sunlight absorbed: the balance at the top doesn’t depend on the atmosphere at all. What changes is how warm the surface must be to push that much infrared out.`}
       />
 
       <P>
@@ -331,15 +340,16 @@ export default function Lesson() {
       <H2>Too much at the equator, too little at the poles</H2>
       <P>
         A single average hides the fact that drives all weather. Sunlight strikes the tropics nearly head-on and the poles at a glancing angle, spread over far more
-        ground. Snow and ice make the high latitudes brighter still. But infrared leaves from everywhere, warm or cold. So the tropics absorb more than they emit and
-        the high latitudes emit more than they absorb.
+        ground. Snow and ice make the high latitudes brighter still. But infrared leaves from everywhere, warm or cold, and on the real Earth it varies far less with
+        latitude than the sunlight does. So the tropics absorb more than they emit, and the high latitudes emit more than they absorb; the difference is carried
+        between them.
       </P>
       <P>
         The next demonstration is a planet built from bands of latitude, each balancing sunlight against infrared, with today’s albedo pattern. Its horizontal axis
         runs from the equator to the pole, stretched so that equal widths are equal areas of the planet’s surface. The upper chart compares the sunlight each band
         absorbs, in gold, with the infrared it emits, in red; the lower one shows the temperature each band settles at, with the dashed line the temperature it would
         have if nothing moved between bands. The slider sets how easily heat flows from warm bands to cold ones — a stand-in for the winds and ocean currents that
-        carry it. It starts at zero:
+        carry it. It starts at zero, with every band left to balance on its own:
       </P>
 
       <Figure name="Planet Energy Model · by latitude" scenario={l}>
@@ -357,7 +367,11 @@ export default function Lesson() {
           items={[
             { label: 'at the equator', value: `${fmt(bal.equatorC)} °C`, tone: WX.temperature },
             { label: 'at the pole', value: `${fmt(bal.poleC)} °C`, tone: WX.temperature },
-            { label: 'most heat carried poleward', value: `${fmt(bal.peakTransportPW, 1)} PW`, tone: WX.energy },
+            {
+              label: 'most heat carried poleward',
+              value: bal.peakTransportPW >= 0.05 ? `${fmt(bal.peakTransportPW, 1)} PW across ${fmt(bal.peakLat)}°` : `${fmt(bal.peakTransportPW, 1)} PW`,
+              tone: WX.energy,
+            },
           ]}
         />
         <Slider
@@ -374,23 +388,30 @@ export default function Lesson() {
 
       <P>
         With no transport, every band balances on its own. The equator reaches {fmt(noMove.equatorC)} °C and the pole {fmt(noMove.poleC)} °C, and the latitude of
-        this course’s fictional city, Calder Bay, at 41° north, averages a little below freezing. The gold and red curves lie on top of each other, because each band emits
+        this course’s fictional city, Fenwick Bay, at 41° north, averages a little below freezing. The gold and red curves lie on top of each other, because each band emits
         exactly what it absorbs.
       </P>
       <P>
         Now let heat flow. The bands near the equator emit less than they absorb and the high latitudes emit more, and the shaded surplus and deficit appear between
         the curves. Because the axis is stretched to equal areas, the gold area always equals the blue one: the planet as a whole still balances, and its average
-        temperature stays at 15 °C whatever the slider says. What changes is the shape. The tropics cool and the poles warm; at 0.6 W/m² per °C, 41° north
-        climbs to about {fmt(tempAtLatitude(latitudeBalance(0.6), 41))} °C. The heat crossing each latitude circle is measured in petawatts, millions of billions of watts. It peaks
-        near 33°, the latitude where surplus turns to deficit, because everything absorbed in excess on the equator’s side of that line must cross it.
+        temperature stays at 15 °C whatever the slider says. What changes is the shape. The tropics cool and the poles warm; at {fmt(QUOTED_TRANSPORT, 1)} W/m² per
+        °C, 41° north climbs to about {fmt(tempAtLatitude(quoted, 41))} °C. The heat crossing each latitude circle is measured in petawatts, millions of billions of
+        watts, and at {fmt(QUOTED_TRANSPORT, 1)} the most that crosses any of them is {fmt(quoted.peakTransportPW, 1)} PW, across {fmt(quoted.peakLat)}°. That is
+        where surplus turns to deficit, because everything absorbed in excess on the equator’s side of that line must cross it.
       </P>
 
       <Challenge
         id="b"
-        question="Estimates for the real Earth put the peak poleward heat transport, by atmosphere and ocean together, at about 5–6 petawatts. Set the transport so the model carries that much."
+        question={`Estimates for the real Earth put the peak poleward heat transport, by atmosphere and ocean together, at about 5–6 petawatts. Predict first: if the heat carried grew in proportion to the slider, what setting would carry that much, given ${fmt(quoted.peakTransportPW, 1)} PW at ${fmt(QUOTED_TRANSPORT, 1)}? Then find a setting that really carries 5–6 PW.`}
         solved={solved2}
-        status={`Right now the most heat carried poleward is ${fmt(bal.peakTransportPW, 1)} PW.`}
-        success={`Solved. At ${fmt(bal.peakTransportPW, 1)} PW the equator settles at ${fmt(bal.equatorC)} °C and the pole at ${fmt(bal.poleC)} °C — the real equator averages about 27 °C. The temperature difference between them is what keeps the transport going: heat flows only because the tropics stay warmer than the poles.`}
+        status={
+          d === 0
+            ? 'Predict first, then raise the transport.'
+            : bal.peakTransportPW < REAL_TRANSPORT_PW[0]
+              ? 'Still short of 5 PW. Compare the setting with your prediction.'
+              : 'More than 6 PW: too much.'
+        }
+        success={`Solved: ${fmt(d, 2)} W/m² per °C carries ${fmt(bal.peakTransportPW, 1)} PW. A proportional guess says about ${fmt((REAL_TRANSPORT_PW[0] / quoted.peakTransportPW) * QUOTED_TRANSPORT, 2)}–${fmt((REAL_TRANSPORT_PW[1] / quoted.peakTransportPW) * QUOTED_TRANSPORT, 2)}, but it takes more, because the transport wears down its own cause: as heat flows, the tropics cool and the poles warm, so each step of the slider pushes against a smaller temperature difference. Here the equator settles at ${fmt(bal.equatorC)} °C and the pole at ${fmt(bal.poleC)} °C; the real equator averages about 27 °C. Heat flows only because the tropics stay warmer than the poles.`}
       />
 
       <P>

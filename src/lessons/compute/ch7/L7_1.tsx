@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
-  Controls,
   FigRef,
   Figure,
   GRAPHIC,
@@ -33,7 +32,7 @@ import { ACCELERATORS, GPU_COLOR, GPU_IDS, type GpuId } from '../../../model/com
 import { SITES, SITE_IDS, type SiteId } from '../../../model/compute/sites';
 import { WORKLOAD_IDS, type WorkloadId } from '../../../model/compute/workloads';
 import type { Redundancy } from '../../../engines/compute/facilityPower';
-import { resetPart, updateCloud, useCloud } from '../shared/cloudStore';
+import { confirmResetPart, updateCloud, useCloud } from '../shared/cloudStore';
 
 // ---------------------------------------------------------------------------
 // Controls and helpers. The fleet lives in the shared capstone design (cloudStore); this lesson
@@ -93,7 +92,7 @@ export function racksByClass(f: FleetDesign): Record<GpuId, number> {
   return out;
 }
 
-/** What customers want for each workload: their average hour, or their busiest hour. */
+/** What customers want for each workload before price: in an average weekday hour (their sizes), or in their busiest hour. */
 export function customerDemand(customers: Customer[], basis: 'average' | 'peak'): Record<WorkloadId, number> {
   const out = {} as Record<WorkloadId, number>;
   for (const w of WORKLOAD_IDS) out[w] = 0;
@@ -101,17 +100,17 @@ export function customerDemand(customers: Customer[], basis: 'average' | 'peak')
   return out;
 }
 
-// The challenge: Bayport's hall has room for 60 racks; fit 6,000 A-class equivalents of chat capacity into it.
-export const BAYPORT_RACKS = 60;
+// The challenge: Marston's hall has room for 60 racks; fit 6,000 A-class equivalents of chat capacity into it.
+export const MARSTON_RACKS = 60;
 export const CHAT_TARGET = 6000;
 
 export function allChecksPass(f: FleetDesign): boolean {
   return evalOf(f).checks.every((c) => c.ok);
 }
 
-/** Challenge: at Bayport, every check passing, no more than 60 racks, at least 6,000 A-class equivalents of chat capacity. */
-export function bayportSolved(f: FleetDesign): boolean {
-  return f.site === 'bayport' && allChecksPass(f) && evalOf(f).racks <= BAYPORT_RACKS && capacityOf(f).chat70 >= CHAT_TARGET - 1e-6;
+/** Challenge: at Marston, every check passing, no more than 60 racks, at least 6,000 A-class equivalents of chat capacity. */
+export function marstonSolved(f: FleetDesign): boolean {
+  return f.site === 'marston' && allChecksPass(f) && evalOf(f).racks <= MARSTON_RACKS && capacityOf(f).chat70 >= CHAT_TARGET - 1e-6;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,16 +120,21 @@ const D = FLEET_DEFAULT;
 const EV0 = evalOf(D);
 const CAP0 = capacityOf(D);
 const BY0 = capacityByClass(D);
-const BAY0 = evalOf({ ...D, site: 'bayport' });
-const NF0 = evalOf({ ...D, site: 'northfield' });
+const BAY0 = evalOf({ ...D, site: 'marston' });
+const NF0 = evalOf({ ...D, site: 'fernhill' });
 const HOT = evalOf({ ...D, supplyC: 35 });
 const BIG = evalOf({ ...D, gpus: { L: 256, A: 2048, B: 256 } });
 const BIG_PORTS = evalOf({ ...D, gpus: { L: 256, A: 2048, B: 256 }, downPorts: 40 });
 const BIG_48 = evalOf({ ...D, gpus: { L: 256, A: 2048, B: 256 }, downPorts: 48 });
 /** A worked answer to the challenge (one of several). */
-export const EXAMPLE_ANSWER: FleetDesign = { ...D, site: 'bayport', cooling: 'liquid', supplyC: 35, feedKW: 140, gpus: { L: 0, A: 0, B: 2240 }, downPorts: 35 };
+export const EXAMPLE_ANSWER: FleetDesign = { ...D, site: 'marston', cooling: 'liquid', supplyC: 35, feedKW: 140, gpus: { L: 0, A: 0, B: 2240 }, downPorts: 35 };
 const EX = evalOf(EXAMPLE_ANSWER);
 const EX_AIR = evalOf({ ...EXAMPLE_ANSWER, cooling: 'air', supplyC: 24, feedKW: 40 });
+/** Marston's hall filled to the last rack with liquid-cooled B-class servers on the biggest feeds: still far inside the grid connection. */
+export const FULL_HALL: FleetDesign = { ...EXAMPLE_ANSWER, gpus: { L: 0, A: 0, B: MARSTON_RACKS * 80 }, downPorts: PORTS_MAX };
+const FULL = evalOf(FULL_HALL);
+const RED_N = evalOf({ ...D, redundancy: 'N' });
+const RED_2N = evalOf({ ...D, redundancy: '2N' });
 const DEMAND_AVG = customerDemand(CUSTOMERS_DEFAULT, 'average');
 const DEMAND_PEAK = customerDemand(CUSTOMERS_DEFAULT, 'peak');
 
@@ -170,6 +174,12 @@ export const LESSON_NUMBERS = {
   exGridPeak: EX.gridPeakMW,
   exOk: EX.checks.every((c) => c.ok),
   exAirRacks: EX_AIR.racks,
+  fullHallRacks: FULL.racks,
+  fullHallGridPeak: FULL.gridPeakMW,
+  pueN: RED_N.pue,
+  pue2N: RED_2N.pue,
+  fixedN: RED_N.fixedPerYear,
+  fixed2N: RED_2N.fixedPerYear,
   demandAvg: DEMAND_AVG,
   demandPeak: DEMAND_PEAK,
   demandAvgTotal: WORKLOAD_IDS.reduce((s, w) => s + DEMAND_AVG[w], 0),
@@ -191,12 +201,12 @@ function SiteFloor({ f, ev }: { f: FleetDesign; ev: FleetEval }) {
   const finite = GPU_IDS.every((g) => Number.isFinite(racks[g]));
   const total = finite ? GPU_IDS.reduce((s, g) => s + racks[g], 0) : 0;
   const site = SITES[f.site];
-  // Floor area: x 0–400, y 30–200. Tiles shrink to fit; past 600 racks each tile stands for several.
+  // Floor area: x 0–392, y 30–188. Tiles shrink to fit; past 600 racks each tile stands for several.
   const per = total > 600 ? Math.ceil(total / 600) : 1;
   const tiles = GPU_IDS.flatMap((g) => Array.from({ length: Math.ceil((finite ? racks[g] : 0) / per) }, () => g));
   const n = tiles.length;
   const W = 392;
-  const Hh = 164;
+  const Hh = 158;
   const cols = n > 0 ? Math.max(1, Math.ceil(Math.sqrt((n * W) / Hh))) : 1;
   const size = n > 0 ? Math.min(22, W / cols, Hh / Math.ceil(n / cols)) : 22;
   const gx = 430;
@@ -208,7 +218,7 @@ function SiteFloor({ f, ev }: { f: FleetDesign; ev: FleetEval }) {
     .map((g) => `${SHORT[g]} ${fmt(f.gpus[g])} in ${Number.isFinite(racks[g]) ? fmt(racks[g]) : 'no'} racks`)
     .join(', ')}), ${f.cooling === 'air' ? 'air' : 'liquid'}-cooled on ${f.feedKW} kW feeds. At the hottest hour the site draws ${fmt(ev.gridPeakMW, 1)} MW of a ${site.gridMW} MW grid connection${over ? ': too much' : ''}.`;
   return (
-    <svg className="diagram" viewBox="0 0 640 230" role="img" aria-label={label}>
+    <svg className="diagram" viewBox="0 0 640 194" role="img" aria-label={label}>
       <text className="ax" x={0} y={14}>
         {site.name}: the hall, {per > 1 ? `each tile ${per} racks` : 'one tile per rack'}
       </text>
@@ -240,16 +250,16 @@ function SiteFloor({ f, ev }: { f: FleetDesign; ev: FleetEval }) {
       <text className="ax" x={gx} y={88}>
         IT {fmt(ev.itMW, 2)} MW · PUE {fmt(ev.pue, 2)}
       </text>
-      <text className="ax" x={gx} y={112}>
+      <text className="ax" x={gx} y={106}>
         {site.rttMs} ms from the users
       </text>
-      <text className="ax" x={gx} y={128}>
+      <text className="ax" x={gx} y={122}>
         power ${site.powerPrice}/MWh · building ×{site.buildCostIndex}
       </text>
       {GPU_IDS.map((g, i) => (
         <g key={g}>
-          <rect x={gx} y={150 + i * 22} width={10} height={10} rx={2} fill={GPU_COLOR[g]} />
-          <text x={gx + 16} y={159 + i * 22} style={{ fontSize: 12, fill: '#333' }}>
+          <rect x={gx} y={138 + i * 20} width={10} height={10} rx={2} fill={GPU_COLOR[g]} />
+          <text x={gx + 16} y={147 + i * 20} style={{ fontSize: 12, fill: '#333' }}>
             {SHORT[g]} {fmt(f.gpus[g])} GPUs · {Number.isFinite(racks[g]) ? `${fmt(racks[g])} racks` : 'no racks'}
           </text>
         </g>
@@ -290,7 +300,7 @@ function CapacityChart({ f, customers, basis }: { f: FleetDesign; customers: Cus
   const x = (v: number) => x0 + ((x1 - x0) * v) / top;
   const label = WORKLOAD_IDS.map((w, i) => `${WNAME[w]}: capacity ${fmt(caps[i])}, customers want ${fmt(want[w])}${far.has(w) ? ' (out of reach from this site)' : ''}`).join('; ');
   return (
-    <svg className="chart" viewBox="0 0 640 260" role="img" aria-label={`Capacity of the fleet for each workload, in A-class equivalents, against the customers’ ${basis === 'average' ? 'average' : 'busiest'} hour. ${label}.`}>
+    <svg className="chart" viewBox="0 0 640 260" role="img" aria-label={`Capacity of the fleet for each workload, in A-class equivalents, against the customers’ demand before price in ${basis === 'average' ? 'an average weekday hour' : 'their busiest hour'}. ${label}.`}>
       <text className="ax" x={x0} y={14}>
         A-class equivalents, if the whole fleet did only that work
       </text>
@@ -328,22 +338,16 @@ export default function Lesson() {
   const cap = useMemo(() => capacityOf(f), [f]);
   const setFleet = (patch: Partial<FleetDesign>) => updateCloud((d) => ({ ...d, fleet: { ...d.fleet, ...patch } }));
   const setGpus = (g: GpuId, v: number) => updateCloud((d) => ({ ...d, fleet: { ...d.fleet, gpus: { ...d.fleet.gpus, [g]: v } } }));
-  const solved = bayportSolved(f);
+  const solved = marstonSolved(f);
   const failing = ev.checks.filter((c) => !c.ok).map((c) => CHECK_NAME[c.id].toLowerCase());
   const status =
-    f.site !== 'bayport'
-      ? `The fleet is at ${SITES[f.site].name}. Move it to Bayport first.`
+    f.site !== 'marston'
+      ? `The fleet is at ${SITES[f.site].name}. Move it to Marston first.`
       : failing.length
-        ? `At Bayport the ${failing.join(' and ')} check${failing.length > 1 ? 's fail' : ' fails'}.`
-        : ev.racks > BAYPORT_RACKS
-          ? `Every check passes, but the fleet takes ${fmt(ev.racks)} racks: more than the hall’s ${BAYPORT_RACKS}.`
+        ? `At Marston the ${failing.join(' and ')} check${failing.length > 1 ? 's fail' : ' fails'}.`
+        : ev.racks > MARSTON_RACKS
+          ? `Every check passes, but the fleet takes ${fmt(ev.racks)} racks: more than the hall’s ${MARSTON_RACKS}.`
           : `${fmt(ev.racks)} racks, every check passing — but only ${fmt(cap.chat70)} A-class equivalents of chat capacity, short of ${fmt(CHAT_TARGET)}.`;
-  const caption = ev.checks.every((c) => c.ok)
-    ? `${fmt(ev.total)} GPUs in ${fmt(ev.racks)} racks; every check passes. Fixed costs come to ${usd(fixedPerGpuHour(f), 2)} for each GPU-hour, used or not.`
-    : `${failing.length} check${failing.length > 1 ? 's fail' : ' fails'}: ${ev.checks
-        .filter((c) => !c.ok)
-        .map((c) => c.text)
-        .join(' ')}`;
 
   return (
     <LessonPage id="compute/7.1">
@@ -355,8 +359,9 @@ export default function Lesson() {
       </P>
       <P>
         The cloud is one design, kept in this browser, and each lesson changes only its own part of it: this lesson the fleet, Lesson 7.2 the customers, 7.3 the prices
-        and 7.4 the operating plan, while 7.5 judges the result. Each lesson’s Reset puts back only its own part, and every lesson works from the starting design if you’d
-        rather skip ahead. Nothing in this chapter is new. Every number comes from an engine an earlier lesson built, and each lesson points back to where.
+        and 7.4 the operating plan, while 7.5 judges the result. Each lesson’s Reset asks first and puts back only its own part. The text of every lesson describes
+        the starting design, so you can skip ahead, and each demonstration that uses the other lessons’ parts can show either the starting design or yours. Nothing
+        in this chapter is new. Every number comes from an engine an earlier lesson built, and each lesson points back to where.
       </P>
       <P>
         The starting fleet sits at Tech Park, the campus in the electricity course’s region: {fmt(N.gpus.L)} L-class 48 GB, {fmt(N.gpus.A)} A-class 80 GB and{' '}
@@ -364,16 +369,19 @@ export default function Lesson() {
         Chapter 4 decide whether it can be built. The racks must hold their servers within their feeds and their cooling (
         <a href={lessonHref('compute/4.1')}>Lesson 4.1</a>). The site must stay inside its grid connection at the hottest hour of the year, cooling included (
         <a href={lessonHref('compute/4.2')}>Lessons 4.2</a> and <a href={lessonHref('compute/4.3')}>4.3</a>). The coolant must be cool enough for every chip to run at
-        full speed (Lesson 4.3). And two tiers of switches must reach every GPU (<a href={lessonHref('compute/4.4')}>Lesson 4.4</a>). The money follows Lesson 4.5’s
-        base case: servers paid off over 5 years and the building over 15, at 10% a year.
+        full speed (Lesson 4.3). And two tiers of switches must reach every GPU (<a href={lessonHref('compute/4.4')}>Lesson 4.4</a>). The money follows{' '}
+        <a href={lessonHref('compute/4.5')}>Lesson 4.5</a>’s base case: servers paid off over 5 years and the building over 15, at 10% a year.
       </P>
       <P>
         In the next demonstration, the tiles are the hall’s racks, colored by the GPUs they hold, and the bar is the site’s draw at its hottest hour against its grid
-        connection. Change the site, the GPUs, the cooling and how warm its coolant runs, the rack feeds, the ports each leaf switch gives the GPUs, and the redundancy.
-        Your choices are saved as your cloud’s fleet:
+        connection. The last readout is the fleet’s <K tone="orange">capacity</K> for chat: the chat work it could do in an hour if every GPU did nothing else, counted in
+        A-class equivalents (A-eq). One A-class equivalent is the work one A-class 80 GB GPU does for that workload, the unit in which{' '}
+        <a href={lessonHref('compute/3.5')}>Lesson 3.5</a> measured each accelerator and <a href={lessonHref('compute/6.1')}>Lesson 6.1</a> counted a fleet’s yield.
+        Change the site, the GPUs, the cooling and how warm its coolant runs, the rack feeds, the ports each leaf switch gives the GPUs, and the redundancy. Your choices
+        are saved as your cloud’s fleet:
       </P>
 
-      <Figure name="GPU Cloud Builder" onReset={() => resetPart('fleet')}>
+      <Figure name="GPU Cloud Builder" onReset={() => confirmResetPart('fleet')}>
         <Segmented
           label="Site"
           value={f.site}
@@ -386,26 +394,23 @@ export default function Lesson() {
           items={[
             { label: 'capital spent', value: mUSD(ev.capex), tone: 'green' },
             { label: 'fixed cost a year', value: mUSD(ev.fixedPerYear), tone: 'green' },
-            { label: 'fixed cost per GPU-hour', value: usd(fixedPerGpuHour(f), 2), tone: 'green' },
-            { label: 'chat capacity, A-class equivalents', value: fmt(cap.chat70), tone: 'orange' },
+            { label: 'fixed per GPU-hour', value: usd(fixedPerGpuHour(f), 2), tone: 'green' },
+            { label: 'chat capacity, A-eq', value: fmt(cap.chat70), tone: 'orange' },
           ]}
         />
-        <Caption>{caption}</Caption>
-        <Controls columns={2}>
-          {GPU_IDS.map((g) => (
-            <Slider key={g} label={`${SHORT[g]} GPUs`} value={f.gpus[g]} min={0} max={GPU_MAX[g]} step={GPU_STEP} onChange={(v) => setGpus(g, v)} display={fmt(f.gpus[g])} />
-          ))}
-          <Slider
-            label={f.cooling === 'air' ? 'Inlet air' : 'Supply water'}
-            tone="teal"
-            value={f.supplyC}
-            min={SUPPLY_MIN}
-            max={SUPPLY_MAX}
-            onChange={(supplyC) => setFleet({ supplyC })}
-            display={`${fmt(f.supplyC)} °C`}
-          />
-          <Slider label="Leaf ports facing GPUs" tone="blue" value={f.downPorts} min={PORTS_MIN} max={PORTS_MAX} onChange={(downPorts) => setFleet({ downPorts })} display={`${f.downPorts} of 64`} />
-        </Controls>
+        {GPU_IDS.map((g) => (
+          <Slider key={g} label={`${SHORT[g]} GPUs`} value={f.gpus[g]} min={0} max={GPU_MAX[g]} step={GPU_STEP} onChange={(v) => setGpus(g, v)} display={fmt(f.gpus[g])} />
+        ))}
+        <Slider
+          label={f.cooling === 'air' ? 'Inlet air' : 'Supply water'}
+          tone="teal"
+          value={f.supplyC}
+          min={SUPPLY_MIN}
+          max={SUPPLY_MAX}
+          onChange={(supplyC) => setFleet({ supplyC })}
+          display={`${fmt(f.supplyC)} °C`}
+        />
+        <Slider label="Leaf ports facing GPUs" tone="blue" value={f.downPorts} min={PORTS_MIN} max={PORTS_MAX} onChange={(downPorts) => setFleet({ downPorts })} display={`${f.downPorts} of 64`} />
         <Segmented
           label="Cooling"
           value={f.cooling}
@@ -419,7 +424,7 @@ export default function Lesson() {
           label="Rack feed"
           value={String(f.feedKW)}
           onChange={(v) => setFleet({ feedKW: Number(v) })}
-          options={FEEDS.map((kw) => ({ value: String(kw), label: `${kw} kW feeds` }))}
+          options={FEEDS.map((kw, i) => ({ value: String(kw), label: i === 0 ? `${kw} kW feeds` : `${kw} kW` }))}
         />
         <Segmented
           label="UPS redundancy"
@@ -441,10 +446,16 @@ export default function Lesson() {
         4.5, the business will live or die by how much of each hour it sells.
       </P>
       <P>
-        Now try the other sites. At Bayport, beside the users, the same fleet runs a PUE of {fmt(N.bayPue, 2)} in the warm, humid air, and the city’s land and labor
-        raise its fixed cost to {mUSD(N.bayFixed)} a year. At Northfield, with cold air and cheap hydro power, the PUE falls to {fmt(N.nfPue, 2)} and the fixed cost to{' '}
-        {mUSD(N.nfFixed)} — but Northfield is {SITES.northfield.rttMs} ms from the users, and the next demonstration will show what that costs. Warm the inlet air to
+        Now try the other sites. At Marston, beside the users, the same fleet runs a PUE of {fmt(N.bayPue, 2)} in the warm, humid air, and the city’s land and labor
+        raise its fixed cost to {mUSD(N.bayFixed)} a year. At Fernhill, with cold air and cheap hydro power, the PUE falls to {fmt(N.nfPue, 2)} and the fixed cost to{' '}
+        {mUSD(N.nfFixed)} — but Fernhill is {SITES.fernhill.rttMs} ms from the users, and the next demonstration will show what that costs. Warm the inlet air to
         35 °C and the cooling check fails: the B-class can no longer shed its 1,000 W and slows to {Math.round(N.hotSpeedB * 100)}% of full speed (Lesson 4.3).
+      </P>
+      <P>
+        The redundancy control, by contrast, barely moves anything. It models only one of the two costs of spares in{' '}
+        <a href={lessonHref('compute/4.2')}>Lesson 4.2</a>, the losses of UPS modules running at part load, and those shift the PUE only from {fmt(N.pueN, 2)} with N to{' '}
+        {fmt(N.pue2N, 2)} with 2N. The capital the spare modules cost and the outages they prevent are left out of this model, so the fixed cost stays at{' '}
+        {mUSD(N.fixedN)} either way and N looks free. It isn’t: without a spare, losing one module drops part of the hall, which is why real halls pay for N+1 or 2N.
       </P>
 
       <H2>Where the limits are</H2>
@@ -454,15 +465,17 @@ export default function Lesson() {
         now gets {Math.round(N.bigPortsShare * 100)}% of its card’s bandwidth when everyone talks at once. Serving barely notices, since a copy of a model lives inside
         one server, and the 70B training run can still hide its gradient exchange behind its backward pass, as Lesson 4.4 found. At 48 ports, a third of a card each,
         it can’t: training slows to {Math.round(N.big48Training * 100)}% of its speed. Air cooling holds a rack to about 40 kW, so dense
-        B-class servers need liquid and a big feed to pack tightly. And at Bayport, a fleet large enough will run into the 20 MW connection before it runs out of floor.
+        B-class servers need liquid and a big feed to pack tightly.
       </P>
       <P>
-        Suppose the cloud wants to serve chat from the city itself, where the hall has room for just {BAYPORT_RACKS} racks:
+        Where land is dear, the floor can bind before the grid does. Marston’s hall has room for just {MARSTON_RACKS} racks: filled to the last one with B-class
+        servers, ten to a liquid-cooled rack on {Math.max(...FEEDS)} kW feeds, it would draw only {fmt(N.fullHallGridPeak, 1)} MW at the hottest hour, well inside the
+        city’s {SITES.marston.gridMW} MW connection. Suppose the cloud wants to serve chat from the city itself:
       </P>
 
       <Challenge
         id="a"
-        question={`Move the fleet to Bayport and fit at least ${fmt(CHAT_TARGET)} A-class equivalents of chat capacity into no more than ${BAYPORT_RACKS} racks, with every check passing.`}
+        question={`Move the fleet to Marston and fit at least ${fmt(CHAT_TARGET)} A-class equivalents of chat capacity into no more than ${MARSTON_RACKS} racks, with every check passing.`}
         solved={solved}
         status={status}
         success={`Solved: ${fmt(ev.racks)} racks hold ${fmt(cap.chat70)} A-class equivalents of chat capacity, and every check passes. The B-class does ${fmt(capacityByClass(f).chat70.B > 0 && f.gpus.B > 0 ? capacityByClass(f).chat70.B / f.gpus.B : 0, 2)} A-class hours of chat work each, so it packs the most chat into a rack; air allows three of its servers to a rack, while liquid on a big enough feed allows up to ten. More than ${fmt(2048)} GPUs also need more of each leaf’s ports facing them.`}
@@ -471,27 +484,27 @@ export default function Lesson() {
       <P>
         There are several answers, and all of them lean on the B-class and on liquid. The leanest is {fmt(EXAMPLE_ANSWER.gpus.B)} B-class GPUs and nothing else,
         cooled by 35 °C water on 140 kW feeds, with {EXAMPLE_ANSWER.downPorts} of each leaf’s ports facing GPUs: {fmt(N.exRacks)} racks and {fmt(N.exChat)} A-class
-        equivalents of chat, drawing {fmt(N.exGridPeak, 1)} MW of Bayport’s 20 MW at the hottest hour. Cooled by air on 40 kW feeds, the same GPUs would need{' '}
+        equivalents of chat, drawing {fmt(N.exGridPeak, 1)} MW of Marston’s 20 MW at the hottest hour. Cooled by air on 40 kW feeds, the same GPUs would need{' '}
         {fmt(N.exAirRacks)} racks. Whether a fleet like that would pay is a question for the rest of the chapter: keep whichever fleet you like, or press Reset to put
-        the starting one back.
+        the starting one back. The next lessons’ text quotes the starting fleet, and their demonstrations show it unless you switch them to yours.
       </P>
 
       <H2>What the fleet can do</H2>
       <P>
-        A fleet’s GPUs are worth what they can do for the customers who can reach them. Lesson 3.5 measured how much of each workload’s work each accelerator does, in
-        A-class equivalents, and Lesson 6.1 turned that into the fleet’s yield. Added up over a fleet, it is the fleet’s <K tone="orange">capacity</K> for that work. In the next demonstration, each bar is the work the whole fleet could do if it did only
-        that workload, split by the accelerators that do it; the black mark is what the customers of Lesson 7.2 want for that workload in their average hour, or their
-        busiest. The sliders move the same fleet as the first demonstration:
+        A fleet’s GPUs are worth what they can do for the customers who can reach them. Chat is only one of the six workloads of <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>, and each accelerator does a
+        different share of each one’s work, so the fleet has a capacity for every workload. In the next demonstration, each bar is the work the whole fleet could do if
+        it did only that workload, split by the accelerators that do it; the black mark is what the customers of Lesson 7.2 want for that workload before any price is
+        asked, in an average weekday hour or in their busiest. The sliders move the same fleet as the first demonstration:
       </P>
 
       <CapacityFigure />
 
       <P>
         The starting fleet could do {fmt(N.capChat)} A-class equivalents of chat work, {fmt(N.capTrain)} of training or {fmt(N.capFrontier)} of the frontier
-        assistant’s — but it does all of them at once, from the same GPUs, so the bars can’t simply be added. The customers want {fmt(N.demandAvgTotal)} A-class
-        equivalents in their average hour, in all, and more in the afternoon. The bars also show where each class earns its place. The {fmt(N.gpus.B)} B-class GPUs
+        assistant’s — but it does all of them at once, from the same GPUs, so the bars can’t simply be added. Before price, the customers want{' '}
+        {fmt(N.demandAvgTotal)} A-class equivalents in an average weekday hour, in all, and more in the afternoon. The bars also show where each class earns its place. The {fmt(N.gpus.B)} B-class GPUs
         supply {fmt(N.chatByB)} A-class equivalents of chat, two-thirds as much as {fmt(N.gpus.A)} A-class GPUs, four times as many, do; the {fmt(N.gpus.L)} L-class
-        cards supply {fmt(N.chatByL)}. Every one of those cards still costs its share of the fixed cost, a question Lessons 7.4 and 7.5 will press. Move the fleet to Northfield and
+        cards supply {fmt(N.chatByL)}. Every one of those cards still costs its share of the fixed cost, a question Lessons 7.4 and 7.5 will press. Move the fleet to Fernhill and
         the code-completion bar fades: its users are too far away for any GPU there to serve them.
       </P>
       <P>
@@ -515,7 +528,7 @@ function CapacityFigure() {
         value={s.basis}
         onChange={s.set}
         options={[
-          { value: 'average', label: 'Their average hour' },
+          { value: 'average', label: 'An average weekday hour' },
           { value: 'peak', label: 'Their busiest hour' },
         ]}
       />

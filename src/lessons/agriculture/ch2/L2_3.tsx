@@ -64,6 +64,8 @@ export function strategyRecord(strategy: BlightStrategy, o: { cornOnCorn: boolea
 }
 
 const BASE = { cornOnCorn: false, pressure: 1, price: PLAN_PRICE.corn, fungicide: FUNGICIDE_PER_ACRE };
+/** Where both figures start the scouting threshold: well above the best, so the challenge starts unsolved. */
+export const START_THRESHOLD = 0.04;
 let bestThreshold: number | null = null;
 /** The scouting threshold (in half-percent steps) with the highest average gain, under the base conditions. */
 export function bestScoutingThreshold(): number {
@@ -72,6 +74,12 @@ export function bestScoutingThreshold(): number {
     bestThreshold = THRESHOLDS[means.reduce((a, m, i) => (m > means[a] ? i : a), 0)];
   }
   return bestThreshold;
+}
+
+/** Scouting at a threshold under the base conditions: the average gain and the seasons, of 200, in which it sprays. */
+export function scoutingRecord(threshold: number): { mean: number; sprays: number } {
+  const o = { ...BASE, threshold };
+  return { mean: strategyRecord('scout', o).mean, sprays: YEARS.filter((y) => outcome(y, 'scout', o).sprayed).length };
 }
 
 /** The challenge: scout and spray at the threshold that earns the most on average (corn after wheat, base blight, $4.60 corn, $32 spray). */
@@ -87,17 +95,17 @@ export function thresholdSolved(s: { strategy: BlightStrategy; cornOnCorn: boole
 }
 
 export default function Lesson() {
-  const s = useScenario('blight', { season: 'reference' as SeasonKey, strategy: 'fungicide' as BlightStrategy, rotation: 'wheat' as 'wheat' | 'corn', pressure: 1, threshold: 0.02 });
+  const s = useScenario('blight', { season: 'reference' as SeasonKey, strategy: 'fungicide' as BlightStrategy, rotation: 'wheat' as 'wheat' | 'corn', threshold: START_THRESHOLD });
   const cornOnCorn = s.state.rotation === 'corn';
   const year = SEASONS[s.state.season];
-  const opts = { cornOnCorn, threshold: s.state.threshold, pressure: s.state.pressure, price: PLAN_PRICE.corn, fungicide: FUNGICIDE_PER_ACRE };
-  const run = useMemo(() => fieldSeason(year, blightField(s.state.strategy, opts)), [year, s.state.strategy, cornOnCorn, s.state.threshold, s.state.pressure]);
+  const opts = { cornOnCorn, threshold: s.state.threshold, pressure: 1, price: PLAN_PRICE.corn, fungicide: FUNGICIDE_PER_ACRE };
+  const run = useMemo(() => fieldSeason(year, blightField(s.state.strategy, opts)), [year, s.state.strategy, cornOnCorn, s.state.threshold]);
   const clean = useMemo(() => fieldSeason(year, { district: 'prairie', crop: 'corn' }), [year]);
   const res = outcome(year, s.state.strategy, opts);
   const days = run.days.map((d) => d.day);
   const silking = run.stageDays[4];
 
-  const m = useScenario('many', { strategy: 'fungicide' as BlightStrategy, rotation: 'wheat' as 'wheat' | 'corn', pressure: 1, threshold: 0.02, price: PLAN_PRICE.corn, fungicide: FUNGICIDE_PER_ACRE });
+  const m = useScenario('many', { strategy: 'fungicide' as BlightStrategy, rotation: 'wheat' as 'wheat' | 'corn', pressure: 1, threshold: START_THRESHOLD, price: PLAN_PRICE.corn, fungicide: FUNGICIDE_PER_ACRE });
   const mOpts = { cornOnCorn: m.state.rotation === 'corn', threshold: m.state.threshold, pressure: m.state.pressure, price: m.state.price, fungicide: m.state.fungicide };
   const records = useMemo(
     () => STRATEGIES.filter((x) => x.value !== 'none').map((x) => ({ ...x, ...strategyRecord(x.value, mOpts) })),
@@ -105,6 +113,10 @@ export default function Lesson() {
   );
   const chosen = records.find((r) => r.value === m.state.strategy) ?? records[1];
   const solved = useMemo(() => thresholdSolved({ ...m.state, cornOnCorn: m.state.rotation === 'corn' }), [m.state]);
+  const startScout = useMemo(() => scoutingRecord(START_THRESHOLD), []);
+  const scoutNow = useMemo(() => (m.state.strategy === 'scout' ? scoutingRecord(m.state.threshold) : null), [m.state.strategy, m.state.threshold]);
+  const lower = useMemo(() => (solved ? scoutingRecord(m.state.threshold - 0.005) : null), [solved, m.state.threshold]);
+  const higher = useMemo(() => (solved ? scoutingRecord(m.state.threshold + 0.005) : null), [solved, m.state.threshold]);
 
   return (
     <LessonPage id="agriculture/2.3">
@@ -123,9 +135,9 @@ export default function Lesson() {
         sugar, and as <a href={lessonHref('agriculture/1.5')}>Lesson 1.5</a> showed, sugar during grain fill is what fills the kernels.
       </P>
       <P>
-        A farmer has three hypothetical defenses in our model. A <b>resistant hybrid</b> slows the blight by 40% all season, for $12 an acre more in seed — and, we’ll
+        A farmer has three defenses, and our model puts its own numbers on each. A <b>resistant hybrid</b> slows the blight by 40% all season, for $12 an acre more in seed — and, we’ll
         assume, gives up 3% of its yield, because its genetics trail the newest susceptible hybrids. A <b>fungicide</b> sprayed at silking slows the blight by 80% for
-        three weeks, for $32 an acre. Or the farmer can <b>scout</b>: walk the fields for $4 an acre just before silking and spray only if the blight has passed a
+        three weeks, for $32 an acre. Or the farmer can <b>scout</b>: walk the fields for $4 an acre at silking and spray that day only if the blight has passed a
         threshold. In the next demonstration, the upper chart is the diseased share of Cedar Bend’s corn leaves through the summer; the lower one is the leaf area that
         is still green, against the same crop with no disease at all. Choose a season, a strategy and the field’s history:
       </P>
@@ -203,7 +215,6 @@ export default function Lesson() {
             { label: 'gain against doing nothing', value: perAcre(res.gain), tone: res.gain >= 0 ? 'green' : 'red' },
           ]}
         />
-        <Slider label="Blight pressure" tone="red" value={s.state.pressure} min={0.25} max={4} step={0.25} onChange={(v) => s.set({ pressure: v })} display={`${fmt(s.state.pressure, 2)}× the usual spores`} />
         <Slider
           label="Scouting threshold"
           tone="violet"
@@ -221,8 +232,8 @@ export default function Lesson() {
         In the reference season the blight arrives in late June and, left alone, covers 43% of the leaves by the time the kernels are full; the crop yields 175.5
         bushels instead of 188. Sprayed at silking, it slows for three weeks, ends at 19%, and the crop yields 183.5 — eight bushels more, worth about $35 against
         the $32 spray. In the wet summer, with more than a month of warm, wet days, the untreated blight takes 87% of the leaves and a quarter of the crop: 156.5
-        bushels instead of 211. There the spray is worth 33 bushels, and the resistant hybrid 39. In the dry summer the blight barely gets going, the spray buys less
-        than a bushel, and the resistant hybrid’s yield drag makes it the worst choice of all.
+        bushels instead of 211. There the spray is worth 33 bushels, and the resistant hybrid 39. In the dry summer the blight barely gets going: the spray buys less
+        than a bushel, and the resistant hybrid’s yield drag gives it the smallest harvest of all.
       </P>
       <P>
         Now switch to corn after corn. Last year’s infected residue is still on the ground, the blight starts with three times the spores, and three times the start
@@ -294,27 +305,34 @@ export default function Lesson() {
       <P>
         With corn after wheat and the usual spores, the blight costs Cedar Bend 6.3% of its yield in an average season and 11.7% in a 1-in-10 bad one. Spraying
         every field at silking gains an average of just 58 cents an acre: it pays in 75 seasons of the 200, handsomely in the wet ones, and loses most of its $32 in
-        the rest. The resistant hybrid gains $6.22 on average and pays in 82 seasons. Scouting at a 2% threshold sprays in 62 seasons and gains $3.20. None of these
-        is a sure thing; each is a bet on the weather, with its own spread of outcomes. Many farmers spray every year anyway, accepting a small average cost to avoid
-        the worst seasons — a trade between the average and the spread that will come back, in another form, when we reach hedging in Chapter 5. On corn after corn every defense pays handsomely, because the blight starts so
-        far ahead — the rotation in <FigRef to="Farm Planner">the farm planner</FigRef> earns part of its keep here.
+        the rest. The resistant hybrid gains $6.22 on average and pays in 82 seasons. Scouting is the subtle one. At the {fmt(START_THRESHOLD * 100)}% threshold
+        where the demonstration starts, it sprays in only {startScout.sprays} of the 200 seasons and loses {usd(-startScout.mean, 2)} an acre on average — most of
+        the $4 it pays to look.
       </P>
 
       <Challenge
         id="a"
         figure="Crop Risk Simulator · 200 seasons"
-        question="With corn after wheat, the usual blight pressure, corn at $4.60 and a $32 spray, choose scouting. What threshold, in half-percent steps, earns the most on average?"
+        question="At 4% the scout almost never acts on what it sees. Predict which way the threshold should move, then find the threshold, in half-percent steps, at which scouting earns the most on average — with corn after wheat, the usual blight pressure, corn at $4.60 and a $32 spray."
         solved={solved}
         status={
           m.state.strategy !== 'scout'
             ? 'Choose the scouting strategy.'
             : m.state.rotation !== 'wheat' || Math.abs(m.state.pressure - 1) > 1e-6 || Math.abs(m.state.price - BASE.price) > 1e-6 || Math.abs(m.state.fungicide - BASE.fungicide) > 1e-6
               ? 'Keep corn after wheat, 1.00× pressure, $4.60 corn and a $32 spray.'
-              : `At ${fmt(m.state.threshold * 100, 1)}%, scouting gains ${usd(chosen.mean, 2)} an acre on average.`
+              : `At ${fmt(m.state.threshold * 100, 1)}%, scouting sprays in ${scoutNow?.sprays ?? 0} seasons and ${chosen.mean >= 0 ? 'gains' : 'loses'} ${usd(Math.abs(chosen.mean), 2)} an acre on average.`
         }
-        success={`Solved: a ${fmt(m.state.threshold * 100, 1)}% threshold gains ${usd(chosen.mean, 2)} an acre on average, spraying only in the seasons when the blight is already well established by silking. A lower threshold sprays nearly every year and pays for many sprays that weren’t needed; a higher one waits too long. The $4 a farmer pays to look is buying information, and here it is worth more than it costs.`}
+        success={`Solved: a ${fmt(m.state.threshold * 100, 1)}% threshold sprays in ${scoutNow?.sprays ?? 0} seasons and gains ${usd(chosen.mean, 2)} an acre on average, spraying only when the blight is already well established by silking. The best is a knife-edge: at ${fmt((m.state.threshold - 0.005) * 100, 1)}% scouting sprays in ${lower?.sprays} seasons and gains only ${usd(lower?.mean ?? 0, 2)}, paying for sprays that weren’t needed, and at ${fmt((m.state.threshold + 0.005) * 100, 1)}% it sprays in ${higher?.sprays} and ${(higher?.mean ?? 0) >= 0 ? `gains ${usd(higher?.mean ?? 0, 2)}` : `loses ${usd(-(higher?.mean ?? 0), 2)}`}, missing seasons that needed a spray. The $4 a farmer pays to look is buying information, and here it is worth more than it costs.`}
       />
 
+      <P>
+        At its best, then, scouting beats spraying every field but not the resistant hybrid. None of these is a sure thing; each is a bet on the weather, with its
+        own spread of outcomes, and the bet moves with the odds and the stakes: double the blight pressure and spraying every field gains $19.85 an acre on
+        average; raise corn to $6 and it gains $11.01; cut the spray to $20 and it gains $12.58. Many farmers spray every year anyway, a strategy that barely breaks
+        even on average, to avoid the worst seasons — a trade between the average and the spread that will come back, in another form, when we reach hedging in
+        Chapter 5. On corn after corn every defense pays handsomely, because the blight starts so far ahead — the rotation in{' '}
+        <FigRef to="Farm Planner">the farm planner</FigRef> earns part of its keep here.
+      </P>
       <P>
         Biology, in other words, adds its own uncertainty on top of the weather’s, and most of it is the weather in disguise: the blight is a wet-summer problem, and
         its losses fall hardest in the seasons that are otherwise good for corn. What’s left for this chapter is the end of the season — getting the crop out of the

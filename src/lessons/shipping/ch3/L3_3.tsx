@@ -28,8 +28,8 @@ import { ladenDraft } from '../../../engines/shipping/voyage';
 import { WorldMap } from '../shared/WorldMap';
 import { XYChart } from '../shared/XYChart';
 
-/** Passage speed used to turn miles into days. */
-const SPEED = 13;
+/** Laden passage speed used to turn miles into days: the chapter’s 12 knots laden (13 in ballast). */
+const SPEED = 12;
 const KMAX_DRAFT = ladenDraft(KESTREL, 75_000);
 const CAPE_DRAFT = ladenDraft(ALBATROSS, 170_000);
 
@@ -55,8 +55,10 @@ const TOGGLES: Chokepoint[] = ['gibraltar', 'suez', 'redsea', 'hormuz', 'malacca
 
 const nm = (x: number) => `${fmt(x)} nm`;
 const days = (x: number) => `${fmt(x, 1)} days`;
+/** Ships a day on the slider's half-ship steps: “30” or “30.5”. */
+const half = (x: number) => fmt(x, Number.isInteger(x) ? 0 : 1);
 const tradeName = (t: Trade) => `${PLACE[t.from].name}–${PLACE[t.to].name}`;
-/** Days at sea at 13 knots plus canal days. */
+/** Days at sea at the laden speed plus canal days. */
 const passageDays = (r: SeaRoute) => r.nm / (24 * SPEED) + r.canalDays;
 
 export interface TradeStatus {
@@ -122,6 +124,10 @@ export interface CanalState {
  * Below capacity, random arrivals queue for a while at each slot (Erlang C, `expectedWait`). Above
  * it, the line at anchor grows every day by the ships the canal can't pass, so the wait grows too,
  * until it equals the detour; from then on every ship beyond the canal's capacity goes round.
+ * Exactly at capacity the line has no drift but never clears: bunches of arrivals push it up and
+ * there is no spare capacity to work them off, so it wanders upward like a random walk, its expected
+ * length growing with the square root of time (a diffusion approximation) until the wait reaches
+ * the detour.
  */
 export function canalState(slots: number, arrivals: number): CanalState {
   const c = Math.max(1, Math.round(slots));
@@ -139,6 +145,12 @@ export function canalState(slots: number, arrivals: number): CanalState {
       else hi = mid;
     }
     return { waits: Array(HORIZON + 1).fill(DETOUR_DAYS), settledWait: DETOUR_DAYS, settledQueue: lo * DETOUR_DAYS, divertShare: 1 - lo / arrivals, divertDay: 0, transits: lo };
+  }
+  if (Math.abs(arrivals - c) < 1e-9) {
+    // Expected ships in line after t days: √(2·λ·(1 + cv²)·t / π), the mean of a driftless random walk held above zero.
+    const spread = (2 * arrivals * (1 + TRANSIT_CV * TRANSIT_CV)) / Math.PI;
+    const waits = Array.from({ length: HORIZON + 1 }, (_, t) => Math.min(DETOUR_DAYS, Math.sqrt(spread * t) / c));
+    return { waits, settledWait: DETOUR_DAYS, settledQueue: c * DETOUR_DAYS, divertShare: 0, divertDay: (c * DETOUR_DAYS) ** 2 / spread, transits: c };
   }
   const growth = (arrivals - c) / c; // days of wait added each day
   const divertDay = growth > 0 ? DETOUR_DAYS / growth : Infinity;
@@ -173,6 +185,8 @@ const ANSWER = (() => {
   for (let a = 40; a >= 15; a -= ARRIVAL_STEP) if (slotCutSolved(CUT_SLOTS, a)) return a;
   return NaN;
 })();
+/** The arithmetic the challenge asks for: the most ships a day whose excess over the slots takes the full 60 days to build the wait up to the detour. */
+export const ARRIVALS_LIMIT = CUT_SLOTS + (CUT_SLOTS * DETOUR_DAYS) / CHALLENGE_DAYS;
 
 export default function Lesson() {
   const s = useScenario('chokepoints', { closed: [] as Chokepoint[] });
@@ -189,13 +203,14 @@ export default function Lesson() {
   const cs = canalState(q.state.slots, q.state.arrivals);
   const solved = slotCutSolved(q.state.slots, q.state.arrivals);
   const xs = Array.from({ length: HORIZON + 1 }, (_, t) => t);
-  const over = q.state.arrivals >= q.state.slots;
+  const atCapacity = Math.abs(q.state.arrivals - q.state.slots) < 1e-9;
+  const over = q.state.arrivals > q.state.slots && !atCapacity;
 
   return (
     <LessonPage id="shipping/3.3">
       <P>
         <a href={lessonHref('shipping/3.1')}>Lesson 3.1</a> laid out the lanes ships follow, and <a href={lessonHref('shipping/3.2')}>Lesson 3.2</a> showed what
-        happens when too many of them arrive at one port. Between the ports, the lanes pass through a handful of narrow places — two canals cut by hand, and a few
+        happens when too many of them arrive at one port. Between the ports, the lanes pass through a handful of narrow places — two man-made canals, and a few
         straits between continents and islands — that are the only short way from one ocean to the next. A large share of the world’s trade squeezes through
         them. This lesson asks what happens to voyages when one of them closes, and what that does to the number of ships the world needs.
       </P>
@@ -257,8 +272,8 @@ export default function Lesson() {
         {nm(byId(NO_SUEZ, 'box').route!.nm)} by way of the Cape of Good Hope: {nm(byId(NO_SUEZ, 'box').extraNm)} and{' '}
         {days(byId(NO_SUEZ, 'box').extraDays)} more at {SPEED} knots. The Suezmax from Ras Tanura adds {nm(byId(NO_SUEZ, 'suezmax').extraNm)}. Closing the Red
         Sea at Bab el-Mandeb, its southern end, or the Strait of Gibraltar, the Mediterranean’s western one, cuts the same shortcut. None of this is hypothetical. In March 2021 the container ship{' '}
-        <i>Ever Given</i> ran aground across the canal and blocked it for six days, and since late 2023 attacks on ships in the Red Sea have led many owners to
-        send their ships round the Cape instead.
+        <i>Ever Given</i> ran aground across the canal and blocked it for six days, and from late 2023, attacks on ships in the Red Sea led many owners to send
+        their ships round the Cape instead.
       </P>
       <P>
         The other passages matter to other trades. Close the Panama Canal and the grain from New Orleans to Qingdao goes the other way round the world, through
@@ -266,8 +281,9 @@ export default function Lesson() {
         the Indian Ocean and the Pacific, and coal from Samarinda to Paradip detours through the Sunda Strait, {nm(byId(NO_MALACCA, 'coal').extraNm)} farther. The
         VLCC doesn’t notice: laden to {fmt(VLCC.designDraft, 1)} meters she is too deep for Malacca anyway and already sails by the Lombok Strait, as deep-draft
         tankers do, {nm(byId(OPEN, 'vlcc').open.nm - VLCC_SHALLOW.nm)} farther than a shallower ship would go. And the Strait of Hormuz has no way round at all.
-        Close it and both tanker trades from Ras Tanura vanish from the table. About a fifth of the oil the world consumes passes through Hormuz; pipelines in
-        Saudi Arabia and the United Arab Emirates can carry part of it to ports outside the Gulf, but not by sea.
+        Close it and both tanker trades from Ras Tanura vanish from the map; the table marks them “no sea route.” About a fifth of the oil the world consumes
+        passes through Hormuz. Pipelines across Saudi Arabia to the Red Sea, and across the United Arab Emirates to the Gulf of Oman, can bypass the strait for
+        part of it, and tankers load that oil at the far end.
       </P>
 
       <H2>More miles, more ships</H2>
@@ -279,15 +295,15 @@ export default function Lesson() {
         cargo now needs a bigger fleet, and nobody can build one in a hurry.
       </P>
       <P>
-        Notice what doesn’t change: the Capesize trades. Closing Suez costs them {fmt(EXTRA_SUEZ.cape, 1)} ships, because in our world none of their routes uses
+        Notice what doesn’t change: the Capesize trades. Closing Suez costs them {EXTRA_SUEZ.cape < 0.05 ? 'nothing' : `${fmt(EXTRA_SUEZ.cape, 1)} ships`}, because in our world none of their routes uses
         any of these six passages. Ore from Brazil to China already goes round the Cape of Good Hope, the shorter way; ore and coal from Australia never pass
         near them. A chokepoint is a choke only for the trades that run through it, which is why closures hit some freight markets hard and leave others alone.
       </P>
 
       <H2>A canal is a queue</H2>
       <P>
-        Closure is the extreme. More often a canal simply can’t pass everyone who wants it. The Panama Canal’s locks lift ships 26 meters to Gatun Lake and lower
-        them down the other side, and every lockage spends fresh water from the lake. In 2023 a drought left the lake low, and the canal authority cut both the
+        Closure is the extreme. More often a canal simply can’t pass everyone who wants it. The Panama Canal, opened in 1914, has locks that lift ships 26 meters
+        to Gatun Lake, in the middle of the isthmus, and lower them down the other side, and every lockage spends fresh water from the lake. In 2023 a drought left the lake low, and the canal authority cut both the
         number of ships it passed each day and the draft they could load to. Ships queued at anchor at both ends, and some owners sent theirs the long way instead.
       </P>
       <P>
@@ -300,7 +316,11 @@ export default function Lesson() {
       <Figure name="Canal and Strait Simulator · the Panama queue" scenario={q}>
         <XYChart
           ariaLabel={`Wait at anchor over ${HORIZON} days with ${q.state.slots} slots a day and ${fmt(q.state.arrivals, 1)} ships a day wanting to cross. ${
-            over ? `The wait grows until it equals the ${days(DETOUR_DAYS)} detour on day ${fmt(cs.divertDay)}.` : `The wait settles at ${fmt(cs.settledWait * 24)} hours.`
+            over
+              ? `The wait grows until it equals the ${days(DETOUR_DAYS)} detour on day ${fmt(cs.divertDay)}.`
+              : atCapacity
+                ? `The wait creeps up to ${days(cs.waits[HORIZON])} by day ${HORIZON}.`
+                : `The wait settles at ${fmt(cs.settledWait * 24)} hours.`
           }`}
           series={[{ xs, ys: cs.waits, color: GRAPHIC.teal, width: 2.5, fillTo: 0, fillOpacity: 0.12 }]}
           xMin={0}
@@ -314,7 +334,7 @@ export default function Lesson() {
           xLabel="Days after the change"
           yLabel="Wait at anchor, days"
           refLines={[{ y: DETOUR_DAYS, color: TEXT.red, label: `detour by Suez: ${days(DETOUR_DAYS)}` }]}
-          markers={Number.isFinite(cs.divertDay) && cs.divertDay <= HORIZON ? [{ x: cs.divertDay, y: DETOUR_DAYS, color: TEXT.red, label: `ships divert from day ${fmt(cs.divertDay)}`, anchor: cs.divertDay > 80 ? 'end' : 'start', labelDy: 18 }] : []}
+          markers={Number.isFinite(cs.divertDay) && cs.divertDay <= HORIZON ? [{ x: cs.divertDay, y: DETOUR_DAYS, color: TEXT.red, label: 'ships start to go round', anchor: cs.divertDay > 80 ? 'end' : 'start', labelDy: 18 }] : []}
           height={220}
         />
         <Readouts
@@ -329,7 +349,9 @@ export default function Lesson() {
         <Caption>
           {over
             ? `The canal passes ${q.state.slots} ships a day and ${fmt(q.state.arrivals, 1)} arrive, so the line at anchor grows by ${fmt(q.state.arrivals - q.state.slots, 1)} a day and the wait by ${fmt(((q.state.arrivals - q.state.slots) / q.state.slots) * 24, 1)} hours a day.`
-            : `The slots are busy ${pct(q.state.arrivals / q.state.slots)} of the time; ships that arrive in a bunch wait for one to come free.`}
+            : atCapacity
+              ? `The canal passes ${q.state.slots} ships a day and ${q.state.slots} arrive: on average it keeps up, but with nothing to spare, every bunch of arrivals adds to a line that never clears. The wait creeps up, to ${days(cs.waits[HORIZON])} by day ${HORIZON}, and would take about ${fmt(cs.divertDay / 365)} years to reach the detour.`
+              : `The slots are busy ${pct(q.state.arrivals / q.state.slots)} of the time; ships that arrive in a bunch wait for one to come free.`}
         </Caption>
       </Figure>
 
@@ -350,16 +372,18 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`A drought cuts the canal to ${CUT_SLOTS} slots a day. Find the most ships a day, to the nearest half ship, that can keep arriving for ${CHALLENGE_DAYS} days before the wait at anchor grows as long as the detour.`}
+        question={`A drought cuts the canal to ${CUT_SLOTS} slots a day. Compute first: the wait grows each day by the ships the canal can’t pass, divided by ${CUT_SLOTS}. How many ships a day can keep arriving for ${CHALLENGE_DAYS} days before the wait reaches the ${fmt(DETOUR_DAYS, 1)}-day detour? Then set the slots to ${CUT_SLOTS} and the arrivals to your answer, rounded down to a half ship, and check it on the chart.`}
         solved={solved}
         status={
           Math.round(q.state.slots) !== CUT_SLOTS
             ? `Set the slots to ${CUT_SLOTS} first; they are at ${q.state.slots}.`
-            : Number.isFinite(cs.divertDay)
-              ? `At ${fmt(q.state.arrivals, 1)} ships a day, the wait reaches the detour on day ${fmt(cs.divertDay, 1)}.`
-              : `At ${fmt(q.state.arrivals, 1)} ships a day, the canal keeps up and the wait never reaches the detour. Can it take more?`
+            : !over
+              ? `At ${half(q.state.arrivals)} ships a day the canal keeps up${atCapacity ? ' on average, and the wait creeps up for years' : ''}. Can it take more?`
+              : cs.divertDay < CHALLENGE_DAYS
+                ? `At ${half(q.state.arrivals)} ships a day the wait reaches the detour before day ${CHALLENGE_DAYS}.`
+                : `At ${half(q.state.arrivals)} ships a day the wait holds out past day ${CHALLENGE_DAYS}. Is that the most?`
         }
-        success={`Solved: ${fmt(ANSWER, 1)} ships a day. The line grows by the ships the canal can't pass, ${fmt(ANSWER - CUT_SLOTS, 1)} a day, and a ship at its back waits that many ÷ ${CUT_SLOTS} days longer each day, so the wait reaches ${days(DETOUR_DAYS)} on day ${fmt(canalState(CUT_SLOTS, ANSWER).divertDay, 1)}. Half a ship more and it gets there on day ${fmt(canalState(CUT_SLOTS, ANSWER + ARRIVAL_STEP).divertDay, 1)}. A small shortfall can hide in a queue for months; a large one shows up within weeks.`}
+        success={`Solved: ${half(ANSWER)} ships a day. The wait may grow by no more than ${days(DETOUR_DAYS)} ÷ ${CHALLENGE_DAYS}, or ${fmt(DETOUR_DAYS / CHALLENGE_DAYS, 2)} days a day, and it grows by the excess ÷ ${CUT_SLOTS}, so the excess can be at most ${CUT_SLOTS} × ${fmt(DETOUR_DAYS, 1)} ÷ ${CHALLENGE_DAYS} = ${fmt(ARRIVALS_LIMIT - CUT_SLOTS, 1)} ships: ${fmt(ARRIVALS_LIMIT, 1)} a day, or ${half(ANSWER)} on the slider. At ${half(ANSWER)} the wait reaches the detour on day ${fmt(canalState(CUT_SLOTS, ANSWER).divertDay, 1)}; half a ship more and it gets there on day ${fmt(canalState(CUT_SLOTS, ANSWER + ARRIVAL_STEP).divertDay, 1)}. A small shortfall can hide in a queue for months; a large one shows up within weeks.`}
       />
 
       <P>

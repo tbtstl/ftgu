@@ -1,4 +1,4 @@
-// A map of the weather course's fictional region: the coast and the bay, the port city of Calder
+// A map of the weather course's fictional region: the coast and the bay, the port city of Fenwick
 // Bay, the corn plains around Marlow and the wind farm on Hollin Ridge. Drawn in a 600 × 400 frame
 // where one unit is about a kilometer, with north up. Figures draw their own overlays (fronts,
 // storms, wind arrows) as children, in the same coordinates.
@@ -34,7 +34,7 @@ function Turbine({ x, y }: { x: number; y: number }) {
   );
 }
 
-export interface CalderMapProps {
+export interface FenwickMapProps {
   /** Drawn over the land and sea, under the station markers. */
   children?: ReactNode;
   /** Drawn over everything. */
@@ -49,7 +49,7 @@ export interface CalderMapProps {
   viewBox?: string;
 }
 
-export function CalderMap({ children, overlay, highlight, onSelect, ariaLabel, bare, viewBox = '0 0 600 400' }: CalderMapProps) {
+export function FenwickMap({ children, overlay, highlight, onSelect, ariaLabel, bare, viewBox = '0 0 600 400' }: FenwickMapProps) {
   const key = (id: StationId) => (e: KeyboardEvent) => {
     if (onSelect && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
@@ -63,18 +63,18 @@ export function CalderMap({ children, overlay, highlight, onSelect, ariaLabel, b
       role={onSelect ? 'group' : 'img'}
       aria-label={
         ariaLabel ??
-        'Map of the Calder region: the port city of Calder Bay on the coast, the farm town of Marlow on the plains 350 km to the west, and the wind farm on Hollin Ridge to the north-west.'
+        'Map of the Fenwick region: the port city of Fenwick Bay on the coast, the farm town of Marlow on the plains 350 km to the west, and the wind farm on Hollin Ridge to the north-west.'
       }
     >
       <defs>
-        <pattern id="calder-fields" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
+        <pattern id="fenwick-fields" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(8)">
           <rect width="14" height="14" fill={LAND} />
           <rect x="1" y="1" width="12" height="5" fill={FIELD} />
           <rect x="1" y="8" width="5" height="5" fill={FIELD} />
         </pattern>
       </defs>
       <rect x={0} y={0} width={600} height={400} fill={LAND} />
-      <ellipse cx={170} cy={270} rx={140} ry={95} fill="url(#calder-fields)" opacity={0.9} />
+      <ellipse cx={170} cy={270} rx={140} ry={95} fill="url(#fenwick-fields)" opacity={0.9} />
       {/* Hollin Ridge: contours running south-west to north-east. */}
       {[0, 1, 2].map((k) => (
         <ellipse key={k} cx={300} cy={108} rx={120 - k * 34} ry={34 - k * 10} transform="rotate(-18 300 108)" fill="none" stroke={CONTOUR} strokeWidth={1.4} />
@@ -98,7 +98,7 @@ export function CalderMap({ children, overlay, highlight, onSelect, ariaLabel, b
         (Object.keys(STATIONS) as StationId[]).map((id) => {
           const s = STATIONS[id];
           const on = highlight === id;
-          const labelLeft = id === 'calder';
+          const labelLeft = id === 'fenwick';
           return (
             <g
               key={id}

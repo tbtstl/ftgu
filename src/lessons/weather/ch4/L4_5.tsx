@@ -27,6 +27,7 @@ import {
 } from '../../../framework';
 import {
   WIND_PPA,
+  WINTER_DAYS,
   farmYears,
   regress,
   summarize,
@@ -41,7 +42,7 @@ import {
 import { CITY_WIND_SHARE, UTILITY, monthIndex } from '../../../engines/weather/degreeDays';
 import { FARM, yieldHistory } from '../../../engines/weather/crops';
 import { archive, monthDays } from '../../../model/weather/archive';
-import { CALDER, MARLOW, STATIONS } from '../../../model/weather/region';
+import { FENWICK, MARLOW, STATIONS } from '../../../model/weather/region';
 import { RIDGE_MW } from '../../../engines/weather/renewables';
 import { WX } from '../shared/tones';
 
@@ -54,7 +55,7 @@ export interface RiskState {
   business: Business;
   /** Multiplies the day-to-day temperature variability (utility and farm). */
   variability: number;
-  /** Calder Bay's winter warming per °C of Niño-3.4, °F (utility). */
+  /** Fenwick Bay's winter warming per °C of Niño-3.4, °F (utility). */
   ensoF: number;
   /** The Marlow region's share of the national corn crop (farm). */
   share: number;
@@ -62,8 +63,10 @@ export interface RiskState {
   windScale: number;
 }
 
-export const RISK_DEFAULTS: RiskState = { business: 'utility', variability: 1, ensoF: STATIONS.calder.ensoF ?? 1, share: 0.02, windScale: 1 };
+export const RISK_DEFAULTS: RiskState = { business: 'utility', variability: 1, ensoF: STATIONS.fenwick.ensoF ?? 1, share: 0.02, windScale: 1 };
 export const VARIABILITY_STEP = 0.05;
+/** The second point the first challenge gives, so the reader can extend a line through it and × 1. */
+export const VARIABILITY_HINT = 0.5;
 
 const utilCache = new Map<string, UtilityWinter[]>();
 const farmCache = new Map<string, FarmYear[]>();
@@ -123,6 +126,32 @@ export function riskOf(st: RiskState): Risk {
   return { values, summary, budget: summary.mean, shortfall: summary.mean - summary.p5, worst: summary.mean - summary.min, worstIndex };
 }
 
+/** Each business's standard deviation and 1-in-20 shortfall as shares of its own budget, at the region's own physics. */
+export function relativeRisk(business: Business): { sd: number; shortfall: number } {
+  const r = riskOf({ ...RISK_DEFAULTS, business });
+  return { sd: r.summary.sd / r.budget, shortfall: r.shortfall / r.budget };
+}
+
+/**
+ * Why the utility is steadier against budget than the wind farm: the year-to-year spread (as a
+ * share of the mean) of each one's weather driver, the share of the utility's margin that doesn't
+ * depend on the weather, and how many percent of energy the wind farm gains per 1% of wind.
+ */
+export function steadinessDrivers(): { hddCv: number; windCv: number; baseShare: number; windElasticity: number } {
+  const winters = utilityRun(1, RISK_DEFAULTS.ensoF);
+  const hdd = summarize(winters.map((w) => w.hdd));
+  const budget = summarize(winters.map((w) => w.margin)).mean;
+  const fitW = indexFit({ business: 'wind', farmIndex: 'heat' });
+  const wind = summarize(fitW.x);
+  const revenue = summarize(fitW.y);
+  return {
+    hddCv: hdd.sd / hdd.mean,
+    windCv: wind.sd / wind.mean,
+    baseShare: (UTILITY.baseLoad * WINTER_DAYS * UTILITY.margin) / budget,
+    windElasticity: (fitW.slope * wind.mean) / revenue.mean,
+  };
+}
+
 /** The first challenge's line: a 1-in-20 winter that falls more than $25 million short. */
 export const SHORTFALL_TARGET = 25_000_000;
 
@@ -131,7 +160,7 @@ function utilityShortfall(variability: number, ensoF: number): number {
 }
 
 /**
- * The first challenge: with ENSO's pull left at Calder Bay's own, the smallest variability on the
+ * The first challenge: with ENSO's pull left at Fenwick Bay's own, the smallest variability on the
  * slider's steps at which the utility's 1-in-20 winter falls more than $25 million short.
  */
 export function variabilitySolved(st: RiskState): boolean {
@@ -143,14 +172,14 @@ export function variabilitySolved(st: RiskState): boolean {
 // ---------------------------------------------------------------------------
 // The second demonstration: each season's cash flow against a weather index.
 
-export type FarmIndex = 'calderCdd' | 'rain' | 'heat';
+export type FarmIndex = 'fenwickCdd' | 'rain' | 'heat';
 
 export interface IndexState {
   business: Business;
   farmIndex: FarmIndex;
 }
 
-export const INDEX_DEFAULTS: IndexState = { business: 'utility', farmIndex: 'calderCdd' };
+export const INDEX_DEFAULTS: IndexState = { business: 'utility', farmIndex: 'fenwickCdd' };
 
 export interface IndexFit {
   x: number[];
@@ -205,7 +234,7 @@ export function indexFit(st: IndexState): IndexFit {
     const w = utilityRun(1, RISK_DEFAULTS.ensoF);
     x = w.map((v) => v.hdd);
     y = w.map((v) => v.margin);
-    index = 'Calder Bay heating degree days, November–March';
+    index = 'Fenwick Bay heating degree days, November–March';
     unit = 'HDD';
     outcome = 'winter margin';
   } else if (st.business === 'wind') {
@@ -224,9 +253,9 @@ export function indexFit(st: IndexState): IndexFit {
     const f = farmRun(1, RISK_DEFAULTS.share);
     const yh = yieldHistory();
     y = f.map((v) => v.profit);
-    if (st.farmIndex === 'calderCdd') {
+    if (st.farmIndex === 'fenwickCdd') {
       x = yh.map((v) => monthIndex('CDD', v.year, 6) + monthIndex('CDD', v.year, 7));
-      index = 'Calder Bay cooling degree days, July–August';
+      index = 'Fenwick Bay cooling degree days, July–August';
       unit = 'CDD';
     } else if (st.farmIndex === 'rain') {
       x = yh.map((v) => v.rainIn);
@@ -234,7 +263,7 @@ export function indexFit(st: IndexState): IndexFit {
       unit = 'inch';
     } else {
       x = yh.map((v) => v.heatDD);
-      index = 'Marlow’s heat degree days above 86 °F, July–August';
+      index = 'Marlow’s extreme-heat degree days above 86 °F, July–August';
       unit = 'degree day';
     }
     outcome = 'profit';
@@ -249,7 +278,7 @@ export function indexFit(st: IndexState): IndexFit {
 /** The second challenge: the index that explains the most of the Marlow farm's profit. */
 export function bestIndexSolved(st: IndexState): boolean {
   if (st.business !== 'farm') return false;
-  const all: FarmIndex[] = ['calderCdd', 'rain', 'heat'];
+  const all: FarmIndex[] = ['fenwickCdd', 'rain', 'heat'];
   const best = all.reduce((a, b) => (indexFit({ business: 'farm', farmIndex: b }).r2 > indexFit({ business: 'farm', farmIndex: a }).r2 ? b : a));
   return st.farmIndex === best;
 }
@@ -272,7 +301,7 @@ function ordinal(n: number): string {
 }
 
 const BUSINESS_LABEL: Record<Business, string> = {
-  utility: 'Calder Gas & Light',
+  utility: 'Fenwick Gas & Light',
   farm: 'the Marlow corn farm',
   wind: 'the Hollin Ridge wind farm',
 };
@@ -389,12 +418,13 @@ export default function Lesson() {
     const avgWinterWind = winterWinds.reduce((a, v) => a + v, 0) / winterWinds.length;
     const fitU = indexFit({ business: 'utility', farmIndex: 'heat' });
     const fitW = indexFit({ business: 'wind', farmIndex: 'heat' });
-    const fitCdd = indexFit({ business: 'farm', farmIndex: 'calderCdd' });
+    const fitCdd = indexFit({ business: 'farm', farmIndex: 'fenwickCdd' });
     const fitRain = indexFit({ business: 'farm', farmIndex: 'rain' });
     const fitHeat = indexFit({ business: 'farm', farmIndex: 'heat' });
     const doubled = riskOf({ ...RISK_DEFAULTS, business: 'utility', ensoF: 3 });
+    const half = riskOf({ ...RISK_DEFAULTS, business: 'utility', variability: VARIABILITY_HINT });
     const worstRank = [...utilWinters].sort((a, b) => a.hdd - b.hdd).findIndex((w) => w.winter === worstW.winter) + 1;
-    return { worstRank, util, farm, farmBig, wind, hddMean, warmest, worstW, avgWinterWind, winterWinds, fitU, fitW, fitCdd, fitRain, fitHeat, doubled };
+    return { worstRank, util, farm, farmBig, wind, hddMean, warmest, worstW, avgWinterWind, winterWinds, fitU, fitW, fitCdd, fitRain, fitHeat, doubled, half, ...steadinessDrivers() };
   }, []);
 
   const perHdd = utilityDollarsPerHdd();
@@ -402,9 +432,9 @@ export default function Lesson() {
 
   const caption =
     st.business === 'utility'
-      ? `Calder Gas & Light earns $${UTILITY.margin} on every MMBtu it delivers, and each heating degree day adds ${fmt(UTILITY.perHdd)} MMBtu, so each degree day is worth about ${usd(perHdd)} of margin. Its average winter earns ${money(risk.budget)}.`
+      ? `Fenwick Gas & Light earns $${UTILITY.margin} on every MMBtu it delivers, and each heating degree day adds ${fmt(UTILITY.perHdd)} MMBtu, so each degree day is worth about ${usd(perHdd)} of margin. Its average winter earns ${money(risk.budget)}.`
       : st.business === 'farm'
-        ? `The farm grows ${fmt(FARM.acres)} acres of corn at ${usd(FARM.costPerAcre)} an acre. In an average year it earns ${money(risk.budget, false)}; with the region at ${pct(st.share)} of the national crop, its worst year ${risk.summary.min < 0 ? `loses ${money(-risk.summary.min, false)}` : `still earns ${money(risk.summary.min, false)}`}.`
+        ? `The farm grows ${fmt(FARM.acres)} acres of corn at ${usd(FARM.costPerAcre)} an acre. In an average year it earns ${money(risk.budget, false)}; with ${fmt(st.share * 100)}% of the national crop under Marlow’s weather, its worst year ${risk.summary.min < 0 ? `loses ${money(-risk.summary.min, false)}` : `still earns ${money(risk.summary.min, false)}`}.`
         : `Hollin Ridge’s ${RIDGE_MW} MW sell every megawatt-hour at a contracted $${WIND_PPA}. With the wind at ${fmt(st.windScale * 100)}% of the archive’s, its average year earns ${money(risk.budget)}.`;
 
   return (
@@ -417,9 +447,9 @@ export default function Lesson() {
       </P>
       <P>
         Weather can hurt a business through prices or through quantities. A utility that has to buy gas at short notice in a cold snap pays the spiking city-gate
-        prices of Lesson 4.2 — <b>price risk</b>, the cold snap in the first sentence of this course. But many US gas utilities pass the cost of the gas itself
-        straight through to their customers. What they keep is a <K tone={WX.money}>margin</K> on every unit they deliver, and the weather decides how many units
-        that is. That is <b>volume risk</b>, and it runs the other way: a mild winter is the expensive one, the other half of that first sentence. The Hollin Ridge
+        prices of Lesson 4.2 — <b>price risk</b>, the danger for anyone caught buying energy at short notice. But many US gas utilities pass the cost of the gas
+        itself straight through to their customers. What they keep is a <K tone={WX.money}>margin</K> on every unit they deliver, and the weather decides how many
+        units that is. That is <b>volume risk</b>, and it runs the other way: a mild winter is the expensive one, costing the utility the gas it never sells. The Hollin Ridge
         wind farm is in the same position, selling every megawatt-hour at a contracted ${WIND_PPA} while the wind decides how many it has to sell, and so is the Marlow farm,
         whose costs are fixed in spring while the summer decides the harvest.
       </P>
@@ -427,8 +457,8 @@ export default function Lesson() {
         Each of them plans on a normal season. A warm winter doesn’t look like a disaster from inside a utility; it looks like a shortfall against budget, explained
         in the annual report by the weather. In the next demonstration, choose a business. Each bar is one season of the course’s simulated archive — a winter,
         November to March, for the utility; a year for the farms — drawn as how far that season’s cash came in above or below the average season, which serves as
-        the budget. The dashed line marks the <K tone={WX.money}>1-in-20 bad season</K>, the fifth percentile. The sliders change the physics underneath: how
-        variable the weather is, how hard ENSO tilts the winter, how much wind blows, how much of the nation’s corn grows around Marlow. All of it is simulated,
+        the budget. The dashed line marks the <K tone={WX.money}>1-in-20 bad season</K>, the fifth percentile. The sliders change the world underneath: how
+        variable the weather is, how hard ENSO tilts the winter, how much wind blows — and, for the farm, how much of the nation’s corn shares Marlow’s weather. All of it is simulated,
         the businesses included:
       </P>
 
@@ -438,7 +468,7 @@ export default function Lesson() {
           value={st.business}
           onChange={(v) => s.set({ business: v })}
           options={[
-            { value: 'utility', label: 'Calder Gas & Light' },
+            { value: 'utility', label: 'Fenwick Gas & Light' },
             { value: 'farm', label: 'Marlow corn farm' },
             { value: 'wind', label: 'Hollin Ridge wind farm' },
           ]}
@@ -485,13 +515,13 @@ export default function Lesson() {
         )}
         {st.business === 'farm' && (
           <Slider
-            label="Region’s share of the national corn crop"
+            label="Share of the national crop under Marlow’s weather"
             value={st.share}
-            min={0}
+            min={0.01}
             max={0.5}
             step={0.01}
             onChange={(v) => s.set({ share: v })}
-            display={pct(st.share)}
+            display={`${fmt(st.share * 100)}%`}
           />
         )}
         {st.business === 'wind' && (
@@ -510,41 +540,48 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with Calder Gas & Light. Its average winter earns {money(q.util.budget)} of margin, with a standard deviation of {money(q.util.summary.sd)}. One winter
+        Start with Fenwick Gas & Light. Its average winter earns {money(q.util.budget)} of margin, with a standard deviation of {money(q.util.summary.sd)}. One winter
         in 20 falls {money(q.util.shortfall)} short of that, and the worst falls {money(q.util.worst)} short. Each heating degree day is worth about{' '}
         {usd(perHdd)}: ${UTILITY.margin} on each of the {fmt(UTILITY.perHdd)} MMBtu it adds. The warmest winter in the archive, winter {q.warmest.winter}, brought{' '}
         {fmt(q.warmest.hdd)} degree days against an average of {fmt(q.hddMean)}. Turn up ENSO’s pull and the spread widens: at 3 °F per °C the 1-in-20 winter falls{' '}
         {money(q.doubled.shortfall)} short, because the Pacific now pushes whole winters warm or cold together. (Some states let utilities adjust their bills for
-        the weather, which shifts much of this risk to their customers; Calder Gas & Light keeps it.)
+        the weather, which shifts much of this risk to their customers; Fenwick Gas & Light keeps it.)
       </P>
       <P>
         Switch to the corn farm and the scale changes, but the risk doesn’t shrink. Its average year earns {money(q.farm.budget, false)} on {fmt(FARM.acres)} acres;
         its standard deviation is {money(q.farm.summary.sd, false)}, {fmt(q.farm.summary.sd / q.farm.budget, 1)} times as much; one year in 20 loses {money(-q.farm.summary.p5, false)}, and the
-        worst loses {money(-q.farm.summary.min, false)}. The farm’s costs are fixed, so a short harvest falls straight through to profit. Raise the region’s share of
-        the national crop and the natural hedge of <a href={lessonHref('weather/4.3')}>Lesson 4.3</a> appears: at 40%, a bad harvest raises the price enough that
+        worst loses {money(-q.farm.summary.min, false)}. The farm’s costs are fixed, so a short harvest falls straight through to profit. Raise the share of the
+        national crop under Marlow’s weather and the natural hedge of <a href={lessonHref('weather/4.3')}>Lesson 4.3</a> appears: at 40%, a bad harvest raises the price enough that
         the standard deviation falls to {money(q.farmBig.summary.sd, false)}.
       </P>
       <P>
-        The wind farm is the steadiest. Its average year earns {money(q.wind.budget)}, its standard deviation is {money(q.wind.summary.sd)}, about{' '}
-        {pct(q.wind.summary.sd / q.wind.budget)} of that, and its 1-in-20 year falls {money(q.wind.shortfall)} short. A year of wind is the sum of 365 days of
-        weather, and the days’ ups and downs largely cancel. The farm’s harvest hangs on a few weeks of July, and a whole winter’s gas on how a few cold spells
-        happen to fall.
+        The wind farm’s average year earns {money(q.wind.budget)}, with a standard deviation of {money(q.wind.summary.sd)}, and its 1-in-20 year falls{' '}
+        {money(q.wind.shortfall)} short. Those are smaller sums than the utility’s, but the fair comparison is against each business’s own budget, and by that
+        measure the steadiest of the three is the gas utility: its standard deviation is{' '}
+        {pct(q.util.summary.sd / q.util.budget, 1)} of its average winter and its 1-in-20 winter falls {pct(q.util.shortfall / q.util.budget, 1)} short, against{' '}
+        {pct(q.wind.summary.sd / q.wind.budget, 1)} and {pct(q.wind.shortfall / q.wind.budget, 1)} for the wind farm. That isn’t because the wind is less steady
+        than the cold. A year’s average wind on Hollin Ridge has a standard deviation of only {pct(q.windCv, 1)} of its mean, against {pct(q.hddCv, 1)} for a
+        winter’s degree days at Fenwick Bay. But about {pct(q.baseShare)} of the utility’s margin comes from the {fmt(UTILITY.baseLoad)} MMBtu a day it sells
+        whatever the weather, a fixed base that dilutes the swings of the rest, while every dollar the wind farm earns depends on the wind — and the steep power curve of{' '}
+        <a href={lessonHref('weather/4.4')}>Lesson 4.4</a> turns each 1% more or less wind into about {fmt(q.windElasticity, 1)}% more or less energy.
       </P>
 
       <Challenge
         id="a"
-        question={`Leave ENSO’s pull at Calder Bay’s own ${fmt(RISK_DEFAULTS.ensoF, 1)} °F per °C. How much more variable — to the nearest ${VARIABILITY_STEP} — would the weather have to be before Calder Gas & Light’s 1-in-20 winter fell more than $25 million short of budget?`}
+        question={`Leave ENSO’s pull at Fenwick Bay’s own ${fmt(RISK_DEFAULTS.ensoF, 1)} °F per °C. With the weather’s day-to-day variability at × ${fmt(VARIABILITY_HINT, 1)}, the utility’s 1-in-20 winter falls ${money(q.half.shortfall)} short of budget; at × 1, ${money(q.util.shortfall)}. Predict first, assuming it keeps growing at that pace: how much more variable — to the nearest ${VARIABILITY_STEP} — would the weather have to be before the 1-in-20 winter fell more than $25 million short? Then check.`}
         solved={solved}
         status={
           st.business !== 'utility'
-            ? 'Choose Calder Gas & Light first.'
+            ? 'Choose Fenwick Gas & Light first.'
             : Math.abs(st.ensoF - RISK_DEFAULTS.ensoF) > 1e-9
               ? `Set ENSO’s pull back to ${fmt(RISK_DEFAULTS.ensoF, 1)} °F per °C.`
-              : shortNow > SHORTFALL_TARGET
-                ? `At × ${fmt(st.variability, 2)} the 1-in-20 winter falls ${money(shortNow)} short. Would less variability do it?`
-                : `At × ${fmt(st.variability, 2)} the 1-in-20 winter falls ${money(shortNow)} short.`
+              : Math.abs(st.variability - RISK_DEFAULTS.variability) < 1e-9
+                ? 'Make your prediction, then raise the variability.'
+                : shortNow > SHORTFALL_TARGET
+                  ? `At × ${fmt(st.variability, 2)} the 1-in-20 winter falls ${money(shortNow)} short. Would less variability do it?`
+                  : `At × ${fmt(st.variability, 2)} the 1-in-20 winter falls ${money(shortNow)} short.`
         }
-        success={`Solved. At × ${fmt(st.variability, 2)} the 1-in-20 winter falls ${money(shortNow)} short of budget. The shortfall grows almost in proportion to the variability: the utility’s exposure is linear in the degree days, so making every day’s departure from normal bigger makes every winter’s bigger with it. Even Marlow’s winter days are only ${fmt(MARLOW.winterSd / CALDER.winterSd, 2)} times as variable as Calder Bay’s; a climate half again as variable would be a different place.`}
+        success={`Solved: × ${fmt(st.variability, 2)}, where the 1-in-20 winter falls ${money(shortNow)} short of budget. From × ${fmt(VARIABILITY_HINT, 1)} to × 1 it grew by ${money(q.util.shortfall - q.half.shortfall)}, and from × 1 to × ${fmt(st.variability, 2)} by ${money(shortNow - q.util.shortfall)}, so the line you extended roughly holds. But it doesn’t pass through zero: had the shortfall grown in proportion to the variability, × ${fmt(SHORTFALL_TARGET / q.util.shortfall, 2)} would have been enough. Bigger day-to-day departures make every winter’s degree days swing further, but part of the risk comes from ENSO, which pushes whole winters warm or cold whatever the days do, and that part doesn’t grow. Even Marlow’s winter days are only ${fmt(MARLOW.winterSd / FENWICK.winterSd, 2)} times as variable as Fenwick Bay’s; a climate that much more variable would be a different place.`}
       />
 
       <H2>What an index can explain</H2>
@@ -562,7 +599,7 @@ export default function Lesson() {
           value={ix.state.business}
           onChange={(v) => ix.set({ business: v })}
           options={[
-            { value: 'utility', label: 'Calder Gas & Light' },
+            { value: 'utility', label: 'Fenwick Gas & Light' },
             { value: 'farm', label: 'Marlow corn farm' },
             { value: 'wind', label: 'Hollin Ridge wind farm' },
           ]}
@@ -573,9 +610,9 @@ export default function Lesson() {
             value={ix.state.farmIndex}
             onChange={(v) => ix.set({ farmIndex: v })}
             options={[
-              { value: 'calderCdd', label: 'Calder Bay summer CDD' },
+              { value: 'fenwickCdd', label: 'Fenwick Bay summer CDD' },
               { value: 'rain', label: 'Marlow summer rain' },
-              { value: 'heat', label: 'Marlow heat degree days' },
+              { value: 'heat', label: 'Marlow extreme-heat degree days' },
             ]}
           />
         )}
@@ -591,7 +628,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        For Calder Gas & Light the fit is close: winter degree days at Calder Bay explain {pct(q.fitU.r2)} of its margin, at {usd(q.fitU.slope)} per degree day — a
+        For Fenwick Gas & Light the fit is close: winter degree days at Fenwick Bay explain {pct(q.fitU.r2)} of its margin, at about {usd(Math.round(q.fitU.slope / 1000) * 1000)} per degree day — a
         little more than {usd(perHdd)}, because winter winds in the city average {fmt(q.avgWinterWind, 1)} m/s against its year-round {fmt(UTILITY.meanWind, 1)}, and
         windy days need more gas for each degree day. The wind is also most of what the line misses. Winter {q.worstW.winter}, with {fmt(q.worstW.hdd)} degree days,
         was only the {ordinal(q.worstRank)}-warmest in the archive, but it was calm, averaging {fmt(q.winterWinds[q.worstW.winter - 1], 1)} m/s, and it was the utility’s worst. Winter{' '}
@@ -601,26 +638,24 @@ export default function Lesson() {
       <P>
         The wind farm’s revenue follows Hollin Ridge’s average wind almost as faithfully: R² of {pct(q.fitW.r2)}, at {perUnit(q.fitW.slope)} per meter per second of
         the year’s average wind. What the average misses is how the wind was spread through the year — the steep power curve of{' '}
-        <a href={lessonHref('weather/4.4')}>Lesson 4.4</a> rewards a few strong days more than many middling ones.
-      </P>
-      <P>
-        The farm is where indexes struggle. Calder Bay’s summer cooling degree days explain only {pct(q.fitCdd.r2)} of its profit: they measure heat 350 km away, on
-        the coast, as a daily mean, while the corn suffers from inland afternoon peaks. Marlow’s summer rain explains {pct(q.fitRain.r2)}, since the yield suffers only once a
-        summer falls well short of rain, and heat does damage whatever the rain.
+        <a href={lessonHref('weather/4.4')}>Lesson 4.4</a> rewards a few strong days more than many middling ones. The farm is where indexes
+        struggle, and where the choice of index matters most.
       </P>
 
       <Challenge
         id="b"
         figure="Weather Risk Calculator · against the index"
-        question="Which of the three indexes explains the most of the Marlow farm’s profit?"
+        question="Predict first: in Lesson 4.3, heat did more of the damage than drought in most of the farm’s poor seasons, and Fenwick Bay lies 350 km away on the coast. Which of the three indexes should explain the most of the Marlow farm’s profit? Then check all three."
         solved={solved2}
-        status={
-          ix.state.business !== 'farm'
-            ? 'Choose the Marlow corn farm first.'
-            : `This index explains ${pct(fit.r2)} of the farm’s profit, leaving ${money(fit.residualSd, false)} a year unexplained.`
-        }
-        success={`Solved. Marlow’s own heat degree days explain ${pct(q.fitHeat.r2)}, at ${perUnit(q.fitHeat.slope)} of profit per degree day. Even so, ${money(q.fitHeat.residualSd, false)} a year is left unexplained — the dry summers and the timing that the index doesn’t count.`}
+        status={ix.state.business !== 'farm' ? 'Choose the Marlow corn farm first.' : 'Not this one. Check the other indexes.'}
+        success={`Solved. Marlow’s own extreme-heat degree days explain ${pct(q.fitHeat.r2)} of the farm’s profit, each degree day costing it about ${usd(Math.round(-q.fitHeat.slope / 1000) * 1000)}. Even so, ${money(q.fitHeat.residualSd, false)} a year of the ${money(q.fitHeat.sd, false)} spread is left unexplained — the dry summers and the timing that the index doesn’t count.`}
       />
+
+      <P>
+        The other two do far worse. Fenwick Bay’s summer cooling degree days explain only {pct(q.fitCdd.r2)} of the farm’s profit: they measure heat 350 km away, on
+        the coast, as a daily mean, while the corn suffers from inland afternoon peaks. Marlow’s summer rain explains {pct(q.fitRain.r2)}, since the yield suffers only
+        once a summer falls well short of rain, and heat does damage whatever the rain.
+      </P>
 
       <P>
         The gap between an index and a business has a name: <b>basis risk</b>. It comes from geography (the station isn’t the farm), from definition (a daily mean

@@ -26,7 +26,8 @@ import {
 } from '../../../framework';
 import { scfPerCubicFoot, zFactor } from '../../../engines/gas/eos';
 import { BTU_PER_THERM, GJ_PER_MMBTU, MMBTU_PER_MCF, MMBTU_PER_MWH, STD_PSIA, STD_TEMP_F, psia, rankine } from '../../../engines/gas/properties';
-import { PIPELINE } from '../../../model/gas/world';
+import { stationLine } from '../../../engines/gas/compression';
+import { PIPELINE, stationLineOf } from '../../../model/gas/world';
 import { COST_RECIPE } from '../../../engines/market/offerCost';
 import { psigFmt } from '../shared/format';
 
@@ -101,6 +102,8 @@ const AT_MAOP = meterHour(NORTHLINE.maopPsig, METER_DEFAULTS.temp, METER_DEFAULT
 const COLD = meterHour(METER_DEFAULTS.pressure, 30, METER_DEFAULTS.hhv);
 const WARM = meterHour(METER_DEFAULTS.pressure, 80, METER_DEFAULTS.hhv);
 const NORTHLINE_HOUR_MMCF = (NORTHLINE.capacityBcfd * 1000) / 24;
+/** The share of Northline's gas its compressor stations burn at full flow (Lesson 1.4). */
+export const NORTHLINE_FUEL_SHARE = stationLine(stationLineOf(NORTHLINE), NORTHLINE.capacityBcfd * 1000).fuelShare;
 const NORTHLINE_DAY_MMBTU = NORTHLINE.capacityBcfd * 1e6 * MMBTU_PER_MCF;
 const DEF_TPC = thermsPerCcf(BILL_DEFAULTS.hhv);
 const DEF_THERMS = BILL_DEFAULTS.ccf * DEF_TPC;
@@ -134,7 +137,6 @@ export default function Lesson() {
   const byVolume = b.state.ccf * RETAIL_PRICE;
   const byEnergy = therms * RETAIL_PRICE;
   const solved = billsEqualSolved(b.state.hhv);
-  const gap = tpc - 1;
 
   const units = [
     { key: 'ccf', unit: 'CCF on the meter (100 cubic feet each)', value: fmt(b.state.ccf) },
@@ -148,9 +150,10 @@ export default function Lesson() {
   return (
     <LessonPage id="gas/1.5">
       <P>
-        The previous lesson ended with gas being burned to move gas: Northline’s three compressor stations consume about 1.8% of what flows through them. Whatever
-        survives the trip reaches Metro, and there it changes hands. The pipeline company delivers it to the city’s gas utility, and the utility pays for it. Every
-        such handover happens at a meter, and a meter has an awkward job. It counts volume — cubic feet sliding past — but nobody buys gas for its volume. They buy it
+        The previous lesson ended with gas being burned to move gas: Northline’s three compressor stations consume about {pct(NORTHLINE_FUEL_SHARE, 1)} of what flows
+        through them. Whatever survives the trip reaches Metro, where custody passes from Northline to the city’s gas utility. The utility already owns the gas — it
+        bought it at Calder Hub and pays Northline only to carry it — but the handover is where both sides settle how much was delivered, and every such handover
+        happens at a meter. A meter has an awkward job. It counts volume — cubic feet sliding past — but nobody buys gas for its volume. They buy it
         to burn, so what they pay for is <K c="energy">energy</K>.
       </P>
       <P>
@@ -243,8 +246,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'standard ft³ per actual ft³', value: `× ${fmt(shown, 1)}` },
-            { label: 'standard volume this hour', value: `${fmt(hr.scf / 1e6, 1)} MMcf` },
-            { label: 'energy this hour', value: `${fmt(hr.mmbtu)} MMBtu`, tone: 'gold' },
             { label: `value at a simulated $${HUB_PRICE.toFixed(2)}/MMBtu`, value: usd(value), tone: 'green' },
           ]}
         />
@@ -284,17 +285,18 @@ export default function Lesson() {
         <Checkbox label="Flow computer treats the gas as ideal (ignores Z)" checked={ideal} onChange={(v) => m.set({ ideal: v })} />
         {ideal && (
           <Caption>
-            Treating the gas as ideal, the flow computer counts {fmt(hr.mmbtu)} MMBtu. The pipe really delivered {fmt(hr.trueMMBtu)}: {pct(lost / hr.trueMMBtu, 1)} more,
-            worth {usd(lost * HUB_PRICE)} this hour.
+            Treating the gas as ideal, the flow computer counts {fmt(hr.mmbtu)} MMBtu. The pipe really delivered {fmt(hr.trueMMBtu)}, so {pct(lost / hr.trueMMBtu, 1)} of
+            it went uncounted, worth {usd(lost * HUB_PRICE)} this hour.
           </Caption>
         )}
       </Figure>
 
       <P>
-        At the starting settings the gas arrives at {psigFmt(METER_DEFAULTS.pressure)}, Northline’s minimum delivery pressure, and {METER_DEFAULTS.temp} °F. Each
-        actual cubic foot then holds {fmt(DEF.scfPerCf, 1)} standard cubic feet, so the hour’s million cubic feet are {fmt(DEF.scf / 1e6, 1)} MMcf of gas — about
-        five-sixths of what Northline carries in an hour at its full {NORTHLINE.capacityBcfd} Bcf/d, {fmt(NORTHLINE_HOUR_MMCF)} MMcf. At {fmt(METER_DEFAULTS.hhv)} Btu
-        per standard cubic foot that’s {fmt(DEF.mmbtu)} MMBtu, worth {usd(DEF.mmbtu * HUB_PRICE)} at a simulated price of ${HUB_PRICE.toFixed(2)} per MMBtu.
+        At the starting settings the gas arrives at {psigFmt(METER_DEFAULTS.pressure)}, Northline’s minimum delivery pressure, and {METER_DEFAULTS.temp} °F.{' '}
+        <a href={lessonHref('gas/1.2')}>Lesson 1.2</a> took buried gas to be at 60 °F, but the ground runs cooler in winter and warmer in summer, so a meter station
+        measures the temperature rather than assuming it. At these conditions each actual cubic foot holds {fmt(DEF.scfPerCf, 1)} standard cubic feet, so the hour’s million cubic feet are {fmt(DEF.scf / 1e6, 1)} MMcf of gas — about {pct(DEF.scf / 1e6 / NORTHLINE_HOUR_MMCF)} of what Northline carries
+        in an hour at its full {NORTHLINE.capacityBcfd} Bcf/d, {fmt(NORTHLINE_HOUR_MMCF)} MMcf. At {fmt(METER_DEFAULTS.hhv)} Btu per standard cubic foot that’s{' '}
+        {fmt(DEF.mmbtu)} MMBtu, worth {usd(DEF.mmbtu * HUB_PRICE)} at a simulated price of ${HUB_PRICE.toFixed(2)} per MMBtu.
       </P>
       <P>
         The first equation is the gas law of <a href={lessonHref('gas/1.2')}>Lesson 1.2</a>, rearranged: the same molecules that fill a cubic foot at the line’s
@@ -304,9 +306,9 @@ export default function Lesson() {
         meter that ignored temperature would bill a winter morning and a summer afternoon alike.
       </P>
       <P>
-        The last factor is the compressibility of Lesson 1.2. Tick the box to see what a flow computer that treated the gas as ideal would report. At the starting
-        settings it counts {fmt(DEF_IDEAL.mmbtu)} MMBtu, {pct(1 - DEF_IDEAL.mmbtu / DEF.mmbtu)} less than the {fmt(DEF.mmbtu)} that went by, a gift to the buyer of{' '}
-        {usd((DEF.mmbtu - DEF_IDEAL.mmbtu) * HUB_PRICE)} every hour. At pipeline pressures, Z is anything but a rounding error, so measurement standards spell out how to
+        The last factor is the compressibility of <a href={lessonHref('gas/1.2')}>Lesson 1.2</a>. Tick the box to see what a flow computer that treated the gas as ideal would report. At the starting
+        settings it counts {fmt(DEF_IDEAL.mmbtu)} MMBtu, {pct(1 - DEF_IDEAL.mmbtu / DEF.mmbtu)} less than the {fmt(DEF.mmbtu)} that went by: gas worth{' '}
+        {usd((DEF.mmbtu - DEF_IDEAL.mmbtu) * HUB_PRICE)} every hour that the flow computer would never record. At pipeline pressures, Z is anything but a rounding error, so measurement standards spell out how to
         calculate it from the gas’s composition, pressure and temperature. At standard conditions themselves, natural gas is ideal to within about a quarter of a
         percent.
       </P>
@@ -317,11 +319,13 @@ export default function Lesson() {
         same cubic feet with different amounts of heat. That is why gas is bought and sold by energy. The trading unit is the MMBtu, a million British thermal units
         (a Btu is about the heat that warms a pound of water by one degree Fahrenheit). Pipeline contracts often say dekatherm instead, which is the same thing: a
         dekatherm is ten <b>therms</b> of 100,000 Btu each, or exactly one MMBtu. Canadian hubs usually quote prices per gigajoule ({fmt(GJ_PER_MMBTU, 3)} GJ to the
-        MMBtu), and European hubs per megawatt-hour of gas ({fmt(MMBTU_PER_MWH, 3)} MMBtu to the MWh).
+        MMBtu), and European hubs per megawatt-hour of gas ({fmt(MMBTU_PER_MWH, 3)} MMBtu to the MWh). The industry’s abbreviations count in Roman numerals, not
+        metric prefixes: M is a thousand, so an Mcf is a thousand cubic feet, an MMcf a thousand thousand — a million — and an MMBtu a million Btu. A Bcf, with B for
+        billion, is a thousand MMcf.
       </P>
       <P>
         Prices quoted per volume still turn up, and need care. Trading hubs quote dollars per MMBtu, while many statistics, including the US government’s, quote
-        dollars per thousand cubic feet. A Mcf of the region’s gas carries {MMBTU_PER_MCF} MMBtu, so ${HUB_PRICE.toFixed(2)} per MMBtu is{' '}
+        dollars per thousand cubic feet. An Mcf of the region’s gas carries {MMBTU_PER_MCF} MMBtu, so ${HUB_PRICE.toFixed(2)} per MMBtu is{' '}
         {usd(HUB_PRICE * MMBTU_PER_MCF, 2)} per Mcf. The two agree only for gas of exactly 1,000 Btu per standard cubic foot.
       </P>
       <P>
@@ -396,7 +400,9 @@ export default function Lesson() {
       <P>
         A cold month’s {BILL_DEFAULTS.ccf} CCF of the region’s gas is {fmt(DEF_THERMS, 1)} therms: each CCF is {fmt(100 * HOME_SCF_PER_CF, 1)} standard cubic feet at{' '}
         {fmt(BILL_DEFAULTS.hhv)} Btu apiece, or {fmt(DEF_TPC, 3)} therms. Billed by energy, the month costs {usd(DEF_THERMS * RETAIL_PRICE, 2)}; billed by volume at the
-        same rate, {usd(BILL_DEFAULTS.ccf * RETAIL_PRICE, 2)}. Notice, too, how far the retail price sits from the wholesale one. ${RETAIL_PRICE.toFixed(2)} a therm is $
+        same rate, {usd(BILL_DEFAULTS.ccf * RETAIL_PRICE, 2)}. Change the month’s use and every number in the demonstration scales with it, but the therm factor
+        doesn’t: it depends only on the gas, so billing the region’s gas by energy raises a small bill and a large one by the same {pct(DEF_TPC - 1, 1)}. Notice, too,
+        how far the retail price sits from the wholesale one. ${RETAIL_PRICE.toFixed(2)} a therm is $
         {fmt(RETAIL_PRICE * 10, 2)} per MMBtu, against the simulated ${HUB_PRICE.toFixed(2)} hub price of{' '}
         <FigRef to="Gas Measurement Lab">the first demonstration</FigRef>. At these illustrative prices the gas itself is less than a quarter of the bill; the rest
         pays for the local pipes, meters and service that bring it to the house.
@@ -404,14 +410,14 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Suppose a utility charged $${RETAIL_PRICE.toFixed(2)} per CCF and switched to $${RETAIL_PRICE.toFixed(2)} per therm. For what gas quality, to the nearest Btu per standard cubic foot, would no customer’s bill change?`}
+        question={`Suppose a utility charged $${RETAIL_PRICE.toFixed(2)} per CCF and switched to $${RETAIL_PRICE.toFixed(2)} per therm. For what gas quality would no customer’s bill change? A CCF at the meter is ${fmt(100 * HOME_SCF_PER_CF, 1)} standard cubic feet and a therm is 100,000 Btu: work out the heating value first, to the nearest Btu per standard cubic foot, then set it to check.`}
         solved={solved}
         status={
-          Math.abs(gap) < 1e-9
-            ? 'Right now a CCF is exactly one therm.'
-            : `At ${fmt(b.state.hhv)} Btu/scf, a CCF is ${fmt(tpc, 3)} therms, so billing by energy makes every bill ${pct(Math.abs(gap), 1)} ${gap > 0 ? 'higher' : 'lower'}.`
+          b.state.hhv === BILL_DEFAULTS.hhv
+            ? 'Work out the heating value first, then set it.'
+            : `At ${fmt(b.state.hhv)} Btu/scf, a CCF is ${fmt(tpc, 3)} therms.`
         }
-        success={`Solved. The bills match when one CCF is exactly one therm, 100,000 Btu. A CCF at the meter is ${fmt(100 * HOME_SCF_PER_CF, 1)} standard cubic feet, so it takes 100,000 ÷ ${fmt(100 * HOME_SCF_PER_CF, 1)} ≈ ${CCF_THERM_HHV} Btu per standard cubic foot — a little under 1,000, because the meter’s cubic feet are slightly compressed. The region’s ${BILL_DEFAULTS.hhv} Btu gas would raise every bill by ${pct(DEF_TPC - 1, 1)}, which is the point: per therm, the customer pays for what the gas actually does.`}
+        success={`Solved: ${CCF_THERM_HHV} Btu per standard cubic foot. The bills match when one CCF is one therm, so ${fmt(100 * HOME_SCF_PER_CF, 1)} standard cubic feet must carry 100,000 Btu: 100,000 ÷ ${fmt(100 * HOME_SCF_PER_CF, 1)} ≈ ${CCF_THERM_HHV}. That’s a little under 1,000, because the meter’s cubic feet are slightly compressed. Richer gas makes a bill by the therm higher than one by the CCF, and leaner gas makes it lower: per therm, the customer pays for what the gas actually does.`}
       />
 
       <H2>Counting gas from here on</H2>

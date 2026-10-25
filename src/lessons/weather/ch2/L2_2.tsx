@@ -26,11 +26,11 @@ import {
 import { FRONT_SHAPE, frontPassage, frontWeather, type FrontInput, type FrontKind, type FrontWeather, type StationHour } from '../../../engines/weather/fronts';
 import { density } from '../../../engines/weather/thermo';
 import { STATIONS, type StationId } from '../../../model/weather/region';
-import { CalderMap } from '../shared/CalderMap';
+import { FenwickMap } from '../shared/FenwickMap';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
-// The first demonstration: one front, in cross-section and on Calder Bay's instruments.
+// The first demonstration: one front, in cross-section and on Fenwick Bay's instruments.
 
 export const FRONT_DEFAULTS: FrontInput = { kind: 'cold', coldC: 2, warmC: 16, warmDewC: 12, speed: 10 };
 
@@ -39,11 +39,25 @@ export function effectiveFront(f: FrontInput): FrontInput {
   return { ...f, warmDewC: Math.min(f.warmDewC, f.warmC), coldC: Math.min(f.coldC, f.warmC - 1) };
 }
 
-/** The first challenge: one cold front that leaves at least 10 mm of rain at Calder Bay. */
+/** How much the pressure rises in the two hours after its lowest point, hPa. */
+export function pressureJump(rec: StationHour[]): number {
+  const k = rec.reduce((best, h, i) => (h.pressureHpa < rec[best].pressureHpa ? i : best), 0);
+  return rec[Math.min(rec.length - 1, k + 2)].pressureHpa - rec[k].pressureHpa;
+}
+
+/** The first challenge: one cold front that leaves at least 10 mm of rain at Fenwick Bay. */
 export const RAIN_TARGET_MM = 10;
 export function rainSolved(f: FrontInput): boolean {
   const e = effectiveFront(f);
   return e.kind === 'cold' && frontWeather(e).rainMm >= RAIN_TARGET_MM;
+}
+
+/** The least whole-degree dew point at which the starting cold front leaves 10 mm, with the warm air at least that warm. */
+export function leastRainDewC(): number {
+  for (let d = FRONT_DEFAULTS.warmDewC; d <= 40; d++) {
+    if (rainSolved({ ...FRONT_DEFAULTS, warmC: Math.max(d, FRONT_DEFAULTS.warmC), warmDewC: d })) return d;
+  }
+  return NaN;
 }
 
 const COLD_FILL = tint(GRAPHIC.blue, 0.22);
@@ -161,7 +175,7 @@ function CrossSection({ f, wx }: { f: FrontInput; wx: FrontWeather }) {
 
 const HX = scale(0, 48, 64, 620);
 
-/** Calder Bay's instruments as the front passes, hour by hour. */
+/** Fenwick Bay's instruments as the front passes, hour by hour. */
 function StationRecord({ rec, f }: { rec: StationHour[]; f: FrontInput }) {
   const temps = rec.flatMap((h) => [h.tempC, h.dewC]);
   const t0 = Math.floor(Math.min(...temps) / 5) * 5;
@@ -182,7 +196,7 @@ function StationRecord({ rec, f }: { rec: StationHour[]; f: FrontInput }) {
       className="chart"
       viewBox="0 0 640 270"
       role="img"
-      aria-label={`Calder Bay's station over 48 hours as the ${f.kind} front arrives at hour 24: temperature goes from ${fmt(first.tempC)} to ${fmt(lastH.tempC)} °C, dew point from ${fmt(first.dewC)} to ${fmt(lastH.dewC)} °C, pressure from ${fmt(first.pressureHpa)} hPa down to ${fmt(pMin.pressureHpa)} hPa at hour ${pMin.t} and then ${fmt(lastH.pressureHpa)} hPa, the wind from ${fmt(first.windFrom)}° to ${fmt(lastH.windFrom)}°, and ${fmt(total, 1)} mm of rain.`}
+      aria-label={`Fenwick Bay's station over 48 hours as the ${f.kind} front arrives at hour 24: temperature goes from ${fmt(first.tempC)} to ${fmt(lastH.tempC)} °C, dew point from ${fmt(first.dewC)} to ${fmt(lastH.dewC)} °C, pressure from ${fmt(first.pressureHpa)} hPa down to ${fmt(pMin.pressureHpa)} hPa at hour ${pMin.t} and then ${fmt(lastH.pressureHpa)} hPa, the wind from ${fmt(first.windFrom)}° to ${fmt(lastH.windFrom)}°, and ${fmt(total, 1)} mm of rain.`}
     >
       <text className="ax" x={64} y={12}>
         Temperature and dew point, °C
@@ -266,12 +280,12 @@ export function coldArrivalHour(id: StationId, speed: number): number {
   return (s.x - KC * (s.y - LOW.y) - LOW.startX) / (speed * 3.6);
 }
 
-/** Hours between the cold front reaching Marlow and reaching Calder Bay. */
+/** Hours between the cold front reaching Marlow and reaching Fenwick Bay. */
 export function coldLagHours(speed: number): number {
-  return coldArrivalHour('calder', speed) - coldArrivalHour('marlow', speed);
+  return coldArrivalHour('fenwick', speed) - coldArrivalHour('marlow', speed);
 }
 
-/** The second challenge: Calder Bay's cold front 12 hours after Marlow's, to the nearest hour. */
+/** The second challenge: Fenwick Bay's cold front 12 hours after Marlow's, to the nearest hour. */
 export const LAG_TARGET_H = 12;
 export function lagSolved(speed: number): boolean {
   return Math.round(coldLagHours(speed)) === LAG_TARGET_H;
@@ -297,7 +311,7 @@ const STAGE_LABEL: Record<AirStage, string> = { ahead: 'cool air ahead of the wa
 
 function stageText(id: StationId, hour: number, speed: number) {
   const st = stationAt(id, hour, speed);
-  return `${STAGE_LABEL[st.stage]}, ${fmt(st.tempC)} °C${st.rain === 'warm' ? ', steady rain' : st.rain === 'cold' ? ', heavy showers' : ''}`;
+  return `${STAGE_LABEL[st.stage]}, ${fmt(st.tempC)} °C${st.rain === 'warm' ? ', steady rain' : st.rain === 'cold' ? ', showers' : ''}`;
 }
 
 /** Triangles (cold) or half-disks (warm) along a front, on the side it advances toward. */
@@ -344,7 +358,7 @@ function LowMap({ hour, speed }: { hour: number; speed: number }) {
   const status = (id: StationId) => {
     const s = STATIONS[id];
     const st = stationAt(id, hour, speed);
-    const left = id === 'calder';
+    const left = id === 'fenwick';
     return (
       <text key={id} x={left ? s.x - 12 : s.x + 10} y={s.y + (id === 'ridge' ? 4 : 20)} textAnchor={left ? 'end' : 'start'} className="ax" style={{ fill: st.stage === 'sector' ? TEXT.red : TEXT.blue }}>
         {fmt(st.tempC)} °C{st.rain ? ' · rain' : ''}
@@ -352,11 +366,11 @@ function LowMap({ hour, speed }: { hour: number; speed: number }) {
     );
   };
   return (
-    <CalderMap
-      ariaLabel={`Map of the Calder region ${fmt(hour)} hours after a low entered from the west, moving east at ${fmt(speed, 1)} m/s along the region's northern edge. Marlow is in ${stageText('marlow', hour, speed)}; Calder Bay is in ${stageText('calder', hour, speed)}.`}
+    <FenwickMap
+      ariaLabel={`Map of the Fenwick region ${fmt(hour)} hours after a low entered from the west, moving east at ${fmt(speed, 1)} m/s along the region's northern edge. Marlow is in ${stageText('marlow', hour, speed)}; Fenwick Bay is in ${stageText('fenwick', hour, speed)}.`}
       overlay={
         <g>
-          {(['marlow', 'ridge', 'calder'] as StationId[]).map(status)}
+          {(['marlow', 'ridge', 'fenwick'] as StationId[]).map(status)}
           <text x={592} y={20} textAnchor="end" className="lab">
             hour {fmt(hour)}
           </text>
@@ -379,7 +393,7 @@ function LowMap({ hour, speed }: { hour: number; speed: number }) {
           L
         </text>
       </g>
-    </CalderMap>
+    </FenwickMap>
   );
 }
 
@@ -388,24 +402,24 @@ const PX = scale(0, PASSAGE_HOURS, 64, 620);
 function PassageChart({ hour, speed }: { hour: number; speed: number }) {
   const hours = useMemo(() => Array.from({ length: PASSAGE_HOURS * 2 + 1 }, (_, i) => i / 2), []);
   const series = useMemo(
-    () => (['marlow', 'calder'] as StationId[]).map((id) => ({ id, temps: hours.map((h) => stationAt(id, h, speed).tempC) })),
+    () => (['marlow', 'fenwick'] as StationId[]).map((id) => ({ id, temps: hours.map((h) => stationAt(id, h, speed).tempC) })),
     [hours, speed],
   );
   const y = scale(-4, 20, 104, 18);
-  const colors: Record<string, string> = { marlow: '#8a8a8a', calder: GRAPHIC.red };
+  const colors: Record<string, string> = { marlow: '#8a8a8a', fenwick: GRAPHIC.red };
   return (
     <svg
       className="chart"
       viewBox="0 0 640 128"
       role="img"
-      aria-label={`Temperatures at Marlow and Calder Bay over ${PASSAGE_HOURS} hours as the low passes: each warms when the warm front passes and turns cold when the cold front does. The cold front reaches Marlow at hour ${fmt(coldArrivalHour('marlow', speed))} and Calder Bay at hour ${fmt(coldArrivalHour('calder', speed))}.`}
+      aria-label={`Temperatures at Marlow and Fenwick Bay over ${PASSAGE_HOURS} hours as the low passes: each warms when the warm front passes and turns cold when the cold front does. The cold front reaches Marlow at hour ${fmt(coldArrivalHour('marlow', speed))} and Fenwick Bay at hour ${fmt(coldArrivalHour('fenwick', speed))}.`}
     >
       <text className="ax" x={64} y={12}>
         Temperature, °C
       </text>
       <GridY y={y} ticks={[0, 10, 20]} x0={64} x1={620} format={(v) => fmt(v)} baseline={0} />
       {series.map((s) => (
-        <path key={s.id} d={linePath(hours.map(PX), s.temps.map(y))} fill="none" stroke={colors[s.id]} strokeWidth={s.id === 'calder' ? 2.5 : 2} strokeDasharray={s.id === 'marlow' ? '6 4' : undefined} />
+        <path key={s.id} d={linePath(hours.map(PX), s.temps.map(y))} fill="none" stroke={colors[s.id]} strokeWidth={s.id === 'fenwick' ? 2.5 : 2} strokeDasharray={s.id === 'marlow' ? '6 4' : undefined} />
       ))}
       <line className="cur" x1={PX(hour)} x2={PX(hour)} y1={18} y2={104} />
       {[0, 12, 24, 36, 48, 60].map((h) => (
@@ -442,15 +456,17 @@ export default function Lesson() {
   const rhoCold = density(1000, FRONT_DEFAULTS.coldC);
   const rhoWarm = density(1000, FRONT_DEFAULTS.warmC);
   const hotter = frontWeather({ ...FRONT_DEFAULTS, warmC: 24 });
-  const moister = frontWeather({ ...FRONT_DEFAULTS, warmC: 24, warmDewC: 20 });
   const lagDefault = coldLagHours(LOW_DEFAULTS.speed);
-  const calderWarm = (STATIONS.calder.x - KW * (STATIONS.calder.y - LOW.y) - LOW.startX) / (LOW_DEFAULTS.speed * 3.6);
-  const calderCold = coldArrivalHour('calder', LOW_DEFAULTS.speed);
+  // The pressure's rise in the two hours after its lowest point, and the most rain a cold front can draw from the starting warm air.
+  const refJump = pressureJump(refRec);
+  const saturatedRain = frontWeather({ ...FRONT_DEFAULTS, warmDewC: FRONT_DEFAULTS.warmC }).rainMm;
+  const fenwickWarm = (STATIONS.fenwick.x - KW * (STATIONS.fenwick.y - LOW.y) - LOW.startX) / (LOW_DEFAULTS.speed * 3.6);
+  const fenwickCold = coldArrivalHour('fenwick', LOW_DEFAULTS.speed);
 
   return (
     <LessonPage id="weather/2.2">
       <P>
-        <a href={lessonHref('weather/2.1')}>The previous lesson</a> divided each hemisphere into three great cells, and put Calder Bay’s 41° north in the
+        <a href={lessonHref('weather/2.1')}>The previous lesson</a> divided each hemisphere into three great cells, and put Fenwick Bay’s 41° north in the
         westerlies, under the jet stream that runs above the boundary between cold polar air and warm subtropical air. That boundary isn’t a gentle gradient. Much
         of the time the change from one kind of air to the other is squeezed into a zone a few tens of kilometers wide, and that zone — a <b>front</b> — is where
         most of the mid-latitudes’ weather happens. The name comes from meteorologists in Bergen, Norway, who worked out the picture at the end of the First World
@@ -463,9 +479,10 @@ export default function Lesson() {
         polar or tropical — continental polar air, maritime tropical air, and so on.
       </P>
       <P>
-        From here on, the course follows one fictional region, the <b>Calder region</b>, at about 41° north on the east coast of a continent. Its port city,{' '}
-        <b>Calder Bay</b>, is where the weather contracts of later chapters will settle. Three hundred and fifty kilometers inland lies <b>Marlow</b>, a farm town
-        on the corn plains, and to the city’s north-west the hills of <b>Hollin Ridge</b> carry the region’s wind farm. Two air masses take turns over it.
+        Chapter 1 visited the course’s fictional region a few times; from here on we’ll follow it closely. The <b>Fenwick region</b> lies at about 41° north on
+        the east coast of a continent. Its port city, <b>Fenwick Bay</b>, is where the weather contracts of later chapters will settle. About 350 km inland lies{' '}
+        <b>Marlow</b>, the farm town on the corn plains of <a href={lessonHref('weather/1.4')}>Lesson 1.4</a>, and to the city’s north-west the hills of{' '}
+        <b>Hollin Ridge</b> carry the region’s wind farm. Two air masses take turns over it.
         Continental polar air arrives from the north-west, cold and dry from the interior; maritime tropical air arrives from the south, warm and humid from the
         ocean. Where they meet, the colder air is the denser: at the same pressure, air at {fmt(FRONT_DEFAULTS.coldC)} °C is {fmt((rhoCold / rhoWarm - 1) * 100)}%
         denser than air at {fmt(FRONT_DEFAULTS.warmC)} °C (<a href={lessonHref('weather/1.2')}>Lesson 1.2</a>). So the cold air slides under the warm air like a
@@ -474,7 +491,7 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the upper picture is a slice through a front, west on the left, with the cold air shaded blue and the warm air riding up over it
-        in red. The lower one is the record from Calder Bay’s weather station over two days as the front passes, arriving at hour 24. A <b>cold front</b> is one where
+        in red. The lower one is the record from Fenwick Bay’s weather station over two days as the front passes, arriving at hour 24. A <b>cold front</b> is one where
         the cold air advances and pushes the warm air out of the way; at a <b>warm front</b>, the warm air advances and climbs over the retreating cold air. Choose
         one, and change the two air masses and the front’s speed:
       </P>
@@ -502,11 +519,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'cloud base', value: `${fmt(wx.cloudBaseM)} m`, tone: WX.moisture },
-            { label: 'warm air lifted at', value: `${fmt(wx.liftMs * 100)} cm/s`, tone: WX.wind },
-            { label: 'rain rate', value: `${fmt(wx.rainRateMmH, 1)} mm/h`, tone: WX.moisture },
-            { label: 'rain lasts', value: `${fmt(wx.rainHours, 1)} h`, tone: WX.moisture },
-            { label: 'total rain', value: `${fmt(wx.rainMm, 1)} mm`, tone: WX.moisture },
+            { label: 'warm air lifted at', value: `${fmt(wx.liftMs * 100, wx.liftMs < 0.1 ? 1 : 0)} cm/s`, tone: WX.wind },
+            { label: `of rain: ${fmt(wx.rainRateMmH, 1)} mm an hour for ${fmt(wx.rainHours, 1)} hours`, value: `${fmt(wx.rainMm, 1)} mm`, tone: WX.moisture },
             { label: 'higher pressure under the cold air', value: `${fmt(wx.domeHpa, 1)} hPa`, tone: WX.pressure },
           ]}
         />
@@ -534,7 +548,7 @@ export default function Lesson() {
       </P>
       <P>
         Watch the pressure, too. It falls through the day as the front approaches, bottoming out at {fmt(refMin.pressureHpa, 1)} hPa as the front arrives, then
-        jumps to {fmt(refRec[refRec.length - 1].pressureHpa, 1)} hPa. The pressure at the ground is the weight of the air overhead, and behind the front the lowest
+        jumps about {fmt(refJump)} hPa in two hours and keeps rising. The pressure at the ground is the weight of the air overhead, and behind the front the lowest
         1.5 km of the column is filled with colder, denser air, which weighs {fmt(ref.domeHpa, 1)} hPa more. A falling barometer has warned sailors of an
         approaching storm for centuries.
       </P>
@@ -542,7 +556,7 @@ export default function Lesson() {
         Now switch to a warm front, and slow it to 5 m/s, a more typical pace for one. Its surface is far gentler, rising a kilometer in{' '}
         {fmt(1 / FRONT_SHAPE.warm.slope)} km, so the warm air glides up it at only {fmt(refWarm.liftMs * 100, 1)} cm/s. The rain is light,{' '}
         {fmt(refWarm.rainRateMmH, 1)} mm an hour, but it falls from a deck of cloud spread hundreds of kilometers ahead of the front, so it begins long before the warm
-        air arrives and goes on for {fmt(refWarm.rainHours)} hours — {fmt(refWarm.rainMm)} mm, more than the cold front’s downpour.
+        air arrives and goes on for {fmt(refWarm.rainHours)} hours — {fmt(refWarm.rainMm)} mm, more than the cold front’s brief, harder rain.
       </P>
 
       <H2>What sets the rain</H2>
@@ -552,19 +566,21 @@ export default function Lesson() {
         rains {fmt(refSlow.rainRateMmH, 1)} mm an hour, at 20 m/s {fmt(refFast.rainRateMmH, 1)}. But a faster front also crosses the station sooner, and the two
         effects cancel exactly: {fmt(refSlow.rainMm, 1)} mm either way. Heating the warm air doesn’t help either. At 24 °C with the same 12 °C dew point, the air
         carries the same vapor and simply saturates higher up, and the front leaves the same {fmt(hotter.rainMm, 1)} mm. What changes the total is the moisture itself, the dew
-        point: raise it to 20 °C on a 24 °C day and the front leaves {fmt(moister.rainMm, 1)} mm.
+        point.
       </P>
 
       <Challenge
         id="a"
-        question={`Make a single cold front leave at least ${RAIN_TARGET_MM} mm of rain at Calder Bay.`}
+        question={`Predict first: could the starting ${fmt(FRONT_DEFAULTS.warmC)} °C warm air make a cold front leave ${RAIN_TARGET_MM} mm of rain if only its dew point rose? Then make a single cold front leave at least ${RAIN_TARGET_MM} mm at Fenwick Bay.`}
         solved={solved}
         status={
           !cold
             ? 'Switch to a cold front first.'
-            : `Right now the cold front leaves ${fmt(wx.rainMm, 1)} mm: ${fmt(wx.rainRateMmH, 1)} mm an hour for ${fmt(wx.rainHours, 1)} hours.`
+            : s.state.warmDewC >= f.warmC
+              ? `The warm air is saturated: at ${fmt(f.warmC)} °C it can hold no more vapor, and the front leaves ${fmt(wx.rainMm, 1)} mm.`
+              : `Right now the cold front leaves ${fmt(wx.rainMm, 1)} mm: ${fmt(wx.rainRateMmH, 1)} mm an hour for ${fmt(wx.rainHours, 1)} hours.`
         }
-        success={`Solved: ${fmt(wx.rainMm, 1)} mm, from warm air with a dew point of ${fmt(f.warmDewC)} °C. Neither the front’s speed nor the warm air’s temperature could do it alone; only more water vapor could. That’s why the heaviest frontal rain at Calder Bay comes when the warm sector is filled with humid air straight off the ocean.`}
+        success={`Solved: ${fmt(wx.rainMm, 1)} mm, from warm air at ${fmt(f.warmC)} °C with a dew point of ${fmt(f.warmDewC)} °C. The dew point alone couldn’t do it, because it can’t rise past the air’s own temperature: at the starting ${fmt(FRONT_DEFAULTS.warmC)} °C, even saturated air leaves only ${fmt(saturatedRain, 1)} mm. It takes more water vapor, in air warm enough to hold it — here a dew point of at least ${fmt(leastRainDewC())} °C. That’s why the heaviest frontal rain at Fenwick Bay comes when the warm sector is filled with humid air straight off the ocean.`}
       />
 
       <H2>Fronts come in pairs</H2>
@@ -574,12 +590,13 @@ export default function Lesson() {
         drags cold air toward the equator. The boundary sharpens into two fronts that meet at the low: a warm front running east or south-east of it, a cold
         front trailing to its south-west, and between them a wedge of warm, humid air called the <b>warm sector</b>. This was the Bergen meteorologists’ great
         insight: the fronts and the low are one system, born together on the boundary between the air masses, and the whole system drifts east on the westerlies.
-        The cold front usually moves faster, and eventually catches up with the warm front and lifts the warm sector off the ground altogether.
+        The cold front usually moves faster, and eventually catches up with the warm front and lifts the warm sector off the ground altogether; the front they
+        merge into is called an <b>occluded front</b>.
       </P>
       <P>
-        In the next demonstration, such a low tracks east along the northern edge of the Calder region, with its warm front (red half-disks) and cold front (blue
+        In the next demonstration, such a low tracks east along the northern edge of the Fenwick region, with its warm front (red half-disks) and cold front (blue
         triangles) sweeping across the map. The rain bands are shaded teal and the warm sector red, and each station shows its temperature as the system passes. The
-        chart compares the temperatures at Marlow and Calder Bay. Change the system’s speed, or drag the hour:
+        chart compares the temperatures at Marlow and Fenwick Bay. Change the system’s speed, or drag the hour:
       </P>
 
       <Figure name="Weather Front Lab · a passing low" scenario={m} play={play}>
@@ -587,7 +604,7 @@ export default function Lesson() {
         <PassageChart hour={hour} speed={speed} />
         <Legend
           items={[
-            { label: 'Calder Bay', color: GRAPHIC.red, kind: 'line' },
+            { label: 'Fenwick Bay', color: GRAPHIC.red, kind: 'line' },
             { label: 'Marlow', color: '#8a8a8a', kind: 'line', dashed: true },
             { label: 'Warm sector', color: tint(GRAPHIC.red, 0.25) },
             { label: 'Rain', color: tint(GRAPHIC.teal, 0.45) },
@@ -596,8 +613,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'Marlow', value: STAGE_LABEL[stationAt('marlow', hour, speed).stage].replace(/ (ahead of|behind) the .*$/, ''), tone: stationAt('marlow', hour, speed).stage === 'sector' ? WX.temperature : WX.pressure },
-            { label: 'Calder Bay', value: STAGE_LABEL[stationAt('calder', hour, speed).stage].replace(/ (ahead of|behind) the .*$/, ''), tone: stationAt('calder', hour, speed).stage === 'sector' ? WX.temperature : WX.pressure },
-            { label: 'cold front reaches Calder Bay after Marlow', value: `${fmt(lag, 1)} h`, tone: WX.wind },
+            { label: 'Fenwick Bay', value: STAGE_LABEL[stationAt('fenwick', hour, speed).stage].replace(/ (ahead of|behind) the .*$/, ''), tone: stationAt('fenwick', hour, speed).stage === 'sector' ? WX.temperature : WX.pressure },
           ]}
         />
         <Slider label="Hour" value={hour} min={0} max={PASSAGE_HOURS} step={0.5} onChange={(v) => m.set({ hour: v })} display={`hour ${fmt(hour)}`} />
@@ -607,23 +623,27 @@ export default function Lesson() {
       <P>
         Every station south of the low’s track lives through the same sequence. First the sky thickens and steady rain begins, long before the warm front itself
         arrives. Then the front passes, the rain stops and the temperature climbs as the mild, humid air of the warm sector flows in. Hours later the cold front
-        brings a short, heavy burst of rain, and behind it the north-west wind and the cold, dry air. At {fmt(LOW_DEFAULTS.speed)} m/s, Calder Bay’s warm front
-        arrives at hour {fmt(calderWarm)} and its cold front at hour {fmt(calderCold)}.
+        brings a short burst of harder rain, and behind it the north-west wind and the cold, dry air. At {fmt(LOW_DEFAULTS.speed)} m/s, Fenwick Bay’s warm front
+        arrives at hour {fmt(fenwickWarm)} and its cold front at hour {fmt(fenwickCold)}.
       </P>
       <P>
-        And every station gets it in turn from the west. Marlow lives through each stage hours before Calder Bay does; at {fmt(LOW_DEFAULTS.speed)} m/s the cold
+        And every station gets it in turn from the west. Marlow lives through each stage hours before Fenwick Bay does; at {fmt(LOW_DEFAULTS.speed)} m/s the cold
         front reaches the city {fmt(lagDefault, 1)} hours after the farm town. The wind that brings the weather also delivers a warning: what Marlow’s instruments
-        record this morning, Calder Bay’s will record this evening. That simple idea — look upstream to see what’s coming — is where weather forecasting began, and
+        record this morning, Fenwick Bay’s will record this evening. That simple idea — look upstream to see what’s coming — is where weather forecasting began, and
         we’ll build on it in Chapter 3. (The demonstration’s temperatures are illustrative: {fmt(AIR.ahead)} °C ahead of the warm front, {fmt(AIR.sector)} °C in the
         warm sector, {fmt(AIR.behind)} °C behind the cold front.)
       </P>
 
       <Challenge
         id="b"
-        question={`A cold front passes Marlow at dawn. How fast must the system move for it to reach Calder Bay ${LAG_TARGET_H} hours later, to the nearest hour?`}
+        question={`A cold front passes Marlow at dawn. Predict first: at ${fmt(LOW_DEFAULTS.speed)} m/s it reaches Fenwick Bay ${fmt(lagDefault, 1)} hours later, and the lag is the distance divided by the speed. How fast must the system move for the front to reach the city ${LAG_TARGET_H} hours later, to the nearest hour? Work it out, then set that speed and check.`}
         solved={solved2}
-        status={`At ${fmt(speed, 1)} m/s, the cold front reaches Calder Bay ${fmt(lag, 1)} hours after Marlow.`}
-        success={`Solved. At ${fmt(speed, 1)} m/s the system covers ${fmt(speed * 3.6 * LAG_TARGET_H)} km in ${LAG_TARGET_H} hours, a little less than the 356 km between the towns: the cold front leans back toward the south-west, so it reaches the city, which lies slightly farther north, a little sooner. A forecaster who sees the front pass Marlow knows, to within an hour or so, when it will reach Calder Bay.`}
+        status={
+          speed === LOW_DEFAULTS.speed
+            ? `At ${fmt(LOW_DEFAULTS.speed)} m/s the lag is ${fmt(lagDefault, 1)} hours. What speed stretches it to ${LAG_TARGET_H}?`
+            : `At ${fmt(speed, 1)} m/s, the cold front reaches Fenwick Bay ${fmt(lag, 1)} hours after Marlow.`
+        }
+        success={`Solved. The lag is inversely proportional to the speed: ${fmt(lagDefault, 1)} h × ${fmt(LOW_DEFAULTS.speed)}/${fmt(speed, 1)} = ${fmt(lag, 1)} h. At ${fmt(speed, 1)} m/s the system covers ${fmt(speed * 3.6 * LAG_TARGET_H)} km in ${LAG_TARGET_H} hours, a little less than the ${fmt(STATIONS.fenwick.x - STATIONS.marlow.x)} km that Fenwick Bay lies east of Marlow: the cold front leans back toward the south-west, so it reaches the city, which lies slightly farther north, a little sooner. A forecaster who sees the front pass Marlow knows, to within an hour or so, when it will reach Fenwick Bay.`}
       />
 
       <P>

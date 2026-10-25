@@ -53,6 +53,8 @@ export interface XYRef {
   color?: string;
   dash?: string;
   label?: string;
+  /** For a y line: draw the label under the line instead of over it (to clear a nearby line's label). */
+  labelBelow?: boolean;
   /** For the cursor style (thin dashed black). */
   cursor?: boolean;
 }
@@ -237,7 +239,7 @@ export function XYChart({
               {r.label}
             </text>
           ) : (
-            <text key={'rl' + i} className="ax ax-e" x={x1 - 2} y={sy(r.at) - 5} style={r.color ? { fill: r.color } : undefined}>
+            <text key={'rl' + i} className="ax ax-e" x={x1 - 2} y={sy(r.at) + (r.labelBelow ? 13 : -5)} style={r.color ? { fill: r.color } : undefined}>
               {r.label}
             </text>
           )

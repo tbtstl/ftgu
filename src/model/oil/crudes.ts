@@ -4,7 +4,7 @@
 // each temperature range, what kinds of molecules make up each range, and how much sulfur and
 // metal it carries. The four crudes are fictional, but their properties sit in realistic ranges:
 //
-//   Ridgeback Light   — a light, sweet shale crude from the inland Ridgeback Basin.
+//   Pinyon Light   — a light, sweet shale crude from the inland Pinyon Basin.
 //   Seaboard Blend    — a light, sweet offshore crude that arrives by tanker.
 //   Northfield Sour   — a medium, sour crude from an old conventional field in the same basin.
 //   Coldwater Heavy   — a heavy, sour crude from the north, thick enough to need diluting to move.
@@ -145,7 +145,7 @@ export const CUTS: Cut[] = [
 
 export const CUT_INDEX: Record<CutId, number> = Object.fromEntries(CUTS.map((ct, i) => [ct.id, i])) as Record<CutId, number>;
 
-export type CrudeId = 'ridgeback' | 'seaboard' | 'northfield' | 'coldwater';
+export type CrudeId = 'pinyon' | 'seaboard' | 'northfield' | 'coldwater';
 
 export interface CrudeSpec {
   id: CrudeId;
@@ -164,13 +164,13 @@ export interface CrudeSpec {
 
 export const CRUDE_SPECS: CrudeSpec[] = [
   {
-    id: 'ridgeback',
-    name: 'Ridgeback Light',
+    id: 'pinyon',
+    name: 'Pinyon Light',
     yields: [0.035, 0.11, 0.17, 0.16, 0.21, 0.24, 0.075],
     aromaticity: 0.1,
     sulfur: 0.15,
     metals: 3,
-    origin: 'shale wells in the inland Ridgeback Basin',
+    origin: 'shale wells in the inland Pinyon Basin',
   },
   {
     id: 'seaboard',
@@ -188,7 +188,7 @@ export const CRUDE_SPECS: CrudeSpec[] = [
     aromaticity: 0.5,
     sulfur: 1.9,
     metals: 60,
-    origin: 'an old conventional field in the Ridgeback Basin',
+    origin: 'an old conventional field in the Pinyon Basin',
   },
   {
     id: 'coldwater',
@@ -202,6 +202,6 @@ export const CRUDE_SPECS: CrudeSpec[] = [
 ];
 
 export const CRUDE_IDS: CrudeId[] = CRUDE_SPECS.map((s) => s.id);
-export const CRUDE_SHORT: Record<CrudeId, string> = { ridgeback: 'Ridgeback', seaboard: 'Seaboard', northfield: 'Northfield', coldwater: 'Coldwater' };
+export const CRUDE_SHORT: Record<CrudeId, string> = { pinyon: 'Pinyon', seaboard: 'Seaboard', northfield: 'Northfield', coldwater: 'Coldwater' };
 /** Graphic colors for the four crudes, light to heavy. */
-export const CRUDE_COLOR: Record<CrudeId, string> = { ridgeback: '#4590ce', seaboard: '#2a9d90', northfield: '#d0702a', coldwater: '#6b5a4e' };
+export const CRUDE_COLOR: Record<CrudeId, string> = { pinyon: '#4590ce', seaboard: '#2a9d90', northfield: '#d0702a', coldwater: '#6b5a4e' };

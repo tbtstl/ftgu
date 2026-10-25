@@ -21,12 +21,14 @@ import {
   pct,
   scale,
   tint,
+  usd,
   useScenario,
 } from '../../../framework';
 import { invest, DEPOSIT, SECONDHAND_AGE, type InvestKind } from '../../../engines/shipping/investment';
-import { classScrapValue } from '../../../engines/shipping/cycle';
-import { standardHistory, monthLabel, HISTORY_MONTHS } from '../../../model/shipping/history';
+import { classScrapValue, shipValue, type CycleMonth } from '../../../engines/shipping/cycle';
+import { historyWith, standardHistory, monthLabel, HISTORY_MONTHS } from '../../../model/shipping/history';
 import { DEFAULT_CYCLE } from '../../../engines/shipping/cycle';
+import { DEFAULTS as COSTS_DEFAULTS, maxPriceFor } from './L2_4';
 import { XYChart } from '../shared/XYChart';
 
 const HIST = standardHistory().cls.kmax;
@@ -37,13 +39,24 @@ export const LAST_ORDER = HISTORY_MONTHS - LAG - 1;
 export const LAST_PURCHASE = HISTORY_MONTHS - 13;
 export const TARGET_RETURN = 0.2;
 
-const $m = (x: number, d = 1) => `$${fmt(x / 1e6, d)}m`;
+/** The shipyard lags the reader can try, months; 30 is the history's own. */
+export const LAGS = ['12', '30', '48'] as const;
+export type Lag = (typeof LAGS)[number];
+/** The history rerun with every shipyard delivering `lag` months after the order (the standard one at 30). */
+export function lagHistory(lag: number): CycleMonth[] {
+  return lag === LAG ? HIST : historyWith({ lag }).cls.kmax;
+}
+/** Last month a newbuilding can be ordered and still be delivered within the history, for a lag. */
+export const lastOrder = (lag: number) => HISTORY_MONTHS - lag - 1;
+
+/** Prices in $ million, as the whole chapter writes them: $32.0 million. */
+const $m = (x: number) => `${usd(x / 1e6, 1)} million`;
 const perDay = (x: number) => `$${fmt(x)}/day`;
 const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
 
-/** The challenge: a newbuilding that earns at least 20% a year on the money put in. */
-export function returnSolved(kind: InvestKind, month: number): boolean {
-  if (kind !== 'newbuild' || month > LAST_ORDER) return false;
+/** The challenge: a newbuilding that earns at least 20% a year on the money put in, in the history as it happened (30-month lag). */
+export function returnSolved(kind: InvestKind, month: number, lag: number = LAG): boolean {
+  if (kind !== 'newbuild' || lag !== LAG || month > LAST_ORDER) return false;
   return invest('kmax', HIST, 'newbuild', month).irr >= TARGET_RETURN - 1e-9;
 }
 
@@ -93,22 +106,55 @@ const TCE_MAX = Math.max(...HIST.map((m) => m.tce));
 const NB_BOOM_MAX = Math.max(...HIST.slice(0, LAST_ORDER + 1).map((m) => m.newbuild));
 const PEAK_NB_MONTH = HIST.findIndex((m) => m.newbuild === NB_BOOM_MAX);
 const BOOM = invest('kmax', HIST, 'newbuild', PEAK_NB_MONTH);
-const SLUMP_MONTH = 84;
+export const BOOM_MONTH = 30;
+export const SLUMP_MONTH = 84;
 const SLUMP = invest('kmax', HIST, 'newbuild', SLUMP_MONTH);
-const SOLUTIONS = Array.from({ length: LAST_ORDER + 1 }, (_, m) => m).filter((m) => returnSolved('newbuild', m));
+export const SOLUTIONS = Array.from({ length: LAST_ORDER + 1 }, (_, m) => m).filter((m) => returnSolved('newbuild', m));
+/** The dearest newbuilding among the challenge's answers, $ million. */
+const SOL_NB_MAX = Math.max(...SOLUTIONS.map((m) => HIST[m].newbuild));
+
+/** The prose's two orders, Year 3 July and Year 8 January, in the history rerun with another shipyard lag. */
+export function lagCase(lag: number) {
+  const h = lagHistory(lag);
+  return {
+    peak: Math.max(...h.map((m) => m.tce)),
+    boom: invest('kmax', h, 'newbuild', BOOM_MONTH, lag).irr,
+    slump: invest('kmax', h, 'newbuild', SLUMP_MONTH, lag).irr,
+  };
+}
+const LAG12 = lagCase(12);
+const LAG30 = lagCase(LAG);
+const LAG48 = lagCase(48);
+/** Percentage points between the slump order's return and the boom order's. */
+const gap = (c: ReturnType<typeof lagCase>) => 100 * (c.slump - c.boom);
+
+/** A new Kamsarmax valued at a steady $15,000 a day for life, $ — against Lesson 2.4's full-cost answer at that rate. */
+export const PV_RATE_TCE = 15_000;
+export const PV_15K = shipValue('kmax', 0, PV_RATE_TCE, PV_RATE_TCE);
+const FULL_COST_PRICE = maxPriceFor({ ...COSTS_DEFAULTS, tce: PV_RATE_TCE });
 
 const MONTHS = HIST.map((_, i) => i / 12);
+/** Earnings in the history as it happened, drawn faintly when the reader reruns it with another lag. */
+const TCE_30 = HIST.map((m) => m.tce);
 
 export default function Lesson() {
-  const inv = useScenario('investment', { kind: 'newbuild' as InvestKind, month: 30 });
+  const inv = useScenario('investment', { kind: 'newbuild' as InvestKind, month: BOOM_MONTH, lag: String(LAG) as Lag });
   const { kind } = inv.state;
-  const maxMonth = kind === 'newbuild' ? LAST_ORDER : LAST_PURCHASE;
+  const lag = Number(inv.state.lag);
+  const hist = useMemo(() => lagHistory(lag), [lag]);
+  const maxMonth = kind === 'newbuild' ? lastOrder(lag) : LAST_PURCHASE;
   const month = Math.min(inv.state.month, maxMonth);
-  const r = invest('kmax', HIST, kind, month);
-  const solved = returnSolved(kind, month);
-  const tceSeries = useMemo(() => HIST.map((m) => m.tce), []);
-  const nbSeries = useMemo(() => HIST.map((m) => m.newbuild), []);
-  const shSeries = useMemo(() => HIST.map((m) => m.secondhand), []);
+  const r = invest('kmax', hist, kind, month, lag);
+  const solved = returnSolved(kind, month, lag);
+  const series = useMemo(
+    () => ({ tce: hist.map((m) => m.tce), nb: hist.map((m) => m.newbuild), sh: hist.map((m) => m.secondhand) }),
+    [hist],
+  );
+  const range = (xs: number[]) => [Math.min(...xs), Math.max(...xs)];
+  const [tceLo, tceHi] = range(series.tce);
+  const [nbLo, nbHi] = range(series.nb);
+  const [shLo, shHi] = range(series.sh);
+  const rerun = lag !== LAG;
   const held = (HISTORY_MONTHS - r.deliveryMonth) / 12;
 
   const wf = useScenario('world-fleet', { year: 5 });
@@ -151,28 +197,36 @@ export default function Lesson() {
       <P>
         Suppose Northwind Bulk wants a second Kamsarmax. It can <b>order a newbuilding</b>: pay a {pct(DEPOSIT)} deposit to a shipyard, the rest when she is
         delivered {LAG} months later, and own a new ship. Or it can <b>buy a secondhand ship</b>: a {SECONDHAND_AGE}-year-old Kamsarmax, paid for and delivered
-        at once. Either way the ship then trades on the spot market, earning the month’s rate on her earning days and paying her operating costs every day, until
-        the end of Year 12, when she is valued at what the market would then pay for a ship of her age. In the next demonstration, choose how to buy and when:
+        at once. Either way the ship then trades on the <b>spot market</b>, taking one cargo after another at whatever the market pays at the time — in our model,
+        the month’s TCE on each of her earning days — and paying her operating costs every day, until the end of Year 12, when she is valued at what the market
+        would then pay for a ship of her age. The demonstration sums this up as a <b>return a year on the money put in</b>, which bankers call the internal rate of
+        return: the yearly interest rate at which Northwind’s payments would grow into exactly what the ship brings back — her earnings less running costs, plus
+        that final value, which is a valuation, not a sale. In the next demonstration, choose how to buy and when, and leave the shipyard lag at {LAG} months for
+        now:
       </P>
 
       <Figure name="Fleet Investment Simulator" scenario={inv}>
         <Segmented
           label="How to buy"
           value={kind}
-          onChange={(k) => inv.set({ kind: k, month: Math.min(inv.state.month, k === 'newbuild' ? LAST_ORDER : LAST_PURCHASE) })}
+          onChange={(k) => inv.set({ kind: k, month: Math.min(inv.state.month, k === 'newbuild' ? lastOrder(lag) : LAST_PURCHASE) })}
           options={[
             { value: 'newbuild', label: 'Order a newbuilding' },
             { value: 'secondhand', label: `Buy a ${SECONDHAND_AGE}-year-old ship` },
           ]}
         />
+        <Segmented label="Shipyard lag" value={inv.state.lag} onChange={(v) => inv.set({ lag: v })} options={LAGS.map((l) => ({ value: l, label: `${l}-month lag` }))} />
         <XYChart
-          ariaLabel={`Kamsarmax earnings over twelve simulated years, from ${perDay(TCE_MIN)} to ${perDay(TCE_MAX)}. ${kind === 'newbuild' ? `Ordered in ${monthLabel(month)}, delivered ${monthLabel(r.deliveryMonth)}.` : `Bought in ${monthLabel(month)}.`}`}
-          series={[{ xs: MONTHS, ys: tceSeries, color: GRAPHIC.green, width: 2 }]}
+          ariaLabel={`Kamsarmax earnings over twelve simulated years${rerun ? `, rerun with every shipyard delivering ${lag} months after the order` : ''}, from ${perDay(tceLo)} to ${perDay(tceHi)}. ${kind === 'newbuild' ? `Ordered in ${monthLabel(month)}, delivered ${monthLabel(r.deliveryMonth)}.` : `Bought in ${monthLabel(month)}.`}`}
+          series={[
+            ...(rerun ? [{ xs: MONTHS, ys: TCE_30, color: '#a8a8a8', width: 1.5, dash: '4 3' }] : []),
+            { xs: MONTHS, ys: series.tce, color: GRAPHIC.green, width: 2 },
+          ]}
           xMin={0}
           xMax={12}
           yMin={0}
-          yMax={60_000}
-          yTicks={[0, 20_000, 40_000, 60_000]}
+          yMax={80_000}
+          yTicks={[0, 20_000, 40_000, 60_000, 80_000]}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 0 ? 'Year 1' : v === 12 ? 'end' : `Year ${v + 1}`)}
           yFormat={(v) => `$${fmt(v / 1000)}k`.replace('$−', '−$')}
@@ -185,10 +239,10 @@ export default function Lesson() {
           )}
         />
         <XYChart
-          ariaLabel={`Ship prices: newbuildings between ${$m(NB_MIN * 1e6)} and ${$m(NB_MAX * 1e6)}, five-year-old ships between ${$m(SH_MIN * 1e6)} and ${$m(SH_MAX * 1e6)}. In ${monthLabel(month)} a newbuilding cost ${$m(HIST[month].newbuild * 1e6)} and a five-year-old ship ${$m(HIST[month].secondhand * 1e6)}.`}
+          ariaLabel={`Ship prices: newbuildings between ${$m(nbLo * 1e6)} and ${$m(nbHi * 1e6)}, five-year-old ships between ${$m(shLo * 1e6)} and ${$m(shHi * 1e6)}. In ${monthLabel(month)} a newbuilding cost ${$m(hist[month].newbuild * 1e6)} and a five-year-old ship ${$m(hist[month].secondhand * 1e6)}.`}
           series={[
-            { xs: MONTHS, ys: nbSeries, color: '#8a8a8a', width: 2 },
-            { xs: MONTHS, ys: shSeries, color: GRAPHIC.orange, width: 2 },
+            { xs: MONTHS, ys: series.nb, color: '#8a8a8a', width: 2 },
+            { xs: MONTHS, ys: series.sh, color: GRAPHIC.orange, width: 2 },
           ]}
           xMin={0}
           xMax={12}
@@ -197,16 +251,17 @@ export default function Lesson() {
           yTicks={[20, 30, 40]}
           xTicks={[0, 2, 4, 6, 8, 10, 12]}
           xFormat={(v) => (v === 0 ? 'Year 1' : v === 12 ? 'end' : `Year ${v + 1}`)}
-          yFormat={(v) => `$${v}m`}
+          yFormat={(v) => fmt(v)}
           yLabel="Ship prices, $ million"
           height={150}
           cursor={month / 12}
-          markers={[{ x: month / 12, y: kind === 'newbuild' ? HIST[month].newbuild : HIST[month].secondhand, color: kind === 'newbuild' ? TEXT.gray : TEXT.orange }]}
+          markers={[{ x: month / 12, y: kind === 'newbuild' ? hist[month].newbuild : hist[month].secondhand, color: kind === 'newbuild' ? TEXT.gray : TEXT.orange }]}
         />
         <Legend
           items={[
             { label: 'Newbuilding price', color: '#8a8a8a', kind: 'line' },
             { label: `${SECONDHAND_AGE}-year-old ship’s price`, color: GRAPHIC.orange, kind: 'line' },
+            ...(rerun ? [{ label: `Earnings with the history’s ${LAG}-month lag`, color: '#a8a8a8', kind: 'line' as const, dashed: true }] : []),
           ]}
         />
         <Readouts
@@ -227,45 +282,67 @@ export default function Lesson() {
           display={monthLabel(month)}
         />
         <Caption>
+          {rerun ? `In the history rerun with a ${lag}-month lag: ` : ''}
           {kind === 'newbuild'
-            ? `Ordered in ${monthLabel(month)} at ${$m(r.price)}, she is delivered in ${monthLabel(r.deliveryMonth)}, when the market pays ${perDay(HIST[r.deliveryMonth].tce)}, and trades for ${fmt(held, 1)} years.`
-            : `Bought in ${monthLabel(month)} for ${$m(r.price)}, when the market pays ${perDay(HIST[month].tce)}, she trades for ${fmt(held, 1)} years.`}
+            ? `${rerun ? 'o' : 'O'}rdered in ${monthLabel(month)}, she is delivered in ${monthLabel(r.deliveryMonth)}, when the market pays ${perDay(hist[r.deliveryMonth].tce)}, and trades for ${fmt(held, 1)} years.`
+            : `${rerun ? 'b' : 'B'}ought in ${monthLabel(month)}, when the market pays ${perDay(hist[month].tce)}, she trades for ${fmt(held, 1)} years.`}
         </Caption>
       </Figure>
 
       <P>
-        Start in July of Year 3, at the height of the boom. Earnings have nearly doubled in two years — they average {perDay(YEARS[2].tce)} in Year 3,
-        against {perDay(YEARS[0].tce)} in Year 1 — and every owner can see it: a newbuilding costs{' '}
-        {$m(HIST[30].newbuild * 1e6)} and a five-year-old ship {$m(HIST[30].secondhand * 1e6)}, more than a new one. That isn’t a mistake. The secondhand ship
-        can start earning today’s rates today; the newbuilding won’t arrive for {LAG} months. Ordered then, the newbuilding is delivered in{' '}
-        {monthLabel(30 + LAG)}, into a market paying {perDay(HIST[30 + LAG].tce)}, and over the history returns {pct(invest('kmax', HIST, 'newbuild', 30).irr, 1)} a
-        year. Order when the shipyards’ prices peak, in {monthLabel(PEAK_NB_MONTH)} at {$m(BOOM.price)}, and the return is {pct(BOOM.irr, 1)}.
-      </P>
-      <P>
-        Now drag the order into the slump. In {monthLabel(SLUMP_MONTH)}, when Kamsarmaxes earn {perDay(HIST[SLUMP_MONTH].tce)} and nobody wants ships, a
-        newbuilding costs {$m(SLUMP.price)}. She arrives in {monthLabel(SLUMP.deliveryMonth)}, just as the market recovers, and returns {pct(SLUMP.irr, 1)} a year.
-        The ship is identical; only the timing changed. Owners who trade ships this way call it <b>asset play</b>: buying ships cheap and selling them dear, with
-        the voyages in between mattering less than the dates.
+        Start in July of Year 3, in the middle of the boom. Earnings have nearly doubled in two years — they average {perDay(YEARS[2].tce)} in Year 3,
+        against {perDay(YEARS[0].tce)} in Year 1 — and every owner can see it: a newbuilding costs {$m(HIST[BOOM_MONTH].newbuild * 1e6)} and a five-year-old
+        ship {$m(HIST[BOOM_MONTH].secondhand * 1e6)}, more than a new one. That isn’t a mistake. The secondhand ship can start earning today’s rates today; the
+        newbuilding won’t arrive for {LAG} months. Ordered then, the newbuilding is delivered in {monthLabel(BOOM_MONTH + LAG)}, into a market paying{' '}
+        {perDay(HIST[BOOM_MONTH + LAG].tce)}, and over the history returns {pct(LAG30.boom, 1)} a year. Order when the shipyards’ prices peak, in{' '}
+        {monthLabel(PEAK_NB_MONTH)} at {$m(BOOM.price)}, and the return is {pct(BOOM.irr, 1)}.
       </P>
 
       <Challenge
         id="a"
-        question={`Find a month to order a newbuilding that earns Northwind at least ${pct(TARGET_RETURN)} a year on its money by the end of the history.`}
+        question={`Northwind wants a newbuilding that earns at least ${pct(TARGET_RETURN)} a year on its money by the end of the history. Predict first: should it order while earnings are high, or after they have fallen — and roughly when? Then find a month whose order does it.`}
         solved={solved}
         status={
           kind !== 'newbuild'
             ? 'Switch to ordering a newbuilding.'
-            : `Ordered in ${monthLabel(month)}, she returns ${Number.isFinite(r.irr) ? pct(r.irr, 1) : 'nothing measurable'} a year.`
+            : rerun
+              ? `Set the shipyard lag back to ${LAG} months, the history’s own.`
+              : month === BOOM_MONTH
+                ? 'Make your prediction, then move the order.'
+                : `Ordered in ${monthLabel(month)}, she returns ${Number.isFinite(r.irr) ? pct(r.irr, 1) : 'nothing measurable'} a year.`
         }
-        success={`Solved. Every order from ${monthLabel(SOLUTIONS[0])} to ${monthLabel(SOLUTIONS[SOLUTIONS.length - 1])} clears ${pct(TARGET_RETURN)} — all of them placed in the slump, when shipyards were cheap and owners frightened, and delivered into the recovery. None placed in the first six years does.`}
+        success={`Solved — after the boom, not during it. Every order from ${monthLabel(SOLUTIONS[0])} to ${monthLabel(SOLUTIONS[SOLUTIONS.length - 1])} clears ${pct(TARGET_RETURN)}, and none placed in the first six years does. All were placed after the first boom had run its course, with shipyards asking ${$m(SOL_NB_MAX * 1e6)} or less, and all were delivered between ${monthLabel(SOLUTIONS[0] + LAG)} and ${monthLabel(SOLUTIONS[SOLUTIONS.length - 1] + LAG)}: in time to trade through the boom of Years 11 and 12, or at least to be valued while it lasts. The last of them earn most of their return on paper, from that end value.`}
       />
+
+      <P>
+        Take one order that clears it, placed in {monthLabel(SLUMP_MONTH)}. Kamsarmaxes then earn {perDay(HIST[SLUMP_MONTH].tce)}, and a newbuilding costs{' '}
+        {$m(SLUMP.price)}, against {$m(HIST[BOOM_MONTH].newbuild * 1e6)} in the boom. She arrives in {monthLabel(SLUMP.deliveryMonth)}, into a market still paying
+        only {perDay(HIST[SLUMP.deliveryMonth].tce)}, but in time to trade through the boom of Years 11 and 12, and returns {pct(SLUMP.irr, 1)} a year.
+        The ship is identical; only the timing changed. Owners who trade ships this way call it <b>asset play</b>: buying ships cheap and selling them dear, with
+        the voyages in between mattering less than the dates.
+      </P>
+
+      <H2>The shipyards’ lag</H2>
+      <P>
+        Why does timing matter so much? Because of the wait. Set the shipyard lag in <FigRef to="Fleet Investment Simulator">this demonstration</FigRef> to 12
+        months: the model reruns all twelve years with every owner’s newbuildings, not just Northwind’s, arriving a year after they are ordered. Owners still order
+        heavily in the boom, but their ships arrive while the shortage is still there and cut it short: earnings never rise above {perDay(LAG12.peak)}, against{' '}
+        {perDay(LAG30.peak)} with the {LAG}-month lag. Ordered in {monthLabel(BOOM_MONTH)}, a newbuilding now returns {pct(LAG12.boom, 1)} a year; ordered in{' '}
+        {monthLabel(SLUMP_MONTH)}, {pct(LAG12.slump, 1)} — {fmt(gap(LAG12))} percentage points apart, against {fmt(gap(LAG30))}. Stretch the lag to 48 months and the cycle
+        swings harder: earnings reach {perDay(LAG48.peak)}, and the same two orders return {pct(LAG48.boom, 1)} and {pct(LAG48.slump, 1)}. A short lag doesn’t make
+        shipping more profitable — in our model every order earns less — but it makes timing matter far less. The asset play is a bet on the shipyards’ lag.
+      </P>
 
       <H2>Prices follow earnings</H2>
       <P>
-        Look at the two price lines. A ship is worth what she can earn: the present value of her expected earnings, less her operating costs, over the rest of her
-        life, plus what a breaker will pay for her steel at the end — {$m(classScrapValue('kmax'))} for a Kamsarmax at our illustrative scrap price. Owners can’t
-        see the future, so they lean on the recent past, and a ship’s value swings with recent earnings. In our history a five-year-old ship sold for anything
-        from {$m(SH_MIN * 1e6)} to {$m(SH_MAX * 1e6)}.
+        Look at the two price lines, with the lag back at {LAG} months. A ship is worth what she can earn. Owners add up the earnings they expect from her, less
+        her operating costs, over the rest of her life, plus what a breaker will pay for her steel at the end — {$m(classScrapValue('kmax'))} for a Kamsarmax at
+        our illustrative scrap price. But a dollar that arrives years from now is worth less than a dollar today, which could be earning interest meanwhile, so
+        each year’s money is first discounted, here by 8% for every year it lies ahead. The total is her <K tone="green">present value</K>. At a steady{' '}
+        {perDay(PV_RATE_TCE)} for life, a new Kamsarmax is worth {$m(PV_15K)} this way — close to the{' '}
+        {FULL_COST_PRICE === null ? 'price' : $m(FULL_COST_PRICE * 1e6)} that <a href={lessonHref('shipping/2.4')}>Lesson 2.4</a>’s full-cost break-even allowed
+        Northwind to pay at the same rate, though that lesson counted quite differently. Owners can’t see the future, so they lean on the recent past, and a
+        ship’s value swings with recent earnings. In our history a five-year-old ship sold for anything from {$m(SH_MIN * 1e6)} to {$m(SH_MAX * 1e6)}.
       </P>
       <P>
         Newbuilding prices move less, between {$m(NB_MIN * 1e6)} and {$m(NB_MAX * 1e6)}. A shipyard’s price is set by its costs and by how full its order book is:

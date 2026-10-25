@@ -33,7 +33,6 @@ import {
   type GateType,
 } from '../../../engines/compute/logic';
 import { gateDelayPs } from '../../../engines/compute/transistor';
-import { ACCELERATORS } from '../../../model/compute/hardware';
 
 // ---------------------------------------------------------------------------
 // Switch-level circuits: each gate as a pull-up network of p-channel switches (on when their
@@ -118,9 +117,22 @@ export function halfAdderSolved(sum: GateType, carry: GateType): boolean {
   return rowsRight(sum, carry) === 4;
 }
 
-/** Challenge b: the four-bit sum takes the longest time any four-bit sum can take to settle. */
-export function slowestSolved(a: number, b: number): boolean {
-  return rippleAdder(toBits(a, 4), toBits(b, 4)).settle === rippleWorstCase(4);
+/**
+ * Challenge b: a carry born in bit 0 ripples through every column into the final carry out — bit 0
+ * generates and bits 1–3 propagate. Every such pair adds to 16 with both numbers odd (15 + 1, 9 + 7…).
+ */
+export function rippleOutSolved(a: number, b: number): boolean {
+  const r = rippleAdder(toBits(a, 4), toBits(b, 4));
+  return r.bits[0].kind === 'generate' && r.bits.slice(1).every((bit) => bit.kind === 'propagate');
+}
+
+/** Where the carry from bit 0 stops short of the final carry out, for the challenge's status. */
+export function rippleOutStatus(a: number, b: number): string {
+  const r = rippleAdder(toBits(a, 4), toBits(b, 4));
+  if (r.bits[0].kind !== 'generate') return `In ${a} + ${b}, bit 0 doesn’t generate a carry, so none starts at the bottom.`;
+  const i = r.bits.findIndex((bit, k) => k > 0 && bit.kind !== 'propagate');
+  if (i < 0) return `${a} + ${b} carries all the way.`;
+  return `In ${a} + ${b}, bit 0 generates a carry, but bit ${i} ${r.bits[i].kind === 'kill' ? 'kills it' : 'generates a carry of its own and doesn’t wait for it'}.`;
 }
 
 export const GATE_DEFAULTS = { a: '1' as '0' | '1', b: '1' as '0' | '1', sum: 'NAND' as GateType, carry: 'NOR' as GateType, show: 'sum' as 'sum' | 'carry' };
@@ -139,7 +151,9 @@ export function rippleCaption(r: AdderResult): string {
     if (b.sumReady > best.t) best = { t: b.sumReady, bit: i, carryOut: false };
   });
   const top = r.bits[r.bits.length - 1];
-  if (top.carryReady > best.t) best = { t: top.carryReady, bit: r.bits.length - 1, carryOut: true };
+  // When a carry ripples up through the top column, its carry out settles with its sum digit, at the end of the chain.
+  const ripplesOut = top.kind === 'propagate' && top.carryReady === best.t && top.carryReady > 4;
+  if (top.carryReady > best.t || ripplesOut) best = { t: top.carryReady, bit: r.bits.length - 1, carryOut: true };
   let j = best.carryOut ? best.bit : best.bit - 1;
   const chain: number[] = [];
   while (j >= 0 && r.bits[j].kind === 'propagate') chain.unshift(j--);
@@ -359,7 +373,7 @@ function gateCaption(type: GateType, a: boolean, b: boolean): string {
     return `The first stage is a ${type === 'AND' ? 'NAND' : 'NOR'}: ${path(stageOut[0])}, so X = ${Number(stageOut[0])}. The inverter flips it, so the ${type} gate outputs ${Number(out)}.`;
   if (type === 'XOR')
     return `The inputs ${a === b ? 'agree, so the lower network conducts' : 'differ, so the upper network conducts'}: ${path(out)}, and it outputs ${Number(out)}.`;
-  return `In this ${type}, ${path(out)}, so it outputs ${Number(out)}. The other network is open: no current flows straight from supply to ground.`;
+  return `In this ${type}, ${path(out)}, so it outputs ${Number(out)}. The other network is open: almost no current flows straight from supply to ground, only a leak.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +489,7 @@ export default function Lesson() {
   const ra = rs.state.a;
   const rb = rs.state.b;
   const r = rippleAdder(toBits(ra, 4), toBits(rb, 4));
-  const solvedB = slowestSolved(ra, rb);
+  const solvedB = rippleOutSolved(ra, rb);
   const play = usePlay(true);
   const [t, setT] = useState(0);
   useEffect(() => setT(0), [ra, rb]);
@@ -488,7 +502,6 @@ export default function Lesson() {
   const mul24 = arrayMultiplier(24);
   const mul8 = arrayMultiplier(8);
   const mul4 = arrayMultiplier(4);
-  const A = ACCELERATORS.A;
 
   return (
     <LessonPage id="compute/1.3">
@@ -569,19 +582,15 @@ export default function Lesson() {
             },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'transistors in the circuit', value: fmt(GATE_TRANSISTORS[st.sum] + GATE_TRANSISTORS[st.carry]) },
-            { label: 'rows added correctly', value: `${right} of 4` },
-          ]}
-        />
+        <Readouts items={[{ label: 'transistors in the circuit', value: fmt(GATE_TRANSISTORS[st.sum] + GATE_TRANSISTORS[st.carry]) }]} />
       </Figure>
 
       <P>
         Step the NAND through its four input combinations. Only with A and B both at 1 do both lower switches close, joining the output to ground; any input at 0
         closes one of the upper switches instead and joins the output to the supply. Then look inside the NOR: the same four transistors with the series and
-        parallel arrangements swapped, so its output is 1 only when both inputs are 0. In every case one network is open. As with the inverter, no current flows straight from supply to
-        ground once the output has settled: a CMOS gate draws current only while it switches, charging or draining the wires and transistor gates it drives.
+        parallel arrangements swapped, so its output is 1 only when both inputs are 0. In every case one network is open. As with the inverter, once the output has
+        settled almost no current flows straight from supply to ground — only the leak of <a href={lessonHref('compute/1.2')}>Lesson 1.2</a> — so a CMOS gate
+        draws real current only while it switches, charging or draining the wires and transistor gates it drives.
       </P>
       <P>
         NAND and NOR are the gates CMOS builds most naturally, because a network of switches pulls its output toward the opposite of its inputs. AND and OR cost an
@@ -636,8 +645,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'A + B', value: `${r.value} = ${bin(r.value, 5)}` },
-            { label: 'answer settles after', value: `${r.settle} delays · ${ps(r.settle)}`, tone: 'teal' },
-            { label: 'slowest possible', value: `${worst} delays · ${ps(worst)}`, tone: 'teal' },
+            { label: 'slowest possible, the dashed line', value: `${worst} delays · ${ps(worst)}`, tone: 'teal' },
           ]}
         />
       </Figure>
@@ -650,10 +658,10 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Find two numbers whose sum takes the longest possible time to settle."
+        question="Find two numbers for which a carry born in bit 0 ripples through every column into the final carry out. Predict first: what must each column be — generate, propagate or kill — and so what must A + B come to? Then set them to check."
         solved={solvedB}
-        status={`Right now ${ra} + ${rb} settles after ${r.settle} gate delays.`}
-        success={`Solved. When bits 1 and 2 both propagate, a carry has to ripple through both before bit 3’s sum can be trusted: ${worst} gate delays, about ${ps(worst)}, the most any four-bit sum can take. The classic example is 15 + 1, where the carry from bit 0 ripples all the way to the top.`}
+        status={rippleOutStatus(ra, rb)}
+        success={`Solved. Bit 0 generates a carry and bits 1, 2 and 3 each pass it on, so the final carry out is the last digit to settle, after ${worst} gate delays, about ${ps(worst)}: the most any four-bit sum can take. Every such pair adds to 16, with both numbers odd — 15 + 1, 9 + 7, 5 + 11 and the rest — because bit 0 holds two 1s and each other column one: 2 + 2 + 4 + 8.`}
       />
 
       <H2>Why the arithmetic shapes the chip</H2>
@@ -673,9 +681,10 @@ export default function Lesson() {
       </P>
       <P>
         That square is one reason chips built for machine learning compute at low precision: in the same silicon and power, narrow multipliers fit many times over.
-        The {A.name} we’ll meet in Chapter 2 manages {fmt(A.bf16Tflops)} trillion 16-bit floating-point operations per second in its matrix units, against{' '}
-        {fmt(A.fp32Tflops)} trillion in ordinary 32-bit arithmetic. <a href={lessonHref('compute/2.3')}>Lesson 2.3</a> looks at how it keeps all those multipliers
-        busy.
+        Fitting them is not the same as running them flat out, though. Every multiplication needs its two numbers brought to it and its product carried away, and
+        that traffic grows only in proportion to the width, not with its square, so narrowing the numbers buys less speed than it saves in silicon.{' '}
+        <a href={lessonHref('compute/1.4')}>The next lesson</a> puts figures on that for the A-class, the GPU this course is built around, and{' '}
+        <a href={lessonHref('compute/2.3')}>Lesson 2.3</a> looks at how a GPU keeps thousands of multipliers busy.
       </P>
       <P>
         Every circuit in this lesson forgets. Change an input and the outputs follow a few picoseconds later: the half adder in{' '}

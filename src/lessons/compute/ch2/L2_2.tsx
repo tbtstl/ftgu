@@ -24,6 +24,7 @@ import {
   useScenario,
 } from '../../../framework';
 import { issueUtilization, occupancy, warpTimeline, warpsToHide, waves, type KernelShape, type Occupancy } from '../../../engines/compute/gpuExec';
+import { tileFit } from '../../../engines/compute/matmul';
 import { ACCELERATORS, SM_LIMITS } from '../../../model/compute/hardware';
 
 // ---------------------------------------------------------------------------
@@ -351,7 +352,19 @@ const LANES = SMS * SM_LIMITS.fp32Lanes;
 const THREADS_TO_HIDE = HIDE * SM_LIMITS.schedulers * SM_LIMITS.warpSize * SMS;
 const LATENCY_NS = (LATENCY / ACCELERATORS.A.clockGHz);
 const W133 = waves(133, 1);
-const W1000 = waves(1000, 4);
+/** Warps per scheduler that 90% busy needs at 40 cycles per load: 0.9 × 520 ÷ 40 = 11.7, so 12. */
+const WARPS_FOR_TARGET = Math.ceil((BUSY_TARGET * (SCHED_DEFAULTS.compute + LATENCY)) / SCHED_DEFAULTS.compute - 1e-9);
+/** Shared memory a block of the next lesson's 128 × 128 matrix tiles needs, KB (64). */
+const TILE_SHARED_KB = tileFit(128).sharedKB;
+/** At 32 registers, where registers and threads would allow eight blocks, give each block that much shared memory. */
+const AT_SHARED = occupancy(kernelOf({ ...SCHED_DEFAULTS, regs: 32, shared: TILE_SHARED_KB }));
+const AT_SHARED_REGS_ALLOW = occupancy(kernelOf({ ...SCHED_DEFAULTS, regs: 32 })).blocksPerSM;
+/** Blocks of 384 threads at 64 registers: registers for two blocks, and a gap too small for a third. */
+const ODD_THREADS = 384;
+const AT_ODD = occupancy(kernelOf({ ...SCHED_DEFAULTS, threads: ODD_THREADS }));
+const ODD_LEFTOVER = SM_LIMITS.registers - AT_ODD.blocksPerSM * ODD_THREADS * SCHED_DEFAULTS.regs;
+/** A grid many waves long: 1,000 blocks at one per SM. */
+const W1000 = waves(1000, 1);
 
 export const LESSON_NUMBERS = {
   defaultBlocks: DEFAULT_OCC.blocksPerSM,
@@ -371,6 +384,19 @@ export const LESSON_NUMBERS = {
   latencyNs: LATENCY_NS,
   w133: W133.utilization,
   w1000: W1000.utilization,
+  w1000Waves: W1000.waves,
+  w1000LastWave: W1000.lastWave,
+  warpsForTarget: WARPS_FOR_TARGET,
+  tileSharedKB: TILE_SHARED_KB,
+  sharedBlocks: AT_SHARED.blocksPerSM,
+  sharedLimit: AT_SHARED.limit,
+  sharedRegsAllow: AT_SHARED_REGS_ALLOW,
+  sharedWarps: AT_SHARED.warpsPerSM,
+  sharedBusy: issueUtilization(AT_SHARED.warpsPerScheduler, SCHED_DEFAULTS.compute),
+  oddBlocks: AT_ODD.blocksPerSM,
+  oddWarps: AT_ODD.warpsPerSM,
+  oddLeftover: ODD_LEFTOVER,
+  oddBusy: issueUtilization(AT_ODD.warpsPerScheduler, SCHED_DEFAULTS.compute),
 };
 
 export default function Lesson() {
@@ -411,7 +437,7 @@ export default function Lesson() {
       ? `Set the SMs to hold ${NO_IDLE_PER_SM} blocks each first; now they hold ${ws.perSM}.`
       : ws.blocks <= NO_IDLE_MIN
         ? `${fmt(ws.blocks)} blocks is too few: the grid needs more than ${NO_IDLE_MIN}.`
-        : `${fmt(ws.blocks)} blocks take ${w.waves} waves, and the last fills ${fmt(w.lastWave)} of its ${fmt(w.slots)} slots.`;
+        : `${fmt(ws.blocks)} blocks take ${w.waves} waves, and the last fills ${fmt(w.lastWave)} of its ${fmt(w.slots)} slots. The arrow keys move the slider one block at a time.`;
 
   return (
     <LessonPage id="compute/2.2">
@@ -455,8 +481,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `blocks per SM (limit: ${o.limit})`, value: fmt(o.blocksPerSM), tone: o.limit === 'registers' || o.limit === 'shared memory' ? 'violet' : undefined },
-            { label: 'warps per scheduler', value: fmt(warps) },
             { label: 'occupancy', value: pct(o.occupancy) },
             { label: 'cycles issuing', value: pct(busy, 1), tone: 'orange' },
           ]}
@@ -493,7 +517,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Keeping 40 cycles of arithmetic per load, change the kernel so the scheduler issues on at least 90% of cycles."
+        question={`Predict first: with ${SCHED_DEFAULTS.compute} cycles of arithmetic in every ${fmt(SCHED_DEFAULTS.compute + LATENCY)}-cycle round trip, how many warps must a scheduler have to issue on ${pct(BUSY_TARGET)} of cycles? Then, keeping ${SCHED_DEFAULTS.compute} cycles of arithmetic per load, change the kernel so it has them.`}
         solved={solvedA}
         status={
           st.compute !== SCHED_DEFAULTS.compute
@@ -502,7 +526,7 @@ export default function Lesson() {
               ? 'Not even one block fits on the SM. Lower the registers or the shared memory.'
               : `Right now the scheduler issues on ${pct(busy, 1)} of cycles, with ${warps} warps to choose from.`
         }
-        success={`Solved. At 40 cycles of arithmetic per load, 90% needs 12 warps per scheduler: 48 warps per SM. With blocks of 256 threads, that takes no more than ${MOST_REGS} registers per thread: 48 warps × 32 threads × ${MOST_REGS} = ${fmt(48 * 32 * MOST_REGS)} registers still fits in ${fmt(
+        success={`Solved. ${pct(BUSY_TARGET)} of ${fmt(SCHED_DEFAULTS.compute + LATENCY)} cycles is ${fmt(BUSY_TARGET * (SCHED_DEFAULTS.compute + LATENCY))}, or ${fmt((BUSY_TARGET * (SCHED_DEFAULTS.compute + LATENCY)) / SCHED_DEFAULTS.compute, 1)} warps’ worth of ${SCHED_DEFAULTS.compute}-cycle bursts, so it takes ${WARPS_FOR_TARGET} warps per scheduler: ${4 * WARPS_FOR_TARGET} warps per SM. With blocks of 256 threads, that takes no more than ${MOST_REGS} registers per thread: 48 warps × 32 threads × ${MOST_REGS} = ${fmt(48 * 32 * MOST_REGS)} registers still fits in ${fmt(
           SM_LIMITS.registers,
         )}. With ${MOST_REGS + 1}, only ${ONE_MORE.warpsPerScheduler} warps per scheduler fit, and it issues on ${pct(
           issueUtilization(ONE_MORE.warpsPerScheduler, SCHED_DEFAULTS.compute),
@@ -520,8 +544,17 @@ export default function Lesson() {
         very waits that occupancy was meant to hide. Compilers and programmers trade one against the other.
       </P>
       <P>
-        There is a second way out, which the fourth slider controls: more arithmetic per load. Return to {SCHED_DEFAULTS.regs} registers and double the
-        arithmetic to {2 * SCHED_DEFAULTS.compute} cycles. The same {DEFAULT_OCC.warpsPerScheduler} warps now supply enough work to cover each wait, and the
+        Each resource is handed out a whole block at a time, so shared memory and the size of a block can set the limit too. The matrix kernels of the next
+        lesson give each block {TILE_SHARED_KB} KB of shared memory for its tiles. At 32 registers, where the registers would allow {AT_SHARED_REGS_ALLOW} blocks,
+        set the shared memory to {TILE_SHARED_KB} KB: only {AT_SHARED.blocksPerSM} blocks fit in the SM’s {SM_LIMITS.sharedKB} KB, and the scheduler drops to{' '}
+        {AT_SHARED.warpsPerScheduler} warps, issuing on {pct(LESSON_NUMBERS.sharedBusy, 1)} of cycles. Now set the shared memory back to 0 and the registers to{' '}
+        {SCHED_DEFAULTS.regs}, and try blocks of {ODD_THREADS} threads. Two of them take {fmt(AT_ODD.blocksPerSM * ODD_THREADS * SCHED_DEFAULTS.regs)} registers,
+        and the {fmt(ODD_LEFTOVER)} left over are too few for a third, so a quarter of the register file sits idle and the SM holds {AT_ODD.warpsPerSM} warps
+        instead of {DEFAULT_OCC.warpsPerSM}. Blocks of 128, 256, 512 or 1,024 threads divide the register file evenly; {ODD_THREADS} doesn’t.
+      </P>
+      <P>
+        There is a second way out, which the arithmetic-per-load slider controls: more arithmetic per load. Return to blocks of {SCHED_DEFAULTS.threads} threads and
+        double the arithmetic to {2 * SCHED_DEFAULTS.compute} cycles. The same {DEFAULT_OCC.warpsPerScheduler} warps now supply enough work to cover each wait, and the
         scheduler {DOUBLE_COMPUTE >= 1 - 1e-9 ? 'never idles' : `issues on ${pct(DOUBLE_COMPUTE, 1)} of cycles`}. A kernel that does more with every number it fetches needs fewer warps to stay busy. That
         ratio, arithmetic per byte fetched, is about to become the most important number in this chapter.
       </P>
@@ -542,13 +575,7 @@ export default function Lesson() {
       <Figure name="GPU Thread Simulator · waves" scenario={wv} play={play}>
         <SmGrid s={ws} wave={wave} progress={progress} />
         <Sawtooth s={ws} />
-        <Readouts
-          items={[
-            { label: 'waves', value: fmt(w.waves) },
-            { label: 'blocks in the last wave', value: `${fmt(w.lastWave)} of ${fmt(w.slots)}` },
-            { label: 'utilization over the run', value: pct(w.utilization, 1), tone: 'orange' },
-          ]}
-        />
+        <Readouts items={[{ label: 'utilization over the run', value: pct(w.utilization, 1), tone: 'orange' }]} />
         <Slider label="Blocks in the grid" value={ws.blocks} min={1} max={BLOCKS_MAX} onChange={(v) => wv.set({ blocks: v })} display={fmt(ws.blocks)} />
         <Slider label="Blocks per SM" tone="violet" value={ws.perSM} min={1} max={8} onChange={(v) => wv.set({ perSM: v })} display={fmt(ws.perSM)} />
       </Figure>
@@ -560,15 +587,16 @@ export default function Lesson() {
         a new, nearly empty wave begins, and climbs back as that wave fills.
       </P>
       <P>
-        The teeth shrink as the grid grows. With 1,000 blocks at four per SM, the GPU runs {W1000.waves} waves of up to {fmt(W1000.slots)} blocks, and the last
-        wave holds {fmt(W1000.lastWave)}: {pct(W1000.utilization, 1)} utilization. A grid many waves long hardly notices its last one. So large jobs
-        waste little to the tail, while small ones — a kernel run on a small batch of data, for instance — can lose half the GPU to it. Programmers often size
+        The teeth shrink as the grid grows. With 1,000 blocks at one per SM, the GPU runs {W1000.waves} waves of up to {fmt(W1000.slots)} blocks, and the last
+        wave holds {fmt(W1000.lastWave)}: {pct(W1000.utilization, 1)} utilization. However empty its last wave, a grid of n waves keeps the GPU busy at least
+        (n − 1)/n of the time — here at least {W1000.waves - 1}/{W1000.waves}, or {pct((W1000.waves - 1) / W1000.waves, 1)} — because every wave before the last
+        is full. So large jobs waste little to the tail, while small ones — a kernel run on a small batch of data, for instance — can lose half the GPU to it. Programmers often size
         their grids, or split work differently, to match the number of SMs.
       </P>
 
       <Challenge
         id="b"
-        question={`With ${NO_IDLE_PER_SM} blocks fitting on each SM, choose a grid of more than ${NO_IDLE_MIN} blocks that leaves no slot idle in any wave.`}
+        question={`Predict first: with ${NO_IDLE_PER_SM} blocks fitting on each of the ${SMS} SMs, how many blocks make one full wave, and which grids of more than ${NO_IDLE_MIN} blocks leave no slot idle in any wave? Then choose one.`}
         solved={solvedB}
         status={statusB}
         success={`Solved. Two blocks on each of 132 SMs make ${fmt(2 * SMS)} slots, so any multiple of ${fmt(2 * SMS)} — ${fmt(4 * SMS)} or ${fmt(

@@ -20,8 +20,8 @@ import {
   useScenario,
 } from '../../../framework';
 import { BASAL, CROP, TRANSPIRATION_EFFICIENCY, et0, simulateSeason, vpd, waterLimitedGrowth, type SeasonResult } from '../../../engines/agriculture/crop';
-import { REFERENCE_YEAR, applyShift, simulatedYear } from '../../../model/agriculture/climate';
-import { DISTRICT, DISTRICTS, dayOf, type DistrictId } from '../../../model/agriculture/region';
+import { REFERENCE_YEAR, applyShift, rainBetween, simulatedYear } from '../../../model/agriculture/climate';
+import { DISTRICT, DISTRICTS, dateLabel, dayOf, type DistrictId } from '../../../model/agriculture/region';
 import { DayChart, type DayBand } from '../shared/DayChart';
 import { buAc, inch } from '../shared/format';
 
@@ -30,6 +30,15 @@ const BASE = simulatedYear(REFERENCE_YEAR, 'prairie');
 const FROM = dayOf(5, 1);
 const TO = dayOf(9, 30);
 const STRESS_LINE = 1 - CROP.corn.stressAt;
+
+/** The reference season at Cedar Bend, and July's water bill in it, inches. */
+const REF = simulateSeason(BASE, { crop: 'corn', plantDay: FROM, maturityGdd: PRAIRIE.hybridGdd, pawIn: PRAIRIE.pawIn, startWater: PRAIRIE.springWater });
+export const JULY = {
+  et: REF.days.filter((d) => d.day >= dayOf(7, 1) && d.day < dayOf(8, 1)).reduce((sum, d) => sum + d.et, 0),
+  rain: rainBetween(BASE, dayOf(7, 1), dayOf(8, 1)),
+};
+/** The same season 2 °C warmer. */
+const WARM = simulateSeason(applyShift(BASE, { temp: 2 }), { crop: 'corn', plantDay: FROM, maturityGdd: PRAIRIE.hybridGdd, pawIn: PRAIRIE.pawIn, startWater: PRAIRIE.springWater });
 
 interface WaterState {
   rain: number;
@@ -50,11 +59,14 @@ function grow(st: WaterState): SeasonResult {
   });
 }
 
-/** The challenge: in a 60%-rain summer, the latest irrigation trigger that keeps yield within 1% of fully watered. */
+/** A yield counts as "nothing lost" within half a bushel of the crop irrigated at 20%: the readouts show whole bushels. */
+const NO_LOSS = 0.5;
+
+/** The challenge: in a 60%-rain summer, the latest irrigation trigger that costs no yield against irrigating at 20% (the stress point, 55%). */
 export function triggerSolved(st: WaterState): boolean {
   if (st.irrigate !== 'on' || Math.abs(st.rain - 0.6) > 1e-6 || st.temp !== 0 || st.paw !== PRAIRIE.pawIn) return false;
   const full = grow({ ...st, trigger: 20 }).yield;
-  const ok = (t: number) => grow({ ...st, trigger: t }).yield >= 0.99 * full;
+  const ok = (t: number) => grow({ ...st, trigger: t }).yield >= full - NO_LOSS;
   return ok(st.trigger) && !ok(st.trigger + 5);
 }
 
@@ -72,7 +84,7 @@ function stressBands(r: SeasonResult): DayBand[] {
 }
 
 export default function Lesson() {
-  const s = useScenario('water', { rain: 1, temp: 0, paw: PRAIRIE.pawIn, irrigate: 'off' as 'off' | 'on', trigger: 50 });
+  const s = useScenario('water', { rain: 1, temp: 0, paw: PRAIRIE.pawIn, irrigate: 'off' as 'off' | 'on', trigger: 30 });
   const st = s.state;
   const r = useMemo(() => grow(st), [st]);
   const weather = useMemo(() => applyShift(BASE, { rain: st.rain, temp: st.temp }), [st.rain, st.temp]);
@@ -80,6 +92,7 @@ export default function Lesson() {
   const solved = useMemo(() => triggerSolved(st), [st]);
   const fullRun = useMemo(() => (st.irrigate === 'on' ? grow({ ...st, trigger: 20 }) : null), [st]);
   const full = fullRun?.yield ?? 0;
+  const later = useMemo(() => (solved ? grow({ ...st, trigger: st.trigger + 5 }) : null), [solved, st]);
 
   const l = useScenario('limits', { district: 'prairie' as DistrictId });
   const lim = useMemo(() => {
@@ -136,10 +149,12 @@ export default function Lesson() {
       </Eq>
       <P>
         The supply comes from rain, from irrigation where there is any, and from the water already stored in the <K tone="blue">root zone</K>. Cedar Bend’s deep
-        prairie soil holds about 11 inches of water the roots can extract when it’s full. The crop draws freely until a little over half of it is gone; after that the
-        soil holds the rest more tightly than the roots can pull it, the crop can’t keep up with the demand, and it closes its stomata — and slows its growth — in
-        proportion. That is <K tone="red">water stress</K>. In the next demonstration, the upper chart is the daily traffic — rain and irrigation in, evapotranspiration
-        out — and the lower one is the water left in the root zone, with days of stress shaded. Change the summer and the soil:
+        prairie soil holds about 11 inches of water the roots can extract when it’s full. The crop draws freely until a little over half of it is gone — the same
+        point at which the leaves in the Photosynthesis Lab began to close their stomata. After that the soil holds the rest more tightly than the roots can pull
+        it, the crop can’t keep up with the demand, and it closes its stomata — and slows its growth — in proportion. That is <K tone="red">water stress</K>, and
+        we’ll call it <b>strong stress</b> on days when it cuts the crop’s water use by more than a fifth. In the next demonstration, the upper chart is the daily
+        traffic — rain and irrigation in, evapotranspiration out — and the lower one is the water left in the root zone, with every day of stress shaded. Change
+        the summer and the soil:
       </P>
 
       <Figure name="Water Balance Simulator" scenario={s}>
@@ -219,7 +234,8 @@ export default function Lesson() {
 
       <P>
         Through May and June the soil does most of the work. The canopy is small, rain arrives faster than the crop uses it, and the excess drains away — 6.1 inches of
-        it over the reference season. Then the canopy closes, and July’s 6.4 inches of evapotranspiration meet only 3.1 inches of rain. The difference comes out of
+        it over the reference season. Then the canopy closes, and July’s {fmt(JULY.et, 1)} inches of evapotranspiration meet only {fmt(JULY.rain, 1)} inches of
+        rain. The difference comes out of
         the root zone, which is down to 38% full by the time the crop matures in mid-September. That season, the deep prairie soil was just enough: some mild stress
         late in grain fill, no strong stress, and 188 bushels an acre.
       </P>
@@ -228,13 +244,14 @@ export default function Lesson() {
         161; at 40%, to 134. A thinner soil does much the same thing with normal rain: shrink the root zone to the Upland Ridge’s 7.5 inches and strong stress starts
         on the same August 10, costing 14 bushels; at 6 inches the crop loses 27. Rain and storage are partly interchangeable, which is why a district’s soil
         matters as much as its rainfall.
-        Warming the season does something different. At +2 °C the crop barely stresses at all — it develops so fast that it’s done before the August dry spell — but
-        it yields 163, because its grain fill, as in <a href={lessonHref('agriculture/1.2')}>the previous lesson</a>, is shorter.
+        Warming the season does something different. At +2 °C the crop doesn’t stress at all — it develops so fast that it’s done by{' '}
+        {dateLabel(WARM.maturityDay, true)}, before the soil runs low — but it yields {fmt(WARM.yield)}, because its grain fill, as in{' '}
+        <a href={lessonHref('agriculture/1.2')}>Lesson 1.2</a>, is shorter.
       </P>
 
       <Challenge
         id="a"
-        question="Set the summer to 60% of the reference season’s rain and turn irrigation on. What is the latest trigger — the most of the root zone the crop may use before you irrigate — that keeps the yield within 1% of a crop irrigated whenever it has used just 20%?"
+        question="Set the summer to 60% of the reference season’s rain and turn irrigation on. What is the latest trigger — the most of the root zone the crop may use before you irrigate — that costs no yield at all against a crop irrigated whenever it has used just 20%? Predict it first from the line where stress begins, then set the trigger to your prediction and check."
         solved={solved}
         status={
           Math.abs(st.rain - 0.6) > 1e-6
@@ -243,11 +260,11 @@ export default function Lesson() {
               ? 'Keep the reference temperatures (+0.0 °C) and Cedar Bend’s 11-inch root zone.'
               : st.irrigate !== 'on'
                 ? 'Turn irrigation on.'
-                : r.yield < 0.99 * full
-                  ? `Irrigating at ${st.trigger}% gives ${buAc(r.yield, 1)}, more than 1% short of ${buAc(full, 1)}.`
-                  : `Irrigating at ${st.trigger}% gives ${buAc(r.yield, 1)} with ${inch(r.irrigationTotal)} of water. Could the crop wait longer?`
+                : r.yield < full - NO_LOSS
+                  ? `Irrigating at ${st.trigger}% costs yield: the crop is stressed before the water comes.`
+                  : `Irrigating at ${st.trigger}% costs nothing, with ${inch(r.irrigationTotal)} of water. Could the crop wait longer?`
         }
-        success={`Solved: irrigating when ${st.trigger}% of the root zone is used yields ${buAc(r.yield, 1)} with ${inch(r.irrigationTotal)} of water; the crop watered at 20% got ${buAc(full, 1)} from ${inch(fullRun?.irrigationTotal ?? 0)}. That trigger sits right at the point where stress begins. Irrigate earlier and the extra water mostly ends the season still in the soil or evaporated from a wet surface; wait longer and the crop pays for it in stress.`}
+        success={`Solved: irrigating when ${st.trigger}% of the root zone is used yields ${buAc(r.yield)} with ${inch(r.irrigationTotal)} of water, the same as the crop watered at 20%, which took ${inch(fullRun?.irrigationTotal ?? 0)}; waiting until ${st.trigger + 5}% costs ${fmt(full - (later?.yield ?? full), 1)} bushels. The trigger sits right where stress begins, with ${fmt(STRESS_LINE * 100)}% of the water left. Irrigate earlier and the extra water mostly ends the season still in the soil or evaporated from a wet surface; wait longer and the crop pays for it in stress.`}
       />
 
       <H2>Light or water</H2>
@@ -304,15 +321,16 @@ export default function Lesson() {
       <P>
         On the Black Prairie the two ceilings take turns: light sets the pace on 52 days and water on 47, mostly the hot, bright ones. The air there averages a deficit
         of about 1.5 kilopascals, so each kilogram of dry matter costs about 140 kilograms of transpired water. In the High Plains, where most corn is irrigated, this
-        unirrigated field tells the story: the air is so dry — 2.35 kilopascals on average — that water is the limit on 75 of 82 days even before the soil runs low,
-        and once it does, the crop is starved twice over. It yields 27 bushels. That is why the Plains grow wheat, which does its growing in the cooler, damper spring,
+        unirrigated field tells the story: water is the limit on 75 of 82 days. The field starts the season with its root zone less than half full, so the crop is
+        short of soil water from its first weeks, and the air is so dry — 2.35 kilopascals on average — that even on the few days the soil isn’t short, water
+        usually sets the limit anyway. The crop is starved twice over. It yields 27 bushels. That is why the Plains grow wheat, which does its growing in the cooler, damper spring,
         and why the corn there is pumped from wells.
       </P>
       <P>
         Light, temperature, nutrients and water are now all in the model. Each slows the crop on its own days, and each leaves a mark. What we haven’t done is follow
         those marks into the grain itself. The yield that came out of{' '}
         <FigRef to="Water Balance Simulator">the water balance</FigRef> was a single number; the next lesson takes it apart into ears, kernels and the weight of each
-        kernel, and shows why a dry week in mid-July costs so much more than a dry week in June.
+        kernel, and asks when in the summer each of them is decided.
       </P>
     </LessonPage>
   );

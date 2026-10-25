@@ -1,5 +1,5 @@
-// A day of jobs at Tech Park, and a scheduler that decides which to send to Northfield. Each job is
-// judged with regionMove.ts: it must tolerate Northfield's round trip, finish by its deadline after
+// A day of jobs at Tech Park, and a scheduler that decides which to send to Fernhill. Each job is
+// judged with regionMove.ts: it must tolerate Fernhill's round trip, finish by its deadline after
 // its data has been copied, and save more on GPU-hours than its egress fees cost. The jobs share one
 // wide-area link, which copies one dataset at a time, so the scheduler sends the jobs that save the
 // most per hour of link time first, and a job whose copy would start too late to meet its deadline

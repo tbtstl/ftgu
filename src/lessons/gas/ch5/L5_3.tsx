@@ -86,6 +86,9 @@ export const G2P_BURN_SWEEP = Array.from({ length: Math.round((G2P_GAS_MAX - G2P
   return { gas, mmbtu: d.gasMMBtu, bcf: d.gasBcf };
 });
 
+/** Heights (MMBtu a day) on the demand chart at which the four switching prices are labelled: each just above the step that follows its line. */
+export const SWITCH_LABEL_AT = [74000, 57000, 46000, 24000];
+
 /** Gas prices at which a gas plant's offer equals another plant's: where the stack reorders. */
 export const G2P_SWITCHES = [
   { gas: switchingGasPrice(fleetById('cc2'), FALLS)!, text: 'Mill Creek passes Falls hydro' },
@@ -124,10 +127,14 @@ export function coldDayG2P(temp: number) {
 const COLD_SWEEP = Array.from({ length: G2P_COLD_MAX - G2P_COLD_MIN + 1 }, (_, i) => ({ temp: G2P_COLD_MIN + i, ...coldDayG2P(G2P_COLD_MIN + i) }));
 const coldAt = (t: number) => COLD_SWEEP[Math.round(t) - G2P_COLD_MIN];
 
-/** The second challenge: the warmest whole degree at which the region's 19:00 power price reaches $100. */
-export const COLD_POWER_TARGET = 100;
+/**
+ * The most the 19:00 price can reach on January 20: Mill Creek burning gas at the oil-switching price
+ * (above it the plants burn oil), $/MWh.
+ */
+export const COLD_POWER_CEILING = MILL.heatRate * OIL_SWITCH_VALUE + MILL.vom;
+/** The second challenge: the warmest whole degree at which the region's 19:00 power price reaches that ceiling. */
 export const COLD_POWER_ANSWER = (() => {
-  for (let t = G2P_COLD_MAX; t >= G2P_COLD_MIN; t--) if (coldAt(t).p19 >= COLD_POWER_TARGET) return t;
+  for (let t = G2P_COLD_MAX; t >= G2P_COLD_MIN; t--) if (coldAt(t).p19 >= COLD_POWER_CEILING - 1e-6) return t;
   return NaN;
 })();
 export function coldPowerSolved(temp: number): boolean {
@@ -147,6 +154,11 @@ const MILL_HOURS_BASE = MILL_SET_LIST.length > 1 ? `${MILL_SET_LIST.slice(0, -1)
 const CHEAP = powerDay(3);
 const GAS_HOURS_CHEAP = CHEAP.hours.filter((x) => isGas(x.marginal)).length;
 const PER_DOLLAR_19 = MILL.heatRate;
+/** Above this gas price Mill Creek, not Ironwood coal, sets the 19:00 price. */
+export const MILL_OVER_COAL = G2P_SWITCHES[2].gas;
+/** Metro's planned summer prices (Lesson 4.4's seasonal plan, April to October), and the coal-switching step at or below them. */
+export const METRO_SUMMER = PLAN.price.metro.slice(0, 7);
+export const SUMMER_STEP = Math.max(...COAL_SWITCH_BLOCKS.map((b) => b.value).filter((v) => v <= Math.min(...METRO_SUMMER) + 1e-9));
 const IHR19 = impliedHeatRate(BASE19.price, G2P_DEFAULTS.gas);
 const IHR_DAY = impliedHeatRate(BASE.avgPrice, G2P_DEFAULTS.gas);
 const LAKE_EFF = MMBTU_PER_MWH / LAKESIDE.heatRate;
@@ -230,9 +242,12 @@ export default function Lesson() {
         energy into electricity.
       </P>
       <P>
-        In the next demonstration the region runs through the electricity course’s reference day, each hour cleared in merit order with the gas plants offering at
-        the gas price you choose. The upper chart is the stack at one hour, with Lakeside outlined and the margin it earns hatched; the lower one is the price in
-        every hour, shaded where a gas plant sets it. Drag across the lower chart to pick an hour, and change the price of gas:
+        Two measures follow from that. A gas plant’s margin on each megawatt-hour — the power price less its fuel and upkeep — is its{' '}
+        <K c="price">spark spread</K>. And the power price divided by the gas price is the market’s <K c="energy">implied heat rate</K>: the heat rate a plant would
+        need for the power price just to pay for its fuel. In the next demonstration the region runs through the electricity course’s reference day, each hour cleared
+        in merit order with the gas plants offering at the gas price you choose. The upper chart is the stack at one hour, with Lakeside outlined and the margin it
+        earns hatched; the lower one is the price in every hour, shaded where a gas plant sets it. Drag across the lower chart to pick an hour, and change the price of
+        gas:
       </P>
 
       <Figure name="Gas-to-Power Model" scenario={s}>
@@ -290,14 +305,14 @@ export default function Lesson() {
         At {gp(G2P_DEFAULTS.gas)}, the price the electricity course used throughout, a gas plant sets the power price in {GAS_HOURS_BASE} of the day’s 24 hours, nearly
         all of them in the evening: Lakeside in {word(LAKE_SET_BASE)} of them and Mill Creek in the {word(MILL_SET_BASE)} peak hours, {MILL_HOURS_BASE}, when the price is{' '}
         {usd(BASE19.price, 2)}. The rest of the day Ironwood coal sets it at{' '}
-        {usd(IRONWOOD_OFFER)}. Drag the gas price at 19:00 and the power price follows it at {usd(PER_DOLLAR_19, 2)} per MWh for every dollar on the gas,
-        Mill Creek’s heat rate. That is the conversion between the two markets: a heat rate turns dollars per MMBtu into dollars per megawatt-hour. Lower the gas
+        {usd(IRONWOOD_OFFER)}. Drag the gas price at 19:00 and, anywhere above {gp(MILL_OVER_COAL)}, the power price follows it at {usd(PER_DOLLAR_19, 2)} per MWh
+        for every dollar on the gas, Mill Creek’s heat rate; below {gp(MILL_OVER_COAL)}, Mill Creek undercuts Ironwood and coal sets the evening price too. That is the
+        conversion between the two markets: a heat rate turns dollars per MMBtu into dollars per megawatt-hour. Lower the gas
         price to {gp(3)} and gas sets the price in {GAS_HOURS_CHEAP} hours, because Lakeside now undercuts Ironwood and becomes the plant that sets the price all night.
       </P>
       <P>
-        A gas plant lives on its <K c="price">spark spread</K>: the power price less its fuel and upkeep. At 19:00 at {gp(G2P_DEFAULTS.gas)}, Lakeside earns{' '}
-        {usd(lakesideSpark(G2P_DEFAULTS.gas, 19), 2)} on each megawatt-hour. Traders also divide the power price by the gas price to get the market’s{' '}
-        <b>implied heat rate</b>: {fmt(IHR19, 2)} at 19:00 and {fmt(IHR_DAY, 2)} for the day’s average price. A plant whose own heat rate is lower than the implied heat
+        A gas plant lives on its spark spread. At 19:00 at {gp(G2P_DEFAULTS.gas)}, Lakeside earns {usd(lakesideSpark(G2P_DEFAULTS.gas, 19), 2)} on each
+        megawatt-hour. The implied heat rate is {fmt(IHR19, 2)} at 19:00 and {fmt(IHR_DAY, 2)} for the day’s average price. A plant whose own heat rate is lower than the implied heat
         rate covers its fuel; one whose heat rate is higher doesn’t. The day’s average implied heat rate sits almost exactly at Lakeside’s{' '}
         {LAKESIDE.heatRate}: at the average price, even the region’s most efficient gas plant wouldn’t quite cover its fuel, let alone its upkeep. It earns its money in the evening hours,
         when Mill Creek sets a higher price, and runs little otherwise — {fmt(BASE.energy.cc1)} of the {fmt(LAKESIDE.capacity * 24)} megawatt-hours it could make in the day.
@@ -306,7 +321,7 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Gas-to-Power Model"
-        question={`At 19:00, at what gas price does Lakeside earn a spark spread of exactly $${SPARK_TARGET} per MWh?`}
+        question={`Predict first, from the two plants’ heat rates and upkeep: at 19:00, where Mill Creek sets the price, at what gas price does Lakeside earn a spark spread of exactly $${SPARK_TARGET} per MWh? Then set it and check.`}
         solved={solvedA}
         status={
           h !== 19
@@ -317,9 +332,9 @@ export default function Lesson() {
       />
 
       <P>
-        That surprises most people. An efficient gas plant isn’t hurt by expensive gas so long as a thirstier gas plant sets the price: the power price rises by Mill
-        Creek’s {MILL.heatRate} MMBtu per dollar, Lakeside’s costs by only {LAKESIDE.heatRate}. It is hurt when gas becomes dear enough, or coal cheap enough, that a coal
-        plant sets the price instead.
+        That surprises most people. An efficient gas plant isn’t hurt by expensive gas so long as a thirstier gas plant sets the price: for every dollar on the gas,
+        the power price rises by {usd(MILL.heatRate, 2)} per MWh, Mill Creek’s heat rate, and Lakeside’s costs by only {usd(LAKESIDE.heatRate, 2)}. It is hurt when
+        gas becomes dear enough, or coal cheap enough, that a coal plant sets the price instead.
       </P>
 
       <H2>The power plants’ demand for gas</H2>
@@ -331,9 +346,9 @@ export default function Lesson() {
       <Figure name="Gas-to-Power Model · the power plants’ demand for gas" scenario={s}>
         <XYChart
           xDomain={[G2P_GAS_MIN, 8]}
-          yDomain={[0, 70000]}
+          yDomain={[0, 80000]}
           xTicks={[1.5, 2, 3, 4, 5, 6, 7, 8]}
-          yTicks={[0, 20000, 40000, 60000]}
+          yTicks={[0, 20000, 40000, 60000, 80000]}
           xFormat={(v) => `$${fmt(v, v % 1 ? 1 : 0)}`}
           yFormat={(v) => `${fmt(v / 1000)}k`}
           yLabel="Gas burned by the region’s power plants, MMBtu a day"
@@ -342,12 +357,19 @@ export default function Lesson() {
           series={[{ xs: G2P_BURN_SWEEP.filter((x) => x.gas <= 8).map((x) => x.gas), ys: G2P_BURN_SWEEP.filter((x) => x.gas <= 8).map((x) => x.mmbtu), color: GRAPHIC.orange, kind: 'step', width: 2.5 }]}
           vLines={G2P_SWITCHES.map((x) => ({ at: x.gas, color: '#9a9a9a', dash: '3 4', width: 1 }))}
           markers={gas <= 8 ? [{ x: gas, y: burnNow.mmbtu, color: TEXT.orange, r: 6, label: `${fmt(burnNow.mmbtu)} MMBtu`, labelPos: gas > 5 ? 'above' : 'right' }] : []}
-          ariaLabel={`The region's power plants burn ${fmt(BURN_MAX.mmbtu)} MMBtu a day of gas below ${gp(G2P_SWITCHES[0].gas)} and ${fmt(BURN_MIN.mmbtu)} above ${gp(G2P_SWITCHES[3].gas)}, stepping down where gas plants trade places with Falls hydro and Ironwood coal. At ${gp(gas)} they burn ${fmt(burnNow.mmbtu)} MMBtu.`}
-        />
+          ariaLabel={`The region's power plants burn ${fmt(BURN_MAX.mmbtu)} MMBtu a day of gas below ${gp(G2P_SWITCHES[0].gas)} and ${fmt(BURN_MIN.mmbtu)} above ${gp(G2P_SWITCHES[3].gas)}, stepping down where gas plants trade places with Falls hydro and Ironwood coal: ${G2P_SWITCHES.map((x) => `${x.text} at ${gp(x.gas)}`).join(', ')}. At ${gp(gas)} they burn ${fmt(burnNow.mmbtu)} MMBtu.`}
+        >
+          {(x, y) => (
+            <g aria-hidden="true">
+              {G2P_SWITCHES.map((sw, i) => (
+                <text key={sw.text} className="ax" x={x(sw.gas) + 5} y={y(SWITCH_LABEL_AT[i])} style={{ paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 3 }}>
+                  {gp(sw.gas)} · {sw.text}
+                </text>
+              ))}
+            </g>
+          )}
+        </XYChart>
         <Legend items={[{ label: 'Daily gas burn', color: GRAPHIC.orange, kind: 'line' }, { label: 'Where the stack reorders', color: '#9a9a9a', kind: 'line', dashed: true }]} />
-        <Readouts
-          items={G2P_SWITCHES.map((x) => ({ label: x.text, value: gp(x.gas) }))}
-        />
         <Slider label="Gas price" tone="green" value={gas} min={G2P_GAS_MIN} max={G2P_GAS_MAX} step={G2P_GAS_STEP} onChange={(v) => s.set({ gas: v })} display={`${gp(gas)} per MMBtu`} />
       </Figure>
 
@@ -357,7 +379,8 @@ export default function Lesson() {
         {gp(G2P_SWITCHES[3].gas)}, where Lakeside’s {LAKESIDE.heatRate} × gas + {usd(LAKESIDE.vom)} passes Ironwood’s {usd(IRONWOOD_OFFER)}, only the evening
         needs gas, and it burns {fmt(BURN_MIN.mmbtu)}; cheap gas makes the plants burn {fmt(BURN_MAX.mmbtu / BURN_MIN.mmbtu, 1)} times as much. This is where the coal-switching blocks of Lesson 4.1 come from. Metro’s whole power fleet has many plants of many efficiencies, so its steps are
         smaller and more numerous, spread between {gp(Math.min(...SWITCH_VALUES))} and {gp(Math.max(...SWITCH_VALUES))}, and in the seasonal plan of{' '}
-        <a href={lessonHref('gas/4.4')}>Lesson 4.4</a> the summer prices sit exactly on those steps. The power plants deciding between coal and gas are the gas market’s shock absorber.
+        <a href={lessonHref('gas/4.4')}>Lesson 4.4</a> Metro’s summer prices sit on or just above one of those steps, the {gp(SUMMER_STEP)} one: they run from{' '}
+        {gp(Math.min(...METRO_SUMMER))} to {gp(Math.max(...METRO_SUMMER))}. The power plants deciding between coal and gas are the gas market’s shock absorber.
       </P>
 
       <H2>A cold day</H2>
@@ -396,7 +419,6 @@ export default function Lesson() {
           xLabel="Metro’s temperature, °F"
           height={180}
           series={[{ xs: COLD_SWEEP.map((x) => x.temp), ys: COLD_SWEEP.map((x) => x.p19), color: GRAPHIC.violet, kind: 'line', width: 2.5 }]}
-          hLines={[{ at: COLD_POWER_TARGET, color: '#9a9a9a', dash: '4 4', label: `$${COLD_POWER_TARGET}`, labelAt: 'end' }]}
           markers={[{ x: temp, y: cold.p19, color: TEXT.violet, r: 6 }]}
           cursor={temp}
           ariaLabel={`The electricity region's 19:00 price at each temperature: ${usd(NORMAL.p19, 2)} per MWh on a normal day, up to ${usd(COLDEST.p19, 2)}. At ${temp} °F it is ${usd(cold.p19, 2)}.`}
@@ -415,21 +437,25 @@ export default function Lesson() {
       <P>
         At the normal {G2P_COLD_DEFAULTS.temp} °F, gas costs {gp(NORMAL.metro)} at Metro and the region’s power costs {usd(NORMAL.p19, 2)} at 19:00. Nothing changes
         down to {BREAK_T + 1} °F. A degree colder, the city’s gas runs short, and power plants that only just beat coal start switching back; the gas price
-        climbs, and the power price climbs {fmt(MILL.heatRate, 1)} times as fast. At {OIL_T} °F Metro’s gas reaches {gp(OIL_SWITCH_VALUE, 0)} and the 19:00 price{' '}
-        {usd(coldAt(OIL_T).p19, 2)}, more than three times a normal evening’s. Lakeside, meanwhile, earns {usd(coldAt(OIL_T).lakeMargin)} for the day instead of{' '}
-        {usd(NORMAL.lakeMargin)}.
+        climbs, and the power price climbs {fmt(MILL.heatRate, 1)} times as fast. Colder still, Metro’s gas reaches the {gp(OIL_SWITCH_VALUE, 0)} at which the plants
+        turn to oil, and their fuel can cost no more than that however cold it gets.
       </P>
 
       <Challenge
         id="b"
-        question={`What is the warmest whole-degree temperature on January 20 at which the region’s 19:00 power price reaches $${COLD_POWER_TARGET} per MWh?`}
+        question={`Compute first: with fuel at ${gp(OIL_SWITCH_VALUE, 0)}, what does Mill Creek offer at 19:00? That is the highest the 19:00 price can go on January 20. Then find the warmest whole-degree temperature at which the price reaches it.`}
         solved={solvedB}
-        status={`At ${temp} °F, gas costs ${gp(cold.metro)} at Metro and power ${usd(cold.p19, 2)} at 19:00.`}
-        success={`Solved: ${COLD_POWER_ANSWER} °F. There Metro’s gas reaches ${gp(coldAt(COLD_POWER_ANSWER).metro)}, the price at which power plants would rather burn oil, and Mill Creek’s offer becomes ${MILL.heatRate} × ${gp(coldAt(COLD_POWER_ANSWER).fuel)} + ${usd(MILL.vom)} = ${usd(coldAt(COLD_POWER_ANSWER).p19, 2)}. A degree warmer, gas is ${gp(coldAt(COLD_POWER_ANSWER + 1).metro)} and power ${usd(coldAt(COLD_POWER_ANSWER + 1).p19, 2)}. Nothing in the electricity market changed; the cold reached it through the gas pipe.`}
+        status={
+          cold.p19 >= COLD_POWER_CEILING - 1e-6
+            ? `At ${temp} °F the 19:00 price is at its ceiling. Is this the warmest degree where it gets there?`
+            : `At ${temp} °F, gas costs ${gp(cold.metro)} at Metro and power ${usd(cold.p19, 2)} at 19:00.`
+        }
+        success={`Solved: ${COLD_POWER_ANSWER} °F. With fuel at ${gp(OIL_SWITCH_VALUE, 0)}, Mill Creek offers ${MILL.heatRate} × ${gp(OIL_SWITCH_VALUE, 0)} + ${usd(MILL.vom)} = ${usd(COLD_POWER_CEILING, 2)}, and at ${COLD_POWER_ANSWER} °F Metro’s gas reaches that price, so the 19:00 price is ${usd(coldAt(COLD_POWER_ANSWER).p19, 2)}, more than three times a normal evening’s. A degree warmer, gas is ${gp(coldAt(COLD_POWER_ANSWER + 1).metro)} and power ${usd(coldAt(COLD_POWER_ANSWER + 1).p19, 2)}. Nothing in the electricity market changed; the cold reached it through the gas pipe.`}
       />
 
       <P>
-        The two markets peak together for two reasons. The same cold that fills Metro’s furnaces raises the demand for electricity — our reference day holds that demand
+        Lakeside does well out of the cold: at {OIL_T} °F it earns {usd(coldAt(OIL_T).lakeMargin)} for the day instead of {usd(NORMAL.lakeMargin)}. The two markets peak
+        together for two reasons. The same cold that fills Metro’s furnaces raises the demand for electricity — our reference day holds that demand
         still, so a real cold day would push power prices higher yet — and gas plants are the marginal users in both markets at once: the first gas customers to give
         way when gas runs short, and the plants that set the power price when they run. In regions that rely on gas for both heat and power, the coldest days stretch
         both markets at the same moment, which is why a gas-fired plant that can also burn oil, or that holds firm pipeline capacity, is worth so much more in a

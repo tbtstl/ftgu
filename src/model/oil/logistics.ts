@@ -1,12 +1,12 @@
 // The course world's logistics: pipelines, tankers, terminals and storage (Chapter 4 on).
 //
-//   Ridgeback Basin ──gathering──┐
+//   Pinyon Basin ──gathering──┐
 //   Northfield ──────────────────┤
-//   Coldwater ──Coldwater line───┴─▶ Kessler hub (tank farms) ──Kessler–Calder line──▶ Port Calder
-//                                     │                                                 │  (Calder refinery,
+//   Coldwater ──Coldwater line───┴─▶ Kessler hub (tank farms) ──Kessler–Corran line──▶ Port Corran
+//                                     │                                                 │  (Corran refinery,
 //                                     └─▶ inland refineries                             │   other coastal refiners,
 //                                                                                       │   export terminal)
-//   Seaboard offshore field ──tanker──▶ Port Calder, Northport          tankers ──▶ Northport, Eastbay
+//   Seaboard offshore field ──tanker──▶ Port Corran, Northport          tankers ──▶ Northport, Eastbay
 //
 // Distances, sizes and costs are illustrative but realistic in magnitude. All prices are simulated.
 
@@ -30,9 +30,9 @@ export interface Pipeline {
 }
 
 /** A 30-inch line from the inland hub down to the coast, with three pump stations. */
-export const KESSLER_CALDER: Pipeline = {
-  id: 'kessler-calder',
-  name: 'Kessler–Calder line',
+export const KESSLER_CORRAN: Pipeline = {
+  id: 'kessler-corran',
+  name: 'Kessler–Corran line',
   lengthMiles: 500,
   innerDiameterIn: 29.25,
   roughnessIn: 0.0018,
@@ -43,7 +43,7 @@ export const KESSLER_CALDER: Pipeline = {
   capital: 1.8e9,
 };
 
-/** The mix of basin crudes the Kessler–Calder line usually carries. */
+/** The mix of basin crudes the Kessler–Corran line usually carries. */
 export const TYPICAL_CRUDE = { name: 'Basin mix', sg: 0.84, viscosity: 8 };
 
 export const COLDWATER_LINE: Pipeline = {
@@ -107,17 +107,20 @@ export interface Route {
 }
 
 export const ROUTES: Record<RouteId, Route> = {
-  northport: { id: 'northport', name: 'Port Calder to Northport', from: 'Port Calder', to: 'Northport', nm: 5000 },
-  eastbay: { id: 'eastbay', name: 'Port Calder to Eastbay', from: 'Port Calder', to: 'Eastbay', nm: 12000 },
-  seaboard: { id: 'seaboard', name: 'Seaboard field to Port Calder', from: 'Seaboard terminal', to: 'Port Calder', nm: 1500 },
+  northport: { id: 'northport', name: 'Port Corran to Northport', from: 'Port Corran', to: 'Northport', nm: 5000 },
+  eastbay: { id: 'eastbay', name: 'Port Corran to Eastbay', from: 'Port Corran', to: 'Eastbay', nm: 12000 },
+  seaboard: { id: 'seaboard', name: 'Seaboard field to Port Corran', from: 'Seaboard terminal', to: 'Port Corran', nm: 1500 },
 };
 
 /** Very-low-sulfur marine fuel, $ per tonne (simulated). */
 export const BUNKER_PRICE = 600;
 /** Days in port per round voyage (loading, discharging, waiting). */
 export const PORT_DAYS = 4;
-/** Port Calder's channel: the largest cargo a tanker can load at the dock, barrels. More must be topped up offshore. */
-export const CALDER_DOCK_LIMIT = 1000000;
+/**
+ * Port Corran's channel: the most a tanker can carry at the dock, loading or unloading, barrels.
+ * A bigger cargo is topped up (or lightered) offshore.
+ */
+export const CORRAN_DOCK_LIMIT = 1000000;
 /** Cost of topping up a cargo offshore from smaller vessels (reverse lightering), $ per barrel so loaded. */
 export const LIGHTERING_COST = 0.6;
 

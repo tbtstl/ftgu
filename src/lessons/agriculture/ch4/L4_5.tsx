@@ -21,7 +21,7 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { BASE_PRICE, BU_PER_TONNE, PIPELINE, REGIONS, clearWorld, priceAtStocksToUse, worldHistory, type Balance, type HistoryYear } from '../../../engines/agriculture/world';
+import { BASE_PRICE, PIPELINE, REGION, clearWorld, meanValley, priceAtStocksToUse, worldHistory, type Balance, type HistoryYear } from '../../../engines/agriculture/world';
 import { CROP_LINE } from '../shared/tones';
 
 export interface WorldState {
@@ -40,13 +40,26 @@ export function balanceOf(st: WorldState): Balance {
 }
 
 const SHORT = -10;
-const CAP = 6;
+/** Challenge 1’s threshold: the shortfall adds more than this to the price, $ a bushel. */
+const DOLLAR = 1;
 
-/** Challenge 1: with a 10% U.S. shortfall, the least carry-in (in steps of 5 million tons) that holds the price to $6.00 or less. */
-export function bufferSolved(st: WorldState): boolean {
+/** What the harvest changes add to the price, $ a bushel: against normal harvests with the same stocks carried in. */
+export function harvestsAdd(st: WorldState): number {
+  return balanceOf(st).price - balanceOf({ ...WORLD0, carryIn: st.carryIn }).price;
+}
+
+/** What a 10% U.S. shortfall adds to the price with this much carried in, $ a bushel. */
+export function shortfallAdds(carryIn: number): number {
+  return harvestsAdd({ ...WORLD0, us: SHORT, carryIn });
+}
+
+/**
+ * Challenge 1: with a 10% U.S. shortfall, the most the world can carry in (steps of 5 million tons) for which the shortfall
+ * still adds more than $1 — less than the usual 100, because the price curve is steeper where stocks are scarce.
+ */
+export function dearShortfallSolved(st: WorldState): boolean {
   if (st.us !== SHORT || st.southAmerica !== 0 || st.blackSea !== 0) return false;
-  const ok = (c: number) => balanceOf({ ...st, carryIn: c }).price <= CAP;
-  return ok(st.carryIn) && !ok(st.carryIn - 5);
+  return shortfallAdds(st.carryIn) > DOLLAR && shortfallAdds(st.carryIn + 5) <= DOLLAR;
 }
 
 /** Sixty simulated years of the world market. */
@@ -185,8 +198,9 @@ function HistoryChart({ h, year, avg }: { h: HistoryYear[]; year: number; avg: n
 export default function Lesson() {
   const s = useScenario('world', WORLD0);
   const b = useMemo(() => balanceOf(s.state), [s.state]);
-  const solved1 = useMemo(() => bufferSolved(s.state), [s.state]);
+  const solved1 = useMemo(() => dearShortfallSolved(s.state), [s.state]);
   const drawn = b.carryIn - b.carryOut;
+  const added = useMemo(() => harvestsAdd(s.state), [s.state]);
 
   const t = useScenario('history', { year: 1 });
   const h = history();
@@ -234,7 +248,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'world price, a bushel', value: usd(b.price, 2), tone: 'green' },
-            { label: 'a ton', value: usd(b.price * BU_PER_TONNE) },
+            { label: 'harvests add to the price', value: `${added > 0.005 ? '+' : ''}${usd(added, 2)}`, tone: added > 0.005 ? 'red' : 'ink' },
             { label: 'stocks carried out', value: `${fmt(b.carryOut)} million t`, tone: 'gold' },
             { label: drawn > 0.5 ? 'drawn from stocks' : drawn < -0.5 ? 'added to stocks' : 'change in stocks', value: `${fmt(Math.abs(drawn))} million t` },
           ]}
@@ -250,30 +264,30 @@ export default function Lesson() {
         a bushel. In the model the price rises 39%, to $7.77. The United States no longer has corn to spare, Brazil and Argentina export a little more, and most of
         the gap is closed by use: the importing countries buy 31 million tons less, and 23 million tons come out of stocks. Now look at the curve. It is steep
         where stocks are scarce and flat where they are plentiful, because each ton drawn from stocks brings them closer to the pipeline, where nobody can sell
-        more. That is why traders watch stocks-to-use more closely than any other number on a balance sheet: the same shortfall costs much more when the world starts
-        the year with less.
+        more. The readout of what the harvests add to the price compares it with the price normal harvests would give, with the same stocks carried in.
       </P>
 
       <Challenge
         id="a"
-        question="Make the U.S. harvest 10% short. With the usual 100 million tons carried in, the price rises to $6.55. How much must the world carry in, to the nearest 5 million tons, to hold the price to $6.00 or less?"
+        question={`Make the U.S. harvest 10% short, with the other two normal: with the usual 100 million tons carried in, the shortfall adds ${usd(shortfallAdds(WORLD0.carryIn), 2)} to the price. Predict first from the curve: does the same shortfall add more or less when the world carries in less? Then find the most the world can carry in, in steps of 5 million tons, for which the shortfall adds more than $1.`}
         solved={solved1}
         status={
           s.state.us !== SHORT || s.state.southAmerica !== 0 || s.state.blackSea !== 0
             ? 'Set the U.S. harvest to −10% and the other two to 0%.'
-            : b.price > CAP
-              ? `With ${s.state.carryIn} million tons carried in, the price is ${usd(b.price, 2)}.`
-              : `With ${s.state.carryIn} million tons carried in, the price is ${usd(b.price, 2)}. Would less do?`
+            : added > DOLLAR
+              ? `With ${s.state.carryIn} million tons carried in, the shortfall adds more than $1.`
+              : `With ${s.state.carryIn} million tons carried in, the shortfall adds $1 or less.`
         }
-        success={`Solved: ${s.state.carryIn} million tons carried in holds the price to ${usd(b.price, 2)} — ${fmt(s.state.carryIn - WORLD0.carryIn)} million tons more than usual, to absorb a shortfall of ${fmt(-REGIONS[0].production * SHORT / 100)} million. Stocks work as the world’s insurance against a bad harvest, and like insurance they cost money to hold; Chapter 5 will show the market paying for them.`}
+        success={`Solved: less in the bins, a dearer shortfall. With ${s.state.carryIn} million tons carried in, the same ${fmt(-REGION.us.production * SHORT / 100, 1)} million tons lost in the United States adds ${usd(added, 2)}; with 100 it added ${usd(shortfallAdds(100), 2)}, and with 130 it would add only ${usd(shortfallAdds(130), 2)}. The year starts further left on the curve, where it is steeper, so every ton the shortfall draws from stocks costs more. That is why traders watch stocks-to-use more closely than any other number on a balance sheet. Stocks are the world’s insurance against a bad harvest, and like insurance they cost money to hold; Chapter 5 will show the market paying for them.`}
       />
 
       <P>
         The same arithmetic works for any region. Wipe out Ukraine and Russia’s corn exports — about 31 million tons, which in the model takes a 65% smaller crop
         there — and the price rises to about $6.37. When Russia’s invasion of Ukraine in 2022 shut Ukraine’s seaports for months, until a deal brokered by the United
         Nations and Turkey reopened them that summer, corn and wheat prices rose by much more than that, because the war hit a market already tightened by a
-        drought-damaged Brazilian crop in 2021 and record Chinese imports. Wheat has its own cast — Russia is now its largest exporter, ahead of the European Union,
-        Canada, Australia and the United States — but the same balance sheet, and the same steep curve when stocks run low.
+        drought-damaged Brazilian crop in 2021 and record Chinese imports. Wheat has its own cast — Russia has been its largest exporter in most years since the
+        mid-2010s, ahead of the European Union, Canada, Australia and the United States — but the same balance sheet, and the same steep curve when stocks run
+        low.
       </P>
 
       <H2>Sixty simulated years</H2>
@@ -281,8 +295,9 @@ export default function Lesson() {
         So far we have changed one harvest at a time. In the next demonstration the world’s weather changes them all at once, for 60 simulated years. Each year draws
         a harvest for every region at random. The U.S. harvest moves partly with the Crane Valley’s own season — the simulated seasons of{' '}
         <a href={lessonHref('agriculture/3.5')}>Lesson 3.5</a> — because weather bad enough to hurt the valley usually reaches well beyond it. And whatever stocks one
-        year carries out, the next year carries in. These prices are simulated, like every price in this course; they are the history that the next chapter will
-        trade. Step through the years:
+        year carries out, the next year carries in. The bars are the valley’s harvests, and the dashed line through them is their sixty-year average,{' '}
+        {fmt(avg)} million bushels — a little under the {fmt(meanValley())} million of all 400 seasons, as a run of sixty can be. These prices are simulated, like
+        every price in this course; they are the history that the next chapter will trade. Step through the years:
       </P>
 
       <Figure name="Global Grain Balance · sixty simulated years" scenario={t}>
@@ -292,6 +307,8 @@ export default function Lesson() {
             { label: `year ${t.state.year}: valley corn`, value: `${fmt(sel.valleyCorn)} million bu`, tone: 'gold' },
             { label: 'U.S. harvest', value: pct(sel.crop.us) },
             { label: 'Brazil & Argentina', value: pct(sel.crop.southAmerica) },
+            { label: 'Ukraine & Russia', value: pct(sel.crop.blackSea) },
+            { label: 'importing countries', value: pct(sel.crop.importers) },
             { label: 'stocks carried in', value: `${fmt(sel.carryIn)} million t` },
             { label: 'world price', value: usd(sel.price, 2), tone: 'green' },
           ]}
@@ -313,10 +330,10 @@ export default function Lesson() {
         solved={solved2}
         status={
           sel.valleyCorn > avg
-            ? `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, more than its ${fmt(avg)}-million average, and corn was ${usd(sel.price, 2)}. Is there a dearer year like it?`
-            : `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, less than its ${fmt(avg)}-million average.`
+            ? `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, more than its sixty-year average of ${fmt(avg)} million, and corn was ${usd(sel.price, 2)}. Is there a dearer year like it?`
+            : `In year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, less than its sixty-year average of ${fmt(avg)} million.`
         }
-        success={`Solved: in year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, ${fmt((sel.valleyCorn / avg - 1) * 100)}% more than average, yet corn was ${usd(sel.price, 2)}, because Brazil and Argentina’s harvest was ${fmt(-sel.crop.southAmerica * 100)}% short, Ukraine and Russia’s ${fmt(-sel.crop.blackSea * 100)}%, and the world carried in only ${fmt(sel.carryIn)} million tons. A farmer who forecast the valley’s crop perfectly would still have guessed wrong about the price. A good price forecast needs the world’s balance sheet, not only the view from Cedar Bend.`}
+        success={`Solved: in year ${t.state.year} the valley grew ${fmt(sel.valleyCorn)} million bushels, ${fmt((sel.valleyCorn / avg - 1) * 100)}% more than average, yet corn was ${usd(sel.price, 2)}, because Brazil and Argentina’s harvest was ${fmt(-sel.crop.southAmerica * 100)}% short, Ukraine and Russia’s ${fmt(-sel.crop.blackSea * 100)}%, the importing countries’ own ${fmt(-sel.crop.importers * 100)}% — ${fmt(-sel.crop.importers * REGION.importers.production)} million tons, nearly the ${fmt(-sel.crop.southAmerica * REGION.southAmerica.production)} million Brazil and Argentina lost — and the world carried in only ${fmt(sel.carryIn)} million tons. A farmer who forecast the valley’s crop perfectly would still have guessed wrong about the price. A good price forecast needs the world’s balance sheet, not only the view from Cedar Bend.`}
       />
 
       <P>

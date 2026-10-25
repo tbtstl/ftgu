@@ -19,22 +19,22 @@ import { BASE_ROCK, CHALLENGE_PRESSURE, explorerRate, fieldNumbers, FIELDS_DEFAU
 import { BLOCK_GIP, blockSolved, lineEstimate, runWell, steadyCap, steadySolved, SURVEYS, WELL_DEFAULTS, wellOf } from '../src/lessons/gas/ch2/L2_2';
 import { ACTUAL_BCF, bestFit, fitError, FORECAST_DEFAULTS, forecastSolved, HISTORY, SEEN } from '../src/lessons/gas/ch2/L2_3';
 import { breakevenPrice, BUDGET_WELLS, FIELD_DEFAULTS, fieldSolved, promise, schedule, TARGET } from '../src/lessons/gas/ch2/L2_4';
-import { breakevenSolved, CHALLENGE_GAS, dayValue, DEEP, ethaneLeftSolved, lowestPayingCent, PLANT_DEFAULTS, recoveryGain, runPlant, STANDARD, VALUE_DEFAULTS } from '../src/lessons/gas/ch2/L2_5';
+import { breakevenSolved, CHALLENGE_GAS, dayValue, DEEP, leastShrinkSolved, lowestPayingCent, PLANT_DEFAULTS, recoveryGain, runPlant, STANDARD, VALUE_DEFAULTS } from '../src/lessons/gas/ch2/L2_5';
 import { bindingArcs, COMPRESSION_COST_PER_HP, corridorDesign, type FlowProblem, loopedFlow, PIPE_SIZES, solveFlow } from '../src/engines/gas/network';
 import { CITY_HOURLY_SHAPE, packLineCapacity, packLineOf, packWindow, runLinepack } from '../src/engines/gas/linepack';
 import { dailyFromMonthly, daysToFill, deliverableOver, injectCapacity, optimizeStorage, runStorage, storagePressure, thresholdPolicy, withdrawCapacity } from '../src/engines/gas/storage';
 import { breakevenHub, cargoChoice, cargoMargin, lngCargo, netback, overseasPrices } from '../src/engines/gas/lng';
 import { BUILD_DEFAULTS, buildProblem, CAPITAL_CHARGE, chargePerMMBtu, CHEAPEST, CHEAPEST_COST, cheapestExpansion, design, expansionSolved as buildSolved, networkCost, onlyAdds, REGION_STATIONS } from '../src/lessons/gas/ch3/L3_1';
-import { dayPreset, hollowSolved, LOOP_DEFAULTS, LOOP_TARGET, loopedCapacity, loopSolved, solveDay, SOLVER_DEFAULTS } from '../src/lessons/gas/ch3/L3_2';
-import { ANSWER_RAMP, bestStart, ccgtMW, CHALLENGE_AVG, clean, dayMean, largestRamp, PACK_DEFAULTS, RAMP_STEP, rampSolved, simulate, START_MAX, START_MIN, START_STEP, startRange } from '../src/lessons/gas/ch3/L3_3';
-import { coldSpell, CROSSOVER_DAY, crossoverSolved, dayLabel, DESIGN_INV, DESIGN_NEED, firmRate, firmSolved, gasYear, INJ_DAYS, WD_DAYS, YEAR_DEFAULTS } from '../src/lessons/gas/ch3/L3_4';
-import { breakevenSolved as cargoBreakevenSolved, CHAIN_DEFAULTS, CHALLENGE, challengeAnswer, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
+import { dayPreset, LOOP_DEFAULTS, LOOP_TARGET, loopedCapacity, loopSolved, peakSolved, solveDay, SOLVER_DEFAULTS } from '../src/lessons/gas/ch3/L3_2';
+import { ANSWER_RAMP, ccgtMW, CHALLENGE_AVG, clean, dayMean, largestRamp, PACK_DEFAULTS, RAMP_STEP, simulate, START_MAX, START_MIN, START_STEP, startRange } from '../src/lessons/gas/ch3/L3_3';
+import { coldSpell, CROSSOVER_DAY, dayLabel, DESIGN_INV, DESIGN_NEED, firmRate, firmSolved, gasYear, INJ_DAYS, WD_DAYS, YEAR_DEFAULTS } from '../src/lessons/gas/ch3/L3_4';
+import { CHAIN_DEFAULTS, voyageOf, voyagePhase } from '../src/lessons/gas/ch3/L3_5';
 import { clearRegion, forwardCurve, marketDay, normalPlan, planFor, planInventory, planMonth, scenarioYear, SEASONAL_COSTS, seasonalPlan, simulateYear } from '../src/engines/gas/market';
 import { capacityAuction, firmCapacityValue, futuresMarks, interruptibleValue, marginCalls } from '../src/engines/gas/contracts';
 import { GAS_MONTH_START, GAS_MONTHS, normalTemp, weatherYear, WINTER_START, withColdSnap } from '../src/model/gas/weather';
 import { demandBlocks, demandByNode, OIL_SWITCH_VALUE } from '../src/model/gas/demand';
 import { BAL_JAN15, BAL_JUL15, BALANCE_DEFAULTS, BALANCE_YEARS, balanceDay, balanceWeeks, LNG_CUT_TEMP, lngCutSolved, storageValue, winterDraw } from '../src/lessons/gas/ch4/L4_1';
-import { BASIS_STEPS, breakawaySolved, breakawayTemp, HUB_DAY, HUB_DEFAULTS, hubDay, hubWinter, hubWinterStats, metroSetter, SHORTCUT_RENT } from '../src/lessons/gas/ch4/L4_2';
+import { BASIS_STEPS, HUB_DAY, HUB_DEFAULTS, hubDay, hubWinter, hubWinterStats, metroSetter, northlineFullSolved, northlineFullTemp, SHORTCUT_RENT } from '../src/lessons/gas/ch4/L4_2';
 import { ANCHOR_ANSWER, anchorSolved, CAPACITY_AUCTION_DEFAULTS, EXPANSION_ANNUAL_COST, EXPANSION_COST, EXPANSION_COST_PER_UNIT, EXPANSION_MMBTU_D, expansionOutcome, IT_TOTAL, MARKETER_BID, METRO_GAS_VALUE, QTY_STEP, SPIKE_METRO_PRICE, WINTERS } from '../src/lessons/gas/ch4/L4_3';
 import { enoughStorageScale, enoughStorageSolved, ROUND_TRIP, SEASON_DEFAULTS, seasonPlan, seasonSummary, STORAGE_BCF, WINTER_SEEDS, winterStats } from '../src/lessons/gas/ch4/L4_4';
 import { backwardationThreshold, curveAt, curveChallengeSolved, HEDGE_CONTRACTS, hedgeSolved, INITIAL_MARGIN, MAINTENANCE_MARGIN, SHORT_LEVEL, strips, swapBasis, utilityCost, type WinterId, winterRun } from '../src/lessons/gas/ch4/L4_5';
@@ -59,7 +59,7 @@ import { defaultCapstone, sanitizeCapstone } from '../src/lessons/gas/shared/cap
 import { cheapestFix, CONSTRUCTOR_DEFAULTS, constructorChecks, constructorFixes, constructorFixText, constructorLeastCapital, constructorLineRef, constructorNumbers, constructorOnlyAdds, constructorSolved, FIXES_DEFAULTS } from '../src/lessons/gas/ch7/L7_1';
 import { REGIONAL_MARKET_DEFAULTS, regionalMarketSolved, RM_INDUSTRY, RM_INTERRUPTIBLE, rmChanges, rmEight, rmFullOnlyInWinter, rmLineName, rmSameNetwork, rmWinter } from '../src/lessons/gas/ch7/L7_2';
 import { ensembleSweeps, FORECAST_CHALLENGE_DEFAULTS, forecastChallengeSolved, forecastRound, fullPipeDays, marketOnSteps, networkWords, ROUND_HORIZON, ROUND_MEMBERS, ROUND_MONTHS, roundTally, scoreRound, TALLY_DEFAULTS } from '../src/lessons/gas/ch7/L7_3';
-import { PM_LEASE_MAX, PM_PARTS, PM_TARGET, pmDrivers, pmEight, pmHolds, pmLeaseBcf, pmNetworkWords, pmNumbers, pmRunning, pmShare, portfolioManagerSolved } from '../src/lessons/gas/ch7/L7_4';
+import { PM_LEASE_MAX, PM_PARTS, pmDrivers, pmEight, pmHolds, pmLeaseBcf, pmNetworkWords, pmNumbers, pmRunning, pmShare, pmTarget, portfolioManagerSolved } from '../src/lessons/gas/ch7/L7_4';
 import { activeParts, deskPhrase, KEEP_DEFAULTS, partTotals, practiceKeepers, TOURNAMENT_DEFAULTS, tournamentDesks, tournamentNetworkWords, tournamentPartName, tournamentPortfolioWords, tournamentRun, tournamentSolved, withParts } from '../src/lessons/gas/ch7/L7_5';
 
 describe('gas chapter 1: properties', () => {
@@ -206,8 +206,7 @@ describe('gas 1.1', () => {
     expect(ethaneSolved({ ...r, ethane: 2.3 })).toBe(false);
     expect(ethaneSolved({ ...r, ethane: 2.5 })).toBe(false);
     expect(ethaneSolved({ ...r, ethane: 2.4, propane: 3 })).toBe(false);
-    // Success text: propane and butane alone give 1,081.3; each ethane point adds 7.6; without them 12% ethane fits at 1,078.
-    expect(gasProperties(mixComposition({ ...r, ethane: 0 })).hhv.toFixed(1)).toBe('1081.3');
+    // Success text: without propane and butane, all 12% of the ethane fits at 1,078 (the estimate is in gas-ch1.test.ts).
     const noLiquids = mixComposition({ ...r, propane: 0, butane: 0 });
     expect(Math.round(gasProperties(noLiquids).hhv)).toBe(1078);
     expect(checkSpec(noLiquids).ok).toBe(true);
@@ -610,12 +609,12 @@ describe('gas 2.2', () => {
     expect(Math.round(small.lifeMonths / 12)).toBe(10);
   });
 
-  it('solves the steady-rate challenge at 6 MMcf/d and nowhere else', () => {
-    expect(steadyCap()).toBe(6);
-    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6 })).toBe(true);
-    expect(steadySolved({ ...WELL_DEFAULTS, cap: 5.5 })).toBe(false);
-    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6.5 })).toBe(false);
-    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6, pwf: 500 })).toBe(false);
+  it('solves the four-year steady-rate challenge at 6.5 MMcf/d and nowhere else', () => {
+    expect(steadyCap()).toBe(6.5);
+    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6.5 })).toBe(true);
+    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6 })).toBe(false);
+    expect(steadySolved({ ...WELL_DEFAULTS, cap: 7 })).toBe(false);
+    expect(steadySolved({ ...WELL_DEFAULTS, cap: 6.5, pwf: 500 })).toBe(false);
   });
 
   it('hides a 20.5 Bcf fault block that one survey underestimates and eight nearly pin down', () => {
@@ -823,12 +822,12 @@ describe('gas 2.5', () => {
     expect(full.fuelMMcfd.toFixed(1)).toBe('15.1');
   });
 
-  it('solves the first challenge with the ethane left in: 71% of the propane and all the butane at least', () => {
-    expect(ethaneLeftSolved(PLANT_DEFAULTS)).toBe(false);
-    expect(ethaneLeftSolved({ co2: 0, dehydrate: true, ethane: 0, propane: 71, butane: 100 })).toBe(true);
-    expect(ethaneLeftSolved({ co2: 0, dehydrate: true, ethane: 0, propane: 70, butane: 100 })).toBe(false);
-    expect(ethaneLeftSolved({ co2: 0, dehydrate: false, ethane: 0, propane: 99, butane: 100 })).toBe(false);
-    expect(ethaneLeftSolved({ co2: 0, dehydrate: true, ethane: 5, propane: 99, butane: 100 })).toBe(false);
+  it('solves the first challenge with the least shrink: all the butane and 71% of the propane, the ethane left in', () => {
+    expect(leastShrinkSolved(PLANT_DEFAULTS)).toBe(false);
+    expect(leastShrinkSolved({ co2: 0, dehydrate: true, ethane: 0, propane: 71, butane: 100 })).toBe(true);
+    expect(leastShrinkSolved({ co2: 0, dehydrate: true, ethane: 0, propane: 70, butane: 100 })).toBe(false);
+    expect(leastShrinkSolved({ co2: 0, dehydrate: false, ethane: 0, propane: 99, butane: 100 })).toBe(false);
+    expect(leastShrinkSolved({ co2: 0, dehydrate: true, ethane: 5, propane: 99, butane: 100 })).toBe(false);
     // Ethane alone has to go almost entirely.
     expect(runPlant({ co2: 0, dehydrate: true, ethane: 90, propane: 0, butane: 0 }).ok).toBe(true);
     expect(runPlant({ co2: 0, dehydrate: true, ethane: 89, propane: 0, butane: 0 }).ok).toBe(false);
@@ -849,20 +848,21 @@ describe('gas 2.5', () => {
     expect(dayValue(0, VALUE_DEFAULTS.gas, VALUE_DEFAULTS.ethanePrice)).toBeCloseTo(vr.total, 6);
   });
 
-  it('values the liquids as gas and finds the breakeven at $0.288, the lowest paying cent 29¢', () => {
+  it('values the liquids as gas and finds the breakeven at $0.288; at the challenge’s $3.50 the lowest paying cent is 35¢', () => {
     expect((mmbtuPerGallon('propane') * 2.75).toFixed(2)).toBe('0.25');
     expect((mmbtuPerGallon('ethane') * 2.75).toFixed(2)).toBe('0.18');
     expect(ethaneBreakeven(RIDGEBACK_RAW, NGL_PRICES).toFixed(3)).toBe('0.288');
     const slope = ethaneBreakeven(RIDGEBACK_RAW, { gas: 3.75, nglFee: 0.08 }) - ethaneBreakeven(RIDGEBACK_RAW, NGL_PRICES);
     expect((slope * 100).toFixed(1)).toBe('7.5');
-    expect(CHALLENGE_GAS).toBe(2.75);
     expect(lowestPayingCent(2.75)).toBe(29);
     expect(recoveryGain(2.75, 0.28)).toBeLessThan(0);
     expect(recoveryGain(2.75, 0.29)).toBeGreaterThan(0);
+    expect(CHALLENGE_GAS).toBe(3.5);
+    expect(lowestPayingCent(3.5)).toBe(35);
     expect(breakevenSolved(VALUE_DEFAULTS)).toBe(false);
-    expect(breakevenSolved({ gas: 2.75, ethanePrice: 0.29, recovery: 0 })).toBe(true);
-    expect(breakevenSolved({ gas: 2.75, ethanePrice: 0.3, recovery: 0 })).toBe(false);
-    expect(breakevenSolved({ gas: 3, ethanePrice: 0.29, recovery: 0 })).toBe(false);
+    expect(breakevenSolved({ gas: 3.5, ethanePrice: 0.35 })).toBe(true);
+    expect(breakevenSolved({ gas: 3.5, ethanePrice: 0.36 })).toBe(false);
+    expect(breakevenSolved({ gas: 2.75, ethanePrice: 0.35 })).toBe(false);
   });
 
   it('quotes Sandhill’s raw gas with and without its CO2', () => {
@@ -1099,12 +1099,13 @@ describe('gas 3.2', () => {
     expect(g.binding.sort()).toEqual(['ridgeback-bayport', 'ridgeback-calder']);
   });
 
-  it('solves the Hollow Creek challenge at 0.85 Bcf/d and nowhere else', () => {
+  it('solves the Metro peak challenge at 3.25 Bcf/d and nowhere else', () => {
     const answers: number[] = [];
-    for (let i = 0; i <= 20; i++) if (hollowSolved({ ...dayPreset('design'), hollow: i * 0.05 })) answers.push(Math.round(i * 5));
-    expect(answers).toEqual([85]);
-    expect(hollowSolved(SOLVER_DEFAULTS)).toBe(false);
-    expect(hollowSolved({ ...dayPreset('design'), hollow: 0.85, out: ['ridgeback-calder'] })).toBe(false);
+    for (let i = 0; i <= 52; i++) if (peakSolved({ ...dayPreset('design'), metro: Math.round((0.8 + i * 0.05) * 100) / 100 })) answers.push(Math.round((0.8 + i * 0.05) * 100));
+    expect(answers).toEqual([325]);
+    expect(peakSolved(SOLVER_DEFAULTS)).toBe(false);
+    expect(peakSolved(dayPreset('design'))).toBe(false);
+    expect(peakSolved({ ...dayPreset('design'), metro: 3.25, out: ['ridgeback-calder'] })).toBe(false);
   });
 
   it('quotes the looping numbers', () => {
@@ -1116,25 +1117,24 @@ describe('gas 3.2', () => {
     expect(loopedCapacity(36, 1).total / 1000).toBeCloseTo(3.6, 2);
     const h24 = loopedCapacity(24, 0.5);
     expect(Math.round((h24.inLoop / h24.total) * 100)).toBe(26);
-    expect(lineCapacity({ ...stationLineOf(PIPELINE['calder-metro']), stations: 4 }, psia(765)) / 1000).toBeCloseTo(2.08, 2);
+    // A fourth station, as 3.1 sizes it: the capacity the line could sell.
+    expect(design('calder-metro', 36, 4).capacityBcfd).toBeCloseTo(2.05, 9);
   });
 
-  it('solves the looping challenge at 75% with 36-inch pipe, for about $1.24 billion', () => {
-    expect(LOOP_TARGET).toBe(2650);
+  it('solves the looping challenge at 20% with 36-inch pipe, for about $304 million', () => {
+    expect(LOOP_TARGET).toBe(1950);
     const answers: number[] = [];
     for (let i = 0; i <= 20; i++) if (loopSolved({ size: '36', share: i * 5 })) answers.push(i * 5);
-    expect(answers).toEqual([75]);
+    expect(answers).toEqual([20]);
     expect(loopSolved(LOOP_DEFAULTS)).toBe(false);
-    expect(loopSolved({ size: '30', share: 90 })).toBe(false);
-    const cap = loopedCapacity(36, 0.75).total;
-    expect(cap / 1000).toBeCloseTo(2.72, 2);
-    expect(loopedCapacity(36, 0.7).total).toBeLessThan(2650);
+    expect(loopSolved({ size: '30', share: 25 })).toBe(false);
+    const cap = loopedCapacity(36, 0.2).total;
+    expect(cap / 1000).toBeCloseTo(1.95, 2);
+    expect(loopedCapacity(36, 0.15).total).toBeLessThan(1950);
     const hp = (q: number) => 3 * compress(q, psia(765), psia(1440)).hp;
     const extra = hp(cap) - hp(loopedCapacity(36, 0).total);
-    expect(Math.round(extra / 1000) * 1000).toBe(91000);
-    expect((36 * 180 * 150_000 + extra * 3000) / 1e9).toBeCloseTo(1.24, 2);
-    // 24-inch loops can never reach it; 30-inch loops need 90%.
-    expect(loopedCapacity(24, 1).total).toBeLessThan(2650);
+    expect(Math.round(extra / 1000) * 1000).toBe(15000);
+    expect(Math.round((36 * 48 * 150_000 + extra * 3000) / 1e6)).toBe(304);
   });
 });
 
@@ -1161,10 +1161,6 @@ describe('gas 3.3', () => {
     for (let s = START_MIN; s <= START_MAX; s += START_STEP) if (clean(simulate({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP, start: s }))) starts.push(s);
     expect(starts).toEqual([785]);
     for (let s = START_MIN; s <= START_MAX; s += START_STEP) expect(clean(simulate({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP + RAMP_STEP, start: s }))).toBe(false);
-    expect(bestStart({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP })).toBe(785);
-    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP, start: 785 })).toBe(true);
-    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP })).toBe(false);
-    expect(rampSolved({ ...PACK_DEFAULTS, ramp: ANSWER_RAMP - RAMP_STEP, start: 785 })).toBe(false);
     expect(dayMean(CHALLENGE_AVG, 0)).toBeCloseTo(1300, 9);
   });
 
@@ -1233,14 +1229,14 @@ describe('gas 3.4', () => {
     expect(dayLabel(289)).toBe('January 15');
   });
 
-  it('runs the starting year: 119.1 Bcf by November 1, ratchets on the last 43 and 27 days', () => {
+  it('runs the starting year: full by October 16, ratchets on the last 78 and 25 days', () => {
     const r = gasYear(YEAR_DEFAULTS.start, YEAR_DEFAULTS.inject, YEAR_DEFAULTS.withdraw);
-    expect(r[INJ_DAYS - 1].inventory).toBeCloseTo(119.1, 1);
-    expect(r[r.length - 1].inventory).toBeCloseTo(30.4, 1);
-    expect(r.slice(0, INJ_DAYS).filter((d) => d.limited).length).toBe(43);
-    expect(r.slice(INJ_DAYS).filter((d) => d.limited).length).toBe(27);
-    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.limited))).toBe('March 5');
-    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.inventory < DESIGN_INV))).toBe('January 23');
+    expect(r[INJ_DAYS - 1].inventory).toBeCloseTo(120, 6);
+    expect(r[r.length - 1].inventory).toBeCloseTo(31.1, 1);
+    expect(r.slice(0, INJ_DAYS).filter((d) => d.limited).length).toBe(78);
+    expect(r.slice(INJ_DAYS).filter((d) => d.limited).length).toBe(25);
+    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.limited))).toBe('March 7');
+    expect(dayLabel(r.findIndex((d, i) => i >= INJ_DAYS && d.inventory < DESIGN_INV))).toBe('January 25');
   });
 
   it('quotes Hollow Creek’s ratchets and season limits', () => {
@@ -1270,9 +1266,7 @@ describe('gas 3.4', () => {
     expect(deliverableOver(SF, 7.5, 10)).toBeCloseTo(4.18, 2);
     expect(CROSSOVER_DAY).toBe(25);
     expect(coldSpell(HC, 120, 30)[24]).toBeLessThan(coldSpell(SF, 30, 30)[24]);
-    expect(crossoverSolved({ fill: 100, days: 25 })).toBe(true);
-    expect(crossoverSolved({ fill: 100, days: 24 })).toBe(false);
-    expect(crossoverSolved({ fill: 90, days: 25 })).toBe(false);
+    expect(coldSpell(HC, 120, 30)[25]).toBeGreaterThan(coldSpell(SF, 30, 30)[25]);
   });
 });
 
@@ -1305,7 +1299,9 @@ describe('gas 3.5', () => {
     expect(eu.delivered$).toBeCloseTo(7.17, 2);
     expect(eu.perMMBtu.shipping).toBeCloseTo(0.65, 2);
     expect(eu.costs.shipping).toBe(2_400_000);
-    expect(Math.round((eu.delivered$ - 3) / 0.15)).toBe(28);
+    // Against Northline’s all-in cost running full: its $0.15 plus the capital charge of 3.1.
+    const nlDesign = design('calder-metro', 36, 3);
+    expect(Math.round((eu.delivered$ - 3) / (0.15 + chargePerMMBtu(nlDesign.cost, nlDesign.capacityBcfd, 1)))).toBe(10);
     expect(eu.perMMBtu.liquefaction).toBeGreaterThan(eu.perMMBtu.shipping + eu.perMMBtu.regas);
     expect(as.delivered$).toBeCloseTo(7.91, 2);
     expect(as.perMMBtu.shipping).toBeCloseTo(1.31, 2);
@@ -1325,15 +1321,9 @@ describe('gas 3.5', () => {
     expect(breakevenHub(v, 9)).toBeCloseTo(4.55, 2);
   });
 
-  it('solves the challenge at $3.90 and nowhere else on the grid', () => {
-    expect(challengeAnswer()).toBe(3.9);
-    expect(breakevenHub(voyageOf({ ...CHAIN_DEFAULTS, ...CHALLENGE }), 9)).toBeCloseTo(3.91, 2);
-    const base = { ...CHAIN_DEFAULTS, dest: 'asia' as const, destPrice: 9 };
-    expect(cargoBreakevenSolved({ ...base, hub: 3.9 })).toBe(true);
-    expect(cargoBreakevenSolved({ ...base, hub: 3.85 })).toBe(false);
-    expect(cargoBreakevenSolved({ ...base, hub: 3.95 })).toBe(false);
-    expect(cargoBreakevenSolved({ ...base, hub: 3.9, charter: 100_000 })).toBe(false);
-    expect(cargoBreakevenSolved({ ...CHAIN_DEFAULTS })).toBe(false);
+  it('breaks even at $3.91 at Calder for a $9.00 cargo to Asia', () => {
+    expect(netback(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia' }), 9)).toBeCloseTo(7.0, 2);
+    expect(breakevenHub(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia' }), 9)).toBeCloseTo(3.91, 2);
   });
 
   it('sails the round trip in the right order', () => {
@@ -1477,12 +1467,13 @@ describe('gas 4.1', () => {
     expect(Math.round((at(27).storage - at(28).storage) * -1000)).toBe(53);
   });
 
-  it('solves the LNG challenge at 4 °F and nowhere else', () => {
+  it('cuts LNG from 4 °F; the challenge, with Ridgeback at 2.9 Bcf/d, solves at −2 °F and nowhere else', () => {
     expect(LNG_CUT_TEMP).toBe(4);
-    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 4 })).toBe(true);
-    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 5 })).toBe(false);
-    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 3 })).toBe(false);
-    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 4, lng: 6 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: 4 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: -2, ridgeback: 2.9 })).toBe(true);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: -1, ridgeback: 2.9 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: -3, ridgeback: 2.9 })).toBe(false);
+    expect(lngCutSolved({ ...BALANCE_DEFAULTS, temp: -2, ridgeback: 2.9, lng: 6 })).toBe(false);
     const b = balanceDay({ ...BALANCE_DEFAULTS, temp: 4 });
     expect(b.price).toBeCloseTo(6.5, 9);
     expect(b.lngCut).toBeCloseTo(0.024, 3);
@@ -1547,11 +1538,11 @@ describe('gas 4.2', () => {
   });
 
   it('solves the challenge at 11 °F and nowhere else', () => {
-    expect(breakawayTemp()).toBe(11);
-    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 11 })).toBe(true);
-    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 12 })).toBe(false);
-    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 10 })).toBe(false);
-    expect(breakawaySolved({ ...HUB_DEFAULTS, temp: 11, hollow: 72 })).toBe(false);
+    expect(northlineFullTemp()).toBe(12);
+    expect(northlineFullSolved({ ...HUB_DEFAULTS, temp: 12 })).toBe(true);
+    expect(northlineFullSolved({ ...HUB_DEFAULTS, temp: 13 })).toBe(false);
+    expect(northlineFullSolved({ ...HUB_DEFAULTS, temp: 11 })).toBe(false);
+    expect(northlineFullSolved({ ...HUB_DEFAULTS, temp: 12, hollow: 72 })).toBe(false);
   });
 
   it('quotes the derated Northline and the flooded basin', () => {
@@ -1676,7 +1667,7 @@ describe('gas 4.4', () => {
   });
 
   it('simulates the four winters', () => {
-    expect(WINTER_SEEDS).toEqual({ mild: 23, typical: 11, cold: 29 });
+    expect(WINTER_SEEDS).toEqual({ mild: 2, typical: 3, cold: 29 });
     const n = winterStats('normal');
     const mild = winterStats('mild');
     const typ = winterStats('typical');
@@ -1684,11 +1675,11 @@ describe('gas 4.4', () => {
     expect(Math.round(n.winterHdd)).toBe(4640);
     expect(n.mar31).toBeCloseTo(33.2, 1);
     expect(n.winterPrice).toBeCloseTo(4.21, 2);
-    expect(Math.round((1 - mild.winterHdd / n.winterHdd) * 100)).toBe(15);
-    expect(mild.mar31).toBeCloseTo(56.9, 1);
-    expect(mild.winterPrice).toBeCloseTo(3.91, 2);
-    expect(Math.round(typ.winterHdd)).toBe(4643);
-    expect(typ.winterPrice).toBeCloseTo(4.38, 2);
+    expect(Math.round((1 - mild.winterHdd / n.winterHdd) * 100)).toBe(9);
+    expect(mild.mar31).toBeCloseTo(53.1, 1);
+    expect(mild.winterPrice).toBeCloseTo(3.9, 2);
+    expect(Math.round(typ.winterHdd)).toBe(4603);
+    expect(typ.winterPrice).toBeCloseTo(4.37, 2);
     expect(Math.round((cold.winterHdd / n.winterHdd - 1) * 100)).toBe(14);
     expect(cold.mar31).toBeCloseTo(22.2, 1);
     expect(cold.winterPrice).toBeCloseTo(4.97, 2);
@@ -1741,29 +1732,30 @@ describe('gas 4.5', () => {
 
   it('moves the February contract with storage through three winters', () => {
     const end = (id: WinterId) => winterRun(id).path[winterRun(id).path.length - 1];
-    for (const id of ['cold', 'ordinary', 'mild'] as WinterId[]) expect(r2(winterRun(id).path[0])).toBe(4.56);
+    for (const id of ['cold', 'typical', 'warm'] as WinterId[]) expect(r2(winterRun(id).path[0])).toBe(4.56);
     expect(r2(end('cold'))).toBe(5.06);
-    expect(r2(end('ordinary'))).toBe(4.35);
-    expect(r2(end('mild'))).toBe(3.54);
+    expect(r2(end('typical'))).toBe(4.21);
+    expect(r2(end('warm'))).toBe(3.54);
     expect(r2(winterRun('cold').calderAvg)).toBe(5.12);
-    expect(r2(winterRun('ordinary').calderAvg)).toBe(4.23);
-    expect(r2(winterRun('mild').calderAvg)).toBe(3.32);
+    expect(r2(winterRun('typical').calderAvg)).toBe(3.93);
+    expect(r2(winterRun('warm').calderAvg)).toBe(3.32);
   });
 
-  it('hedges the utility with 140 contracts: the second challenge', () => {
+  it('hedges the utility with 140 contracts and the swap: the second challenge', () => {
     expect(HEDGE_CONTRACTS).toBe(140);
-    expect(hedgeSolved({ contracts: 140 })).toBe(true);
-    expect(hedgeSolved({ contracts: 130 })).toBe(false);
+    expect(hedgeSolved({ contracts: 140, swap: true })).toBe(true);
+    expect(hedgeSolved({ contracts: 140, swap: false })).toBe(false);
+    expect(hedgeSolved({ contracts: 130, swap: true })).toBe(false);
     const range = (n: number, swap: boolean) => {
-      const xs = (['cold', 'ordinary', 'mild'] as WinterId[]).map((id) => utilityCost(id, n, swap).net);
+      const xs = (['cold', 'typical', 'warm'] as WinterId[]).map((id) => utilityCost(id, n, swap).net);
       return [r2(Math.min(...xs)), r2(Math.max(...xs))];
     };
     expect(range(0, false)).toEqual([3.47, 5.57]);
-    expect(range(140, false)).toEqual([4.49, 5.07]);
-    expect(range(140, true)).toEqual([4.67, 4.94]);
-    const mild = utilityCost('mild', 140, false);
-    expect(Math.round(-mild.futuresGain / 1e4) / 100).toBe(1.43);
-    const w = winterRun('mild');
+    expect(range(140, false)).toEqual([4.44, 5.07]);
+    expect(range(140, true)).toEqual([4.61, 4.94]);
+    const warm = utilityCost('warm', 140, false);
+    expect(Math.round(-warm.futuresGain / 1e4) / 100).toBe(1.43);
+    const w = winterRun('warm');
     const marks = futuresMarks(140, w.path[0], w.path.slice(1));
     expect(marginCalls(140, marks.cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN).length).toBe(5);
   });
@@ -2137,22 +2129,24 @@ describe('gas 5.5', () => {
   it('climbs to $20 with Northline out and to rationing when colder still', () => {
     const o = crisisStats(OUTAGE);
     expect(o.peakMetro).toBeCloseTo(20, 6);
-    expect(r2(giveWay(crisisRun(OUTAGE)[STORM_LEAD], OUTAGE).oil)).toBe(0.63);
+    // Northline with a station out: 1.45 Bcf/d (Lessons 1.4 and 5.1).
+    expect(WORST_STORM.northline).toBe(1.45);
+    expect(r2(giveWay(crisisRun(OUTAGE)[STORM_LEAD], OUTAGE).oil)).toBe(0.61);
     const w = crisisStats(WORST);
     expect(w.peakMetro).toBeCloseTo(100, 6);
-    expect(r2(w.rationedBcf)).toBe(1.22);
+    expect(r2(w.rationedBcf)).toBe(0.97);
     expect(w.rationDays).toBe(5);
-    expect(r2(giveWay(crisisRun(WORST)[STORM_LEAD], WORST).homes)).toBe(0.23);
+    expect(r2(giveWay(crisisRun(WORST)[STORM_LEAD], WORST).homes)).toBe(0.18);
   });
 
   it('weighs the defenses against the worst storm', () => {
-    expect(r2(crisisStats({ ...WORST, freeze: 0 }).rationedBcf)).toBe(1.22);
+    expect(r2(crisisStats({ ...WORST, freeze: 0 }).rationedBcf)).toBe(0.97);
     expect(crisisStats({ ...WORST, northline: 1.8 }).rationedBcf).toBeLessThan(1e-6);
     const hold = crisisStats({ ...WORST, lngHold: true });
     expect(r2(hold.rationedBcf)).toBe(1.84);
     expect(r2(hold.peakCalder)).toBe(99.85);
-    expect(r2(crisisStats({ ...WORST, when: 'dec' }).rationedBcf)).toBe(0.25);
-    expect(r2(crisisStats({ ...WORST, when: 'mar' }).rationedBcf)).toBe(2.31);
+    expect(crisisStats({ ...WORST, when: 'dec' }).rationedBcf).toBeLessThan(1e-6);
+    expect(r2(crisisStats({ ...WORST, when: 'mar' }).rationedBcf)).toBe(2.06);
     expect(r2(crisisStats({ ...WORST, when: 'mar', northline: 1.8 }).rationedBcf)).toBe(0.42);
     const s = crisisStats(WORST);
     expect(Math.round(s.hollowAtStorm)).toBe(67);
@@ -2377,16 +2371,15 @@ describe('gas 6.1', () => {
     expect(forecasterPricePerHdd(f)).toBeGreaterThan(0);
   });
 
-  it('makes the cold spell of January 1, Year 3 the challenge, solved at the least skill within 50 cents', () => {
+  it('makes the cold spell of January 1, Year 3 the challenge, checked at full skill', () => {
     const spell = forecasterTwoWeeks(forecasterRun(COLD_SPELL.year, COLD_SPELL.day, 0));
     expect(spell.normalTemp - spell.actTemp).toBeGreaterThan(15);
-    const answer = coldSpellAnswer();
-    expect(answer).toBeCloseTo(0.9, 9);
-    expect(coldSpellMiss(answer)).toBeLessThanOrEqual(PRICE_TOLERANCE);
-    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: answer })).toBe(true);
+    // Even full skill gets within 50 cents; 0.9 is the least that does (the success text quotes it).
+    expect(coldSpellMiss(1)).toBeLessThanOrEqual(PRICE_TOLERANCE);
+    expect(coldSpellAnswer()).toBeCloseTo(0.9, 9);
+    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: 1 })).toBe(true);
     expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: 0.95 })).toBe(false);
-    expect(forecasterSolved({ year: COLD_SPELL.year, day: COLD_SPELL.day, skill: 0.85 })).toBe(false);
-    expect(forecasterSolved({ ...FORECASTER_DEFAULTS, skill: answer })).toBe(false);
+    expect(forecasterSolved({ ...FORECASTER_DEFAULTS, skill: 1 })).toBe(false);
   });
 
   it('shows the miss shrinking as winter passes, and skill paying only over two weeks', () => {
@@ -2409,7 +2402,7 @@ describe('gas 6.2', () => {
   it('trades March/April in seven winters and January/October in eight', () => {
     expect(traderSignals('marApr')).toHaveLength(7);
     expect(traderSignals('janOct')).toHaveLength(8);
-    expect(SPREAD_TRADER_DEFAULTS).toEqual({ spread: 'marApr', year: 2, side: 'buy', lots: 10 });
+    expect(SPREAD_TRADER_DEFAULTS).toEqual({ spread: 'marApr', year: 2 });
   });
 
   it('follows Year 3 and Year 4 as the prose says', () => {
@@ -2464,9 +2457,9 @@ describe('gas 6.2', () => {
     expect(ruleYears('behind', 13)).toEqual([0, 1, 6]);
   });
 
-  it('solves the challenge only at the best threshold', () => {
+  it('solves the challenge only at the highest threshold that makes money', () => {
     expect(spreadTraderSolved(SPREAD_RULE_DEFAULTS)).toBe(false);
-    expect(spreadTraderSolved({ rule: 'behind', threshold: 11 })).toBe(true);
+    expect(spreadTraderSolved({ rule: 'behind', threshold: 11 })).toBe(false);
     expect(spreadTraderSolved({ rule: 'behind', threshold: 12 })).toBe(true);
     expect(spreadTraderSolved({ rule: 'behind', threshold: 10 })).toBe(false);
     expect(spreadTraderSolved({ rule: 'always', threshold: 11 })).toBe(false);
@@ -2521,8 +2514,8 @@ describe('gas 6.3', () => {
 
   it('loses only the fees selling basis at the cost of the trip in a year without a glut', () => {
     const n = basisDeskNumbers();
-    expect(n.eagerEarlyCount).toBe(6);
-    expect(n.eagerEarlyPnl).toBeCloseTo(-18300, 0);
+    expect(n.eagerEarlyCount).toBe(12);
+    expect(n.eagerEarlyPnl).toBeCloseTo(-36600, 0);
     expect(n.feePerMonth).toBeCloseTo(3100, 6);
     // The view never rises above the cost of the trip to Calder.
     expect(basisDeskSignals({ growth: GROWTH_MAX, expansion: true }, 11, 0.05).every((s) => s.view <= -0.12 + 1e-9)).toBe(true);
@@ -2641,7 +2634,7 @@ describe('gas 6.4', () => {
 
   it('solves the lease-fee challenge at the hedged lease’s floor (challenge b)', () => {
     const floor = leaseFloorFee();
-    expect(floor).toBeCloseTo(2, 9);
+    expect(floor).toBeCloseTo(1.9, 9);
     expect(arbitrageNumbers().floorMargin).toBeGreaterThan(0);
     const at = { ...ARBITRAGE_DEFAULTS, lease: floor };
     expect(arbitrageSolved(at)).toBe(true);
@@ -2664,10 +2657,10 @@ describe('gas 6.5', () => {
     const n = strategyLabNumbers();
     expect(n.futuresMargin).toBe(13500);
     expect(n.basisMargin).toBeCloseTo(0.28, 9);
-    expect(k(n.weather.total)).toBe(588);
-    expect(n.weather.trades.length).toBe(34);
-    expect(n.weather.trades.filter((o) => o.pnl <= 0).length).toBe(8);
-    expect(k(n.weather.peakCapital)).toBe(139);
+    expect(k(n.weather.total)).toBe(585);
+    expect(n.weather.trades.length).toBe(27);
+    expect(n.weather.trades.filter((o) => o.pnl <= 0).length).toBe(5);
+    expect(k(n.weather.peakCapital)).toBe(142);
     expect(k(n.spread.total)).toBe(68);
     expect(k(n.spread.peakCapital)).toBe(298);
     expect(k(n.spread.maxDrawdown)).toBe(140);
@@ -2679,7 +2672,7 @@ describe('gas 6.5', () => {
     expect(k(n.metro.totalFees)).toBe(33);
     expect(k(n.metroCostly)).toBe(19);
     expect(n.all.total / 1e6).toBeCloseTo(5.57, 2);
-    expect(k(n.all.peakCapital)).toBe(379);
+    expect(k(n.all.peakCapital)).toBe(383);
     expect(n.all.peakCapital).toBeLessThan(n.ridgeback.peakCapital);
     expect(n.allPeakMonth).toBe(9);
   });
@@ -2692,8 +2685,8 @@ describe('gas 6.5', () => {
     expect(strategyLabSolved(STRATEGY_LAB_DEFAULTS)).toBe(false);
     const over = labOutcome({ ...LAB_CHALLENGE, size: 3 });
     expect(over.bust).toBe(8);
-    expect(k(over.final)).toBe(77);
-    expect(over.book.capital[8] / 1e6).toBeCloseTo(1.1, 2);
+    expect(k(over.final)).toBe(66);
+    expect(over.book.capital[8] / 1e6).toBeCloseTo(1.11, 2);
     // Size scales profit and capital alike.
     expect(labBook('all', 2, 1).total).toBeCloseTo(2 * labBook('all', 1, 1).total, 3);
     expect(labBook('all', 2, 1).peakCapital).toBeCloseTo(2 * labBook('all', 1, 1).peakCapital, 3);
@@ -2938,17 +2931,21 @@ describe('gas 7.2', () => {
     expect(rmLineName('bayport-metro')).toBe('Bayport–Metro line');
   });
 
-  it('solves the challenge on the morning homes went without gas, and only then', () => {
+  it('solves the challenge on the day of Metro’s highest price on the reader’s network, and only then', () => {
     const w = rmWinter(AS_BUILT, 7);
     expect(w.rationedDays).toEqual([313]);
     const day = systemYear(AS_BUILT, PRACTICE_SEEDS[7]).days[313];
     expect(day.tempF).toBeCloseTo(-2.2, 1);
     expect(day.rationed).toBeCloseTo(0.099, 3);
     expect(day.flow['calder-metro']).toBeCloseTo(1.8, 6);
-    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 313 })).toBe(true);
-    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 312 })).toBe(false);
-    expect(regionalMarketSolved({ winter: 7, network: 'yours', day: 313 })).toBe(false);
-    expect(regionalMarketSolved(REGIONAL_MARKET_DEFAULTS)).toBe(false);
+    // On the network as built, "yours" and "as built" are the same network, and either is accepted.
+    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 313 }, AS_BUILT)).toBe(true);
+    expect(regionalMarketSolved({ winter: 7, network: 'yours', day: 313 }, AS_BUILT)).toBe(true);
+    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 312 }, AS_BUILT)).toBe(false);
+    expect(regionalMarketSolved(REGIONAL_MARKET_DEFAULTS, AS_BUILT)).toBe(false);
+    // On a changed network only the reader's own counts.
+    expect(regionalMarketSolved({ winter: 7, network: 'built', day: 313 }, fix)).toBe(false);
+    expect(regionalMarketSolved({ winter: 7, network: 'yours', day: 313 }, fix)).toBe(true);
     // On the changed network that morning, Metro pays $20 and nobody is cut.
     const f = systemYear(fix, PRACTICE_SEEDS[7]).days[313];
     expect(f.price.metro).toBe(20);
@@ -3074,16 +3071,18 @@ describe('gas 7.4', () => {
 
   it('has a challenge the defaults don’t solve and a few portfolios do, on the network as built and on a changed one', () => {
     expect(portfolioManagerSolved(AS_BUILT, PORTFOLIO_DEFAULTS)).toBe(false);
-    const bigger = { ...PORTFOLIO_DEFAULTS, storageShare: pmShare(2) };
-    expect(portfolioManagerSolved(AS_BUILT, bigger)).toBe(true);
-    const e = pmEight(AS_BUILT, bigger);
+    // Half the lease, the toll and the weather trades: more for the same cash.
+    const swapped = { ...PASSIVE, storageShare: pmShare(0.5), toll: true, weatherLots: 10 };
+    expect(portfolioManagerSolved(AS_BUILT, swapped)).toBe(true);
+    const e = pmEight(AS_BUILT, swapped);
     expect(e.worst).toBeGreaterThan(0);
-    expect(e.mean).toBeGreaterThanOrEqual(PM_TARGET.mean);
-    expect(e.peakCapital).toBeLessThanOrEqual(PM_TARGET.capital);
-    // Too much storage needs too much cash.
+    expect(e.mean).toBeGreaterThanOrEqual(pmTarget(AS_BUILT).mean);
+    expect(e.peakCapital).toBeLessThanOrEqual(pmTarget(AS_BUILT).capital);
+    // A bigger lease earns more but needs too much cash.
+    expect(portfolioManagerSolved(AS_BUILT, { ...PORTFOLIO_DEFAULTS, storageShare: pmShare(2) })).toBe(false);
     expect(portfolioManagerSolved(AS_BUILT, { ...PASSIVE, storageShare: pmShare(PM_LEASE_MAX) })).toBe(false);
     const changed: GasSystem = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, 'ridgeback-bayport': 4, 'sandhill-metro': 5 } };
-    expect(portfolioManagerSolved(changed, { ...PASSIVE, storageShare: pmShare(1.5), weatherLots: 20, metroSellMMBtuD: 10_000, metroSkipColderF: 0 })).toBe(true);
+    expect(portfolioManagerSolved(changed, { ...PASSIVE, storageShare: pmShare(1), weatherLots: 10, metroSellMMBtuD: 20_000, metroSkipColderF: null })).toBe(true);
     expect(pmNetworkWords(changed).changed).toEqual(['Coastal Line', 'Valley Line']);
   });
 });
@@ -3116,7 +3115,7 @@ describe('gas 7.5', () => {
     const run = desks[0].run;
     expect(run.colder[run.result.totals.indexOf(mine.worst)]).toBeCloseTo(-542.1, 0);
     expect(run.colder[run.result.totals.indexOf(mine.best)]).toBeCloseTo(430.4, 0);
-    expect(tournamentRun(AS_BUILT, p, 'practice').result.mean).toBeCloseTo(1_009_253, -3);
+    expect(tournamentRun(AS_BUILT, p, 'practice').result.mean).toBeCloseTo(1_007_757, -3);
     const byId = Object.fromEntries(desks.map((d) => [d.id, d]));
     expect(Math.round(byId.storage.run.result.winRate * 12)).toBe(11);
     expect(Math.round(byId.gambler.run.result.winRate * 12)).toBe(5);
@@ -3137,7 +3136,7 @@ describe('gas 7.5', () => {
     // The toll isn't held, so its box doesn't matter.
     expect(tournamentSolved({ ...KEEP_DEFAULTS, firm: false, metro: false, toll: false }, AS_BUILT, p)).toBe(true);
     const kept = tournamentRun(AS_BUILT, withParts(p, ['storage', 'weather']), 'unseen');
-    expect(kept.result.mean).toBeCloseTo(895_453, -3);
+    expect(kept.result.mean).toBeCloseTo(895_079, -3);
     const parts = partTotals(tournamentRun(AS_BUILT, p, 'unseen'));
     expect(parts.firm + parts.metro).toBeCloseTo(2_467_767, -3);
     const practiceParts = partTotals(tournamentRun(AS_BUILT, p, 'practice'));

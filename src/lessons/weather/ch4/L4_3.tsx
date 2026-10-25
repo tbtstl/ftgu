@@ -109,6 +109,11 @@ function meanSd(xs: number[]): { mean: number; sd: number } {
   return { mean, sd: Math.sqrt(xs.reduce((s, v) => s + (v - mean) ** 2, 0) / xs.length) };
 }
 
+/** Dollars rounded to the nearest $1,000, for prose. */
+function usdK(x: number): string {
+  return usd(Math.round(x / 1000) * 1000);
+}
+
 function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b);
   return s[Math.floor(s.length / 2)];
@@ -148,7 +153,14 @@ export function steadiestSd(): number {
   return leastSd;
 }
 
-/** The second challenge: in today's climate, a share that makes the profit as steady as any share can, to within $1,000. */
+/** The price's flexibility: a 1% smaller national crop raises the price by this many percent. */
+export const PRICE_FLEXIBILITY = 2.5;
+
+/**
+ * The second challenge: in today's climate, a share that makes the profit as steady as any share
+ * can, to within $1,000. The reader predicts it from the flexibility: a bushel lost is paid for by
+ * the higher price of the rest when 2.5 × the share = 1, at 40%; 38–40% solve.
+ */
 export function steadiestSolved(st: { share: number; warm: number; rainScale: number }): boolean {
   if (st.warm !== 0 || Math.abs(st.rainScale - 1) > 1e-9) return false;
   return profitSd(st.share) <= steadiestSd() + 1000;
@@ -216,10 +228,10 @@ function YieldMap({ heat, rain, seasons }: { heat: number; rain: number; seasons
       className="chart"
       viewBox="0 0 640 314"
       role="img"
-      aria-label={`Corn yield at Marlow over a season's heat and rain. With ${fmt(heat)} heat degree days in July and August and ${fmt(rain, 1)} inches of rain from June through August, the yield is ${fmt(y)} bushels an acre. The dots are the archive's 41 simulated seasons, from ${fmt(Math.min(...seasons.map((s) => s.bushels)))} to ${fmt(Math.max(...seasons.map((s) => s.bushels)))} bushels an acre.`}
+      aria-label={`Corn yield at Marlow over a season's heat and rain. With ${fmt(heat)} extreme-heat degree days in July and August and ${fmt(rain, 1)} inches of rain from June through August, the yield is ${fmt(y)} bushels an acre. The dots are the archive's 41 simulated seasons, from ${fmt(Math.min(...seasons.map((s) => s.bushels)))} to ${fmt(Math.max(...seasons.map((s) => s.bushels)))} bushels an acre.`}
     >
       <text className="ax" x={64} y={14}>
-        Heat degree days, July–August
+        Extreme-heat degree days, July–August
       </text>
       {CELLS.map((c, i) => (
         <rect key={i} x={c.x} y={c.y} width={c.w} height={c.h} fill={c.fill} />
@@ -402,7 +414,7 @@ export default function Lesson() {
   return (
     <LessonPage id="weather/4.3">
       <P>
-        The last two lessons followed the weather into the city: into the gas Calder Gas & Light sends out on a cold day, and into the prices of gas and power. Now
+        The last two lessons followed the weather into the city: into the gas Fenwick Gas & Light sends out on a cold day, and into the prices of gas and power. Now
         we go inland, to the corn plains around Marlow, 350 km west of the coast. A farm’s exposure looks different from a utility’s. It doesn’t sell a little more
         or less every day of the winter. It sells one harvest a year, and the weather that matters most comes in a few weeks of high summer.
       </P>
@@ -413,13 +425,14 @@ export default function Lesson() {
         waterlogging the roots.
       </P>
       <P>
-        Our model of the Marlow crop keeps the two stresses that matter most. Heat is counted as <K tone={WX.index}>heat degree days</K>: for each day of July and
-        August, how many degrees its maximum temperature rises above 86 °F (30 °C), summed over the two months — the same 86 °F that US agronomists use as the cap
-        when they count corn’s growing degree days. In the model a summer day’s maximum runs about {SUMMER_HALF_RANGE_F} °F above its mean. Water is counted as the{' '}
+        Our model of the Marlow crop keeps the two stresses that matter most. Heat is counted as <K tone={WX.index}>extreme-heat degree days</K>: for each day of July
+        and August, how many degrees its maximum temperature rises above 86 °F (30 °C), summed over the two months — the same 86 °F that US agronomists use as the
+        cap when they count corn’s growing degree days. (They count damaging heat, not the cold that the heating degree days of{' '}
+        <a href={lessonHref('weather/4.1')}>Lesson 4.1</a> measure.) In the model a summer day’s maximum runs about {SUMMER_HALF_RANGE_F} °F above its mean. Water is counted as the{' '}
         <K tone={WX.moisture}>rain</K> that falls from June through August. Each stress keeps a share of the crop’s potential, {YIELD_PARAMS.potential} bushels an
         acre in a summer with neither:
       </P>
-      <Eq label="Yield equals 249 bushels per acre times e to the minus 0.003 times the heat degree days, times the share kept after water stress">
+      <Eq label="Yield equals 249 bushels per acre times e to the minus 0.003 times the extreme-heat degree days, times the share kept after water stress">
         <span>yield</span>
         <Op>=</Op>
         <span>{YIELD_PARAMS.potential}</span>
@@ -467,19 +480,21 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        It starts at the archive’s median summer: {fmt(n.medianHeat)} heat degree days and {fmt(n.medianRain, 1)} inches of rain. That summer yields{' '}
-        {fmt(atMedian)} bushels an acre. Notice how much the heat of an ordinary summer already costs: a quarter of the potential. Each further heat degree day
+        It starts at the archive’s median summer: {fmt(n.medianHeat)} extreme-heat degree days and {fmt(n.medianRain, 1)} inches of rain. That summer yields{' '}
+        {fmt(atMedian)} bushels an acre. Notice how much the heat of an ordinary summer already costs: a quarter of the potential. Each further extreme-heat degree day
         takes another 0.3% — about half a bushel an acre from a normal crop — so a run of hot days in July adds up quickly. The rain works differently. Between 13
         and 18 inches it hardly matters, but below 13 the losses grow with the square of the shortfall: in a median-heat summer, 11 inches yields{' '}
         {fmt(cornYield({ heatDD: MEDIAN_HEAT, rainIn: 11, julyF: 0 }).bushels)} bushels, 9 inches {fmt(cornYield({ heatDD: MEDIAN_HEAT, rainIn: 9, julyF: 0 }).bushels)}
         , and 7 inches {fmt(cornYield({ heatDD: MEDIAN_HEAT, rainIn: 7, julyF: 0 }).bushels)}.
       </P>
       <P>
-        The dots show which stress the real risk comes from. The worst season in the archive, year {n.worst.year}, had {fmt(n.worst.heatDD)} heat degree days and
+        The dots show which stress the real risk comes from. The worst season in the archive, year {n.worst.year}, had {fmt(n.worst.heatDD)} extreme-heat degree days and
         only {fmt(n.worst.rainIn, 1)} inches of rain, and yielded {fmt(n.worst.bushels)} bushels an acre. Of the {n.poor} seasons that fell more than 10% short of a
-        normal {FARM.normalYield}, heat did more of the damage in {n.heatLed} and drought in {n.poor - n.heatLed}. The two often come together, because a dry summer
-        is a hot one: with little water to evaporate, the sun’s energy goes into heating the ground and the air (the latent heat of{' '}
-        <a href={lessonHref('weather/1.3')}>Lesson 1.3</a>, working in reverse). In the archive, as on the real plains, a hot spell makes rain less likely.
+        normal {FARM.normalYield}, heat did more of the damage in {n.heatLed} and drought in {n.poor - n.heatLed}. On the real plains the two often come together,
+        because a dry summer is a hot one: with little water to evaporate, the sun’s energy goes into heating the ground and the air (the latent heat of{' '}
+        <a href={lessonHref('weather/1.3')}>Lesson 1.3</a>, working in reverse). The simulated archive builds in only a little of that link — at Marlow a hot
+        spell makes a rainy day somewhat less likely — and it is lost in the summer’s other ups and downs: across the 41 seasons, the hotter summers have been
+        no drier than the cooler ones. So the archive understates how often the two stresses strike together.
       </P>
       <P>
         Notice, too, that the archive’s median season yields {fmt(n.medianYield)} bushels, less than the {fmt(atMedian)} of a summer that is median in both heat and
@@ -495,7 +510,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`In a summer with the median ${MEDIAN_HEAT} heat degree days, what’s the least June–August rain, to the nearest tenth of an inch, at which the farm still breaks even at $4.50 a bushel?`}
+        question={`In a summer with the median ${MEDIAN_HEAT} extreme-heat degree days, what’s the least June–August rain, to the nearest tenth of an inch, at which the farm still breaks even at $4.50 a bushel?`}
         solved={solved}
         status={
           heat !== MEDIAN_HEAT
@@ -510,15 +525,15 @@ export default function Lesson() {
       <H2>Forty-one harvests</H2>
       <P>
         Run the farm through all 41 seasons of the archive. Its yield ranges from {fmt(n.worst.bushels)} to {fmt(n.best.bushels)} bushels an acre, and at a steady{' '}
-        {usd(FARM.basePrice, 2)} it loses money in {n.losses} seasons of {YEARS}. Its profit averages {usd(n.mean)}, but swings by {usd(n.sd)} from one season to the
-        next (a standard deviation), and in year {n.worst.year} it loses {usd(-Math.min(...base.map((x) => x.profit)))}. A business whose profit is a small difference
+        {usd(FARM.basePrice, 2)} it loses money in {n.losses} seasons of {YEARS}. Its profit averages {usdK(n.mean)}, but swings by {usdK(n.sd)} from one season to the
+        next (a standard deviation), and in year {n.worst.year} it loses {usdK(-Math.min(...base.map((x) => x.profit)))}. A business whose profit is a small difference
         between two large numbers, one of them set by the weather, lives or dies by the weather.
       </P>
       <P>
         But the price isn’t always steady. If only Marlow had a bad summer, the national harvest would hardly notice and the price wouldn’t move. The weather that
         withers Marlow’s corn, though, often covers much of the corn belt at once, and then the whole country’s crop shrinks and the price rises. In 2012, drought
         and heat across the US Midwest cut the national corn yield to about a quarter below what had been expected, and corn futures rose to records above $8 a
-        bushel. In our model a 1% smaller national crop raises the price by 2.5%, and the share of the national crop grown under Marlow’s weather decides how much
+        bushel. In our model a 1% smaller national crop raises the price by {PRICE_FLEXIBILITY}%, and the share of the national crop grown under Marlow’s weather decides how much
         Marlow’s yield moves it.
       </P>
       <P>
@@ -568,30 +583,35 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At 2% the price barely moves, the profit line is steep, and the dots spread from {usd(Math.max(...base.map((x) => x.profit)))} to{' '}
-        {usd(Math.min(...base.map((x) => x.profit)))}. Raise the share and the line tilts. A poor harvest now sells at a higher price, so the farm loses less in its
-        bad years and makes less in its good ones. At 40% — where 2.5 × the share is exactly 1 — a bushel lost is very nearly paid for by the higher price of the
-        rest, and the farm’s profit hardly depends on its yield at all: it swings by only {usd(n.at40.sd)}, and its worst season costs it {usd(-n.at40.worst)}. This
-        is a <b>natural hedge</b>: the farm’s price and its quantity move in opposite directions. Past that point the farm is over-hedged, its good harvests now
-        selling so cheaply that they become its losing seasons; at 50% the swing is back up to {usd(n.at50.sd)}.
+        At 2% the price barely moves, the profit line is steep, and the dots spread from {usdK(Math.max(...base.map((x) => x.profit)))} to{' '}
+        {usdK(Math.min(...base.map((x) => x.profit)))}. Raise the share and the line tilts. A poor harvest now sells at a higher price, so the farm loses less in its
+        bad years and makes less in its good ones.
       </P>
 
       <Challenge
         id="b"
-        question="Leave Marlow’s climate as it is. What share of the national crop makes the farm’s profit steadiest, to within $1,000 of the smallest swing any share gives?"
+        question={`Leave Marlow’s climate as it is. A 1% smaller harvest at Marlow shrinks the national crop by the share times 1%, and each 1% of that raises the price by ${PRICE_FLEXIBILITY}%. Predict first: at what share would a bushel lost be just paid for by the higher price of the rest? Then check: find the share that makes the farm’s profit steadiest, to within $1,000 of the smallest swing any share gives.`}
         solved={solved2}
         status={
           warm !== 0 || Math.abs(rainScale - 1) > 1e-9
             ? 'First set the summers back to normal and the rain back to the archive’s.'
             : `At ${fmt(share * 100)}%, the profit swings by ${usd(profitSd(share))} from season to season.`
         }
-        success={`Solved. At ${fmt(share * 100)}%, the swing is down to ${usd(profitSd(share))}, against ${usd(n.sd)} at 2%. It bottoms out near 40%, where a 1% shortfall in the crop raises the price by almost exactly 1%, so revenue stands still. But notice who pays for this hedge: the buyers of corn, in higher prices. And it only works for a farm whose weather really is the nation’s. A farm hit by a storm that missed its neighbors (Lesson 2.3) gets no help from the price at all.`}
+        success={`Solved. At ${fmt(share * 100)}%, the swing is down to ${usdK(profitSd(share))}, against ${usdK(n.sd)} at 2%. It bottoms out near 1 ÷ ${PRICE_FLEXIBILITY} = 40%, where a 1% shortfall in the crop raises the price by almost exactly 1%, so revenue stands still. But the steadiness isn’t free: the average profit is down to ${usdK(stats.mean)}, from ${usdK(n.mean)} at 2%. The farm now sells its big harvests cheap and its small ones dear, so on average it gets less for its corn.`}
       />
+
+      <P>
+        At 40%, where {PRICE_FLEXIBILITY} × the share is exactly 1, a bushel lost is very nearly paid for by the higher price of the rest, and the farm’s profit
+        hardly depends on its yield at all: it swings by only {usdK(n.at40.sd)}, and its worst season costs it {usdK(-n.at40.worst)}. This is a{' '}
+        <b>natural hedge</b>: the farm’s price and its quantity move in opposite directions. Past that point the farm is over-hedged, its good harvests now selling
+        so cheaply that they become its losing seasons; at 50% the swing is back up to {usdK(n.at50.sd)}. And the hedge only works for a farm whose weather really
+        is the nation’s. A farm hit by a storm that missed its neighbors (<a href={lessonHref('weather/2.3')}>Lesson 2.3</a>) gets no help from the price at all.
+      </P>
 
       <P>
         The other two controls are the physical drivers of the risk, and the farm is very sensitive to them. In this model, summers just 0.5 °F warmer drop the
         median yield to {fmt(n.warm05.median)} bushels and turn {n.warm05.losses} of the {YEARS} seasons into losses; at +1 °F the median is {fmt(n.warm1.median)}, and
-        at +2 °F it is {fmt(n.warm2.median)} and the farm loses {usd(-n.warm2.mean)} in an average year. Each degree pushes more days over 86 °F and pushes the hot days
+        at +2 °F it is {fmt(n.warm2.median)} and the farm loses {usdK(-n.warm2.mean)} in an average year. Each degree pushes more days over 86 °F and pushes the hot days
         further over it. A fifth less summer rain is gentler on the median, {fmt(n.drier.median)} bushels, but it deepens the drought years and makes{' '}
         {n.drier.losses} of the seasons losses. Try warming with the share at 40%: the natural hedge softens the swings, but it can’t restore an average that the
         climate has taken away. A hedge moves money between good years and bad; it doesn’t make a bad climate good.

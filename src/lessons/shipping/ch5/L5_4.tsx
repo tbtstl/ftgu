@@ -73,16 +73,39 @@ export function comparePlans(s: AllocationState): { eqs: Equilibrium[]; stay: Pl
 /** The harvest-strength slider's values. */
 export const SOY_GRID = Array.from({ length: 21 }, (_, i) => Math.round((0.5 + 0.05 * i) * 100) / 100);
 
-/** The weakest harvest on the slider at which repositioning still beats staying, deciding in February (null if none). */
-export function weakestPayingHarvest(bunker: number, speed: number, waiting: number): number | null {
-  for (const soy of SOY_GRID) if (comparePlans({ month: 1, soy, bunker, speed, waiting }).diff > 0) return soy;
+/** Where Kestrel's soybean cargo is fixed under a set of plans: the month and that month's market. */
+function soyFix(r: { eqs: Equilibrium[]; repo: Plan }) {
+  const leg = r.repo.legs.find((l) => l.route === 'P-SAN-QIN')!;
+  const k = Math.floor(leg.start / MONTH);
+  return { leg, k, eq: r.eqs[k] };
+}
+
+/** Ballast miles, measured from China, that Brazil's soybean freight pays for in a month's market. */
+export const creditedMiles = (eq: Equilibrium) => eq.routes.find((r) => r.route.id === 'P-SAN-QIN')!.positional;
+/** Ships a month Santos draws in ballast from China in a month's market. */
+export const shipsFromChina = (eq: Equilibrium) => eq.plan.flows.filter((f) => f.to === 'SAN' && f.from === 'QIN').reduce((a, f) => a + f.ships, 0) / 12;
+
+/** The freight Kestrel's soybeans earn credit for, and Santos's draw on China, in the month she loads. */
+export function fixCredit(s: AllocationState) {
+  const r = comparePlans(s);
+  const { k, eq } = soyFix(r);
+  const miles = creditedMiles(eq);
+  return { month: (s.month + k) % 12, miles, full: miles >= BALLAST_NM - 1, china: shipsFromChina(eq), diff: r.diff };
+}
+
+/** The first challenge's decision month: March, so that Kestrel loads in April, the height of the harvest. */
+export const CREDIT_MONTH = 2;
+
+/** The weakest harvest on the slider at which Brazil's freight still pays for all of Kestrel's ballast, deciding in March (null if none). */
+export function weakestFullCredit(bunker: number, speed: number, waiting: number): number | null {
+  for (const soy of SOY_GRID) if (fixCredit({ month: CREDIT_MONTH, soy, bunker, speed, waiting }).full) return soy;
   return null;
 }
 
-/** The first challenge: deciding in February, the weakest harvest at which repositioning still pays. */
+/** The first challenge: deciding in March, the weakest harvest at which the freight still credits the whole ballast leg. */
 export function harvestSolved(s: AllocationState): boolean {
-  if (s.month !== 1) return false;
-  const w = weakestPayingHarvest(s.bunker, s.speed, s.waiting);
+  if (s.month !== CREDIT_MONTH) return false;
+  const w = weakestFullCredit(s.bunker, s.speed, s.waiting);
   return w !== null && Math.abs(s.soy - w) < 1e-9;
 }
 
@@ -92,7 +115,7 @@ export interface FlexState {
   wait: number;
 }
 
-export const FLEX_DEFAULTS: FlexState = { month: 3, vol: 0.2, wait: 3 };
+export const FLEX_DEFAULTS: FlexState = { month: 1, vol: 0.2, wait: 3 };
 
 /** What waiting is worth: waiting and choosing, against the better plan chosen now, $/day. */
 export function waitValue(month: number, vol: number, wait: number) {
@@ -101,10 +124,14 @@ export function waitValue(month: number, vol: number, wait: number) {
   return { ...c, value: c.mean.wait - Math.max(c.mean.stay, c.mean.reposition) };
 }
 
-/** The second challenge: in April with the market swinging ±20% a month, the longest wait that still pays. */
-export function longestWaitSolved(s: FlexState): boolean {
-  if (s.month !== 3 || Math.abs(s.vol - 0.2) > 1e-9) return false;
-  return waitValue(3, 0.2, s.wait).value > 0 && waitValue(3, 0.2, s.wait + 1).value <= 0;
+/** What free news (no days spent waiting) is worth in each decision month, with the market swinging ±20%. */
+export const FREE_NEWS = MONTH_NAMES.map((_, m) => waitValue(m, 0.2, 0).value);
+/** The month in which free news is worth most. */
+export const FREE_NEWS_BEST = FREE_NEWS.indexOf(Math.max(...FREE_NEWS));
+
+/** The second challenge: with the wait at zero and ±20% swings, the decision month in which the news is worth most. */
+export function freeNewsSolved(s: FlexState): boolean {
+  return s.wait === 0 && Math.abs(s.vol - 0.2) < 1e-9 && s.month === FREE_NEWS_BEST;
 }
 
 // Numbers the prose quotes, all from the model at the default settings.
@@ -120,19 +147,25 @@ const COAL_NM = seaRoute('SAM', 'QIN', { draft: ladenDraft(KESTREL, MARKET_CLASS
 const COAL_DAYS = JAN.stay.legs[0].days;
 const BALLAST_DAYS = soyLeg(JAN.repo).start;
 /** Brazil's freight credits this many ballast miles, out of season and in the harvest. */
-const positionalIn = (eq: Equilibrium) => eq.routes.find((r) => r.route.id === 'P-SAN-QIN')!.positional;
-const POS_OFF = positionalIn(JAN.eqs[0]);
-const POS_ON = positionalIn(JAN.eqs[2]);
-const fromChinaInto = (eq: Equilibrium) => eq.plan.flows.filter((f) => f.to === 'SAN' && f.from === 'QIN').reduce((a, f) => a + f.ships, 0);
+const POS_OFF = creditedMiles(JAN.eqs[0]);
+const POS_ON = creditedMiles(JAN.eqs[2]);
+/** Ships a month Santos draws from China in April, at the default harvest. */
+export const APRIL_CHINA = shipsFromChina(JAN.eqs[3]);
 const BUNKER_FEB = [300, 900].map((b) => comparePlans({ ...DEFAULTS, month: 1, bunker: b }).diff);
 const BUNKER_JAN = [300, 900].map((b) => comparePlans({ ...DEFAULTS, month: 0, bunker: b }).diff);
 const CONG4 = [comparePlans({ ...DEFAULTS, month: 1, waiting: 4 }).diff, comparePlans({ ...DEFAULTS, month: 0, waiting: 4 }).diff];
-const SPEED_FEB = [10, 14].map((sp) => comparePlans({ ...DEFAULTS, month: 1, speed: sp }).diff);
-export const WEAKEST = weakestPayingHarvest(600, 12, 0);
-const APRIL = waitValue(3, 0.2, 3);
-const APRIL5 = waitValue(3, 0.2, 5);
-const FEB_FREE = waitValue(1, 0.2, 0);
-const APRIL_FREE = waitValue(3, 0.2, 0);
+const SPEED_PLANS = [10, 14].map((sp) => comparePlans({ ...DEFAULTS, month: 1, speed: sp }));
+const SPEED_FEB = SPEED_PLANS.map((p) => p.diff);
+/** The first challenge's answer at the default fuel, speed and queue. */
+export const WEAKEST_FULL = weakestFullCredit(DEFAULTS.bunker, DEFAULTS.speed, DEFAULTS.waiting);
+export const APRIL = waitValue(3, 0.2, 3);
+export const APRIL5 = waitValue(3, 0.2, 5);
+export const FEB3 = waitValue(1, 0.2, 3);
+const FEB_FREE = FREE_NEWS[1];
+/** The decision month in which the first demonstration's two plans are closest. */
+export const CLOSEST = BY_MONTH.map(Math.abs).indexOf(Math.min(...BY_MONTH.map(Math.abs)));
+/** Free news's value in the next-best month. */
+export const FREE_NEWS_RUNNER_UP = Math.max(...FREE_NEWS.filter((_, m) => m !== FREE_NEWS_BEST));
 
 // Map routes.
 const PACIFIC_OUT = seaRoute('QIN', 'SAM', { draft: ballastDraft(KESTREL) })!.points;
@@ -212,18 +245,19 @@ export default function Lesson() {
   const al = useScenario('allocation', DEFAULTS);
   const s = al.state;
   const r = useMemo(() => comparePlans(s), [s]);
-  const leg = soyLeg(r.repo);
-  const fixMonth = Math.floor(leg.start / MONTH);
-  const fixEq = r.eqs[fixMonth];
-  const credited = positionalIn(fixEq);
-  const weakest = useMemo(() => (s.month === 1 ? weakestPayingHarvest(s.bunker, s.speed, s.waiting) : null), [s.month, s.bunker, s.speed, s.waiting]);
-  const solved = s.month === 1 && weakest !== null && Math.abs(s.soy - weakest) < 1e-9;
+  const { k: fixMonth, eq: fixEq } = soyFix(r);
+  const credited = creditedMiles(fixEq);
+  const fullCredit = credited >= BALLAST_NM - 1;
+  const china = shipsFromChina(fixEq);
+  const weakest = useMemo(() => (s.month === CREDIT_MONTH ? weakestFullCredit(s.bunker, s.speed, s.waiting) : null), [s.month, s.bunker, s.speed, s.waiting]);
+  const solved = s.month === CREDIT_MONTH && weakest !== null && Math.abs(s.soy - weakest) < 1e-9;
+  /** One step weaker than the reader's harvest, for the success message. */
+  const weaker = useMemo(() => (solved ? fixCredit({ ...s, soy: Math.round((s.soy - 0.05) * 100) / 100 }) : null), [solved, s]);
 
   const fx = useScenario('flexibility', FLEX_DEFAULTS);
   const f = fx.state;
   const flex = useMemo(() => waitValue(f.month, f.vol, f.wait), [f.month, f.vol, f.wait]);
-  const flexNext = useMemo(() => (f.month === 3 && Math.abs(f.vol - 0.2) < 1e-9 ? waitValue(3, 0.2, f.wait + 1).value : NaN), [f.month, f.vol, f.wait]);
-  const flexSolved = f.month === 3 && Math.abs(f.vol - 0.2) < 1e-9 && flex.value > 0 && flexNext <= 0;
+  const flexSolved = freeNewsSolved(f);
   const sorted = (a: number[]) => [...a].sort((x, y) => x - y);
   const pctiles = flex.stay.map((_, i) => (100 * i) / (flex.stay.length - 1));
 
@@ -267,14 +301,7 @@ export default function Lesson() {
           ]}
         />
         <Timeline s={s} stay={r.stay} repo={r.repo} eqs={r.eqs} />
-        <Readouts
-          items={[
-            { label: 'staying earns', value: perDay(r.stay.tce), tone: 'green' },
-            { label: 'repositioning earns', value: perDay(r.repo.tce), tone: 'green' },
-            { label: 'repositioning against staying', value: signedDay(r.diff), tone: r.diff >= 0 ? 'green' : 'red' },
-            { label: `soybeans fixed in ${MONTH_NAMES[(s.month + fixMonth) % 12]}`, value: `${usd(leg.freight ?? 0, 2)}/t`, tone: 'green' },
-          ]}
-        />
+        <Readouts items={[{ label: `repositioning against staying, over the ${HORIZON} days`, value: signedDay(r.diff), tone: r.diff >= 0 ? 'green' : 'red' }]} />
         <Slider label="Deciding in" tone="teal" value={s.month} min={0} max={11} onChange={(v) => al.set({ month: v })} display={MONTH_NAMES[s.month]} />
         <Slider
           label="Brazil’s soybean harvest"
@@ -290,8 +317,9 @@ export default function Lesson() {
         <Slider label="Kestrel’s speed" tone="teal" value={s.speed} min={10} max={14} step={0.5} onChange={(v) => al.set({ speed: v })} display={`${fmt(s.speed, 1)} kn`} />
         <Slider label="Extra waiting at Qingdao" tone="teal" value={s.waiting} min={0} max={4} onChange={(v) => al.set({ waiting: v })} display={`${s.waiting} days a call`} />
         <Caption>
-          In {MONTH_NAMES[(s.month + fixMonth) % 12]}, Brazil’s soybean freight pays for {fmt(credited)} miles of ballast from China
-          {credited < BALLAST_NM - 1 ? `, not all of Kestrel’s ${fmt(BALLAST_NM)}: the market expects Santos’s empty ships from closer ports that month` : ', the whole of Kestrel’s trip: Santos needs ships even from China that month'}.
+          {china > 0.05
+            ? `Kestrel loads in ${MONTH_NAMES[(s.month + fixMonth) % 12]}, when Santos draws ${china >= 1 ? `about ${fmt(china)} ships a month` : 'less than one ship a month'} in ballast from China, so Brazil’s soybean freight pays for ${fullCredit ? `the whole of her ${fmt(BALLAST_NM)} miles of ballast` : `${fmt(credited)} of her ${fmt(BALLAST_NM)} miles of ballast`}.`
+            : `Kestrel loads in ${MONTH_NAMES[(s.month + fixMonth) % 12]}, when Santos draws no ships from China — its empty ships come from closer ports — so Brazil’s soybean freight pays for ${fmt(credited)} miles of ballast from China${fullCredit ? ', all of hers' : `, not all of her ${fmt(BALLAST_NM)}`}.`}
         </Caption>
       </Figure>
 
@@ -315,7 +343,7 @@ export default function Lesson() {
         ship the market needs to bring there. Out of season, the ships Santos needs come from Paradip, in India, where the coal trades leave Kamsarmaxes free{' '}
         {fmt(PAR_NM)} miles away. Brazil’s freight then pays for {fmt(POS_OFF)} miles of ballast measured from China, and Kestrel must sail {fmt(BALLAST_NM - POS_OFF)}{' '}
         more — about {fmt((BALLAST_NM - POS_OFF) / (24 * 12), 1)} days at 12 knots — that nobody pays for. In the harvest, Santos needs so many ships that it draws
-        them from China too, about {fmt(fromChinaInto(JAN.eqs[3]) / 12)} a month in April in our model, and the freight then pays for all {fmt(POS_ON)} miles. A
+        them from China too, about {fmt(APRIL_CHINA)} a month in April in our model, and the freight then pays for all {fmt(POS_ON)} miles. A
         Kamsarmax open in Qingdao is the marginal ballaster only at the height of the season, which is exactly when it should go.
       </P>
       <P>
@@ -325,25 +353,28 @@ export default function Lesson() {
         model’s speed rule that <a href={lessonHref('shipping/4.1')}>Lesson 4.1</a> found. Add waiting at Qingdao and the Pacific loses its appeal, because the coal
         plan calls there every {fmt(COAL_DAYS)} days or so and queues each time (<a href={lessonHref('shipping/3.2')}>Lesson 3.2</a>): with four extra days a call, February’s gain
         rises to {usd(CONG4[0])} a day and January’s loss shrinks to {usd(Math.abs(CONG4[1]))}. Kestrel’s own speed matters less than you might expect —
-        February’s gain is {usd(SPEED_FEB[0])} at 10 knots and {usd(SPEED_FEB[1])} at 14 — because, as <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a> found,
-        a ship’s earnings change slowly near her best speed.
+        February’s gain is {usd(SPEED_FEB[0])} at 10 knots and {usd(SPEED_FEB[1])} at 14 — because her speed moves both plans together: at 10 knots staying earns{' '}
+        {usd(FEB.stay.tce - SPEED_PLANS[0].stay.tce)} a day less than at 12 and repositioning {usd(FEB.repo.tce - SPEED_PLANS[0].repo.tce)} less, so the gap
+        between them hardly moves.
       </P>
 
       <Challenge
         id="a"
         figure="Fleet Allocation Optimizer"
-        question="Decide in February. Then weaken Brazil’s harvest until repositioning no longer pays: find the weakest harvest on the slider at which it still beats staying."
+        question={`Decide in March, so that Kestrel loads in April at the height of the harvest, when Santos draws about ${fmt(APRIL_CHINA)} ships a month from China. Weaken Brazil’s harvest one step and watch the caption’s count of those ships. Predict from how fast it falls the weakest harvest on the slider at which Brazil’s freight still pays for all ${fmt(BALLAST_NM)} of Kestrel’s ballast miles, then check.`}
         solved={solved}
         status={
-          s.month !== 1
-            ? `Set the decision month to February; it is ${MONTH_NAMES[s.month]}.`
+          s.month !== CREDIT_MONTH
+            ? `Set the decision month to March; it is ${MONTH_NAMES[s.month]}.`
             : weakest === null
-              ? 'With these settings repositioning never pays in February. Ease the queue or the speed back toward the start.'
-              : r.diff > 0
-                ? `At ${mt(s.soy)}, repositioning still earns ${usd(r.diff)} a day more. Can the harvest be weaker?`
-                : `At ${mt(s.soy)}, staying is better by ${usd(Math.abs(r.diff))} a day.`
+              ? 'With these settings Brazil’s freight never pays for her whole trip in April. Ease the queue or the fuel price back toward the start.'
+              : `At ${mt(s.soy)}, the freight pays for ${fullCredit ? 'all' : fmt(credited)} of Kestrel’s ${fmt(BALLAST_NM)} miles.`
         }
-        success={`Solved. At ${mt(s.soy)}, ${pct(s.soy)} of a normal harvest, repositioning beats staying by only ${usd(r.diff)} a day, and one step weaker it loses. A harvest this thin no longer draws ships from China even in March, so Brazil’s freight pays for ${fmt(credited)} miles of ballast, not Kestrel’s ${fmt(BALLAST_NM)}; all that’s left of her edge is March’s stronger market. The opportunity was the harvest all along.`}
+        success={`Solved. At ${mt(s.soy)}, ${pct(s.soy)} of a normal harvest, Santos still draws ${china >= 1 ? `about ${fmt(china)} ships a month` : 'a few ships'} from China in April, so Brazil’s freight pays for all of Kestrel’s ${fmt(BALLAST_NM)} miles and repositioning beats staying by ${usd(r.diff)} a day.${
+          weaker && !weaker.full
+            ? ` One step weaker, Santos needs none of them: the freight pays for only ${fmt(weaker.miles)} miles, and repositioning’s edge ${weaker.diff > 0 ? `shrinks to ${usd(weaker.diff)}` : `turns into a loss of ${usd(-weaker.diff)}`} a day.`
+            : ''
+        } Kestrel’s long trip is paid for only while ships open in China, like her, are ones the market needs — which is why the opportunity was the harvest all along.`}
       />
 
       <H2>What flexibility is worth</H2>
@@ -354,8 +385,11 @@ export default function Lesson() {
         in the language of finance.
       </P>
       <P>
-        In the next demonstration the market’s earnings move each month by a random amount, with the size you set, in 200 simulated futures. For each, the chart
-        sorts the outcomes of staying, repositioning, and waiting then choosing, from worst to best. Waiting means seeing the next month’s market before committing:
+        In the next demonstration the market’s earnings move each month by a random amount, with the size you set, in 200 simulated futures. For each choice —
+        staying, repositioning, and waiting then choosing — the chart sorts its 200 outcomes from worst to best, so each line shows the spread of what that choice
+        could earn. The lines are sorted separately, so points at the same place on two lines are usually different futures: compare the lines’ overall heights,
+        which the averages in the readouts sum up. Waiting means seeing the next month’s market before committing — all of it, however short the wait, a
+        simplification of our model:
       </P>
 
       <Figure name="Fleet Allocation Optimizer · flexibility" scenario={fx}>
@@ -397,28 +431,30 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start in April, the month when the two plans are closest, with the market swinging ±20% a month. Staying averages {perDay(APRIL.mean.stay)} and
-        repositioning {perDay(APRIL.mean.reposition)}; waiting three days and then choosing averages {perDay(APRIL.mean.wait)}, worth {usd(APRIL.value)} a day more
-        than the better plan chosen now. It wins because when May turns out strong, the waiting ship heads for Brazil, and when it turns out weak, she stays. Spread
-        the waiting to five days and the value turns to {signedDay(APRIL5.value)}: the information is no better, and the days are gone. Set the wait to zero and you
-        see what the news would be worth if it cost nothing — {perDay(APRIL_FREE.value)} in April. In February, with repositioning clearly ahead, even free news is
-        worth only {usd(FEB_FREE.value)} a day, because nothing it could say would change the choice.
+        Start in February, the month the first demonstration found repositioning furthest ahead, with the market swinging ±20% a month. Staying averages{' '}
+        {perDay(FEB3.mean.stay)} and repositioning {perDay(FEB3.mean.reposition)}; waiting three days and then choosing averages {perDay(FEB3.mean.wait)},{' '}
+        {usd(-FEB3.value)} a day worse than simply repositioning now. Set the wait to zero and you see what the news would be worth if it cost nothing: here, only{' '}
+        {usd(FEB_FREE)} a day, because nothing next month could say would change the choice.
       </P>
 
       <Challenge
         id="b"
-        question="Decide in April with the market swinging ±20% a month. Find the longest wait that is still worth more than choosing now."
+        question="Keep the wait at zero, so the news costs nothing, and the market swinging ±20% a month. In which month is free news worth most to Kestrel? Predict from the first demonstration before you move the month, then check."
         solved={flexSolved}
         status={
-          f.month !== 3 || Math.abs(f.vol - 0.2) > 1e-9
-            ? 'Set the month to April and the market swings to ±20%.'
-            : flex.value > 0
-              ? `Waiting ${f.wait} days is worth ${usd(flex.value)} a day. Could she wait longer?`
-              : `Waiting ${f.wait} days costs ${usd(Math.abs(flex.value))} a day against choosing now.`
+          f.wait !== 0 || Math.abs(f.vol - 0.2) > 1e-9
+            ? 'Set the days spent waiting to zero and the market swings to ±20%.'
+            : `Deciding in ${MONTH_NAMES[f.month]}, free news is worth ${usd(Math.max(0, flex.value))} a day.`
         }
-        success={`Solved. ${f.wait} days of waiting still earns ${usd(flex.value)} a day more than committing now; one more day and the lost earnings outweigh what the news is worth. Flexibility has a price, and it runs out fast.`}
+        success={`Solved: in ${MONTH_NAMES[FREE_NEWS_BEST]} free news is worth ${usd(FREE_NEWS[FREE_NEWS_BEST])} a day, more than three times as much as in any other month. ${MONTH_NAMES[FREE_NEWS_BEST]} is when the first demonstration’s two plans were closest, ${usd(Math.abs(BY_MONTH[CLOSEST]))} a day apart, so a strong or a weak next month can tip the choice either way. When one plan is far ahead, as in February, the same news changes nothing.`}
       />
 
+      <P>
+        News is rarely free, though. In April, waiting three days and then choosing still averages {perDay(APRIL.mean.wait)}, against {perDay(APRIL.mean.stay)}{' '}
+        for staying and {perDay(APRIL.mean.reposition)} for repositioning: worth {usd(APRIL.value)} a day more than the better plan chosen now. It wins because when
+        May turns out strong, the waiting ship heads for Brazil, and when it turns out weak, she stays. Stretch the wait to five days and the value turns to{' '}
+        {signedDay(APRIL5.value)}: the information is no better, and the days are gone.
+      </P>
       <P>
         That is the shape of every repositioning decision. Keeping a ship uncommitted is worth most when the plans are close and the future uncertain, and least when
         one plan is clearly better — and the waiting itself costs days that can’t be earned back. Owners do this every week, judging whether to fix now or hold a

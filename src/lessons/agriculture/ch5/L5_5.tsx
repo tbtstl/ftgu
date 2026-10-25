@@ -29,6 +29,7 @@ import {
   allSeasons,
   bestRatio,
   expectedYield,
+  hedgeGain,
   revenue,
   summarize,
   walkForward,
@@ -36,6 +37,7 @@ import {
   type Instrument,
 } from '../../../engines/agriculture/hedging';
 import { MARKET_YEARS } from '../../../engines/agriculture/market';
+import { centsPlain } from '../shared/format';
 import { MARKET_LINE } from '../shared/tones';
 
 export interface LabState {
@@ -53,6 +55,29 @@ export function leastVariableSolved(st: LabState): boolean {
   return st.farm === 'dryland' && st.kind === 'futures' && st.costs && st.ratio / 100 === bestRatio(allSeasons('dryland'), 'futures');
 }
 
+/** The drought year, when the put expired worthless, and the year the put paid most, a glut. */
+export const DROUGHT_YEAR = 46;
+export const GLUT_YEAR = 10;
+
+/** One dryland year of a put on the whole expected crop: prices $ a bushel, `gain` after costs per bushel, `perAcre` and revenues $ an acre. */
+export function putYear(year: number) {
+  const x = allSeasons('dryland')[year - 1];
+  const gain = hedgeGain(x, 'puts');
+  return { ...x, gain, perAcre: gain * expectedYield('dryland'), plain: revenue(x, 'none', 0), withPuts: revenue(x, 'puts', 1) };
+}
+
+/** What commissions, spreads and margin interest cost a year on average, $ an acre: the figure's costs readout. */
+export function tradingCosts(farm: Farm, kind: Instrument, ratio: number): number {
+  if (kind === 'none') return 0;
+  const xs = allSeasons(farm);
+  return xs.reduce((t, x) => t + revenue(x, kind, ratio, false) - revenue(x, kind, ratio, true), 0) / xs.length;
+}
+
+/** The volatility the puts are bought at on March 1, averaged over the sixty years. */
+export function meanPutVolatility(): number {
+  return allSeasons('dryland').reduce((t, x) => t + x.vol, 0) / MARKET_YEARS;
+}
+
 export interface WalkState {
   kind: 'futures' | 'puts';
   lookback: number;
@@ -61,13 +86,14 @@ export interface WalkState {
 
 export const WALK0: WalkState = { kind: 'futures', lookback: 20, year: 30 };
 
-/** The year in which the walk-forward futures hedge on a 20-year lookback cost the most against not hedging. */
-export function costliestYear(): number {
-  const wf = walkForward('futures', 20);
+/** The year after `after` in which the walk-forward futures hedge on a `lookback`-year window cost the most against not hedging. */
+export function costliestYear(lookback = 20, after = 0): number {
+  const wf = walkForward('futures', lookback);
   const all = allSeasons();
-  let worst = wf.years[0];
+  let worst = 0;
   let gap = Infinity;
   wf.years.forEach((y, i) => {
+    if (y <= after) return;
     const d = wf.revenues[i] - revenue(all[y - 1], 'none', 0);
     if (d < gap) {
       gap = d;
@@ -77,8 +103,12 @@ export function costliestYear(): number {
   return worst;
 }
 
-export function costliestSolved(st: WalkState): boolean {
-  return st.kind === 'futures' && st.lookback === 20 && st.year === costliestYear();
+/** Challenge 2's lookback: short enough that the drought of DROUGHT_YEAR leaves the window within the record. */
+export const SHORT_LOOKBACK = 5;
+
+/** Challenge 2: with futures and a five-year lookback, the year after the drought in which hedging cost the most. */
+export function forgottenSolved(st: WalkState): boolean {
+  return st.kind === 'futures' && st.lookback === SHORT_LOOKBACK && st.year === costliestYear(SHORT_LOOKBACK, DROUGHT_YEAR);
 }
 
 function RevenueChart({ hedged, plain, yields }: { hedged: number[]; plain: number[]; yields: number[] }) {
@@ -158,11 +188,13 @@ export default function Lesson() {
   const plain = useMemo(() => seasons.map((x) => revenue(x, 'none', 0)), [seasons]);
   const sh = summarize(hedged);
   const sp = summarize(plain);
-  const costPerAcre = useMemo(
-    () => (s.state.kind === 'none' ? 0 : seasons.reduce((t, x) => t + revenue(x, s.state.kind, s.state.ratio / 100, false) - revenue(x, s.state.kind, s.state.ratio / 100, true), 0) / seasons.length),
-    [seasons, s.state],
-  );
+  const costPerAcre = useMemo(() => tradingCosts(s.state.farm, s.state.kind, s.state.ratio / 100), [s.state.farm, s.state.kind, s.state.ratio]);
   const solved1 = useMemo(() => leastVariableSolved(s.state), [s.state]);
+  const dr = useMemo(() => putYear(DROUGHT_YEAR), []);
+  const gl = useMemo(() => putYear(GLUT_YEAR), []);
+  const meanVol = useMemo(() => meanPutVolatility(), []);
+  const putFees = useMemo(() => tradingCosts('dryland', 'puts', 1), []);
+  const putNet = useMemo(() => summarize(allSeasons('dryland').map((x) => revenue(x, 'none', 0) - revenue(x, 'puts', 1, false))).mean, []);
 
   const w = useScenario('walk', WALK0);
   const wf = useMemo(() => walkForward(w.state.kind, w.state.lookback), [w.state.kind, w.state.lookback]);
@@ -176,7 +208,9 @@ export default function Lesson() {
   const wfSd = summarize(wf.revenues).sd;
   const plainSd = summarize(test.map((x) => revenue(x, 'none', 0))).sd;
   const selIndex = Math.max(0, Math.min(wf.years.length - 1, w.state.year - FIRST_TEST_YEAR));
-  const solved2 = useMemo(() => costliestSolved(w.state), [w.state]);
+  const solved2 = useMemo(() => forgottenSolved(w.state), [w.state]);
+  const selYear = wf.years[selIndex];
+  const selSeason = dry[selYear - 1];
 
   return (
     <LessonPage id="agriculture/5.5">
@@ -184,16 +218,31 @@ export default function Lesson() {
         The last four lessons built the pieces of a grain strategy: the hedge, the curve, the basis and the forecast. A strategy is a rule — sell this much, on
         this day, with this instrument — and the way to judge a rule is to replay it on history, a <K tone="violet">backtest</K>. Backtests lie in three familiar
         ways. They use information nobody had at the time (<i>look-ahead</i>). They tune the rule to the very years they then judge it on (<i>overfitting</i>). And
-        they leave out what trading costs. This lesson tests Cedar Bend’s marketing program honestly, on the sixty simulated years, avoiding all three.
+        they leave out what trading costs. This lesson takes the piece every farm uses, the hedge, and tests Cedar Bend’s marketing program honestly, on the sixty
+        simulated years, avoiding all three.
       </P>
       <P>
         The program is simple. On March 1 Cedar Bend can sell December futures on part of its expected crop — its average yield is{' '}
         {fmt(expectedYield('dryland'))} bushels an acre — or buy December <K tone="violet">put options</K> instead. A put is the right, but not the duty, to sell
         December futures at a set price, the strike; Cedar Bend buys puts struck at the March futures price. If prices fall, the put pays like a short futures
-        position; if they rise, it expires worthless and costs only what was paid for it. We price the puts with Black’s formula from the volatility our market
-        implies on March 1, about 15% a year — less than the 20 to 30% real corn options often trade at, because our simulated market has no news about demand,
-        energy or policy before harvest. Every cost is counted: about a cent a bushel in commissions and slippage on futures, plus interest on the margin; for
-        options, the premium, a cent each way of bid–ask spread and a commission. At harvest Cedar Bend sells its corn at Fairview and closes the hedge. In the
+        position; if they rise, it expires worthless and costs only what was paid for it. Two years show the difference. In year {DROUGHT_YEAR}, the drought
+        year, December futures stood at {usd(dr.f0, 2)} on March 1, and a put struck there cost {centsPlain(dr.put0)} a bushel. By mid-October the drought had
+        driven futures to {usd(dr.f1, 2)} and the put was worth nothing: with fees and interest, puts on the whole expected crop cost Cedar Bend{' '}
+        {centsPlain(-dr.gain)} a bushel, {usd(-dr.perAcre)} an acre, while its {fmt(dr.yield)} bushels an acre sold at {usd(dr.cash, 2)}. A futures hedge would
+        have lost {usd(dr.f1 - dr.f0, 2)} a bushel. In year {GLUT_YEAR}, a glut, futures fell from {usd(gl.f0, 2)} to {usd(gl.f1, 2)} and Fairview bid only{' '}
+        {usd(gl.cash, 2)}; the put, bought for {centsPlain(gl.put0)}, was worth {usd(gl.put1, 2)}, and the same cover added {usd(gl.perAcre)} an acre to a
+        harvest that brought {usd(gl.plain)}.
+      </P>
+      <P>
+        What should a put cost? We price the puts with Black’s formula, the standard one for options on futures. It takes the futures price, the strike, the
+        time left and one number nobody can look up: the <i>volatility</i>, how widely the futures price is expected to swing — the standard deviation of its percentage
+        change over a year. Traders run the formula backward, reading the volatility out of the prices options trade at, and call it the{' '}
+        <K tone="violet">implied volatility</K>. Our market has no option prices to read, so we use the volatility the model itself implies: how much is still
+        unknown about the harvests, the valley’s and the world’s, on March 1 — for the valley, the band of <a href={lessonHref('agriculture/5.4')}>Lesson 5.4</a> at its widest.
+        It is about {fmt(meanVol * 100)}% a year — less than the 20 to 30% real corn
+        options often trade at, because our simulated market has no news about demand, energy or policy before harvest. Every cost is counted: about a cent a
+        bushel in commissions and slippage on futures, plus interest on the margin; for options, the premium, a cent each way of bid–ask spread and a
+        commission. At harvest Cedar Bend sells its corn at Fairview and closes the hedge. In the
         next demonstration the bars are revenue per acre with the hedge, the dots without it, and the strip at the bottom the farm’s yield. Choose the farm, the
         instrument and how much of the expected crop to hedge:
       </P>
@@ -210,7 +259,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'average revenue', value: `${usd(sh.mean)} an acre`, tone: 'green' },
-            { label: 'spread (std. dev.)', value: `${usd(sh.sd)} (unhedged ${usd(sp.sd)})`, tone: sh.sd <= sp.sd ? 'green' : 'red' },
+            { label: 'spread (std. dev.)', value: `${usd(sh.sd, 2)} (unhedged ${usd(sp.sd)})`, tone: sh.sd <= sp.sd ? 'green' : 'red' },
             { label: 'worst year', value: `${usd(sh.worst)} (unhedged ${usd(sp.worst)})`, tone: sh.worst >= sp.worst ? 'green' : 'red' },
             { label: 'costs', value: `${usd(costPerAcre, 2)} an acre a year` },
           ]}
@@ -229,7 +278,6 @@ export default function Lesson() {
           value={s.state.kind}
           onChange={(v) => s.set({ kind: v })}
           options={[
-            { value: 'none', label: 'No hedge' },
             { value: 'futures', label: 'Futures' },
             { value: 'puts', label: 'Puts' },
           ]}
@@ -245,20 +293,21 @@ export default function Lesson() {
         in <a href={lessonHref('agriculture/3.2')}>Lesson 3.2</a>, cut the valley’s and raise the price. In a drought the farm has fewer bushels to sell, and a
         full hedge loses money on bushels it never grew. The farm already has a <K tone="gold">natural hedge</K>, and a futures hedge fights it. Puts don’t: in a
         drought they expire worthless at a known cost, and in a glut they pay. With puts on the whole expected crop the spread falls to $87 and the worst year
-        rises to $585, at a cost of about $11 an acre a year in average revenue, most of it fees and spreads. Now give the farm center pivots. Irrigated, its yield hardly depends on the weather, the correlation weakens
+        rises to $585, at a cost of about $11 an acre a year in average revenue, most of it trading costs: the costs readout puts those at{' '}
+        {usd(putFees, 2)}. Untick “Count trading costs” and what is left, {usd(putNet, 2)}, is the premium the puts didn’t pay back. Now give the farm center pivots. Irrigated, its yield hardly depends on the weather, the correlation weakens
         to −0.39, and a full futures hedge becomes the best tool: the spread falls from $172 to $90. The right hedge depends on the farm’s physical risk.
       </P>
 
       <Challenge
         id="a"
-        question="For the dryland farm with futures and costs counted, what share of the expected crop, to the nearest 10%, made revenue least variable over the sixty years?"
+        question="Choose the dryland farm and futures, with costs counted. As the share hedged rises, the square of revenue’s spread — its variance — traces a symmetric U, and hedging 100% left revenue more variable than hedging nothing. Predict first: is the bottom of the U under 50% or over? Then find the share, to the nearest 10%, that made revenue least variable over the sixty years."
         solved={solved1}
         status={
           s.state.farm !== 'dryland' || s.state.kind !== 'futures' || !s.state.costs
             ? 'Choose the dryland farm and futures, with costs counted.'
-            : `Hedging ${s.state.ratio}% leaves revenue varying by ${usd(sh.sd)} an acre.`
+            : `Hedging ${s.state.ratio}% leaves revenue varying by ${usd(sh.sd, 2)} an acre.`
         }
-        success={`Solved: hedging ${s.state.ratio}% of the expected crop leaves Cedar Bend’s revenue varying by ${usd(sh.sd)} an acre, the least of any share. Less than half: the rest of the protection comes free from the natural hedge. But notice how we found it — by looking at all sixty years at once, which nobody hedging in year 1 could do.`}
+        success={`Solved: hedging ${s.state.ratio}% of the expected crop leaves Cedar Bend’s revenue varying by ${usd(sh.sd, 2)} an acre, the least of any share. Under half, as it had to be once a full hedge was worse than none: the rest of the protection comes free from the natural hedge. But notice how we found it — by looking at all sixty years at once, which nobody hedging in year 1 could do.`}
       />
 
       <H2>Testing on years the rule hasn’t seen</H2>
@@ -296,22 +345,30 @@ export default function Lesson() {
       <P>
         With futures and a 20-year lookback, the walk-forward revenue over years 11 to 60 varies by $103 an acre — no better than not hedging at all, $102 over
         the same fifty years — although the hindsight-best share promised $94. The chosen share wanders between 10% and 100% as droughts enter and leave the
-        lookback window, so each year’s hedge is tuned to a past that doesn’t repeat. With a 5-year lookback it is worse, $121. Puts survive the test: walked
-        forward on the same 20 years their revenue varies by $83, because a put’s protection doesn’t depend on a fragile estimate of how yield and price move
-        together. American farmers, for the same reason, lean on revenue insurance whose guarantee rises with the harvest price — so that in a drought it pays for the lost
+        lookback window, so each year’s hedge is tuned to a past that doesn’t repeat. With a 5-year lookback it is worse, $121. Puts survive the test. Walked
+        forward with the same 20-year lookback, their revenue varies by $83, although for its first seventeen years the rule buys puts on 140 to 150% of the
+        expected crop: over-insured, but a put can lose no more than its cost, and its protection doesn’t depend on a fragile estimate of how yield and price
+        move together. American farmers, for the same reason, lean on revenue insurance whose guarantee rises with the harvest price — so that in a drought it pays for the lost
         bushels at the higher price — and hedge only part of their crop with futures.
       </P>
 
       <Challenge
         id="b"
-        question="With futures and a 20-year lookback, find the year in which hedging cost Cedar Bend the most against not hedging."
+        question={
+          <>
+            Choose futures and a {SHORT_LOOKBACK}-year lookback. The rule now remembers the drought of year {DROUGHT_YEAR} for only five years.
+            Predict first: in which year does the drought drop out of the window, how heavily will the rule hedge once it has, and what will the next dry year
+            cost? The yield strip in <FigRef to="Agricultural Strategy Lab">the first demonstration</FigRef> shows which later years were dry. Then find the year
+            after the drought in which hedging cost Cedar Bend the most.
+          </>
+        }
         solved={solved2}
         status={
-          w.state.kind !== 'futures' || w.state.lookback !== 20
-            ? 'Choose futures and a 20-year lookback.'
-            : `In year ${wf.years[selIndex]} the hedge ${diffs[selIndex] >= 0 ? 'gained' : 'cost'} ${usd(Math.abs(diffs[selIndex]))} an acre.`
+          w.state.kind !== 'futures' || w.state.lookback !== SHORT_LOOKBACK
+            ? `Choose futures and a ${SHORT_LOOKBACK}-year lookback.`
+            : `In year ${selYear} the rule hedged ${fmt(wf.ratios[selIndex] * 100)}% and the hedge ${diffs[selIndex] >= 0 ? 'gained' : 'cost'} ${usd(Math.abs(diffs[selIndex]))} an acre.${selYear <= DROUGHT_YEAR ? ` Look after the drought of year ${DROUGHT_YEAR}.` : ''}`
         }
-        success={`Solved: in year ${wf.years[selIndex]} the walk-forward rule hedged ${fmt(wf.ratios[selIndex] * 100)}% of the expected crop, a drought cut the yield to ${fmt(dry[wf.years[selIndex] - 1].yield)} bushels an acre, and the futures, sold low in March, had to be bought back high: the hedge cost ${usd(-diffs[selIndex])} an acre. A backtest that reports only the average hides this year; a farm has to survive it.`}
+        success={`Solved: in year ${selYear} the rule hedged ${fmt(wf.ratios[selIndex] * 100)}% of the expected crop, because the five years it chose from, ${selYear - SHORT_LOOKBACK} to ${selYear - 1}, no longer held the drought; from year ${DROUGHT_YEAR + SHORT_LOOKBACK + 1}, the first without it, the rule hedged the whole expected crop or more. Year ${selYear} was dry — ${fmt(selSeason.yield)} bushels an acre, with December futures up ${usd(selSeason.f1 - selSeason.f0, 2)} from March — and the futures, sold in March, had to be bought back dearer: the hedge cost ${usd(-diffs[selIndex])} an acre. A five-year memory learns the natural hedge from a drought and forgets it five years later. A backtest’s average hides such a year; a farm has to survive it.`}
       />
 
       <P>

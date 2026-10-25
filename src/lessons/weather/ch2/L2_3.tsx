@@ -56,15 +56,26 @@ export function outlookOf(st: Ingredients): StormOutlook {
   return stormOutlook({ surfaceC: SURFACE_C, ...st });
 }
 
+/** The dew point slider's step, °C. */
+export const DEW_STEP = 0.5;
+/** The first challenge's weaker push: how far it lifts the surface air, km. */
+export const WEAK_LIFT_KM = 1.8;
+/** The data point the challenge's estimate starts from: two degrees drier than the start. */
+export const DRIER_DEW_C = 18;
+
+/** Whether the ingredients are the first challenge's: the weaker push, with the starting air aloft. */
+export function onWeakLift(st: Ingredients): boolean {
+  return st.lapse === INGREDIENT_DEFAULTS.lapse && Math.abs(st.liftKm - WEAK_LIFT_KM) < 1e-6;
+}
+
 /**
- * The first challenge: with the starting moisture and instability, the least lift (on the
- * slider's 100 m steps) that sets off a storm. With a dew point of 20 °C and air aloft cooling
- * 7 °C per km, the level of free convection is at 2.65 km, so the answer is 2.7 km.
+ * The first challenge: with only 1.8 km of lift and the starting air aloft, the least dew point
+ * (on the slider's half-degree steps) that sets off a storm. Each degree of dew point lowers the
+ * level of free convection by about 300 m, so it takes 23 °C, which brings it down to 1.75 km.
  */
-export function leastLiftSolved(st: Ingredients): boolean {
-  if (st.dewC !== INGREDIENT_DEFAULTS.dewC || st.lapse !== INGREDIENT_DEFAULTS.lapse) return false;
-  const lower = Math.round((st.liftKm - LIFT_STEP) * 10) / 10;
-  return outlookOf(st).triggered && (lower < 0 || !outlookOf({ ...st, liftKm: lower }).triggered);
+export function leastDewSolved(st: Ingredients): boolean {
+  if (!onWeakLift(st)) return false;
+  return outlookOf(st).triggered && !outlookOf({ ...st, dewC: st.dewC - DEW_STEP }).triggered;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,14 +409,15 @@ function SpotChart({ st, frac }: { st: RainState; frac: number }) {
 // ---------------------------------------------------------------------------
 // Numbers the prose quotes, from the same model the figures run.
 
+/** The lift that sets the starting afternoon's storm off, km: just past its level of free convection. */
+export const STORM_LIFT_KM = 2.7;
 const START = outlookOf(INGREDIENT_DEFAULTS);
-const GO = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: 2.7 });
-const DRIER = outlookOf({ ...INGREDIENT_DEFAULTS, dewC: 18, liftKm: 2.7 });
-const MOISTER = outlookOf({ ...INGREDIENT_DEFAULTS, dewC: 22, liftKm: 2.7 });
-const GENTLER = outlookOf({ ...INGREDIENT_DEFAULTS, lapse: 6.5, liftKm: 2.7 });
-const MULTI = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: 2.7, shear: 15 });
-const SUPER = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: 2.7, shear: 25 });
-const TORN = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: 2.7, shear: 40 });
+const GO = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: STORM_LIFT_KM });
+const DRIER = outlookOf({ ...INGREDIENT_DEFAULTS, dewC: DRIER_DEW_C, liftKm: STORM_LIFT_KM });
+const GENTLER = outlookOf({ ...INGREDIENT_DEFAULTS, lapse: 6.5, liftKm: STORM_LIFT_KM });
+const MULTI = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: STORM_LIFT_KM, shear: 15 });
+const SUPER = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: STORM_LIFT_KM, shear: 25 });
+const TORN = outlookOf({ ...INGREDIENT_DEFAULTS, liftKm: STORM_LIFT_KM, shear: 40 });
 const SUPER_U = 0.55 * 25;
 
 const PLAY_SECONDS = 7;
@@ -414,7 +426,7 @@ export default function Lesson() {
   const s = useScenario('ingredients', INGREDIENT_DEFAULTS);
   const st = s.state;
   const o = useMemo(() => outlookOf(st), [st]);
-  const solved = useMemo(() => leastLiftSolved(st), [st]);
+  const solved = useMemo(() => leastDewSolved(st), [st]);
   const storm = STORMY.includes(o.kind);
   const u = 0.55 * st.shear;
 
@@ -450,7 +462,8 @@ export default function Lesson() {
         convective inhibition.
       </P>
       <P>
-        A sounding full of CAPE can still sit all afternoon under a clear sky, so forecasters reason about thunderstorms by their ingredients. A storm needs{' '}
+        A <b>sounding</b> — the profile of temperature and humidity with height that a weather balloon measures on its way up — can be full of CAPE while the
+        sky stays clear all afternoon, so forecasters reason about thunderstorms by their ingredients. A storm needs{' '}
         <K tone={WX.moisture}>moisture</K>, because condensing vapor is what keeps rising air warm; <b>instability</b>, air aloft that cools quickly enough with
         height for a cloudy parcel to stay warmer than it; and <K tone={WX.wind}>lift</K>, something to push surface air up to the level of free convection — a
         front, a range of hills, a sea breeze, or the cold outflow of an earlier storm. A fourth ingredient decides what kind of storm grows: the{' '}
@@ -475,13 +488,12 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'CAPE', value: `${fmt(o.cape)} J/kg`, tone: WX.energy },
-            { label: 'free convection from', value: o.lfcKm !== null && o.cape >= 100 ? `${fmt(o.lfcKm, 2)} km` : 'none', tone: WX.energy },
             { label: 'storm', value: SHORT[o.kind] },
             { label: 'updraft', value: storm ? `${fmt(o.updraftMs)} m/s` : '—', tone: WX.wind },
             { label: 'rain rate', value: storm ? `${fmt(o.rainRateMmH)} mm/h` : '—', tone: WX.moisture },
           ]}
         />
-        <Slider label="Moisture: dew point" tone={WX.moisture} value={st.dewC} min={10} max={24} step={0.5} onChange={(v) => s.set({ dewC: v })} display={`${fmt(st.dewC, 1)} °C`} />
+        <Slider label="Moisture: dew point" tone={WX.moisture} value={st.dewC} min={10} max={24} step={DEW_STEP} onChange={(v) => s.set({ dewC: v })} display={`${fmt(st.dewC, 1)} °C`} />
         <Slider label="Instability: air aloft cools" tone={WX.temperature} value={st.lapse} min={5.5} max={8} step={0.1} onChange={(v) => s.set({ lapse: v })} display={`${fmt(st.lapse, 1)} °C per km`} />
         <Slider label="Lift" tone={WX.wind} value={st.liftKm} min={0} max={4} step={LIFT_STEP} onChange={(v) => s.set({ liftKm: v })} display={`${fmt(st.liftKm, 1)} km`} />
         <Slider label="Shear, ground to 6 km" tone={WX.wind} value={st.shear} min={0} max={40} onChange={(v) => s.set({ shear: v })} display={`${fmt(st.shear)} m/s`} />
@@ -504,34 +516,37 @@ export default function Lesson() {
         kilometer, a surface parcel has {fmt(START.cape)} J/kg of CAPE above it — plenty for a strong storm. But the lift is only {fmt(INGREDIENT_DEFAULTS.liftKm, 1)}{' '}
         km. Lifted that far, the air doesn’t even reach its cloud base at {fmt(START.ascent.lclKm, 1)} km. It is colder than its surroundings, and when the push
         stops, it sinks back. Its level of free convection is at {fmt(START.lfcKm ?? 0, 2)} km, and the {fmt(START.cin)} J/kg of CIN beneath it is the lid. Raise
-        the lift.
+        the lift to {fmt(STORM_LIFT_KM, 1)} km and the air gets past it. From there the storm runs on its own energy: the cloud shoots up to{' '}
+        {fmt(GO.topKm ?? 0, 1)} km in an updraft of {fmt(GO.updraftMs)} m/s. Nothing changes gradually here — 100 meters less and no storm forms at all.
+      </P>
+      <P>
+        Moisture works on both sides of the ledger. Moister air reaches its cloud base sooner and switches sooner to the slower, moist rate of cooling, so it is
+        warmer at every height above: it has more CAPE, and its level of free convection is lower. Drop the dew point to {DRIER_DEW_C} °C, keeping a lift of {fmt(STORM_LIFT_KM, 1)}
+        km, and the CAPE falls to {fmt(DRIER.cape)} J/kg while the level of free convection rises to {fmt(DRIER.lfcKm ?? 0, 2)} km, out of reach. Instability works
+        the same way: air aloft cooling 6.5 °C per km instead of 7 leaves {fmt(GENTLER.cape)} J/kg and moves free convection up to{' '}
+        {fmt(GENTLER.lfcKm ?? 0, 2)} km. That is why the humid, sticky days of a plains summer are the stormy ones.
       </P>
 
       <Challenge
         id="a"
-        question={`Keep the dew point at ${INGREDIENT_DEFAULTS.dewC} °C and the air aloft at ${INGREDIENT_DEFAULTS.lapse} °C per km. What is the least lift, to the nearest 100 meters, that sets off a storm?`}
+        question={`Suppose a weaker push, one that lifts the surface air only ${fmt(WEAK_LIFT_KM, 1)} km, with the air aloft still cooling ${INGREDIENT_DEFAULTS.lapse} °C per km. Estimate first: two degrees less dew point raised the level of free convection from ${fmt(START.lfcKm ?? 0, 2)} to ${fmt(DRIER.lfcKm ?? 0, 2)} km. How much moister than ${INGREDIENT_DEFAULTS.dewC} °C must the air be for ${fmt(WEAK_LIFT_KM, 1)} km of lift to set off a storm? Then set the lift to ${fmt(WEAK_LIFT_KM, 1)} km and find the least dew point, in half-degree steps, that does it.`}
         solved={solved}
         status={
-          st.dewC !== INGREDIENT_DEFAULTS.dewC || st.lapse !== INGREDIENT_DEFAULTS.lapse
-            ? `Set the dew point back to ${INGREDIENT_DEFAULTS.dewC} °C and the air aloft to ${INGREDIENT_DEFAULTS.lapse} °C per km first.`
+          !onWeakLift(st)
+            ? `Set the lift to ${fmt(WEAK_LIFT_KM, 1)} km and the air aloft to ${INGREDIENT_DEFAULTS.lapse} °C per km.`
             : o.triggered
-              ? `A lift of ${fmt(st.liftKm, 1)} km sets off a storm. Would less do?`
-              : `A lift of ${fmt(st.liftKm, 1)} km leaves the air ${fmt((o.lfcKm ?? 0) - st.liftKm, 2)} km short of its level of free convection.`
+              ? `A dew point of ${fmt(st.dewC, 1)} °C sets off a storm. Would drier air do?`
+              : o.lfcKm === null || o.cape < 100
+                ? `At a dew point of ${fmt(st.dewC, 1)} °C the air is too stable to grow a storm.`
+                : `At a dew point of ${fmt(st.dewC, 1)} °C the level of free convection is at ${fmt(o.lfcKm, 2)} km, ${fmt(o.lfcKm - st.liftKm, 2)} km above the lift.`
         }
-        success={`Solved. The level of free convection is at ${fmt(START.lfcKm ?? 0, 2)} km, so ${fmt(st.liftKm, 1)} km of lift is the least that carries the air past it. From there the storm runs on its own energy: the cloud shoots up to ${fmt(GO.topKm ?? 0, 1)} km in an updraft of ${fmt(GO.updraftMs)} m/s. Nothing changes gradually here either — 100 meters less and the sky stays clear.`}
+        success={`Solved. At ${fmt(st.dewC, 1)} °C the level of free convection is down to ${fmt(o.lfcKm ?? 0, 2)} km, within reach of the ${fmt(WEAK_LIFT_KM, 1)} km push; half a degree drier, it sits at ${fmt(outlookOf({ ...st, dewC: st.dewC - DEW_STEP }).lfcKm ?? 0, 2)} km. From ${INGREDIENT_DEFAULTS.dewC} °C that is ${fmt(st.dewC - INGREDIENT_DEFAULTS.dewC, (st.dewC - INGREDIENT_DEFAULTS.dewC) % 1 ? 1 : 0)} degrees for ${fmt((START.lfcKm ?? 0) - (o.lfcKm ?? 0), 2)} km, close to the estimate of about a third of a kilometer per degree. The moister afternoon also has ${fmt(o.cape / START.cape, 1)} times the CAPE.`}
       />
-
-      <P>
-        Moisture works on both sides of the ledger. Drop the dew point to 18 °C, keeping a lift of 2.7 km, and the CAPE falls to {fmt(DRIER.cape)} J/kg while the level
-        of free convection rises to {fmt(DRIER.lfcKm ?? 0, 2)} km, out of reach. Raise it to 22 °C and the CAPE grows to {fmt(MOISTER.cape)} J/kg, with free
-        convection from {fmt(MOISTER.lfcKm ?? 0, 2)} km. Moister air reaches its cloud base sooner and switches sooner to the slower, moist rate of cooling, so it is
-        warmer at every height above. Instability works the same way: air aloft cooling 6.5 °C per km instead of 7 leaves {fmt(GENTLER.cape)} J/kg and moves free
-        convection up to {fmt(GENTLER.lfcKm ?? 0, 2)} km. That is why the humid, sticky days of a plains summer are the stormy ones.
-      </P>
 
       <H2>What the shear does</H2>
       <P>
-        Once a storm goes, the shear shapes it. With little shear, as at the start, the storm is a <b>single cell</b>. Its updraft carries vapor up, the vapor
+        Once a storm goes, the shear shapes it. Set the dew point back to {INGREDIENT_DEFAULTS.dewC} °C and the lift to {fmt(STORM_LIFT_KM, 1)} km, so the starting afternoon has its
+        storm. With little shear, as at the start, it is a <b>single cell</b>. Its updraft carries vapor up, the vapor
         condenses into rain, and the rain falls straight back down through the updraft that made it. The falling rain drags air down with it and cools it by
         evaporating, and that cold downdraft spreads out along the ground and cuts off the warm, moist air feeding the storm. A single cell usually rains itself
         out in 30 minutes to an hour.
@@ -554,8 +569,10 @@ export default function Lesson() {
       <H2>Rain at one spot</H2>
       <P>
         The rain rate under a storm depends on how much vapor its updraft carries up and how much of that falls out as rain rather than evaporating or blowing
-        away in the anvil. In this model the starting single cell, once lifted, rains {fmt(GO.rainRateMmH)} mm an hour under its core — almost 2 inches. The
-        supercell rains a little less, {fmt(SUPER.rainRateMmH)} mm an hour, because more of its water is carried off downwind.
+        away in the <b>anvil</b>, the flat sheet of cloud that spreads out where the rising air reaches the tropopause of{' '}
+        <a href={lessonHref('weather/2.1')}>Lesson 2.1</a> and stops climbing. In this model the starting single cell, once lifted, rains{' '}
+        {fmt(GO.rainRateMmH)} mm an hour under its core — almost 2 inches. The supercell rains a little less, {fmt(SUPER.rainRateMmH)} mm an hour, because more
+        of its water is carried off downwind.
       </P>
       <P>
         But what floods a field or a street is the total at one spot, and that is the rain rate times the time the storm spends overhead. Storms drift with the
@@ -570,8 +587,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'each storm rains on the gauge for', value: `${fmt(hoursOverSpot(rs) * 60)} min` },
-            { label: 'rain at the gauge', value: `${fmt(total, 1)} mm`, tone: WX.moisture },
-            { label: 'in inches', value: `${fmt(total / 25.4, 2)} in`, tone: WX.moisture },
+            { label: 'rain at the gauge', value: `${fmt(total, 1)} mm · ${fmt(total / 25.4, 2)} in`, tone: WX.moisture },
           ]}
         />
         <Slider label="Rain rate under the storm" tone={WX.moisture} value={rs.rate} min={10} max={100} onChange={(v) => setRain({ rate: v })} display={`${fmt(rs.rate)} mm/h`} />
@@ -583,7 +599,8 @@ export default function Lesson() {
       <P>
         The total is the rain rate times the width of the rain area divided by the storm’s speed, once for each storm that crosses. Halve the speed and the gauge
         collects twice as much; a storm that barely moves can pour for hours on the same few square kilometers. The same thing happens when storms line up along
-        a front or an outflow boundary and new cells keep forming at the upwind end, so one after another passes over the same ground. Meteorologists call it{' '}
+        a front or an <b>outflow boundary</b> — the gust front left behind by earlier storms — and new cells keep forming at the upwind end, so one after another
+        passes over the same ground. Meteorologists call it{' '}
         <b>training</b>, after a line of railway cars, and it is behind many flash floods.
       </P>
 
@@ -607,7 +624,7 @@ export default function Lesson() {
         amount of summer rain set the size of a corn crop, and in Chapter 3, how radar fills in the gaps between gauges.
       </P>
       <P>
-        Thunderstorms live for hours, fronts for days. Compare <FigRef to="Storm Formation Simulator">the first demonstration</FigRef>, where a degree of dew point
+        Storms live for minutes to hours, fronts for days. Compare <FigRef to="Storm Formation Simulator">the first demonstration</FigRef>, where a degree of dew point
         decides between a clear evening and a storm: weather on this scale is hard to predict far ahead. Some of the largest swings in a season’s weather come
         from something much slower — the ocean, whose surface temperatures change over months and push the atmosphere’s odds one way or the other for a whole
         winter. That is the subject of <a href={lessonHref('weather/2.4')}>the next lesson</a>.

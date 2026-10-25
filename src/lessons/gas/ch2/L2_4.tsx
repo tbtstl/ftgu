@@ -13,6 +13,7 @@ import {
   Op,
   P,
   Readouts,
+  Segmented,
   Slider,
   Sub,
   Sup,
@@ -26,7 +27,7 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { fieldCash, fieldProduction, productionByVintage, ridgebackMonthly, sumBcf } from '../../../engines/gas/decline';
+import { fieldCash, fieldProduction, noisyHistory, productionByVintage, ridgebackMonthly, sumBcf } from '../../../engines/gas/decline';
 import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
 import { OPEX_PER_MCF, PLANT_INLET_MMCFD, RIDGEBACK_WELLHEAD_PRICE, ROYALTY, WELL_COST } from '../../../model/gas/production';
 import { XYChart } from '../shared/XYChart';
@@ -52,11 +53,26 @@ const DISCOUNT = 0.1;
 const YEARS = [1, 2, 3, 4, 5] as const;
 const MAX_WELLS = 80;
 
-export const FIELD_DEFAULTS = { y1: 30, y2: 30, y3: 30, y4: 30, y5: 30, price: RIDGEBACK_WELLHEAD_PRICE, cost: WELL_COST };
+export const FIELD_DEFAULTS = { y1: 30, y2: 30, y3: 30, y4: 30, y5: 30 };
 type FieldState = typeof FIELD_DEFAULTS;
 type YearKey = 'y1' | 'y2' | 'y3' | 'y4' | 'y5';
 
 const yearsOf = (s: Pick<FieldState, YearKey>) => [s.y1, s.y2, s.y3, s.y4, s.y5];
+
+/** A lean plan that just keeps the promise, with the fewest wells (104). */
+export const LEAN_YEARS = [41, 24, 14, 13, 12];
+export type PlanId = 'starting' | 'lean' | 'yours';
+/**
+ * The economics figure has its own scenario: which plan it values (the starting plan, the lean
+ * plan, or the reader's plan from the first figure) and the price and well cost. Resetting it
+ * leaves the reader's plan alone.
+ */
+export const ECON_DEFAULTS = { plan: 'starting' as PlanId, price: RIDGEBACK_WELLHEAD_PRICE, cost: WELL_COST };
+
+/** The wells a year of the plan the economics figure values. */
+export function planYears(plan: PlanId, yours: number[]): number[] {
+  return plan === 'starting' ? yearsOf(FIELD_DEFAULTS) : plan === 'lean' ? LEAN_YEARS : yours;
+}
 
 /** Wells online by month: each year's wells spread as evenly as whole wells allow over its twelve months. */
 export function schedule(years: number[]): number[] {
@@ -114,6 +130,8 @@ const ONE_FIRST_YEAR = ONE.cumulative[11] + WELL_COST;
 const NET_PER_MCF = RIDGEBACK_WELLHEAD_PRICE * MMBTU_PER_MCF * (1 - ROYALTY) - OPEX_PER_MCF;
 const TYPE_EUR = sumBcf(TYPE);
 const FIRST_YEAR_SHARE = sumBcf(TYPE.slice(0, 12)) / TYPE_EUR;
+/** What Lesson 2.3's meter recorded for the same well over thirty years, with its noise and its months of downtime, Bcf. */
+const METERED_BCF = sumBcf(noisyHistory(TYPE, 7));
 /** The rate a field adding N wells a year eventually settles at is N × one well's 30-year output ÷ 365.25 days. */
 const PER_WELL_A_YEAR = (TYPE_EUR * 1000) / 365.25;
 const LONG_RUN_WELLS = TARGET / PER_WELL_A_YEAR;
@@ -126,7 +144,6 @@ const DEF_PROMISE = promise(DEF_YEARS);
 const DEF_CASH = fieldCash(DEF_SCHED, fieldProduction(DEF_SCHED, TYPE, CASH_MONTHS), econ(RIDGEBACK_WELLHEAD_PRICE, WELL_COST));
 const BURST_YEARS = [100, 0, 0, 0, 0];
 const BURST = fieldProduction(schedule(BURST_YEARS), TYPE, SHOW_MONTHS);
-const LEAN_YEARS = [41, 24, 14, 13, 12];
 const LEAN_CASH = fieldCash(schedule(LEAN_YEARS), fieldProduction(schedule(LEAN_YEARS), TYPE, CASH_MONTHS), econ(RIDGEBACK_WELLHEAD_PRICE, WELL_COST));
 const DEF_BREAKEVEN = breakevenPrice(DEF_YEARS, WELL_COST);
 
@@ -146,7 +163,7 @@ export default function Lesson() {
   const vintages = useMemo(() => productionByVintage(sched, TYPE, SHOW_MONTHS), [sched]);
   const pr = promise(ys);
   const peak = Math.max(...prod);
-  const capital = wells * st.cost;
+  const capital = wells * WELL_COST;
   const solved = fieldSolved(st);
 
   // Stacked bands, oldest wells at the bottom.
@@ -167,32 +184,46 @@ export default function Lesson() {
       ? `The field holds ${fmt(TARGET)} MMcf/d, but ${wells} wells cost ${money(wells * WELL_COST)} at $9 million each — more than $950 million.`
       : 'Solved.';
   const caption = !pr.holds
-    ? `${wells} wells for ${money(capital)}. The field falls below ${fmt(TARGET)} MMcf/d in ${pr.short} of the 48 promised months, reaching a low of ${mmcfd(pr.low)} in month ${pr.lowMonth + 1}.`
-    : `${wells} wells for ${money(capital)}. The field holds at least ${fmt(TARGET)} MMcf/d through years 2–5${peak > TARGET * 1.05 ? `, peaking at ${mmcfd(peak)}, ${fmt(peak - TARGET)} more than the plant can take` : ''}.`;
+    ? `The field falls below ${fmt(TARGET)} MMcf/d in ${pr.short} of the 48 promised months; its low comes in month ${pr.lowMonth + 1}.`
+    : `The field holds at least ${fmt(TARGET)} MMcf/d through years 2–5${peak > TARGET * 1.05 ? `, and at its peak makes ${fmt(peak - TARGET)} MMcf/d more than the plant can take` : ''}.`;
 
-  // Figure 2: the plan's cash.
-  const longProd = useMemo(() => fieldProduction(sched, TYPE, CASH_MONTHS), [sched]);
-  const cash = useMemo(() => fieldCash(sched, longProd, econ(st.price, st.cost)), [sched, longProd, st.price, st.cost]);
-  const breakeven = useMemo(() => breakevenPrice(planKey.split(',').map(Number), st.cost), [planKey, st.cost]);
+  // Figure 2: the cash of the chosen plan.
+  const e = useScenario('economics', ECON_DEFAULTS);
+  const es = e.state;
+  const ecYears = planYears(es.plan, ys);
+  const ecKey = ecYears.join(',');
+  const ecWells = ecYears.reduce((a, b) => a + b, 0);
+  const ecSched = useMemo(() => schedule(ecKey.split(',').map(Number)), [ecKey]);
+  const longProd = useMemo(() => fieldProduction(ecSched, TYPE, CASH_MONTHS), [ecSched]);
+  const cash = useMemo(() => fieldCash(ecSched, longProd, econ(es.price, es.cost)), [ecSched, longProd, es.price, es.cost]);
+  const breakeven = useMemo(() => breakevenPrice(ecKey.split(',').map(Number), es.cost), [ecKey, es.cost]);
+  const yoursIsStarting = ys.every((n, i) => n === DEF_YEARS[i]);
+  const planCaption =
+    es.plan === 'starting'
+      ? `The starting plan: ${DEF_YEARS[0]} wells in each of years 1–5, ${fmt(ecWells)} in all.`
+      : es.plan === 'lean'
+        ? `The lean plan: ${LEAN_YEARS.join(', ')} wells in years 1–5, ${fmt(ecWells)} in all, as few as can keep the promise.`
+        : `Your plan from the first demonstration: ${ys.join(', ')} wells in years 1–5, ${fmt(ecWells)} in all${yoursIsStarting ? ' — still the starting plan' : ''}.`;
   const payback = paybackMonths(cash.payoutMonth);
   const cumM = cash.cumulative.map((c) => c / 1e6);
   const cxs = cumM.map((_, m) => m + 1);
   const [c0, c1] = niceDomain(Math.min(-50, ...cumM), Math.max(50, ...cumM), 4);
   const lowIdx = cumM.indexOf(Math.min(...cumM));
-  const netPerMcf = st.price * MMBTU_PER_MCF * (1 - ROYALTY) - OPEX_PER_MCF;
+  const netPerMcf = es.price * MMBTU_PER_MCF * (1 - ROYALTY) - OPEX_PER_MCF;
 
   return (
     <LessonPage id="gas/2.4">
       <P>
         <a href={lessonHref('gas/2.3')}>Lesson 2.3</a> followed a single Ridgeback well: {fmt(TYPE[0])} MMcf/d in its first two months, {fmt(TYPE[11], 1)} a year later,
-        and a long tail that adds up to {fmt(TYPE_EUR, 1)} Bcf over thirty years, {pct(FIRST_YEAR_SHARE)} of it in the first year. But a company doesn’t sell one well’s
+        and a long tail: {fmt(TYPE_EUR, 1)} Bcf over thirty years, {pct(FIRST_YEAR_SHARE)} of it in the first year. (That’s a little more than the{' '}
+        {fmt(METERED_BCF, 1)} its meter recorded, because here the well never stops for repairs.) But a company doesn’t sell one well’s
         gas. It sells a field’s, and it usually promises it in advance: so much a day to a processing plant, so much space on a pipeline, booked years ahead. The plant at
         Ridgeback that we’ll visit in <a href={lessonHref('gas/2.5')}>Lesson 2.5</a> takes {fmt(TARGET)} MMcf/d. How does a company keep that much{' '}
         <K tone="orange">flowing</K> when every well that feeds it is in steep decline?
       </P>
       <P>
         By drilling more of them. A field’s production is the sum of its wells’, each well’s curve starting in the month it comes online. Engineers plan with a{' '}
-        <b>type well</b> — the curve they expect from an average new well, here the Ridgeback well of Lesson 2.3 — and a cost: {millions(WELL_COST)} to drill a horizontal
+        <b>type well</b> — the curve they expect from an average new well, here the Ridgeback well of <a href={lessonHref('gas/2.3')}>Lesson 2.3</a> — and a cost: {millions(WELL_COST)} to drill a horizontal
         well and fracture it, an illustrative figure.
       </P>
       <P>
@@ -219,11 +250,7 @@ export default function Lesson() {
           ]}
           hLines={[{ at: TARGET, color: '#333', dash: '6 4', label: `plant inlet, ${fmt(TARGET)} MMcf/d` }]}
           vLines={[{ at: WINDOW_END, color: '#9a9a9a', dash: '3 4', width: 1, label: 'last wells', labelAt: 'end' }]}
-          markers={
-            pr.holds
-              ? []
-              : [{ x: pr.lowMonth + 0.5, y: pr.low, color: GRAPHIC.red, ring: true, r: 6, label: `low: ${fmt(pr.low)}`, labelPos: 'above' }]
-          }
+          markers={pr.holds ? [] : [{ x: pr.lowMonth + 0.5, y: pr.low, color: GRAPHIC.red, ring: true, r: 6 }]}
           ariaLabel={`Field production over eight years from ${wells} wells drilled ${ys.join(', ')} in years 1 to 5, stacked by year. In years 2 to 5 the lowest rate is ${fmt(pr.low)} MMcf/d against the ${fmt(TARGET)} promised; the peak is ${fmt(peak)}. At the end of year 5 the field makes ${fmt(atEnd)} MMcf/d.`}
         />
         <Legend items={YEARS.map((y, i) => ({ label: `Year ${y} wells`, color: VINTAGE_COLOR[i] }))} />
@@ -294,7 +321,7 @@ export default function Lesson() {
         Every well costs money long before it earns any. The producer receives a <K c="price">wellhead price</K> — a simulated {usd(RIDGEBACK_WELLHEAD_PRICE, 2)} per MMBtu,
         Calder Hub’s typical $3.00 less the cost of getting the gas there — pays {pct(ROYALTY)} of its revenue to the owners of the minerals as a royalty, and spends{' '}
         {usd(OPEX_PER_MCF, 2)} per Mcf lifting, gathering and processing the gas. We’ll value every Mcf as pipeline gas, at {MMBTU_PER_MCF} MMBtu, and leave the liquids that
-        processing recovers to Lesson 2.5. That leaves, per Mcf,
+        processing recovers to <a href={lessonHref('gas/2.5')}>Lesson 2.5</a>. That leaves, per Mcf,
       </P>
       <Eq
         label={`Net cash per Mcf equals ${usd(RIDGEBACK_WELLHEAD_PRICE, 2)} times ${MMBTU_PER_MCF} times (1 minus ${pct(ROYALTY)}) minus ${usd(OPEX_PER_MCF, 2)}, which is ${usd(NET_PER_MCF, 2)}`}
@@ -324,11 +351,22 @@ export default function Lesson() {
         </span>
       </Eq>
       <P>
-        In the next demonstration, the line is the cumulative cash of the plan you set in <FigRef to="Gas Field Builder">the first demonstration</FigRef>, over 35 years:
-        negative while the rigs run, positive once the gas has paid for them. Change the wellhead price and the cost of a well:
+        In the next demonstration, the line is a drilling plan’s cumulative cash over 35 years: negative while the rigs run, positive once the gas has paid for them.
+        Choose the starting plan, a lean plan that just keeps the promise with the fewest wells — {LEAN_YEARS.join(', ')} — or your own from{' '}
+        <FigRef to="Gas Field Builder">the first demonstration</FigRef>, and change the wellhead price and the cost of a well:
       </P>
 
-      <Figure name="Gas Field Builder · economics" scenario={s}>
+      <Figure name="Gas Field Builder · economics" scenario={e}>
+        <Segmented
+          label="Plan"
+          value={es.plan}
+          onChange={(v) => e.set({ plan: v })}
+          options={[
+            { value: 'starting', label: 'Starting plan' },
+            { value: 'lean', label: 'Lean plan' },
+            { value: 'yours', label: 'Your plan' },
+          ]}
+        />
         <XYChart
           xDomain={[0, CASH_MONTHS]}
           yDomain={[c0, c1]}
@@ -348,7 +386,7 @@ export default function Lesson() {
             { x: lowIdx + 1, y: cumM[lowIdx], color: GRAPHIC.red },
             ...(payback !== null && payback < CASH_MONTHS ? [{ x: payback, y: 0, color: TEXT.green, ring: true }] : []),
           ]}
-          ariaLabel={`Cumulative cash of ${wells} wells at a wellhead price of ${usd(st.price, 2)} per MMBtu and ${millions(st.cost)} a well: at most ${money(-cash.maxExposure)} tied up, ${
+          ariaLabel={`Cumulative cash of ${planCaption.replace(/\.$/, '')}, at a wellhead price of ${usd(es.price, 2)} per MMBtu and ${millions(es.cost)} a well: at most ${money(-cash.maxExposure)} tied up, ${
             payback === null ? 'never paid back' : `paid back after ${payback} months`
           }, ${money(cash.cumulative[CASH_MONTHS - 1])} after 35 years. Net present value ${money(cash.npv)}.`}
         />
@@ -371,31 +409,33 @@ export default function Lesson() {
         <Slider
           label="Wellhead price"
           tone="green"
-          value={st.price}
+          value={es.price}
           min={1}
           max={5}
           step={0.05}
-          onChange={(v) => s.set({ price: v })}
-          display={`${usd(st.price, 2)}/MMBtu · ${usd(netPerMcf, 2)} net per Mcf`}
+          onChange={(v) => e.set({ price: v })}
+          display={`${usd(es.price, 2)}/MMBtu · ${usd(netPerMcf, 2)} net per Mcf`}
         />
-        <Slider label="Cost of a well" value={st.cost} min={5_000_000} max={14_000_000} step={500_000} onChange={(v) => s.set({ cost: v })} display={millions(st.cost)} />
+        <Slider label="Cost of a well" value={es.cost} min={5_000_000} max={14_000_000} step={500_000} onChange={(v) => e.set({ cost: v })} display={millions(es.cost)} />
+        <Caption>{planCaption}</Caption>
       </Figure>
 
       <P>
         The starting plan ties up as much as {money(-DEF_CASH.maxExposure)} before its gas catches up with its drilling, is paid back after{' '}
-        {fmt((paybackMonths(DEF_CASH.payoutMonth) ?? 0) / 12, 1)} years, and has a net present value of {money(DEF_CASH.npv)} at {usd(RIDGEBACK_WELLHEAD_PRICE, 2)}. A lean
-        plan that just meets the promise — {LEAN_YEARS.join(', ')} wells — spends {money(LEAN_CASH.capex)}, ties up {money(-LEAN_CASH.maxExposure)}, because its drilling
-        is crowded into the first year, and is worth {money(LEAN_CASH.npv)}: less, because it sells less gas, but on far less capital.
+        {fmt((paybackMonths(DEF_CASH.payoutMonth) ?? 0) / 12, 1)} years, and has a net present value of {money(DEF_CASH.npv)} at {usd(RIDGEBACK_WELLHEAD_PRICE, 2)}. The lean
+        plan spends {money(LEAN_CASH.capex)} and ties up more, {money(-LEAN_CASH.maxExposure)}, because its drilling is crowded into the first year. It’s worth{' '}
+        {money(LEAN_CASH.npv)}: less, because it sells less gas, but on far less capital.
       </P>
       <P>
         Now lower the price. The net present value falls in a straight line, and at {usd(DEF_BREAKEVEN, 2)} per MMBtu it reaches zero. Below that{' '}
-        <b>breakeven price</b>, drilling destroys value; above it, every well adds some. The breakeven is the same for every plan, since each well is the same bet made at
-        a different time, and it moves with the cost of a well: cheaper wells, or better ones, lower it. Breakeven prices are why low prices cut supply. When the wellhead
+        <b>breakeven price</b>, drilling destroys value; above it, every well adds some. The breakeven is the same for every plan here, because our wells are identical
+        and every cost comes with a well or its gas, so each well is the same bet made at a different time; in a real field, where wells differ and some costs are
+        shared, plans differ too. The breakeven moves with the cost of a well: cheaper wells, or better ones, lower it. Breakeven prices are why low prices cut supply. When the wellhead
         price falls below them, producers lay down rigs; months later fewer wells come online, and the treadmill turns that into falling production within a year.
       </P>
       <P>
         One thing every plan here takes for granted is that the gas is ready to sell. It isn’t. Gas from Ridgeback comes out of the ground wet and rich in ethane, propane
-        and butane, and Lesson 1.1 showed that no pipeline will take it that way. The <a href={lessonHref('gas/2.5')}>next lesson</a> follows it through the processing
+        and butane, and <a href={lessonHref('gas/1.1')}>Lesson 1.1</a> showed that no pipeline will take it that way. The <a href={lessonHref('gas/2.5')}>next lesson</a> follows it through the processing
         plant that turns it into pipeline gas and liquids.
       </P>
     </LessonPage>

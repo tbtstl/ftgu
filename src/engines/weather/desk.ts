@@ -84,7 +84,7 @@ export function blotterRow(id: DeskContractId, winter: number, day: number, m: M
   const { spec, year } = deskContract(id, winter);
   const { start, end } = contractSpan(spec, year);
   let settled = 0;
-  for (let d = start; d <= Math.min(end, day); d++) settled += hdd(tempF('calder', d, knobs));
+  for (let d = start; d <= Math.min(end, day); d++) settled += hdd(tempF('fenwick', d, knobs));
   const status = day < start ? 'open' : day >= end ? 'settled' : 'running';
   const q = marketQuote(spec, year, day, m, knobs);
   const fair = expectedIndex(spec, year, day, { knobs });
@@ -172,7 +172,7 @@ const pathCache = new Map<string, WinterPaths>();
 
 function simulateWinter(winter: number, day: number, knobs: WorldKnobs, paths: number): WinterPaths {
   const a = archive();
-  const cl = climateFor('calder', knobs);
+  const cl = climateFor('fenwick', knobs);
   const H = LEAD_MAX;
   const rho = SAME_DAY_CORRELATION;
   const { start, end } = contractSpan(SEASON_STRIP, winter);
@@ -184,7 +184,7 @@ function simulateWinter(winter: number, day: number, knobs: WorldKnobs, paths: n
   let realizedVolume = 0;
   const realizedByMonth = new Map<number, number>(months.map((m) => [m, 0]));
   for (let d = start; d <= Math.min(end, day); d++) {
-    const h = hdd(tempF('calder', d, knobs));
+    const h = hdd(tempF('fenwick', d, knobs));
     realizedHdd += h;
     const wind = CITY_WIND_SHARE * a.wind[d];
     realizedVolume += UTILITY.baseLoad + UTILITY.perHdd * h * (1 + UTILITY.perWindMs * (wind - UTILITY.meanWind));
@@ -209,7 +209,7 @@ function simulateWinter(winter: number, day: number, knobs: WorldKnobs, paths: n
     const ahead = (info.year - issueInfo.year) * 12 + (info.month - issueInfo.month);
     const nino = ahead <= 0 ? ninoAt(Math.max(0, day)) : ninoForecast(issueInfo.year, issueInfo.month, ahead);
     ensoW[i] = ensoF * ENSO_MONTH_WEIGHT[info.month];
-    mu[i] = expectedTemp('calder', d, knobs) + ensoW[i] * nino;
+    mu[i] = expectedTemp('fenwick', d, knobs) + ensoW[i] * nino;
     monthKey[i] = Math.max(0, ahead);
     monthOf[i] = info.month;
   }
@@ -392,7 +392,7 @@ export function bookBase(winter: number, book: DeskBook, business: DeskBusiness,
   let actualSeason = 0;
   const monthActual = new Map<number, number>();
   for (let d = start; d <= end; d++) {
-    const h = hdd(tempF('calder', d, knobs));
+    const h = hdd(tempF('fenwick', d, knobs));
     actualSeason += h;
     const mo = dayInfo(d).month;
     monthActual.set(mo, (monthActual.get(mo) ?? 0) + h);

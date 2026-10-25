@@ -158,6 +158,70 @@ export function resetCloud() {
 }
 
 // ---------------------------------------------------------------------------
+// The starting design and the reader's. Each lesson's text describes the starting design; its
+// figures can show either that or the reader's own design. A lesson's own part is always the
+// reader's (its controls edit it); the switch decides where the other parts come from.
+
+export const CLOUD_PARTS: CloudPart[] = ['fleet', 'customers', 'prices', 'ops'];
+
+/** Which design a figure shows: the starting one (with this lesson's own part) or the reader's. */
+export type Basis = 'start' | 'yours';
+
+/** Whether a part of the design differs from the starting design. */
+export function partChanged(d: CloudDesign, part: CloudPart): boolean {
+  const j = (x: unknown) => JSON.stringify(sanitize(JSON.parse(toJson({ ...defaultCloud(), [part]: x } as CloudDesign)))[part], (_, v) => (v === Infinity ? null : v));
+  return j(d[part]) !== j(defaultCloud()[part]);
+}
+
+/** Whether every part but `own` is the starting design's (so both choices of the switch show the same). */
+export function othersAtStart(d: CloudDesign, own: CloudPart | null): boolean {
+  return CLOUD_PARTS.every((p) => p === own || !partChanged(d, p));
+}
+
+/** The design a lesson's figures show: its own part always the reader's, the rest from the basis. */
+export function designFor(d: CloudDesign, own: CloudPart | null, basis: Basis): CloudDesign {
+  if (basis === 'yours') return d;
+  const start = defaultCloud();
+  return own ? { ...start, [own]: d[own] } : start;
+}
+
+/** Ask the reader before something that can't be undone; true where no dialog is available. */
+export function confirmed(message: string): boolean {
+  try {
+    return typeof window === 'undefined' || typeof window.confirm !== 'function' ? true : window.confirm(message) === true;
+  } catch {
+    return true;
+  }
+}
+
+const PART_PHRASE: Record<CloudPart, string> = {
+  fleet: 'fleet (Lesson 7.1)',
+  customers: 'customers (Lesson 7.2)',
+  prices: 'price book (Lesson 7.3)',
+  ops: 'operating plan (Lesson 7.4)',
+};
+
+/**
+ * A figure's Reset for the lesson that owns `part`: if the reader has changed that part, it asks first
+ * (the later lessons use it), and it touches no other part. Returns whether the part is now the
+ * starting one, so a figure resets its own view settings only when the reset went ahead.
+ */
+export function confirmResetPart(part: CloudPart): boolean {
+  if (!partChanged(read(), part)) return true;
+  if (!confirmed(`Put your ${PART_PHRASE[part]} back to the starting design? The other parts of your cloud stay as they are.`)) return false;
+  resetPart(part);
+  return true;
+}
+
+/** Replace the whole design (all four parts) with another, after asking if anything would change. */
+export function confirmReplaceCloud(next: CloudDesign, what: string): boolean {
+  if (toJson(read()) === toJson(next)) return true;
+  if (!confirmed(`Replace your whole cloud — fleet, customers, prices and operating plan — with ${what}?`)) return false;
+  updateCloud(() => next);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // 7.5's tried strategies.
 
 export interface Attempt {

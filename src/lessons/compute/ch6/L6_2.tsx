@@ -2,7 +2,6 @@ import { useId, useMemo } from 'react';
 import {
   Challenge,
   Eq,
-  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -13,7 +12,6 @@ import {
   Op,
   P,
   Readouts,
-  Segmented,
   Slider,
   TEXT,
   areaPath,
@@ -32,6 +30,7 @@ import { procurementSweep, type SweepPoint } from '../../../engines/compute/proc
 import { growthFan } from '../../../engines/compute/demand';
 import { RESTART_MINUTES, spotJobOf, spotRun, type SpotJob, type SpotRun } from '../../../engines/compute/spotCheckpoint';
 import { PRICES } from '../../../model/compute/prices';
+import { Prediction } from './Prediction';
 
 // ---------------------------------------------------------------------------
 // Prices (simulated) and the colors Lesson 5.4 gave the three products.
@@ -49,7 +48,11 @@ const X0 = 64;
 const X1 = 616;
 
 // ---------------------------------------------------------------------------
-// Figure 1: a year of firm need, bought reserved and on demand, plus interruptible work on spot.
+// Figure 1: a year of firm need, bought reserved and on demand. (The interruptible work, which costs
+// the same whatever is reserved, is left to the last section.)
+
+/** Challenge a's prediction: where the bad year is cheapest, against the 260 GPUs that minimize the average. */
+export type SideGuess = 'left' | 'right';
 
 export interface PlanState {
   /** GPUs reserved for the year. */
@@ -58,20 +61,23 @@ export interface PlanState {
   growth: number;
   /** Uncertainty of each month's growth, percent. */
   sigma: number;
+  /** Challenge a's prediction; the bad-year curve is drawn once it is made. */
+  guess: SideGuess | '';
 }
 
-export const PLAN_DEFAULTS: PlanState = { reserved: 0, growth: PROCUREMENT_DEFAULTS.growth * 100, sigma: PROCUREMENT_DEFAULTS.sigma * 100 };
+export const PLAN_DEFAULTS: PlanState = { reserved: 0, growth: PROCUREMENT_DEFAULTS.growth * 100, sigma: PROCUREMENT_DEFAULTS.sigma * 100, guess: '' };
 export const RESERVE_MAX = 800;
 export const RESERVE_STEP = 10;
 export const LEVELS: number[] = Array.from({ length: RESERVE_MAX / RESERVE_STEP + 1 }, (_, i) => i * RESERVE_STEP);
 
-export function paramsOf(s: PlanState): ProcurementParams {
-  return { ...PROCUREMENT_DEFAULTS, reserved: s.reserved, growth: s.growth / 100, sigma: s.sigma / 100 };
+/** The plan's parameters: firm need only, so every cost is what the reservation decides. */
+export function paramsOf(s: Pick<PlanState, 'reserved' | 'growth' | 'sigma'>): ProcurementParams {
+  return { ...PROCUREMENT_DEFAULTS, interruptible: 0, reserved: s.reserved, growth: s.growth / 100, sigma: s.sigma / 100 };
 }
 
 const planCache = new Map<string, ProcurementResult>();
 /** One plan's simulated years (memoized: the reservation slider revisits the same levels). */
-export function planOf(s: PlanState): ProcurementResult {
+export function planOf(s: Pick<PlanState, 'reserved' | 'growth' | 'sigma'>): ProcurementResult {
   const key = `${s.reserved}|${s.growth}|${s.sigma}`;
   let r = planCache.get(key);
   if (!r) {
@@ -106,10 +112,21 @@ export function bestOf(growth: number, sigma: number) {
 /** The bottom of the bad-year curve is flat: within this share of the lowest counts. */
 export const BAD_YEAR_TOLERANCE = 0.001;
 
-/** Challenge a: with the starting forecast, the reservation that makes a bad year (the 95th percentile) cheapest. */
+/** Whether a reservation makes a bad year (the 95th percentile) cheapest, within the curve's flat bottom. */
+export function atBadYearBottom(s: Pick<PlanState, 'reserved' | 'growth' | 'sigma'>): boolean {
+  return planOf(s).p95 <= bestOf(s.growth, s.sigma).p95.p95 * (1 + BAD_YEAR_TOLERANCE);
+}
+
+/** The side of the average's best reservation on which a bad year is cheapest, with the starting forecast. */
+export function badYearSide(): SideGuess {
+  const b = bestOf(PLAN_DEFAULTS.growth, PLAN_DEFAULTS.sigma);
+  return b.p95.reserved > b.mean.reserved ? 'right' : 'left';
+}
+
+/** Challenge a: the right prediction, then, with the starting forecast, the reservation that makes a bad year cheapest. */
 export function badYearSolved(s: PlanState): boolean {
   if (s.growth !== PLAN_DEFAULTS.growth || s.sigma !== PLAN_DEFAULTS.sigma) return false;
-  return planOf(s).p95 <= bestOf(s.growth, s.sigma).p95.p95 * (1 + BAD_YEAR_TOLERANCE);
+  return s.guess === badYearSide() && atBadYearBottom(s);
 }
 
 const MONTHS = PROCUREMENT_DEFAULTS.months;
@@ -117,8 +134,8 @@ const SHAPE_MEAN = WEEK_SHAPE.reduce((a, b) => a + b, 0) / WEEK_SHAPE.length;
 
 function NeedFan({ s }: { s: PlanState }) {
   const fan = growthFan(PROCUREMENT_DEFAULTS.peakNow, MONTHS - 1, s.growth / 100, s.sigma / 100, Math.max(1, s.reserved));
-  const top = 40;
-  const bot = 186;
+  const top = 32;
+  const bot = 178;
   const hi = Math.max(...fan.map((f) => f.p95), s.reserved, 100);
   const [, yMax] = niceDomain(0, hi, 4);
   const sx = scale(0, MONTHS - 1, X0 + 8, X1 - 8);
@@ -129,7 +146,7 @@ function NeedFan({ s }: { s: PlanState }) {
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 220"
+      viewBox="0 0 640 212"
       role="img"
       aria-label={`The busiest hour’s need over the year: ${fmt(PROCUREMENT_DEFAULTS.peakNow)} A-class GPUs now, a median of ${fmt(last.p50)} in month ${MONTHS}, and a 90% range of ${fmt(last.p5)} to ${fmt(last.p95)}. ${fmt(s.reserved)} GPUs reserved.`}
     >
@@ -156,18 +173,19 @@ function NeedFan({ s }: { s: PlanState }) {
         </g>
       )}
       {fan.map((f) => (
-        <text key={f.month} className="ax ax-m" x={sx(f.month)} y={204}>
+        <text key={f.month} className="ax ax-m" x={sx(f.month)} y={196}>
           {f.month + 1}
         </text>
       ))}
-      <text className="ax ax-e" x={X1} y={218}>
+      <text className="ax ax-e" x={X1} y={210}>
         month of the year
       </text>
     </svg>
   );
 }
 
-function CostCurve({ s, plan }: { s: PlanState; plan: ProcurementResult }) {
+/** The year's cost against the reservation. The bad-year curve appears once the reader has predicted where it bottoms out, and its lowest point once the challenge is solved. */
+function CostCurve({ s, plan, showBad, showBadBest }: { s: PlanState; plan: ProcurementResult; showBad: boolean; showBadBest: boolean }) {
   const clip = 'cc' + useId().replace(/[^a-zA-Z0-9]/g, '');
   const pts = sweepOf(s.growth, s.sigma);
   const best = bestOf(s.growth, s.sigma);
@@ -187,7 +205,7 @@ function CostCurve({ s, plan }: { s: PlanState; plan: ProcurementResult }) {
       className="chart"
       viewBox="0 0 640 206"
       role="img"
-      aria-label={`The year’s cost against GPUs reserved. Average: lowest at ${fmt(best.mean.reserved)} reserved, ${millions(best.mean.mean)}. Bad year (1 in 20): lowest at ${fmt(best.p95.reserved)}, ${millions(best.p95.p95)}. With ${fmt(s.reserved)} reserved: average ${millions(plan.mean)}, bad year ${millions(plan.p95)}.`}
+      aria-label={`The year’s cost against GPUs reserved. Average: lowest at ${fmt(best.mean.reserved)} reserved, ${millions(best.mean.mean)}.${showBadBest ? ` Bad year (1 in 20): lowest at ${fmt(best.p95.reserved)}, ${millions(best.p95.p95)}.` : ''} With ${fmt(s.reserved)} reserved: average ${millions(plan.mean)}${showBad ? `, bad year ${millions(plan.p95)}` : ''}.`}
     >
       <defs>
         <clipPath id={clip}>
@@ -199,19 +217,21 @@ function CostCurve({ s, plan }: { s: PlanState; plan: ProcurementResult }) {
       </text>
       <GridY y={sy} ticks={niceTicks(y0, y1, 4)} x0={X0} x1={X1} format={(v) => fmt(v, Number.isInteger(v) ? 0 : 1)} />
       <g clipPath={`url(#${clip})`}>
-        <path d={linePath(xs, pts.map((p) => yv(p.p95)))} fill="none" stroke={GRAPHIC.red} strokeWidth={2} strokeDasharray="6 4" />
+        {showBad && <path d={linePath(xs, pts.map((p) => yv(p.p95)))} fill="none" stroke={GRAPHIC.red} strokeWidth={2} strokeDasharray="6 4" />}
         <path d={linePath(xs, pts.map((p) => yv(p.mean)))} fill="none" stroke={GRAPHIC.green} strokeWidth={2.5} />
         <circle cx={sx(best.mean.reserved)} cy={yv(best.mean.mean)} r={4} fill="#fcfcfb" stroke={GRAPHIC.green} strokeWidth={2} />
-        <circle cx={sx(best.p95.reserved)} cy={yv(best.p95.p95)} r={4} fill="#fcfcfb" stroke={GRAPHIC.red} strokeWidth={2} />
+        {showBadBest && <circle cx={sx(best.p95.reserved)} cy={yv(best.p95.p95)} r={4} fill="#fcfcfb" stroke={GRAPHIC.red} strokeWidth={2} />}
       </g>
       <text className="ax" x={sx(best.mean.reserved)} y={yv(best.mean.mean) + 16} textAnchor="middle" style={{ fill: TEXT.green }}>
         lowest average · {fmt(best.mean.reserved)}
       </text>
-      <text className="ax" x={sx(best.p95.reserved) + 8} y={yv(best.p95.p95) - 8} style={{ fill: TEXT.red }}>
-        lowest bad year · {fmt(best.p95.reserved)}
-      </text>
+      {showBadBest && (
+        <text className="ax" x={sx(best.p95.reserved) + 8} y={yv(best.p95.p95) - 8} style={{ fill: TEXT.red }}>
+          lowest bad year · {fmt(best.p95.reserved)}
+        </text>
+      )}
       <line className="cur" x1={cur.x} x2={cur.x} y1={top} y2={bot} />
-      {cur.p95 >= top && <circle cx={cur.x} cy={cur.p95} r={5} fill={GRAPHIC.red} stroke="#fcfcfb" strokeWidth={2} />}
+      {showBad && cur.p95 >= top && <circle cx={cur.x} cy={cur.p95} r={5} fill={GRAPHIC.red} stroke="#fcfcfb" strokeWidth={2} />}
       {cur.mean >= top && <circle cx={cur.x} cy={cur.mean} r={5.5} fill={GRAPHIC.green} stroke="#fcfcfb" strokeWidth={2} />}
       {[0, 200, 400, 600, 800].map((v) => (
         <text key={v} className="ax ax-m" x={sx(v)} y={186}>
@@ -226,23 +246,27 @@ function CostCurve({ s, plan }: { s: PlanState; plan: ProcurementResult }) {
 }
 
 // ---------------------------------------------------------------------------
-// Figure 2: what spot capacity is worth to two kinds of interruptible work.
+// Figure 2: when spot beats reserving, against the width of a synchronous job and its restart time.
 
 export type JobId = 'tune8' | 'train70';
+export const JOB_IDS: JobId[] = ['tune8', 'train70'];
 export const JOBS: Record<JobId, SpotJob> = { tune8: spotJobOf('tune8'), train70: spotJobOf('train70') };
-const JOB_LABEL: Record<JobId, string> = { tune8: 'Fine-tuning jobs', train70: 'A pretraining run' };
+const JOB_LABEL: Record<JobId, string> = { tune8: 'Fine-tuning jobs', train70: 'Pretraining run' };
+const JOB_COLOR: Record<JobId, string> = { tune8: GRAPHIC.gold, train70: GRAPHIC.violet };
+const JOB_TEXT: Record<JobId, string> = { tune8: TEXT.gold, train70: TEXT.violet };
 
 export interface SpotState {
-  job: JobId;
   /** Reclaims per server per day. */
   reclaims: number;
   /** Minutes to get replacement servers running after a reclaim. */
   restart: number;
 }
 
-export const SPOT_DEFAULTS: SpotState = { job: 'tune8', reclaims: 2, restart: RESTART_MINUTES };
+export const SPOT_DEFAULTS: SpotState = { reclaims: 2, restart: RESTART_MINUTES };
 export const RECLAIM_MAX = 4;
 export const RECLAIM_STEP = 0.05;
+export const RESTART_MIN = 2;
+export const RESTART_MAX = 30;
 const INTERVAL_MAX = 240;
 
 /** Spot at the cheapest checkpoint interval (whole minutes up to four hours), for a reclaim rate and restart time. */
@@ -269,7 +293,8 @@ export function crossoverReclaims(job: SpotJob, restart: number): number {
   let lo = 0;
   let hi = 40;
   if (!spotBeatsReserved(job, lo, restart)) return 0;
-  for (let i = 0; i < 50; i++) {
+  while (spotBeatsReserved(job, hi, restart)) hi *= 2;
+  for (let i = 0; i < 40; i++) {
     const mid = (lo + hi) / 2;
     if (spotBeatsReserved(job, mid, restart)) lo = mid;
     else hi = mid;
@@ -277,12 +302,27 @@ export function crossoverReclaims(job: SpotJob, restart: number): number {
   return lo;
 }
 
+/**
+ * Whole-job stops a day a job can bear before a useful spot hour costs more than a reserved one:
+ * the crossover reclaim rate times the servers that must all keep running.
+ */
+export function bearableStops(job: SpotJob, restart: number): number {
+  return crossoverReclaims(job, restart) * job.servers;
+}
+
+/** The bearable stops of both jobs at every whole-minute restart time on the slider (computed once). */
+export const BEARABLE: Record<JobId, number[]> = (() => {
+  const out = { tune8: [] as number[], train70: [] as number[] };
+  for (const id of JOB_IDS) for (let m = RESTART_MIN; m <= RESTART_MAX; m++) out[id].push(bearableStops(JOBS[id], m));
+  return out;
+})();
+
 /** Snap a slider value to its grid, so 0.75 is 0.75. */
 const snap = (x: number) => Math.round(x / RECLAIM_STEP) * RECLAIM_STEP;
 
 /** Challenge b: for the pretraining run at the starting restart time, the highest reclaim rate on the slider's grid at which spot still beats reserved. */
 export function wideSolved(s: SpotState): boolean {
-  if (s.job !== 'train70' || s.restart !== SPOT_DEFAULTS.restart) return false;
+  if (s.restart !== SPOT_DEFAULTS.restart) return false;
   const job = JOBS.train70;
   return spotBeatsReserved(job, snap(s.reclaims), s.restart) && !spotBeatsReserved(job, snap(s.reclaims + RECLAIM_STEP), s.restart);
 }
@@ -293,80 +333,64 @@ export const WIDE_ANSWER = (() => {
   return best;
 })();
 
-function SpotCurve({ s }: { s: SpotState }) {
-  const clip = 'sc' + useId().replace(/[^a-zA-Z0-9]/g, '');
-  const job = JOBS[s.job];
-  const pts = useMemo(() => {
-    const out: Array<{ r: number; c: number }> = [];
-    for (let i = 0; i <= RECLAIM_MAX / RECLAIM_STEP; i++) {
-      const r = snap(i * RECLAIM_STEP);
-      out.push({ r, c: bestSpot(job, r, s.restart).perUsefulHour });
-    }
-    return out;
-  }, [job, s.restart]);
-  const cross = useMemo(() => crossoverReclaims(job, s.restart), [job, s.restart]);
+const STOPS_LO = 1;
+const STOPS_HI = 300;
+
+function StopsChart({ s }: { s: SpotState }) {
   const top = 24;
-  const bot = 172;
-  const yMax = 4;
-  const sx = scale(0, RECLAIM_MAX, X0, X1);
-  const sy = scale(0, yMax, bot, top);
-  const finite = pts.filter((p) => Number.isFinite(p.c));
-  const run = bestSpot(job, s.reclaims, s.restart);
-  const ok = Number.isFinite(run.perUsefulHour);
-  const refs = [
-    { v: PRICE.onDemand, label: `on demand ${dollars(PRICE.onDemand)}`, color: COLOR.onDemand },
-    { v: PRICE.reserved, label: `reserved ${dollars(PRICE.reserved)}`, color: COLOR.reserved },
-  ];
+  const bot = 206;
+  const sx = scale(RESTART_MIN, RESTART_MAX, X0, X1);
+  const ly = scale(Math.log10(STOPS_LO), Math.log10(STOPS_HI), bot, top);
+  const sy = (v: number) => ly(Math.log10(Math.min(STOPS_HI, Math.max(STOPS_LO, v))));
+  const minutes = BEARABLE.tune8.map((_, i) => RESTART_MIN + i);
+  const at = s.restart - RESTART_MIN;
+  const stops = (id: JobId) => s.reclaims * JOBS[id].servers;
+  const label = JOB_IDS.map(
+    (id) => `${JOB_LABEL[id]}, ${fmt(JOBS[id].servers)} servers: stopped ${fmt(stops(id), 1)} times a day, and can bear about ${fmt(BEARABLE[id][at])} with ${fmt(s.restart)}-minute restarts`,
+  ).join('. ');
   return (
-    <svg
-      className="chart"
-      viewBox="0 0 640 210"
-      role="img"
-      aria-label={`${JOB_LABEL[s.job]} on spot A-class GPUs, ${fmt(s.reclaims, 2)} reclaims per server a day, ${fmt(s.restart)}-minute restarts: ${ok ? `${dollars(run.perUsefulHour)} per useful GPU-hour` : 'the work never gets anywhere'}. Spot beats the ${dollars(PRICE.reserved)} reserved price below ${cross > RECLAIM_MAX ? 'every rate shown' : `${fmt(cross, 2)} reclaims per server a day`}.`}
-    >
-      <defs>
-        <clipPath id={clip}>
-          <rect x={X0} y={top - 2} width={X1 - X0} height={bot - top + 2} />
-        </clipPath>
-      </defs>
+    <svg className="chart" viewBox="0 0 640 246" role="img" aria-label={`Whole-job stops a day, at ${fmt(s.reclaims, 2)} reclaims per server a day. ${label}.`}>
       <text className="ax" x={X0} y={12}>
-        Price of one useful GPU-hour on spot, at the best checkpoint interval
+        Stops of the whole job a day (log scale): curves, what it can bear; flat lines, what it gets
       </text>
-      <GridY y={sy} ticks={[0, 1, 2, 3, 4]} x0={X0} x1={X1} format={(v) => usd(v)} baseline={0} />
-      {cross < RECLAIM_MAX && <rect x={sx(cross)} y={top} width={X1 - sx(cross)} height={bot - top} fill={tint(GRAPHIC.red, 0.12)} />}
-      {refs.map((r) => (
-        <g key={r.label}>
-          <line x1={X0} x2={X1} y1={sy(r.v)} y2={sy(r.v)} stroke={r.color} strokeWidth={1.5} strokeDasharray="6 4" />
-          <text className="ax ax-e" x={X1 - 4} y={sy(r.v) - 5} style={{ fill: '#555' }}>
-            {r.label}
+      {[1, 3, 10, 30, 100, 300].map((t) => (
+        <g key={t}>
+          <line className="gl" x1={X0} x2={X1} y1={sy(t)} y2={sy(t)} />
+          <text className="ax ax-e" x={X0 - 6} y={sy(t) + 4}>
+            {fmt(t)}
           </text>
         </g>
       ))}
-      <g clipPath={`url(#${clip})`}>
-        <path d={linePath(finite.map((p) => sx(p.r)), finite.map((p) => sy(Math.min(p.c, yMax * 1.3))))} fill="none" stroke={GRAPHIC.teal} strokeWidth={2.5} strokeLinejoin="round" />
-      </g>
-      {cross < RECLAIM_MAX && (
-        <g>
-          <line x1={sx(cross)} x2={sx(cross)} y1={top} y2={bot} stroke="#555" strokeDasharray="3 3" />
-          <text className="ax" x={sx(cross) + 6} y={top + 12} style={{ fill: TEXT.red }}>
-            reserved is cheaper past {fmt(cross, 2)} a day
-          </text>
-        </g>
-      )}
-      <line className="cur" x1={sx(s.reclaims)} x2={sx(s.reclaims)} y1={top} y2={bot} />
-      <circle cx={sx(s.reclaims)} cy={ok ? sy(Math.min(run.perUsefulHour, yMax)) : top} r={5.5} fill={ok ? GRAPHIC.teal : TEXT.red} stroke="#fcfcfb" strokeWidth={2} />
-      {(!ok || run.perUsefulHour > yMax) && (
-        <text className="ax" x={sx(s.reclaims) + (sx(s.reclaims) > X1 - 140 ? -8 : 8)} y={top + 28} textAnchor={sx(s.reclaims) > X1 - 140 ? 'end' : 'start'} style={{ fill: TEXT.red }}>
-          {ok ? `off the chart: ${dollars(run.perUsefulHour)}` : 'no useful hours at all'}
-        </text>
-      )}
-      {[0, 1, 2, 3, 4].map((v) => (
-        <text key={v} className="ax ax-m" x={sx(v)} y={190}>
+      <line className="base" x1={X0} x2={X1} y1={bot} y2={bot} />
+      {JOB_IDS.map((id) => {
+        const y = sy(stops(id));
+        const off = stops(id) < STOPS_LO;
+        return (
+          <g key={id}>
+            <path d={linePath(minutes.map(sx), BEARABLE[id].map(sy))} fill="none" stroke={JOB_COLOR[id]} strokeWidth={2.5} strokeLinejoin="round" />
+            <line x1={X0} x2={X1} y1={y} y2={y} stroke={JOB_COLOR[id]} strokeWidth={1.8} strokeDasharray="6 4" />
+            <text className="ax" x={X1 - 4} y={y - 5} textAnchor="end" style={{ fill: JOB_TEXT[id] }}>
+              {JOB_LABEL[id].toLowerCase()}, {fmt(JOBS[id].servers)} servers: {off ? 'never stopped' : `stopped ${fmt(stops(id), stops(id) < 10 ? 1 : 0)} times a day`}
+            </text>
+            <circle cx={sx(s.restart)} cy={sy(BEARABLE[id][at])} r={5} fill={JOB_COLOR[id]} stroke="#fcfcfb" strokeWidth={2} />
+          </g>
+        );
+      })}
+      <text className="ax" x={sx(RESTART_MIN) + 4} y={sy(BEARABLE.tune8[0]) - 8} style={{ fill: JOB_TEXT.tune8 }}>
+        fine-tuning can bear
+      </text>
+      {/* Under the pretraining curve where it has already fallen, so the label never crosses it. */}
+      <text className="ax" x={sx(4)} y={sy(BEARABLE.train70[10 - RESTART_MIN]) + 15} style={{ fill: JOB_TEXT.train70 }}>
+        pretraining can bear
+      </text>
+      <line className="cur" x1={sx(s.restart)} x2={sx(s.restart)} y1={top} y2={bot} />
+      {[2, 5, 10, 15, 20, 25, 30].map((v) => (
+        <text key={v} className="ax ax-m" x={sx(v)} y={224}>
           {fmt(v)}
         </text>
       ))}
-      <text className="ax ax-e" x={X1} y={208}>
-        reclaims per server per day
+      <text className="ax ax-e" x={X1} y={242}>
+        minutes to restart after a reclaim
       </text>
     </svg>
   );
@@ -377,6 +401,8 @@ function SpotCurve({ s }: { s: SpotState }) {
 
 const START = PLAN_DEFAULTS;
 const BEST = bestOf(START.growth, START.sigma);
+/** The reservation with the lowest average cost: the line challenge a's prediction is drawn against. */
+const N_BEST_MEAN = BEST.mean.reserved;
 const ALL_OD = planOf({ ...START, reserved: 0 });
 const AT_BEST_MEAN = planOf({ ...START, reserved: BEST.mean.reserved });
 const AT_BEST_P95 = planOf({ ...START, reserved: BEST.p95.reserved });
@@ -386,17 +412,14 @@ const CALM = bestOf(START.growth, 0);
 const WILD = bestOf(START.growth, 12);
 const HOURS_YEAR = 730 * MONTHS;
 const INTERRUPTIBLE = PROCUREMENT_DEFAULTS.interruptible;
-const N_SPOT_YEAR = INTERRUPTIBLE * HOURS_YEAR * PROCUREMENT_DEFAULTS.spotEffective;
 const TUNE_START = bestSpot(JOBS.tune8, SPOT_DEFAULTS.reclaims, SPOT_DEFAULTS.restart);
-const TRAIN_HALF = bestSpot(JOBS.train70, 0.5, SPOT_DEFAULTS.restart);
-const TRAIN_ONE = bestSpot(JOBS.train70, 1, SPOT_DEFAULTS.restart);
-const TRAIN_TWO = bestSpot(JOBS.train70, 2, SPOT_DEFAULTS.restart);
+const TRAIN_START = bestSpot(JOBS.train70, SPOT_DEFAULTS.reclaims, SPOT_DEFAULTS.restart);
+const bear = (id: JobId, restart: number) => BEARABLE[id][restart - RESTART_MIN];
 
 export const LESSON_NUMBERS = {
   peakNow: PROCUREMENT_DEFAULTS.peakNow,
   averageHourNow: PROCUREMENT_DEFAULTS.peakNow * SHAPE_MEAN,
   finalPeak: ALL_OD.finalPeak,
-  spotYear: N_SPOT_YEAR,
   allOnDemandMean: ALL_OD.mean,
   allOnDemandP95: ALL_OD.p95,
   bestMeanReserved: BEST.mean.reserved,
@@ -423,15 +446,16 @@ export const LESSON_NUMBERS = {
   trainGpus: JOBS.train70.gpus,
   tuneServers: JOBS.tune8.servers,
   tuneGpus: JOBS.tune8.gpus,
-  trainHalf: TRAIN_HALF.perUsefulHour,
-  trainOne: TRAIN_ONE.perUsefulHour,
-  trainTwo: TRAIN_TWO.perUsefulHour,
-  trainTwoUseful: TRAIN_TWO.usefulShare,
-  trainFour: bestSpot(JOBS.train70, 4, SPOT_DEFAULTS.restart).perUsefulHour,
+  trainTwo: TRAIN_START.perUsefulHour,
   trainCross: crossoverReclaims(JOBS.train70, SPOT_DEFAULTS.restart),
-  trainHalfRestart2: bestSpot(JOBS.train70, 0.5, 2).perUsefulHour,
-  trainHalfRestart20: bestSpot(JOBS.train70, 0.5, 20).perUsefulHour,
-  trainHalfRestart30: bestSpot(JOBS.train70, 0.5, 30).perUsefulHour,
+  /** Share of paid spot hours that must do useful work for spot to match the reserved price. */
+  usefulNeeded: PRICE.spot / PRICE.reserved,
+  tuneBear: bear('tune8', SPOT_DEFAULTS.restart),
+  trainBear: bear('train70', SPOT_DEFAULTS.restart),
+  trainBear2: bear('train70', RESTART_MIN),
+  trainBear30: bear('train70', RESTART_MAX),
+  trainCross2: crossoverReclaims(JOBS.train70, RESTART_MIN),
+  trainCross30: crossoverReclaims(JOBS.train70, RESTART_MAX),
   reservedYear: INTERRUPTIBLE * HOURS_YEAR * PRICE.reserved,
   onDemandYear: INTERRUPTIBLE * HOURS_YEAR * PRICE.onDemand,
   tuneSpotYear: INTERRUPTIBLE * HOURS_YEAR * TUNE_START.perUsefulHour,
@@ -444,28 +468,32 @@ export default function Lesson() {
   const ps = s1.state;
   const plan = planOf(ps);
   const solvedA = badYearSolved(ps);
+  const showBad = ps.guess !== '';
   const startForecast = ps.growth === PLAN_DEFAULTS.growth && ps.sigma === PLAN_DEFAULTS.sigma;
-  const statusA = !startForecast
-    ? `Set the forecast back to ${fmt(PLAN_DEFAULTS.growth)}% growth a month, give or take ${fmt(PLAN_DEFAULTS.sigma)}%.`
-    : `With ${fmt(ps.reserved)} reserved, a bad year costs ${millions(plan.p95)}. Can a different reservation make it cheaper?`;
+  const statusA =
+    ps.guess === ''
+      ? `Make your prediction in the first demonstration: left or right of ${fmt(N_BEST_MEAN)}? The bad-year curve appears once you have.`
+      : !startForecast
+        ? `Set the forecast back to ${fmt(PLAN_DEFAULTS.growth)}% growth a month, give or take ${fmt(PLAN_DEFAULTS.sigma)}%.`
+        : atBadYearBottom(ps)
+          ? `${fmt(ps.reserved)} reserved is the bottom of the dashed curve. Is it on the side you predicted?`
+          : `With ${fmt(ps.reserved)} reserved, a bad year costs ${millions(plan.p95)}. Find the reservation where the dashed curve bottoms out.`;
   const reservedCost = ps.reserved * PRICE.reserved * HOURS_YEAR;
-  const onDemandAvg = plan.mean - reservedCost - N_SPOT_YEAR;
+  const onDemandAvg = plan.mean - reservedCost;
 
   const s2 = useScenario('spot', SPOT_DEFAULTS);
   const sp = s2.state;
-  const job = JOBS[sp.job];
-  const run = useMemo(() => bestSpot(job, sp.reclaims, sp.restart), [job, sp.reclaims, sp.restart]);
-  const ok = Number.isFinite(run.perUsefulHour);
+  const tuneRun = useMemo(() => bestSpot(JOBS.tune8, sp.reclaims, sp.restart), [sp.reclaims, sp.restart]);
+  const trainRun = useMemo(() => bestSpot(JOBS.train70, sp.reclaims, sp.restart), [sp.reclaims, sp.restart]);
   const solvedB = wideSolved(sp);
-  const spotYear = ok ? INTERRUPTIBLE * HOURS_YEAR * run.perUsefulHour : Infinity;
+  const spotText = (r: SpotRun) => (Number.isFinite(r.perUsefulHour) ? dollars(r.perUsefulHour) : 'never finishes');
+  const spotTone = (r: SpotRun) => (r.perUsefulHour < PRICE.reserved ? ('green' as const) : ('red' as const));
   const statusB =
-    sp.job !== 'train70'
-      ? 'Choose the pretraining run.'
-      : sp.restart !== SPOT_DEFAULTS.restart
-        ? `Set the restart time back to ${fmt(SPOT_DEFAULTS.restart)} minutes.`
-        : ok
-          ? `At ${fmt(sp.reclaims, 2)} reclaims per server a day, a useful spot hour costs ${dollars(run.perUsefulHour)}, against ${dollars(PRICE.reserved)} reserved.`
-          : `At ${fmt(sp.reclaims, 2)} reclaims per server a day, the run never gets anywhere on spot.`;
+    sp.restart !== SPOT_DEFAULTS.restart
+      ? `Set the restart time back to ${fmt(SPOT_DEFAULTS.restart)} minutes.`
+      : sp.reclaims === SPOT_DEFAULTS.reclaims
+        ? 'Make your estimate, then set the reclaim rate to it.'
+        : `At ${fmt(sp.reclaims, 2)} reclaims per server a day: is this your estimate, rounded down to the slider’s steps? Check it against the readouts.`;
 
   const N = LESSON_NUMBERS;
 
@@ -475,7 +503,8 @@ export default function Lesson() {
         The previous lesson took the provider’s side: given a fleet, which work should each GPU do? This lesson takes the buyer’s. A company that runs models on rented
         capacity has to decide, months ahead, how much of it to commit to. It can’t wait and see. As <a href={lessonHref('compute/5.2')}>Lesson 5.2</a> showed, capacity
         arrives in quarters, and the reserved contracts of <a href={lessonHref('compute/5.4')}>Lesson 5.4</a> are signed for a year at a time. Lesson 5.4 found the rule
-        for a need known in advance: reserve up to the level the need exceeds in two-thirds of the hours. But next year’s need isn’t known. It grows, by an amount nobody
+        for a need known in advance: reserve up to the level the need exceeds in two-thirds of the hours — the reserved price over the on-demand one, {dollars(PRICE.reserved)} ÷{' '}
+        {dollars(PRICE.onDemand)}. But next year’s need isn’t known. It grows, by an amount nobody
         can promise (<a href={lessonHref('compute/5.3')}>Lesson 5.3</a>).
       </P>
       <P>
@@ -483,49 +512,53 @@ export default function Lesson() {
         inference curve, so an average hour needs about {fmt(N.averageHourNow)}. That busiest hour is forecast to grow by {fmt(PLAN_DEFAULTS.growth)}% a month, give or take{' '}
         {fmt(PLAN_DEFAULTS.sigma)}% each month. The service can use <K tone="green">reserved</K> GPUs, committed for the whole year at a simulated{' '}
         {dollars(PRICE.reserved)} an hour whether busy or not, and <K tone="green">on-demand</K> GPUs at {dollars(PRICE.onDemand)} for whatever the reservation doesn’t
-        cover. The company also has {fmt(INTERRUPTIBLE)} GPUs’ worth of fine-tuning work that can be interrupted; it runs on spot at an effective{' '}
-        {dollars(PROCUREMENT_DEFAULTS.spotEffective)} per useful hour (Lesson 5.4), or {millions(N.spotYear)} for the year. To see what the uncertainty does, we simulate{' '}
+        cover. (The company’s work that can be interrupted is a separate question, for the last section.) To see what the uncertainty does, we simulate{' '}
         {fmt(PROCUREMENT_DEFAULTS.scenarios)} possible years.
       </P>
       <P>
         In the next demonstration, the upper chart is the forecast: the busiest hour of each month across the simulated years, with the band holding 90% of them, and the
-        median of an average hour dashed. The lower chart is the cost of the year against the number of GPUs reserved: in green, the <K tone="green">average</K> over all
-        the years, and in dashed red, a <K tone="red">bad year</K> — the cost that one simulated year in twenty reaches or exceeds. Set the reservation, and then the
-        forecast:
+        median of an average hour dashed. The lower chart is the cost of the year against the number of GPUs reserved, in green the <K tone="green">average</K> over all
+        the years; the equation splits it into what the reservation costs and what is bought on demand. Set the reservation, and then the forecast:
       </P>
 
       <Figure name="Capacity Procurement Optimizer" scenario={s1}>
         <NeedFan s={ps} />
-        <CostCurve s={ps} plan={plan} />
+        <CostCurve s={ps} plan={plan} showBad={showBad} showBadBest={solvedA} />
         <Legend
           items={[
             { label: 'average year', color: GRAPHIC.green, kind: 'line' },
-            { label: 'bad year (1 in 20)', color: GRAPHIC.red, kind: 'line', dashed: true },
+            ...(showBad ? [{ label: 'bad year (1 in 20)', color: GRAPHIC.red, kind: 'line' as const, dashed: true }] : []),
             { label: 'reserved GPUs', color: COLOR.reserved, kind: 'line' },
           ]}
         />
         <Slider label="Reserved GPUs" tone="green" value={ps.reserved} min={0} max={RESERVE_MAX} step={RESERVE_STEP} onChange={(v) => s1.set({ reserved: v })} display={`${fmt(ps.reserved)} GPUs`} />
         <Slider label="Growth a month" tone="ink" value={ps.growth} min={0} max={10} step={0.5} onChange={(v) => s1.set({ growth: v })} display={`${fmt(ps.growth, 1)}%`} />
         <Slider label="Uncertainty" tone="ink" value={ps.sigma} min={0} max={12} step={1} onChange={(v) => s1.set({ sigma: v })} display={`± ${fmt(ps.sigma)}% a month`} />
-        <Readouts
-          items={[
-            { label: 'average year', value: millions(plan.mean), tone: 'green' },
-            { label: 'bad year (1 in 20)', value: millions(plan.p95), tone: 'red' },
-            { label: 'per useful GPU-hour', value: dollars(plan.perUsefulHour), tone: 'green' },
-            { label: 'reserved hours idle', value: share(plan.idleShare) },
-          ]}
-        />
         <Eq label="Cost of an average year">
           <span>average year</span>
           <Op>=</Op>
           <span>{usd(reservedCost)} reserved</span>
           <Op>+</Op>
           <span>{usd(onDemandAvg)} on demand</span>
-          <Op>+</Op>
-          <span>{usd(N_SPOT_YEAR)} spot</span>
           <Op>=</Op>
           <K tone="green">{millions(plan.mean)}</K>
         </Eq>
+        <Readouts
+          items={[
+            { label: 'bad year (1 in 20)', value: showBad ? millions(plan.p95) : 'predict first', tone: 'red' },
+            { label: 'reserved hours idle', value: share(plan.idleShare) },
+          ]}
+        />
+        <Prediction
+          label={`Challenge a — predict: is a bad year cheapest left or right of ${fmt(N_BEST_MEAN)} reserved?`}
+          aria="Your prediction for challenge a"
+          value={ps.guess}
+          onChange={(guess) => s1.set({ guess })}
+          options={[
+            { value: 'left', label: `Left of ${fmt(N_BEST_MEAN)}: fewer GPUs` },
+            { value: 'right', label: `Right of ${fmt(N_BEST_MEAN)}: more GPUs` },
+          ]}
+        />
       </Figure>
 
       <P>
@@ -544,18 +577,19 @@ export default function Lesson() {
 
       <H2>Insuring against a fast year</H2>
       <P>
-        An average is a fine thing to minimize for a company that will make the same bet many times. A company making it once also cares about the bad year. Look at{' '}
-        <FigRef to="Capacity Procurement Optimizer">the dashed curve</FigRef>. With nothing reserved, a bad year — one in which the need grows fast, and every extra GPU
-        is bought at {dollars(PRICE.onDemand)} — costs {millions(N.allOnDemandP95)}. At the reservation that minimizes the average, {fmt(N.bestMeanReserved)}, a bad year
-        costs {millions(N.bestMeanP95)}. But the dashed curve bottoms out further right.
+        An average is a fine thing to minimize for a company that will make the same bet many times. A company making it once also cares about the{' '}
+        <K tone="red">bad year</K>: the cost that one simulated year in twenty reaches or exceeds. Bad years are the fast ones, in which the need grows quickly and every
+        GPU beyond the reservation is bought at {dollars(PRICE.onDemand)}. With nothing reserved, a bad year costs {millions(N.allOnDemandP95)}; at the reservation that
+        minimizes the average, {fmt(N.bestMeanReserved)}, it costs {millions(N.bestMeanP95)}. Is {fmt(N.bestMeanReserved)} also the reservation that makes a bad year
+        cheapest?
       </P>
 
       <Challenge
         id="a"
-        question="With the forecast as it starts — 4% growth a month, give or take 5% — find the reservation that makes a bad year cheapest."
+        question={`Predict first: with the forecast as it starts — 4% growth a month, give or take 5% — will the reservation that makes a bad year cheapest be left or right of ${fmt(N.bestMeanReserved)}? Choose your prediction in the first demonstration, which then draws a bad year’s cost as a dashed curve, and find the reservation where that curve bottoms out.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved. At ${fmt(N.bestP95Reserved)} reserved GPUs a bad year costs ${millions(N.bestP95P95)}, the least of any reservation, while the average year costs ${millions(N.bestP95Mean)}: ${usd(N.bestP95Mean - N.bestMeanMean)} more than at the cheapest-on-average ${fmt(N.bestMeanReserved)}. Those extra reserved GPUs are idle in the slow years, and pay for themselves in the fast ones.`}
+        success={`Solved: to the right. At ${fmt(ps.reserved)} reserved GPUs a bad year costs ${millions(plan.p95)}, ${ps.reserved === N.bestP95Reserved ? 'the least of any reservation' : `within 0.1% of the least, ${millions(N.bestP95P95)} at ${fmt(N.bestP95Reserved)}`}, while the average year costs ${millions(plan.mean)}: ${usd(plan.mean - N.bestMeanMean)} more than at ${fmt(N.bestMeanReserved)}. In a fast year the need sits above more of the reserved GPUs for more of the year, so a GPU that would have been idle too often in an average year is busy enough to beat the on-demand price.`}
       />
 
       <P>
@@ -567,69 +601,64 @@ export default function Lesson() {
         moves both curves right, because the need rises above each reserved GPU for more of the year.
       </P>
 
-      <H2>What spot is worth depends on the work</H2>
+      <H2>When spot beats reserving</H2>
       <P>
-        The plan so far took the spot price of the fine-tuning work as given. It isn’t a property of the market alone. As Lesson 5.4 found, an interruptible hour is worth
-        what survives the interruptions, and that depends on the physics of the job: how many servers must all keep running (a synchronous training step, from{' '}
-        <a href={lessonHref('compute/3.3')}>Lesson 3.3</a>), how large a checkpoint is and how fast it can be written, and how long a restart takes. The alternative is
-        to put the same work on reserved GPUs, which at {fmt(INTERRUPTIBLE)} GPUs running around the clock costs {millions(N.reservedYear)} a year. In the next
-        demonstration, choose the shape of the interruptible work — fine-tuning jobs of {fmt(N.tuneGpus)} GPUs on {fmt(N.tuneServers)} servers, or a pretraining run of{' '}
-        {fmt(N.trainGpus)} GPUs on {fmt(N.trainServers)} servers — and set how often the provider reclaims each server and how long a restart takes. Each point checkpoints
-        at its own best interval:
+        The plan so far covered the firm need. The company also has {fmt(INTERRUPTIBLE)} GPUs’ worth of training work, around the clock, that can be interrupted, and
+        for it there is a third product: spot. <a href={lessonHref('compute/5.4')}>Lesson 5.4</a> showed what an interruptible hour is worth. A synchronous job stops
+        whenever any one of its servers is reclaimed (
+        <a href={lessonHref('compute/3.3')}>Lesson 3.3</a>), loses the work since its last checkpoint and has to restart, so an interruptible hour is worth only what
+        survives. Its two training jobs, reclaimed twice a day per server, came out far apart: the fine-tuning job at {dollars(N.tuneCost)} per useful hour, the
+        pretraining run at {dollars(N.trainTwo)}. The buyer’s question is the next one: for which work does spot beat reserving the same GPUs, at{' '}
+        {dollars(PRICE.reserved)} an hour, which at {fmt(INTERRUPTIBLE)} GPUs around the clock costs {millions(N.reservedYear)} a year?
+      </P>
+      <P>
+        Two numbers decide it. Spot sells for {dollars(PRICE.spot)} an hour, so to match the reserved price at least {dollars(PRICE.spot)} ÷ {dollars(PRICE.reserved)} ={' '}
+        {share(N.usefulNeeded)} of the paid hours must do useful work. Each stop of the whole job costs a restart, a checkpoint read back and, on average, half a
+        checkpoint interval of lost work, so a job can bear only so many stops a day; that is the first number. The second is how many it gets: the provider’s reclaims per
+        server times the servers that must all keep running. In the next demonstration, the curves are the stops a day each job can bear, at its best checkpoint interval,
+        against the time a restart takes; the flat lines are the stops it gets. Set the provider’s reclaim rate and the restart time:
       </P>
 
       <Figure name="Capacity Procurement Optimizer · spot" scenario={s2}>
-        <Segmented
-          label="Interruptible work"
-          value={sp.job}
-          onChange={(v) => s2.set({ job: v })}
-          options={[
-            { value: 'tune8', label: `Fine-tuning jobs (${fmt(N.tuneGpus)} GPUs)` },
-            { value: 'train70', label: `Pretraining run (${fmt(N.trainGpus)} GPUs)` },
+        <StopsChart s={sp} />
+        <Legend
+          items={[
+            { label: `${JOB_LABEL.tune8} (${fmt(N.tuneGpus)} GPUs)`, color: JOB_COLOR.tune8, kind: 'line' },
+            { label: `${JOB_LABEL.train70} (${fmt(N.trainGpus)} GPUs)`, color: JOB_COLOR.train70, kind: 'line' },
           ]}
         />
-        <SpotCurve s={sp} />
         <Slider label="Reclaims per server" tone="teal" value={sp.reclaims} min={0} max={RECLAIM_MAX} step={RECLAIM_STEP} onChange={(v) => s2.set({ reclaims: snap(v) })} display={`${fmt(sp.reclaims, 2)} a day`} />
-        <Slider label="Restart time" tone="teal" value={sp.restart} min={2} max={30} onChange={(v) => s2.set({ restart: v })} display={`${fmt(sp.restart)} min`} />
+        <Slider label="Restart time" tone="teal" value={sp.restart} min={RESTART_MIN} max={RESTART_MAX} onChange={(v) => s2.set({ restart: v })} display={`${fmt(sp.restart)} min`} />
         <Readouts
           items={[
-            { label: 'whole job stopped', value: `${fmt(run.interruptionsPerDay, 1)} times a day` },
-            { label: 'best checkpoint interval', value: ok ? `${fmt(run.interval)} min` : '—' },
-            { label: 'paid hours that are useful', value: share(run.usefulShare) },
-            { label: 'per useful GPU-hour', value: ok ? dollars(run.perUsefulHour) : 'never finishes', tone: ok && run.perUsefulHour < PRICE.reserved ? 'green' : 'red' },
-            { label: `${fmt(INTERRUPTIBLE)} GPUs for a year on spot`, value: ok ? millions(spotYear) : '—', tone: 'green' },
-            { label: '… or reserved', value: millions(N.reservedYear), tone: 'green' },
+            { label: `fine-tuning on spot, per useful GPU-hour (reserved: ${dollars(PRICE.reserved)})`, value: spotText(tuneRun), tone: spotTone(tuneRun) },
+            { label: `pretraining on spot, per useful GPU-hour (reserved: ${dollars(PRICE.reserved)})`, value: spotText(trainRun), tone: spotTone(trainRun) },
           ]}
         />
       </Figure>
 
       <P>
-        For fine-tuning jobs, spot is almost always the right choice. A job on {fmt(N.tuneServers)} servers, reclaimed twice a day each, stops {fmt(N.tuneServers * 2)} times
-        a day; checkpointing every {fmt(N.tuneInterval)} minutes, a useful hour costs {dollars(N.tuneCost)}, and the year’s work costs {millions(N.tuneSpotYear)} instead of{' '}
-        {millions(N.reservedYear)} reserved. Reserved only wins past {fmt(N.tuneCross, 1)} reclaims per server a day — far more often than the provider of Lesson 5.4,
-        which took each of its spot GPUs back about twice a day.
-      </P>
-      <P>
-        Switch to the pretraining run and the picture changes. Its {fmt(N.trainServers)} servers all take part in every step, so each one’s reclaims stop all of them. At
-        half a reclaim per server a day a useful hour costs {dollars(N.trainHalf)}, still under the reserved price; at one a day, {dollars(N.trainOne)}; at two,{' '}
-        {dollars(N.trainTwo)}, with only {share(N.trainTwoUseful)} of the paid hours doing useful work; at four, the run is interrupted faster than it can recover and never
-        gets anywhere.
+        With {fmt(SPOT_DEFAULTS.restart)}-minute restarts the fine-tuning jobs can bear about {fmt(N.tuneBear)} stops a day and the pretraining run about{' '}
+        {fmt(N.trainBear)}: much the same, because each stop costs them much the same time. What separates them is width. Reclaimed twice a day per server, the fine-tuning
+        job’s {fmt(N.tuneServers)} servers stop it {fmt(N.tuneServers * 2)} times a day, far inside its limit, and spot wins until its {fmt(N.tuneBear)} bearable stops
+        are shared between its {fmt(N.tuneServers)} servers: {fmt(N.tuneCross, 1)} reclaims per server a day. The pretraining run’s {fmt(N.trainServers)} servers stop it{' '}
+        {fmt(N.trainServers * 2)} times a day, well past its limit.
       </P>
 
       <Challenge
         id="b"
         figure="Capacity Procurement Optimizer · spot"
-        question="For the pretraining run, with 10-minute restarts, find the highest reclaim rate (in steps of 0.05 a day) at which its spot hours still cost less than reserving."
+        question={`Estimate first, the way ${fmt(N.tuneCross, 1)} came from the fine-tuning job’s stops and servers: with ${fmt(SPOT_DEFAULTS.restart)}-minute restarts, what is the highest reclaim rate per server, in the slider’s steps of 0.05 a day, at which the pretraining run’s spot hours still cost less than reserving? Set the reclaim rate to your estimate and check it against the readouts.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved. Up to ${fmt(WIDE_ANSWER, 2)} reclaims per server a day, spot is cheaper; the curves cross at ${fmt(N.trainCross, 2)}. Across ${fmt(N.trainServers)} servers that is about ${fmt(N.trainCross * N.trainServers)} interruptions of the whole run a day. The small fine-tuning jobs, on the same spot capacity, beat reserving until ${fmt(N.tuneCross, 1)} a day: the width of a synchronous job multiplies every reclaim.`}
+        success={`Solved: ${fmt(WIDE_ANSWER, 2)} a day. The run can bear about ${fmt(N.trainBear, 1)} stops a day, and ${fmt(N.trainBear, 1)} ÷ ${fmt(N.trainServers)} servers is ${fmt(N.trainCross, 2)} reclaims per server; one step more, ${fmt(WIDE_ANSWER + RECLAIM_STEP, 2)}, and spot costs more than reserving. The small fine-tuning jobs, on the same spot capacity, beat reserving until ${fmt(N.tuneCross, 1)} a day: the width of a synchronous job multiplies every reclaim.`}
       />
 
       <P>
-        The restart time is just as physical. With half a reclaim per server a day, a two-minute restart makes the run’s useful spot hours cost{' '}
-        {dollars(N.trainHalfRestart2)}; twenty minutes, {dollars(N.trainHalfRestart20)}, past the reserved price; thirty, {dollars(N.trainHalfRestart30)}. Faster
-        replacement servers, smaller checkpoints, faster storage and smaller synchronous groups all move the crossing to the right, and each is a reason to engineer a
-        training system for interruption before buying interruptible capacity for it.
+        The restart time is just as physical, and it moves the curves. With two-minute restarts the pretraining run could bear about {fmt(N.trainBear2)} stops a day,
+        or {fmt(N.trainCross2, 2)} reclaims per server; with thirty-minute restarts, about {fmt(N.trainBear30)}, or {fmt(N.trainCross30, 2)}. Faster replacement
+        servers, smaller checkpoints and faster storage raise the curve, smaller synchronous groups lower the line, and each is a reason to engineer a training system for
+        interruption before buying interruptible capacity for it.
       </P>
 
       <H2>A portfolio, built from physics</H2>

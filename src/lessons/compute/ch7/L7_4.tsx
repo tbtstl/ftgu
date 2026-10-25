@@ -34,12 +34,12 @@ import {
   type OpsContext,
   type OpsPlan,
   type OpsResult,
-  type PriceBook,
   type Tier,
 } from '../../../engines/compute/cloud';
 import { ACCELERATORS, GPU_COLOR, GPU_IDS, type GpuId } from '../../../model/compute/hardware';
 import { PRICES } from '../../../model/compute/prices';
-import { defaultCloud, resetPart, updateCloud, useCloud, type CloudDesign } from '../shared/cloudStore';
+import { confirmResetPart, defaultCloud, designFor, updateCloud, useCloud, type Basis, type CloudDesign } from '../shared/cloudStore';
+import { BasisSwitch, SoFar } from '../shared/SoFar';
 
 // ---------------------------------------------------------------------------
 // The week's conditions: two drivers outside the operator's control, set beside the plan.
@@ -65,6 +65,20 @@ export function optsOf(c: Conditions) {
 }
 
 const sameCond = (a: Conditions, b: Conditions) => a.outPct === b.outPct && a.demandPct === b.demandPct;
+
+/** The premium price book's markup: every on-demand price this far above the market's. */
+export const PREMIUM = 0.2;
+
+/** A design with the premium price book in place of its on-demand prices (or unchanged). */
+export function withPremium(d: CloudDesign, on: boolean): CloudDesign {
+  if (!on) return d;
+  return { ...d, prices: { ...d.prices, onDemand: { L: PRICES.L.onDemand * (1 + PREMIUM), A: PRICES.A.onDemand * (1 + PREMIUM), B: PRICES.B.onDemand * (1 + PREMIUM) } } };
+}
+
+/** Hours of a week in which some rented GPUs are at work. */
+export function rentedHours(r: OpsResult): number {
+  return r.hours.filter((h) => h.rented > 1e-6).length;
+}
 
 // JSON can't hold Infinity, which customers' latency limits may be; null keeps the keys distinct.
 const keyOf = (x: unknown) => JSON.stringify(x, (_, v) => (v === Infinity ? null : v));
@@ -174,7 +188,10 @@ export function turnedAway(r: OpsResult): number {
 const START = defaultCloud();
 const FIRST_COME: OpsPlan = { policy: 'first-come', rented: { L: 0, A: 0, B: 0 }, burst: false };
 const TIERED: OpsPlan = { ...FIRST_COME, policy: 'tiered' };
-const premiumBook = (k: number): PriceBook => ({ ...START.prices, onDemand: { L: START.prices.onDemand.L * k, A: START.prices.onDemand.A * k, B: START.prices.onDemand.B * k } });
+
+/** The hours the prose looks at: a weekday's busiest (Monday 15:00, tied with every weekday's) and its quietest (Monday 03:00). */
+export const PEAK_HOUR = 15;
+export const NIGHT_HOUR = 3;
 
 let numbers: ReturnType<typeof computeNumbers> | null = null;
 function computeNumbers() {
@@ -185,7 +202,7 @@ function computeNumbers() {
   const tiered = runWeek(START, TIERED, NORMAL);
   const rentB = runWeek(START, { ...TIERED, rented: { L: 0, A: 0, B: 32 } }, NORMAL);
   const rentA = runWeek(START, { ...TIERED, rented: { L: 0, A: 64, B: 0 } }, NORMAL);
-  const premium = { ...START, prices: premiumBook(1.2) };
+  const premium = withPremium(START, true);
   const premNo = runWeek(premium, TIERED, NORMAL);
   const premBurst = runWeek(premium, { ...TIERED, burst: true }, NORMAL);
   const launchNone = runWeek(START, TIERED, LAUNCH);
@@ -195,16 +212,24 @@ function computeNumbers() {
   const low = runWeek(START, TIERED, { outPct: 0, demandPct: 70 });
   const normalBest = bestPlan(START, NORMAL);
   const chat = START.customers[0];
-  const peak = hourDetail(START, TIERED, NORMAL, 15);
-  const night = hourDetail(START, TIERED, NORMAL, 4);
+  const peak = hourDetail(START, TIERED, NORMAL, PEAK_HOUR);
+  const night = hourDetail(START, TIERED, NORMAL, NIGHT_HOUR);
+  // The model trainer's commitment: sized for its buyers who will pay the price of the GPUs committed.
+  const ctx = contextOf(START);
+  const trainer = ctx.off.find((o) => o.customer.id === 'c4')!;
+  let trainerPeak = 0;
+  for (let h = 0; h < 168; h++) trainerPeak = Math.max(trainerPeak, hourlyDemand(trainer.customer, h));
+  const trainerCommitted = commit.filter((c) => c.customer === 'c4').reduce((t, c) => t + c.gpus * ctx.prod[trainer.customer.workload][c.gpu], 0);
   return {
     fleetTotal: GPU_IDS.reduce((t, g) => t + START.fleet.gpus[g], 0),
     fleetB: START.fleet.gpus.B,
     committedB,
     fc: { revenue: fc.revenue, power: fc.powerCost, fixed: fc.fixedCost, profit: fc.profit, util: fc.utilization, served: fc.served, away: turnedAway(fc) },
     tiered: { profit: tiered.profit, served: tiered.served, gain: tiered.profit - fc.profit },
-    rentB32: { profit: rentB.profit, loss: tiered.profit - rentB.profit },
-    rentA64: { profit: rentA.profit, loss: tiered.profit - rentA.profit },
+    rentB32: { profit: rentB.profit, loss: tiered.profit - rentB.profit, revenueChange: rentB.revenue - tiered.revenue, rent: rentB.rentCost, ownedA: rentB.utilization.A, hours: rentedHours(rentB) },
+    rentA64: { profit: rentA.profit, loss: tiered.profit - rentA.profit, hours: rentedHours(rentA) },
+    tieredUtilA: tiered.utilization.A,
+    hoursTurnedAway: tiered.hours.filter((h) => h.unmet > 1).length,
     premium: { noBurst: premNo.profit, burst: premBurst.profit, gain: premBurst.profit - premNo.profit, burstCost: premBurst.burstCost },
     launch: {
       none: launchNone.profit,
@@ -222,10 +247,20 @@ function computeNumbers() {
     low70: low.profit,
     normalBest,
     chatPeak: hourlyDemand(chat, 15),
-    chatNight: hourlyDemand(chat, 3),
+    chatNight: hourlyDemand(chat, NIGHT_HOUR),
     peak: { demand: peak.row.demand, owned: peak.row.owned, unmet: peak.row.unmet, customers: peak.customers },
     night: { demand: night.row.demand, owned: night.row.owned, unmet: night.row.unmet, idleA: START.fleet.gpus.A - night.busy.A },
     tieredServed: tiered.served,
+    trainer: {
+      /** Wanted each hour at its first choice's price, and the work its committed GPUs can do, A-class equivalents. */
+      wanted: (trainer.choices[0]?.share ?? 0) * trainerPeak,
+      committed: trainerCommitted,
+      /** Share of its buyers who buy on the B-class, and who will pay the A-class's price. */
+      shareFirst: trainer.choices[0]?.share ?? 0,
+      shareA: trainer.choices.find((c) => c.gpu === 'A')?.share ?? 0,
+    },
+    /** Lesson 5.4's rule: a GPU rented for every hour pays if it sells in more than this share of them. */
+    rentRule: { A: PRICES.A.reserved / PRICES.A.onDemand, B: PRICES.B.reserved / PRICES.B.onDemand },
   };
 }
 
@@ -243,12 +278,14 @@ export function hourName(h: number): string {
 }
 
 const SRC = {
-  owned: { label: 'Our own GPUs', color: GRAPHIC.blue },
+  owned: { label: 'Our GPUs', color: GRAPHIC.blue },
   rented: { label: 'Rented GPUs', color: GRAPHIC.teal },
-  burst: { label: 'Bought on demand elsewhere', color: GRAPHIC.gold },
+  burst: { label: 'Bought elsewhere', color: GRAPHIC.gold },
   unmet: { label: 'Turned away', color: '#f2b1ad' },
 } as const;
 const TIER_NAME: Record<Tier, string> = { reserved: 'reserved', onDemand: 'on demand', spot: 'spot' };
+/** “earns $X” or “loses $X”, for a week's profit. */
+const earnsOrLoses = (x: number) => (x < 0 ? `loses ${usd(-x)}` : `earns ${usd(x)}`);
 
 /** The week, hour by hour: where each A-class equivalent of wanted work was served, or that it was turned away. */
 function WeekChart({ hours, cursor, ariaLabel }: { hours: HourOps[]; cursor?: number; ariaLabel: string }) {
@@ -258,7 +295,7 @@ function WeekChart({ hours, cursor, ariaLabel }: { hours: HourOps[]; cursor?: nu
   const slot = (x1 - x0) / Math.max(1, n);
   const top = Math.max(1, ...hours.map((h) => h.demand));
   const [, d1] = niceDomain(0, top * 1.05, 4);
-  const y = scale(0, d1, 196, 26);
+  const y = scale(0, d1, 166, 26);
   const xs = hours.map((_, i) => x0 + (i + 0.5) * slot);
   const ex = [x0, ...xs, x1];
   const layers: Array<{ key: keyof typeof SRC; vals: number[] }> = [
@@ -277,21 +314,21 @@ function WeekChart({ hours, cursor, ariaLabel }: { hours: HourOps[]; cursor?: nu
   });
   const demandLine = linePath(xs, hours.map((h) => y(h.demand)));
   return (
-    <svg className="chart" viewBox="0 0 640 230" role="img" aria-label={ariaLabel}>
+    <svg className="chart" viewBox="0 0 640 200" role="img" aria-label={ariaLabel}>
       <text className="ax" x={x0} y={14}>
         Work wanted each hour, A-class equivalents
       </text>
       <GridY y={y} ticks={niceTicks(0, d1, 4)} x0={x0} x1={x1} format={(v) => fmt(v)} baseline={0} />
       {[5, 6].map((d) => (
-        <rect key={d} x={x0 + d * 24 * slot} y={26} width={24 * slot} height={170} fill="rgba(0,0,0,.035)" />
+        <rect key={d} x={x0 + d * 24 * slot} y={26} width={24 * slot} height={140} fill="rgba(0,0,0,.035)" />
       ))}
       {paths.map((p) => (
         <path key={p.key} d={p.d} fill={SRC[p.key].color} opacity={p.key === 'unmet' ? 1 : 0.85} />
       ))}
       <path d={demandLine} fill="none" stroke="#333" strokeWidth={1.4} strokeLinejoin="round" />
-      {cursor !== undefined && <line className="cur" x1={xs[cursor]} x2={xs[cursor]} y1={22} y2={196} />}
+      {cursor !== undefined && <line className="cur" x1={xs[cursor]} x2={xs[cursor]} y1={22} y2={166} />}
       {DAYS.map((d, i) => (
-        <text key={d} className="ax ax-m" x={x0 + (i + 0.5) * 24 * slot} y={214}>
+        <text key={d} className="ax ax-m" x={x0 + (i + 0.5) * 24 * slot} y={184}>
           {d}
         </text>
       ))}
@@ -305,7 +342,10 @@ function HourChart({ detail, d }: { detail: HourDetail; d: CloudDesign }) {
   const max = Math.max(1, ...rows.map((c) => Math.max(c.wanted, c.served)));
   const x = scale(0, max, 228, 560);
   const gpus = GPU_IDS.filter((g) => d.fleet.gpus[g] > 0);
-  const h1 = 24 + rows.length * 30;
+  // Past six customers each row closes up to one line, so the chart grows less.
+  const compact = rows.length > 6;
+  const rowH = compact ? 20 : 30;
+  const h1 = 24 + rows.length * rowH;
   const label =
     rows.map((c) => `${c.name}: wanted ${fmt(c.wanted)}, got ${fmt(c.served)}`).join('; ') +
     '. ' +
@@ -317,18 +357,27 @@ function HourChart({ detail, d }: { detail: HourDetail; d: CloudDesign }) {
         Work each customer wanted (outline) and got (filled), A-class equivalents
       </text>
       {rows.map((c, i) => {
-        const yy = 24 + i * 30;
+        const yy = 24 + i * rowH;
+        const barH = compact ? 14 : 18;
         return (
           <g key={c.id}>
-            <text x={0} y={yy + 12} style={{ fontSize: 13, fill: '#222' }}>
-              {c.name}
-            </text>
-            <text x={0} y={yy + 25} className="ax">
-              {TIER_NAME[c.tier]}
-            </text>
-            <rect x={x(0)} y={yy + 2} width={Math.max(0, x(c.served) - x(0))} height={18} fill={GRAPHIC.blue} opacity={0.85} />
-            <rect x={x(0)} y={yy + 2} width={Math.max(0, x(c.wanted) - x(0))} height={18} fill="none" stroke="#333" strokeWidth={1} />
-            <text x={Math.min(x(Math.max(c.wanted, c.served)) + 6, 600)} y={yy + 15} className="ax">
+            {compact ? (
+              <text x={0} y={yy + 13} style={{ fontSize: 12, fill: '#222' }}>
+                {c.name.length > 22 ? c.name.slice(0, 21) + '…' : c.name} <tspan className="ax">· {TIER_NAME[c.tier]}</tspan>
+              </text>
+            ) : (
+              <>
+                <text x={0} y={yy + 12} style={{ fontSize: 13, fill: '#222' }}>
+                  {c.name}
+                </text>
+                <text x={0} y={yy + 25} className="ax">
+                  {TIER_NAME[c.tier]}
+                </text>
+              </>
+            )}
+            <rect x={x(0)} y={yy + 2} width={Math.max(0, x(c.served) - x(0))} height={barH} fill={GRAPHIC.blue} opacity={0.85} />
+            <rect x={x(0)} y={yy + 2} width={Math.max(0, x(c.wanted) - x(0))} height={barH} fill="none" stroke="#333" strokeWidth={1} />
+            <text x={Math.min(x(Math.max(c.wanted, c.served)) + 6, 600)} y={yy + (compact ? 13 : 15)} className="ax">
               {fmt(c.served)} of {fmt(c.wanted)}
             </text>
           </g>
@@ -359,7 +408,9 @@ function HourChart({ detail, d }: { detail: HourDetail; d: CloudDesign }) {
 }
 
 export default function Lesson() {
-  const design = useCloud();
+  const saved = useCloud();
+  const view = useScenario('view', { basis: 'start' as Basis, premium: false });
+  const design = withPremium(designFor(saved, 'ops', view.state.basis), view.state.premium);
   const ops = design.ops;
   const cs = useScenario('conditions', NORMAL);
   const cond = cs.state;
@@ -367,6 +418,18 @@ export default function Lesson() {
   const ctx = contextOf(design);
   const N = lessonNumbers();
   const setOps = (patch: Partial<OpsPlan>) => updateCloud((d) => ({ ...d, ops: { ...d.ops, ...patch, rented: { ...d.ops.rented, ...(patch.rented ?? {}) } } }));
+  const basisSwitch = <BasisSwitch value={view.state.basis} onChange={(basis) => view.set({ basis })} own="ops" />;
+  const policySwitch = (
+    <Segmented
+      label="Who is served first after reserved customers"
+      value={ops.policy}
+      onChange={(policy) => setOps({ policy })}
+      options={[
+        { value: 'first-come', label: 'First come, first served' },
+        { value: 'tiered', label: 'On demand first, spot last' },
+      ]}
+    />
+  );
 
   const hs = useScenario('hour', { hour: 15 });
   const hour = Math.max(0, Math.min(167, hs.state.hour));
@@ -378,10 +441,17 @@ export default function Lesson() {
   const bSolved = planSolved(design, ops, cond, LAUNCH);
   const aStatus = !normal
     ? 'Set the week back to normal first: every GPU in service, demand at 100% of forecast.'
-    : `This plan earns ${usd(week.profit)} this week, ${usd(bestPlan(design, NORMAL).profit - week.profit)} short of the best plan.`;
+    : `This plan ${earnsOrLoses(week.profit)} this week, ${usd(bestPlan(design, NORMAL).profit - week.profit)} short of the best plan.`;
   const bStatus = !launch
     ? 'Set the week to a launch: demand at 180% of forecast, with every GPU in service.'
-    : `This plan earns ${usd(week.profit)} in the launch week, ${usd(bestPlan(design, LAUNCH).profit - week.profit)} short of the best plan.`;
+    : `This plan ${earnsOrLoses(week.profit)} in the launch week, ${usd(bestPlan(design, LAUNCH).profit - week.profit)} short of the best plan.`;
+  const rentsNothing = ops.rented.A + ops.rented.B === 0;
+  const aHours = rentsNothing ? rentedHours(runWeek(design, { ...ops, rented: { L: 0, A: RENT_A.step, B: 0 } }, NORMAL)) : 0;
+  const aSuccess = `Solved: this plan ${earnsOrLoses(week.profit)} this week, the most any plan can in a normal week. ${
+    rentsNothing
+      ? `No rental pays: ${fmt(RENT_A.step)} A-class GPUs rented here would be at work in only ${fmt(aHours)} of the week’s 168 hours, far short of the two-thirds their rent needs, and the next section shows why the B-class fails too.`
+      : 'For this design some rented capacity earns more than it costs.'
+  }${ops.policy === 'tiered' ? ' Serving on-demand customers before spot ones does the rest.' : ''}${ops.burst && view.state.premium ? ' With the premium price book, buying overflow elsewhere pays as well.' : ''}`;
 
   const away = turnedAway(week);
   const caption = `${pct(away)} of the work wanted at the customers’ first-choice prices is turned away this week. Busy: ${GPU_IDS.filter((g) => design.fleet.gpus[g] > 0)
@@ -390,21 +460,31 @@ export default function Lesson() {
   const weekLabel = `A week of operations: ${fmt(week.hours.reduce((s, h) => s + h.demand, 0))} A-class-equivalent GPU-hours wanted, ${fmt(
     week.hours.reduce((s, h) => s + h.owned, 0),
   )} served on our GPUs, ${fmt(week.hours.reduce((s, h) => s + h.rented, 0))} on rented GPUs, ${fmt(week.hours.reduce((s, h) => s + h.burst, 0))} bought elsewhere, ${pct(away)} turned away. Profit ${usd(week.profit)}.`;
+  const planText = `${view.state.basis === 'start' ? 'The starting design' : 'Your design'}${view.state.premium ? ' with the premium price book' : ''}, ${
+    ops.policy === 'tiered' ? 'on demand first' : 'first come, first served'
+  }, ${ops.rented.A + ops.rented.B > 0 ? `renting ${[ops.rented.A ? `${fmt(ops.rented.A)} A-class` : '', ops.rented.B ? `${fmt(ops.rented.B)} B-class` : ''].filter(Boolean).join(' and ')}` : 'nothing rented'}; demand at ${cond.demandPct}% of forecast, ${cond.outPct}% of GPUs out of service.`;
 
   return (
     <LessonPage id="compute/7.4">
       <P>
         Your cloud now has a fleet and a building (<a href={lessonHref('compute/7.1')}>Lesson 7.1</a>), customers (
-        <a href={lessonHref('compute/7.2')}>Lesson 7.2</a>) and a price book (<a href={lessonHref('compute/7.3')}>Lesson 7.3</a>), all kept in this browser. If you
-        skipped those lessons, the starting design stands in for them: {fmt(N.fleetTotal)} GPUs at Tech Park, six customers and the course’s simulated list prices. This lesson runs the
-        cloud for a week, hour by hour, and asks what is still left to decide once all of that is fixed. Two things are: who gets the GPUs each hour, and whether to buy
-        capacity from other clouds when your own runs short. Neither is new. They are the yield management of <a href={lessonHref('compute/6.1')}>Lesson 6.1</a> and the
-        procurement choices of <a href={lessonHref('compute/6.2')}>Lesson 6.2</a>, now applied to your own business.
+        <a href={lessonHref('compute/7.2')}>Lesson 7.2</a>) and a price book (<a href={lessonHref('compute/7.3')}>Lesson 7.3</a>), all kept in this browser. The text
+        describes the starting design — {fmt(N.fleetTotal)} GPUs at Tech Park, six customers and the course’s simulated list prices — and so do the demonstrations,
+        until you switch them to yours. This lesson runs the cloud for a week, hour by hour, and asks what is still left to decide once all of that is fixed. Two things
+        are: who gets the GPUs each hour, and whether to buy capacity from other clouds when your own runs short. Neither is new. They are the yield management of{' '}
+        <a href={lessonHref('compute/6.1')}>Lesson 6.1</a> and the procurement choices of <a href={lessonHref('compute/6.2')}>Lesson 6.2</a>, now applied to your own
+        business. Your cloud so far:
       </P>
+      <SoFar parts={['fleet', 'customers', 'prices']} />
       <P>
         Each hour runs the same way. Reserved customers come first, because their capacity was promised: as in <a href={lessonHref('compute/5.4')}>Lesson 5.4</a>, each
         has GPUs committed to cover its busiest hour and pays for every one of them every hour, used or not. At the starting prices those commitments take{' '}
-        {N.committedB === N.fleetB ? `all ${fmt(N.fleetB)}` : `${fmt(N.committedB)} of the ${fmt(N.fleetB)}`} B-class GPUs, for the frontier lab and the model trainer. On-demand and spot customers share what is left. Each prefers the accelerator that does its work most cheaply (
+        {N.committedB === N.fleetB ? `all ${fmt(N.fleetB)}` : `${fmt(N.committedB)} of the ${fmt(N.fleetB)}`} B-class GPUs, for the frontier lab and the model trainer.
+        A commitment covers only the buyers who will pay the price of the GPUs committed, though. The B-class runs out partway through the model trainer’s, and the rest
+        is on A-class GPUs, sized for the {pct(N.trainer.shareA)} of its buyers who will pay the A-class’s price per unit of work rather than the{' '}
+        {pct(N.trainer.shareFirst)} who buy on the B-class: {fmt(N.trainer.committed)} of the {fmt(N.trainer.wanted)} A-class equivalents it wants each hour. So even in
+        a normal week the trainer is served {pct(N.tieredServed.c4)} of its work. On-demand and spot customers share what is left. Each prefers the accelerator that
+        does its work most cheaply (
         <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>); when that one is full, only the buyers willing to pay a dearer accelerator’s price per unit of work move to
         it (Lesson 7.3), and the rest are turned away. Spot customers may also use committed GPUs that a reserved customer leaves idle.
       </P>
@@ -418,21 +498,15 @@ export default function Lesson() {
       <Figure
         name="Compute Operations Center"
         onReset={() => {
-          resetPart('ops');
+          if (!confirmResetPart('ops')) return;
           cs.reset();
+          view.reset();
         }}
       >
+        {basisSwitch}
         <WeekChart hours={week.hours} ariaLabel={weekLabel} />
         <Legend items={[...(['owned', 'rented', 'burst', 'unmet'] as const).map((k) => ({ label: SRC[k].label, color: SRC[k].color })), { label: 'Work wanted', color: '#333', kind: 'line' as const }]} />
-        <Segmented
-          label="Who is served first after reserved customers"
-          value={ops.policy}
-          onChange={(policy) => setOps({ policy })}
-          options={[
-            { value: 'first-come', label: 'First come, first served' },
-            { value: 'tiered', label: 'On demand first, spot last' },
-          ]}
-        />
+        {policySwitch}
         <Slider
           label="A-class rented"
           tone="green"
@@ -453,7 +527,10 @@ export default function Lesson() {
           onChange={(B) => setOps({ rented: { ...ops.rented, B } })}
           display={`${fmt(ops.rented.B)} at ${usd(PRICES.B.reserved, 2)}/h`}
         />
-        <Checkbox label="When full, buy on-demand hours from another cloud if the sale covers them" checked={ops.burst} onChange={(burst) => setOps({ burst })} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 24px' }}>
+          <Checkbox label="Buy overflow elsewhere when it pays" checked={ops.burst} onChange={(burst) => setOps({ burst })} />
+          <Checkbox label={`Premium price book (on demand +${pct(PREMIUM)})`} checked={view.state.premium} onChange={(premium) => view.set({ premium })} />
+        </div>
         <Slider label="GPUs out of service" tone="red" value={cond.outPct} min={0} max={30} onChange={(outPct) => cs.set({ outPct })} display={`${cond.outPct}%`} />
         <Slider label="Demand against forecast" value={cond.demandPct} min={50} max={200} step={10} onChange={(demandPct) => cs.set({ demandPct })} display={`${cond.demandPct}%`} />
         <Readouts
@@ -463,18 +540,6 @@ export default function Lesson() {
             { label: 'rent and bought hours', value: usd(week.rentCost + week.burstCost), tone: 'green' },
             { label: 'fixed costs (Lesson 4.5)', value: usd(week.fixedCost), tone: 'green' },
             { label: 'profit this week', value: usd(week.profit), tone: week.profit < 0 ? 'red' : 'green' },
-          ]}
-        />
-        <DataTable
-          caption="Each customer: its product, the accelerator that does its work most cheaply and the price per A-class equivalent there, the share of its wanted work served, and its revenue this week"
-          rows={ctx.off}
-          rowKey={(o) => o.customer.id}
-          columns={[
-            { label: 'Customer', cell: (o) => o.customer.name },
-            { label: 'Buys', cell: (o) => TIER_NAME[o.customer.tier] },
-            { label: 'Prefers', cell: (o) => (o.gpu ? `${ACCELERATORS[o.gpu].short}, ${usd(o.price, 2)}` : '—'), align: 'right' },
-            { label: 'Served', cell: (o) => (o.gpu ? pct(week.served[o.customer.id] ?? 0) : 'out of reach'), align: 'right' },
-            { label: 'Revenue', cell: (o) => usd(week.revenueBy[o.customer.id] ?? 0), align: 'right' },
           ]}
         />
         <Caption>{caption}</Caption>
@@ -488,41 +553,65 @@ export default function Lesson() {
         committed to the reserved customers.
       </P>
       <P>
+        The next demonstration lists the customers under the plan and conditions set in <FigRef to="Compute Operations Center">the first demonstration</FigRef>: each
+        one’s product, the accelerator that does its work most cheaply and the price per A-class equivalent there, the share of its wanted work served this week, and
+        its revenue. It repeats the choice of who is served first:
+      </P>
+
+      <Figure name="Compute Operations Center · customers">
+        {basisSwitch}
+        {policySwitch}
+        <DataTable
+          caption="Each customer: its product, the accelerator that does its work most cheaply and the price per A-class equivalent there, the share of its wanted work served, and its revenue this week"
+          rows={ctx.off}
+          rowKey={(o) => o.customer.id}
+          columns={[
+            { label: 'Customer', cell: (o) => o.customer.name },
+            { label: 'Buys', cell: (o) => TIER_NAME[o.customer.tier] },
+            { label: 'Prefers', cell: (o) => (o.gpu ? `${ACCELERATORS[o.gpu].short}, ${usd(o.price, 2)}` : '—'), align: 'right' },
+            { label: 'Served', cell: (o) => (o.gpu ? pct(week.served[o.customer.id] ?? 0) : 'out of reach'), align: 'right' },
+            { label: 'Revenue', cell: (o) => usd(week.revenueBy[o.customer.id] ?? 0), align: 'right' },
+          ]}
+        />
+        <Readouts items={[{ label: 'profit this week', value: usd(week.profit), tone: week.profit < 0 ? 'red' : 'green' }]} />
+      </Figure>
+      <P>
         Now serve on-demand customers before spot ones. Code completion goes from {pct(N.fc.served.c2)} of its work to {pct(N.tiered.served.c2)}, the chat startup from{' '}
         {pct(N.fc.served.c1)} to {pct(N.tiered.served.c1)}, while the document processor drops from {pct(N.fc.served.c6)} to {pct(N.tiered.served.c6)}. The week improves
-        by {usd(N.tiered.gain)}, to {usd(N.tiered.profit)}. It is Lesson 6.1’s lesson in miniature: spot work can wait for the night, and the afternoon GPU-hour it gives up
-        sells for the on-demand price instead.
+        by {usd(N.tiered.gain)}, to {usd(N.tiered.profit)}. It is the heart of Lesson 6.1’s best allocation: spot work can wait for the night, and the afternoon GPU-hour it
+        gives up sells for the on-demand price instead. Even so, work is turned away in every one of the week’s {N.hoursTurnedAway} hours. Should the cloud rent more GPUs?
       </P>
 
       <Challenge
         id="a"
-        question="In a normal week — every GPU in service, demand as forecast — find the operating plan that earns your cloud the most."
+        figure="Compute Operations Center"
+        question={`Predict first: will renting GPUs from another cloud — A-class at ${usd(PRICES.A.reserved, 2)} an hour, sold on demand at ${usd(PRICES.A.onDemand, 2)}, or B-class at ${usd(PRICES.B.reserved, 2)}, sold at ${usd(PRICES.B.onDemand, 2)} — pay in a normal week? Lesson 5.4’s rule is the test: a GPU rented for every hour at two-thirds of its sale price pays only if it sells in more than two-thirds of them. Then, in a normal week — every GPU in service, demand as forecast — find the operating plan that earns your cloud the most.`}
         solved={aSolved}
         status={aStatus}
-        success={`Solved: ${usd(week.profit)} this week. ${
-          ops.policy === 'tiered' ? 'Serving on-demand customers before spot ones does the work; ' : 'Here the order hardly matters; '
-        }${ops.rented.A + ops.rented.B > 0 ? 'and for this design some rented capacity earns more than it costs.' : 'renting anything only adds hours you pay for and can’t fill.'} With the starting design the best plan is to serve on demand first, rent nothing, and earn ${usd(N.normalBest.profit)}.`}
+        success={aSuccess}
       />
 
       <H2>Buying capacity elsewhere</H2>
       <P>
-        If customers are being turned away, why not rent more GPUs? Try it. With the starting design, renting 32 B-class GPUs at another cloud’s simulated reserved price of{' '}
-        {usd(PRICES.B.reserved, 2)} an hour lowers the week’s profit by {usd(N.rentB32.loss)}; renting 64 A-class GPUs at {usd(PRICES.A.reserved, 2)} lowers it by{' '}
-        {usd(N.rentA64.loss)}. The reason is Lesson 5.4’s rule for
-        reservations: a GPU rented for every hour pays only if it will be busy, at a good price, in enough of them. The turned-away work peaks in the afternoon —
-        the chat startup alone wants {fmt(N.chatPeak)} A-class equivalents at 15:00 on a weekday and {fmt(N.chatNight)} at 03:00 — so at night the rented GPUs sit idle or sell
-        to spot buyers for less than their rent.
+        Neither rental pays, and for different reasons. Rent 64 A-class GPUs and the week loses {usd(N.rentA64.loss)} more. The cloud uses rented GPUs only once its own
+        are full, which happens in the afternoons, so they are at work in {fmt(N.rentA64.hours)} of the week’s 168 hours, far short of the two-thirds their rent needs
+        ({usd(PRICES.A.reserved, 2)} ÷ {usd(PRICES.A.onDemand, 2)}). The work turned away at night belongs to buyers who would pay the B-class’s price but not the
+        A-class’s, so more A-class hours don’t win it. Rent 32 B-class GPUs instead, at the same two-thirds of their sale price, and the week loses{' '}
+        {usd(N.rentB32.loss)}. They are busy in all {fmt(N.rentB32.hours)} hours, but mostly with work the cloud’s own A-class GPUs were already doing: the customers
+        prefer them, per unit of work, so the A-class falls from {pct(N.tieredUtilA)} busy to {pct(N.rentB32.ownedA)}, revenue falls by {usd(-N.rentB32.revenueChange)},
+        and the {usd(N.rentB32.rent)} of rent buys nothing new.
       </P>
       <P>
-        Buying on-demand hours from another cloud costs nothing when unused, but with the starting prices it earns nothing either: your on-demand prices are the market’s, so
-        a B-class hour bought for {usd(PRICES.B.onDemand, 2)} resells for {usd(PRICES.B.onDemand, 2)}. Bursting pays only if your own on-demand price sits above the market’s, a choice made in Lesson 7.3. Had you priced
-        on-demand hours 20% above the list there, buying elsewhere would add {usd(N.premium.gain)} to the week ({usd(N.premium.noBurst)} without it, {usd(N.premium.burst)}{' '}
-        with it): customers who would otherwise be turned away pay your premium, and another cloud’s idle GPUs do the work.
+        Buying on-demand hours from another cloud costs nothing when unused, but with the starting prices it earns nothing either: your on-demand prices are the
+        market’s, so a B-class hour bought for {usd(PRICES.B.onDemand, 2)} resells for {usd(PRICES.B.onDemand, 2)}. Bursting pays only if your own on-demand price sits
+        above the market’s, a choice made in Lesson 7.3. Tick the premium price book in <FigRef to="Compute Operations Center">the first demonstration</FigRef> — every
+        on-demand price {pct(PREMIUM)} above the market’s — and buying elsewhere adds {usd(N.premium.gain)} to the week ({usd(N.premium.noBurst)} without it,{' '}
+        {usd(N.premium.burst)} with it): customers who would otherwise be turned away pay your premium, and another cloud’s idle GPUs do the work.
       </P>
 
       <H2>When the week isn’t normal</H2>
       <P>
-        The conditions sliders change things you don’t control. Take 10% of the GPUs out of service — failed boards and the repairs Lesson 6.5 counted as lost hours — and the
+        The conditions sliders change things you don’t control. Take 10% of the GPUs out of service — failed boards and the repairs <a href={lessonHref('compute/6.5')}>Lesson 6.5</a> counted as lost hours — and the
         starting design, served on demand first, falls to {usd(N.out10.profit)}. The reserved customers lose service too, because some of their committed GPUs are among
         those out: the model trainer gets {pct(N.out10.served.c4)} of its work instead of {pct(N.tieredServed.c4)}, and the document processor, which lives on spare
         hours, drops from {pct(N.tieredServed.c6)} to {pct(N.out10.served.c6)}. (A real training run would do worse: as{' '}
@@ -533,15 +622,16 @@ export default function Lesson() {
       <P>
         Now set demand to 180% of the forecast — a launch week. With nothing rented, on demand first, the cloud earns {usd(N.launch.none)}: every owned GPU is busy around the
         clock and the chat startup gets only {pct(N.launch.noneChat)} of its work. Renting now looks different. The extra demand is there at night as well as in the afternoon,
-        so a rented GPU stays busy in enough hours to cover its rent — the same two-thirds rule (Lesson 5.4), this time satisfied.
+        so a rented GPU stays busy in enough hours to cover its rent — the same two-thirds rule, this time satisfied.
       </P>
 
       <Challenge
         id="b"
+        figure="Compute Operations Center"
         question="In a launch week — demand at 180% of the forecast, every GPU in service — find the operating plan that earns your cloud the most."
         solved={bSolved}
         status={bStatus}
-        success={`Solved: ${usd(week.profit)} for the launch week. With the starting design the best plan serves on demand first and rents ${fmt(N.launch.bestA)} A-class${
+        success={`Solved: this plan ${earnsOrLoses(week.profit)} in the launch week. With the starting design the best plan serves on demand first and rents ${fmt(N.launch.bestA)} A-class${
           N.launch.bestB ? ` and ${fmt(N.launch.bestB)} B-class` : ''
         } GPUs: ${usd(N.launch.rentCost)} of rent that lifts the week by ${usd(N.launch.gain)}, and the chat startup gets ${pct(N.launch.bestChat)} of its work instead of ${pct(
           N.launch.noneChat,
@@ -559,22 +649,25 @@ export default function Lesson() {
       </P>
 
       <Figure name="Compute Operations Center · one hour" scenario={hs}>
+        {basisSwitch}
         <WeekChart hours={week.hours} cursor={hour} ariaLabel={`${weekLabel} Marked: ${hourName(hour)}.`} />
         <Slider label="Hour of the week" value={hour} min={0} max={167} onChange={(h) => hs.set({ hour: h })} display={hourName(hour)} />
         <HourChart detail={detail} d={design} />
         <Readouts
           items={[
-            { label: 'work wanted this hour', value: fmt(detail.row.demand) },
+            { label: 'wanted this hour', value: fmt(detail.row.demand) },
             { label: 'served on our GPUs', value: fmt(detail.row.owned) },
-            { label: 'rented or bought elsewhere', value: fmt(detail.row.rented + detail.row.burst) },
+            { label: 'rented or bought', value: fmt(detail.row.rented + detail.row.burst) },
             { label: 'turned away', value: fmt(detail.row.unmet), tone: detail.row.unmet > 0.5 ? 'red' : undefined },
           ]}
         />
+        <Caption>{planText}</Caption>
       </Figure>
 
       <P>
-        With the starting design served on demand first, the busiest hour is Monday at 15:00: {fmt(N.peak.demand)} A-class equivalents wanted, {fmt(N.peak.owned)} served on
-        your own GPUs and {fmt(N.peak.unmet)} turned away. At 04:00 the same day, {fmt(N.night.demand)} are wanted and still {fmt(N.night.unmet)} turned away, though{' '}
+        With the starting design served on demand first, the busiest hours of the week are at {String(PEAK_HOUR).padStart(2, '0')}:00 on each weekday. On
+        Monday, {fmt(N.peak.demand)} A-class equivalents are wanted, {fmt(N.peak.owned)} served on your own GPUs and {fmt(N.peak.unmet)} turned away. At{' '}
+        {String(NIGHT_HOUR).padStart(2, '0')}:00 the same day, {fmt(N.night.demand)} are wanted and still {fmt(N.night.unmet)} turned away, though{' '}
         {fmt(N.night.idleA)} A-class GPUs sit idle: the work turned away at night belongs to buyers who would pay the B-class’s price but not the A-class’s. The fleet isn’t simply too small. Its B-class
         GPUs are sold out to reserved contracts, and its A- and L-class GPUs are priced, per unit of work, above what some buyers will pay — a fact about the fleet and the
         price book, which operations can work around but not undo.

@@ -23,7 +23,7 @@ import {
   useScenario,
 } from '../../../framework';
 import { piston, scfPerCubicFoot, zFactor } from '../../../engines/gas/eos';
-import { PIPELINE_GAS, R_PSIA, SCF_PER_LBMOL, gasProperties, psia, rankine } from '../../../engines/gas/properties';
+import { COMPONENT, PIPELINE_GAS, R_PSIA, SCF_PER_LBMOL, STD_PSIA, gasProperties, psia, rankine } from '../../../engines/gas/properties';
 import { rng } from '../../../model/random';
 import { XYChart } from '../shared/XYChart';
 
@@ -78,6 +78,8 @@ const SCF_1000 = scfPerCubicFoot(1000, 60);
 const SCF_1000_IDEAL = (1000 * SCF_PER_LBMOL) / (R_PSIA * rankine(60));
 const RHO_1000 = (SCF_1000 * GAS.mw) / SCF_PER_LBMOL;
 const SCF_CNG = scfPerCubicFoot(psia(3600), 60);
+/** CNG's packing, to the nearest 50 scf: the model's Z runs a few percent low at these pressures, so the prose stays round. */
+export const SCF_CNG_ROUNDED = Math.round(SCF_CNG / 50) * 50;
 const ZMIN_60 = zMinimum(60);
 const ZMIN_0 = zMinimum(0);
 /** Root-mean-square molecular speed at 60 °F, m/s: √(3RT/M). */
@@ -87,6 +89,15 @@ export const HEAT = { volume: 11, cold: 40, warm: 100 };
 const HEAT_COLD = piston(CHARGE_SCF, HEAT.volume, HEAT.cold);
 const HEAT_WARM = piston(CHARGE_SCF, HEAT.volume, HEAT.warm);
 const HEAT_IDEAL = (HEAT_COLD.pressure * rankine(HEAT.warm)) / rankine(HEAT.cold);
+/** Where an ideal gas would reach the MAOP at 60 °F: Boyle's law from 1,000 cubic feet at 14.73 psia, about 10.1 ft³. */
+export const IDEAL_MAOP_VOLUME = (CHARGE_SCF * STD_PSIA) / psia(MAOP_PSIG);
+/** The challenge's answer: the smallest volume on the slider's grid that keeps the real gas at or under the MAOP. */
+export const MAOP_VOLUME = (() => {
+  for (let i = V_MIN * 10; i <= V_MAX * 10; i++) if (maopSolved(i / 10, CHALLENGE_TEMP)) return i / 10;
+  return NaN;
+})();
+const AT_MAOP = piston(CHARGE_SCF, MAOP_VOLUME, CHALLENGE_TEMP);
+const PAST_MAOP = piston(CHARGE_SCF, roundV(MAOP_VOLUME - V_STEP), CHALLENGE_TEMP);
 
 // ---------------------------------------------------------------------------
 // The animated cylinder.
@@ -282,7 +293,7 @@ export default function Lesson() {
       <P>
         <a href={lessonHref('gas/1.1')}>Lesson 1.1</a> counted gas in standard cubic feet. A standard cubic foot is an amount of gas, not a space: it’s the gas that
         would fill one cubic foot at 60 °F and 14.73 pounds per square inch. Real gas is almost never kept at those conditions. Northline, the pipeline that
-        carries gas from Calder Hub to Metro, is allowed to run at up to 1,440 pounds per square inch, and storage fields hold gas in porous rock deep underground, also at high pressure. So
+        carries gas from Calder Hub to Metro, is allowed to run at up to 1,440 pounds per square inch, and storage fields hold gas in porous rock or salt caverns deep underground, also at high pressure. So
         the number that decides how much energy a pipe or a storage field can hold is how many standard cubic feet fit into one actual cubic foot. The answer
         depends on two things: the gas’s <K tone="blue">pressure</K> and its <K tone="teal">temperature</K>.
       </P>
@@ -293,8 +304,11 @@ export default function Lesson() {
         each square inch every second, so the pressure rises. Warm it and the molecules move faster, striking harder and more often.
       </P>
       <P>
-        In the next demonstration, a cylinder holds 1,000 standard cubic feet of the region’s pipeline gas: {MOLES.toFixed(2)} pound-moles of molecules, weighing{' '}
-        {(MOLES * GAS.mw).toFixed(1)} pounds. At standard conditions it would fill 1,000 cubic feet; the piston has already squeezed it into 50. The blue ticks
+        In the next demonstration, a cylinder holds 1,000 standard cubic feet of the region’s pipeline gas, weighing {(MOLES * GAS.mw).toFixed(1)} pounds. The gas
+        laws count gas by its molecules, in <b>pound-moles</b>: a pound-mole is a fixed number of molecules, as many as there are in {fmt(COMPONENT.methane.mw)} pounds of
+        methane or {fmt(COMPONENT.nitrogen.mw)} of nitrogen. Equal volumes hold equal numbers of molecules, so a pound-mole of any gas fills{' '}
+        {fmt(SCF_PER_LBMOL, 1)} standard cubic feet, and our cylinder holds 1,000 ÷ {fmt(SCF_PER_LBMOL, 1)} = {MOLES.toFixed(2)} pound-moles. At standard
+        conditions the gas would fill 1,000 cubic feet; the piston has already squeezed it into 50. The blue ticks
         on the piston mark molecules hitting it. The gauge’s blue needle is the gas’s pressure, and its dashed needle is what an ideal gas — one whose molecules
         neither attract each other nor take up any room — would show. Push the piston in, and change the temperature:
       </P>
@@ -310,7 +324,6 @@ export default function Lesson() {
           items={[
             { label: 'absolute pressure', value: `${fmt(st.pressure)} psia`, tone: 'blue' },
             { label: 'ideal gas', value: `${fmt(st.idealPressure)} psia` },
-            { label: 'Z', value: st.z.toFixed(3) },
             { label: 'density', value: `${st.density.toFixed(2)} lb/ft³` },
             { label: 'scf per ft³', value: fmt(scfPerCf, 1) },
           ]}
@@ -355,25 +368,23 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Northline may never run above 1,440 psig, its maximum allowable operating pressure. At 60 °F, squeeze the 1,000 standard cubic feet into the smallest volume that keeps the gauge at or under that limit."
+        question={`Northline may never run above ${fmt(MAOP_PSIG)} psig, its maximum allowable operating pressure — ${fmt(psia(MAOP_PSIG), 1)} psia. At 60 °F, Boyle’s law puts an ideal gas at that limit in ${fmt(CHARGE_SCF)} × ${STD_PSIA} ÷ ${fmt(psia(MAOP_PSIG), 1)} ≈ ${fmt(IDEAL_MAOP_VOLUME, 1)} cubic feet. Predict first: will the real gas, at the same 60 °F, need more room than that, or less? Then find the smallest volume, to a tenth of a cubic foot, that keeps the gauge at or under the limit.`}
         solved={solved}
         status={
           temp !== CHALLENGE_TEMP
             ? `Set the temperature to 60 °F first; right now the gas is at ${temp} °F.`
-            : overLimit
-              ? `At ${volume.toFixed(1)} cubic feet the gauge reads ${fmt(gauge(st.pressure))} psig, over the 1,440 psig limit.`
-              : `At ${volume.toFixed(1)} cubic feet the gauge reads ${fmt(gauge(st.pressure))} psig. Can the gas go into less space?`
+            : `At ${volume.toFixed(1)} cubic feet the gauge reads ${fmt(gauge(st.pressure))} psig${overLimit ? ', over the limit' : ''}.`
         }
-        success={`Solved. At ${volume.toFixed(1)} cubic feet the gauge reads ${fmt(gauge(st.pressure))} psig, and ${(volume - V_STEP).toFixed(1)} would take it to ${fmt(gauge(piston(CHARGE_SCF, roundV(volume - V_STEP), temp).pressure))}. That packs ${fmt(scfPerCf, 1)} standard cubic feet into every cubic foot. An ideal gas at the same pressure would need ${(volume / st.z).toFixed(1)} cubic feet, so the real gas fits ${fmt((1 / st.z - 1) * 100)}% more into the same space — the reward for Z = ${st.z.toFixed(3)}.`}
+        success={`Solved: less room, not more. At ${MAOP_VOLUME.toFixed(1)} cubic feet the gauge reads ${fmt(gauge(AT_MAOP.pressure))} psig, and ${roundV(MAOP_VOLUME - V_STEP).toFixed(1)} would take it to ${fmt(gauge(PAST_MAOP.pressure))}. The real gas’s molecules pull on one another and push less than an ideal gas’s, so it fits into less space: Z is ${AT_MAOP.z.toFixed(3)} here, and ${fmt(IDEAL_MAOP_VOLUME, 1)} × ${AT_MAOP.z.toFixed(3)} ≈ ${fmt(IDEAL_MAOP_VOLUME * AT_MAOP.z, 1)} cubic feet. The same space holds ${fmt((1 / AT_MAOP.z - 1) * 100)}% more of the real gas than of an ideal one: ${fmt(CHARGE_SCF / MAOP_VOLUME)} standard cubic feet in every cubic foot.`}
       />
 
       <H2>How much gas fits</H2>
       <P>
-        That reward is why compressibility matters commercially. At 1,000 psia and 60 °F, each cubic foot of pipe holds {fmt(SCF_1000, 1)} standard cubic feet of
+        Fitting more gas into the same space is why compressibility matters commercially. At 1,000 psia and 60 °F, each cubic foot of pipe holds {fmt(SCF_1000, 1)} standard cubic feet of
         our gas, where the ideal law would allow {fmt(SCF_1000_IDEAL, 1)}; the gas inside weighs {RHO_1000.toFixed(2)} pounds per cubic foot, against{' '}
         {GAS.density.toFixed(4)} at standard conditions. A pipeline is therefore also a container, and the gas packed into it — its linepack — is something
         operators draw on and refill every day (<a href={lessonHref('gas/3.3')}>Lesson 3.3</a>). Compressed natural gas for vehicles is stored at up to about 3,600
-        psi, where a cubic foot holds about {fmt(SCF_CNG)} standard cubic feet.
+        psi, where a cubic foot holds roughly {fmt(SCF_CNG_ROUNDED)} standard cubic feet.
       </P>
       <P>
         How far a gas strays from ideal depends on its pressure and its temperature together. The next demonstration plots Z against pressure for several
@@ -436,12 +447,7 @@ export default function Lesson() {
             { label: 'Ideal gas', color: '#777', kind: 'line', dashed: true },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'Z in the cylinder', value: st.z.toFixed(3) },
-            { label: `lowest Z at ${temp} °F`, value: `${zmin.z.toFixed(3)} near ${fmt(zmin.p)} psia` },
-          ]}
-        />
+        <Readouts items={[{ label: 'Z in the cylinder', value: st.z.toFixed(3) }]} />
         {sliders}
       </Figure>
 

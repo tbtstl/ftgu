@@ -22,6 +22,8 @@ import {
   hour,
   lessonHref,
   linePath,
+  niceDomain,
+  niceTicks,
   scale,
   signed,
   tint,
@@ -32,6 +34,8 @@ import {
   TECH_PARK_PUE,
   backtest,
   breakEvenPrices,
+  drawAtCap,
+  gpuDieShare,
   gpuGridKW,
   hourOutcome,
   modeAt,
@@ -54,6 +58,8 @@ const ALL = DAYS.flat();
 const MEAN_PRICE = ALL.reduce((a, b) => a + b, 0) / ALL.length;
 const MAX_PRICE = Math.max(...ALL);
 const KW = gpuGridKW();
+/** Share of that draw that is the GPU itself, which a power cap limits. */
+const DIE = gpuDieShare();
 const A_PRICE = PRICES.A.onDemand;
 /** What an A-class hour costs to provide at Tech Park (Lesson 4.5's base case), and electricity's share of it. */
 const BASE_COST = gpuHourCost({ gpu: 'A', cooling: 'air', site: SITES.techpark, pue: annualPue(SITES.techpark, { cooling: 'air', supplyC: 24 }).pue, utilization: 0.7, serverLifeYears: 5, facilityLifeYears: 15, rate: 0.1 });
@@ -66,7 +72,7 @@ const MODE_COLOR: Record<Mode, string> = { full: tint(GRAPHIC.green, 0.55), capp
 export interface DayState {
   /** Value of an hour of the work at full speed, $. */
   value: number;
-  /** Power cap, % of full power. */
+  /** The GPU's power cap, % of its rated power. */
   cap: number;
   /** Day of the history, 1–120. */
   day: number;
@@ -133,7 +139,7 @@ export const HALL_MW = 20;
 export interface HallState {
   /** GPUs the hall owns. */
   owned: number;
-  /** Power cap, % of full power. */
+  /** The GPUs' power cap, % of their rated power. */
   cap: number;
   /** Counterfactual: speed falls in step with power (no lowering of voltage). */
   linear: boolean;
@@ -141,6 +147,8 @@ export interface HallState {
 
 export const HALL_DEFAULTS: HallState = { owned: 20000, cap: 100, linear: false };
 export const CAP_MIN = 50;
+export const OWNED_MIN = 13000;
+export const OWNED_MAX = 24000;
 
 /** GPUs running and work done (in A-class GPUs' worth of work at full speed) at a cap. */
 export function hallRun(owned: number, capPct: number, linear = false) {
@@ -187,7 +195,9 @@ const PLAN70 = powerCapPlan(HALL_MW, 0.7);
 const PLAN100 = powerCapPlan(HALL_MW, 1);
 const EXTRA_GPUS = PLAN70.gpus - PLAN100.gpus;
 const EXTRA_WORK = PLAN70.work - PLAN100.work;
-const EXTRA_COST = EXTRA_GPUS * BASE_COST.totalYear;
+/** The hardware an extra GPU adds each year: its server share, network and upkeep. The building and the electricity are the hall's 20 MW either way. */
+const HARDWARE_YEAR = BASE_COST.serverYear + BASE_COST.networkYear + BASE_COST.upkeepYear;
+const EXTRA_COST = EXTRA_GPUS * HARDWARE_YEAR;
 
 const SPIKE = MAX_PRICE;
 const SPIKE_POL = policyOf(A_PRICE, 70);
@@ -195,6 +205,14 @@ const SPIKE_FULL = hourOutcome(SPIKE, 'full', SPIKE_POL);
 const SPIKE_CAP = hourOutcome(SPIKE, 'capped', SPIKE_POL);
 const SPIKE_PAUSE = hourOutcome(SPIKE, 'paused', SPIKE_POL);
 
+/** The power pausing saves: a busy GPU's grid draw less what it still draws idle, kW. */
+const PAUSE_KW = KW * (1 - IDLE_POWER_SHARE);
+/** The days on which the price ever passes the capping price for $2.40 work capped to 70%. */
+const CAP_DAYS = DAYS.map((d, i) => ({ day: i + 1, max: Math.max(...d) })).filter((d) => d.max > policyOf(A_PRICE, 70).capAbove).map((d) => d.day);
+/** Where capping $2.40 work to 50% starts to pay, $/MWh. */
+const N_CAP50 = policyOf(A_PRICE, 50).capAbove;
+/** Challenge a's exact answer: the value at which the history's peak just pays for pausing, $ per hour. */
+const N_PAUSE_EXACT = (MAX_PRICE * PAUSE_KW) / 1000;
 const RUN_240 = historyRun(2.4, 70);
 const RUN_095 = historyRun(0.95, 70);
 const RUN_025 = historyRun(0.25, 70);
@@ -241,6 +259,11 @@ export const LESSON_NUMBERS = {
   run025: RUN_025,
   dayDefault: DAY_DEFAULT,
   pauseAnswer: PAUSE_VALUE_ANSWER,
+  pauseKW: PAUSE_KW,
+  /** The break-even value the challenge asks for: the history's peak times the power pausing saves. */
+  pauseValueExact: N_PAUSE_EXACT,
+  capDays: CAP_DAYS,
+  cap50: N_CAP50,
   defer: DEFER,
   fleet120Cost: FLEET_120_COST,
   full: FULL,
@@ -254,6 +277,12 @@ export const LESSON_NUMBERS = {
   extraCost: EXTRA_COST,
   costPerExtraWork: EXTRA_COST / EXTRA_WORK,
   gpuYear: BASE_COST.totalYear,
+  hardwareYear: HARDWARE_YEAR,
+  /** How many times a flat-out GPU's hardware cost per unit of work the capped extra work costs. */
+  extraCostRatio: EXTRA_COST / EXTRA_WORK / HARDWARE_YEAR,
+  dieShare: DIE,
+  draw70: drawAtCap(0.7),
+  savedKW70: KW * (1 - drawAtCap(0.7)),
 };
 
 // ---------------------------------------------------------------------------
@@ -261,6 +290,7 @@ export const LESSON_NUMBERS = {
 
 const money = (x: number) => usd(x, 2);
 const mwh = (x: number) => `${usd(x)}/MWh`;
+const mwh1 = (x: number) => `${usd(x, 1)}/MWh`;
 const pct = (x: number) => `${fmt(x * 100)}%`;
 const pct1 = (x: number) => `${fmt(x * 100, 1)}%`;
 const signedMoney = (x: number) => (Math.round(x * 100) > 0 ? '+' + money(x) : money(x));
@@ -327,7 +357,7 @@ function DayChart({ run, day, capPct }: { run: ReturnType<typeof dayRun>; day: n
       )}
       <line className="base" x1={X0} x2={X1} y1={bot} y2={bot} />
       <text className="ax" x={X0} y={stripTop - 6}>
-        One GPU’s power
+        One GPU’s draw from the grid, with its share of the server
       </text>
       {run.hours.map((h, i) => {
         const share = h.out.powerShare;
@@ -358,8 +388,7 @@ function HallChart({ s }: { s: HallState }) {
   const lin = useMemo(() => caps.map((c) => hallRun(s.owned, c, true).work), [caps, s.owned]);
   const main = s.linear ? lin : real;
   const other = s.linear ? real : lin;
-  const yMax = 20000;
-  const yMin = 8000;
+  const [yMin, yMax] = niceDomain(Math.min(...real, ...lin), Math.max(...real, ...lin), 4);
   const sx = scale(CAP_MIN, 100, X0, X1);
   const sy = scale(yMin, yMax, bot, top);
   const cur = hallRun(s.owned, s.cap, s.linear);
@@ -370,12 +399,12 @@ function HallChart({ s }: { s: HallState }) {
       className="chart"
       viewBox="0 0 640 230"
       role="img"
-      aria-label={`Work done by a ${HALL_MW} MW hall owning ${fmt(s.owned)} A-class GPUs, against the power cap. At ${s.cap}% it runs ${fmt(cur.running)} GPUs and does ${fmt(cur.work)} GPUs’ worth of work, against ${fmt(fullWork)} at full power.${s.linear ? ' Speed falls in step with power here.' : ` The most work comes at ${best}%.`}`}
+      aria-label={`Work done by a ${HALL_MW} MW hall owning ${fmt(s.owned)} A-class GPUs, against the GPUs’ power cap. At ${s.cap}% it runs ${fmt(cur.running)} GPUs and does ${fmt(cur.work)} GPUs’ worth of work, against ${fmt(fullWork)} at full power.${s.linear ? ' Speed falls in step with power here.' : ` The most work comes at ${best}%.`}`}
     >
       <text className="ax" x={X0} y={12}>
         Work done, in A-class GPUs at full speed
       </text>
-      <GridY y={sy} ticks={[8000, 12000, 16000, 20000]} x0={X0} x1={X1} format={(v) => fmt(v)} />
+      <GridY y={sy} ticks={niceTicks(yMin, yMax, 4)} x0={X0} x1={X1} format={(v) => fmt(v)} />
       <line x1={X0} x2={X1} y1={sy(fullWork)} y2={sy(fullWork)} stroke="#777" strokeWidth={1} strokeDasharray="3 4" />
       <text className="ax" x={X0 + 6} y={sy(fullWork) + 14}>
         all at full power
@@ -390,7 +419,7 @@ function HallChart({ s }: { s: HallState }) {
         </text>
       ))}
       <text className="ax ax-e" x={X1} y={228}>
-        power cap, share of full power
+        GPU power cap, share of its rated power
       </text>
     </svg>
   );
@@ -398,7 +427,7 @@ function HallChart({ s }: { s: HallState }) {
 
 function OwnedBar({ s }: { s: HallState }) {
   const cur = hallRun(s.owned, s.cap, s.linear);
-  const max = 27000;
+  const max = 25000;
   const sx = scale(0, max, X0, X1);
   return (
     <svg className="chart" viewBox="0 0 640 54" role="img" aria-label={`${fmt(cur.running)} of the hall’s ${fmt(s.owned)} GPUs are running; ${fmt(cur.dark)} sit dark for want of power.`}>
@@ -446,8 +475,8 @@ export default function Lesson() {
   const hallCaption = hs.linear
     ? `With speed falling in step with power, capping only trades GPUs for speed: ${fmt(hall.running)} GPUs at ${hs.cap}% do ${fmt(hall.work)} GPUs’ worth of work, against ${fmt(hallFull.work)} at full power.`
     : hall.dark > 0
-      ? `${fmt(hall.running)} GPUs run at ${hs.cap}% power, each keeping ${pct(hall.speed)} of its speed; ${fmt(hall.dark)} sit dark. Work: ${fmt(hall.work)} GPUs’ worth, ${signed((hall.work / hallFull.work - 1) * 100, 1)}% against full power.`
-      : `All ${fmt(hs.owned)} GPUs run at ${hs.cap}% power, each keeping ${pct(hall.speed)} of its speed. Work: ${fmt(hall.work)} GPUs’ worth, ${signed((hall.work / hallFull.work - 1) * 100, 1)}% against full power.`;
+      ? `${fmt(hall.running)} GPUs run ${hs.cap === 100 ? 'at full power' : `capped at ${hs.cap}% of their power`}, each keeping ${pct(hall.speed)} of its speed; ${fmt(hall.dark)} sit dark. Work: ${fmt(hall.work)} GPUs’ worth, ${signed((hall.work / hallFull.work - 1) * 100, 1)}% against full power.`
+      : `All ${fmt(hs.owned)} GPUs run ${hs.cap === 100 ? 'at full power' : `capped at ${hs.cap}% of their power`}, each keeping ${pct(hall.speed)} of its speed. Work: ${fmt(hall.work)} GPUs’ worth, ${signed((hall.work / hallFull.work - 1) * 100, 1)}% against full power.`;
 
   return (
     <LessonPage id="compute/6.4">
@@ -455,12 +484,12 @@ export default function Lesson() {
         The previous lesson moved work across the map, to where GPU-hours sold for less. This one keeps the work at Tech Park and moves it through the day instead, around the
         price of the electricity it runs on. Tech Park buys power at the hub price of the electricity course’s region plus delivery charges, and that{' '}
         <K c="price">price</K> moves every hour: over that course’s 120 simulated days it averages {mwh(MEAN_PRICE)}, and on two evenings it passes {usd(2000)}. A data center
-        drawing megawatts around the clock seems the natural customer for that volatility. The question is whether its GPUs should care.
+        drawing megawatts around the clock seems the natural customer for those swings. The question is whether its GPUs should care.
       </P>
       <P>
         Start with the size of the bill. One busy A-class 80 GB, with its share of the server and the cooling plant (a PUE of {fmt(TECH_PARK_PUE, 2)}, Lesson 4.3), draws{' '}
         <K c="power">{fmt(KW, 2)} kW</K> from the grid. At the average price that is {usd(energyAt(MEAN_PRICE), 3)} of <K c="energy">energy</K> an hour, {pct1(energyAt(MEAN_PRICE) / A_PRICE)} of the
-        simulated {money(A_PRICE)} its hour sells for — the hour is worth nearly {fmt(A_PRICE / energyAt(MEAN_PRICE))} times its electricity. From the cost side the answer is
+        simulated {money(A_PRICE)} list price of an on-demand hour — the hour is worth nearly {fmt(A_PRICE / energyAt(MEAN_PRICE))} times its electricity. From the cost side the answer is
         the same: electricity is {pct1(BASE_COST.powerShare)} of what an A-class hour costs to provide at Tech Park (<a href={lessonHref('compute/4.5')}>Lesson 4.5</a>). So the
         strategy has to be judged against the work it gives up, not against the power bill alone.
       </P>
@@ -468,24 +497,30 @@ export default function Lesson() {
         A GPU facing an expensive hour has three choices. It can run flat out. It can pause, though an idle GPU still draws about {pct(IDLE_POWER_SHARE)} of its full power
         and does no work at all. Or it can be capped: told to stay under some share of its full power, which it does by lowering its clock and voltage together. That last
         choice is where the physics of <a href={lessonHref('compute/1.5')}>Lesson 1.5</a> comes in. Power rises much faster than speed near the top of a chip’s range, so a GPU
-        capped at 70% of its power keeps {pct(speedAtPowerShare(0.7))} of its speed. Each choice has a price at which it starts to pay — where the energy it saves equals the
-        work it gives up:
+        capped at 70% of its power keeps {pct(speedAtPowerShare(0.7))} of its speed. The cap limits the GPU alone: its share of the server’s CPUs, memory, network cards
+        and fans, {pct(1 - DIE)} of what it draws, carries on as before, so a 70% cap takes the draw from the grid only to {pct(drawAtCap(0.7))}. Each choice has a price
+        at which it starts to pay — where the energy it saves equals the work it gives up, with a factor of 1,000 to turn dollars per kilowatt-hour into dollars per
+        megawatt-hour:
       </P>
       <Eq label="Capping pays above the price at which the energy saved equals the work given up">
         <span>cap pays above</span>
         <Op>=</Op>
-        <Frac top={<span>work lost per hour</span>} bottom={<K c="power">kW saved</K>} />
+        <Frac top={<span>work lost</span>} bottom={<K c="power">kW saved</K>} />
         <Op>=</Op>
         <Frac
-          top={<K c="price">{money((1 - capSpeed) * st.value)}</K>}
-          bottom={<K c="power">{fmt(KW * (1 - st.cap / 100), 3)} kW</K>}
+          top={
+            <span>
+              <K c="price">{money((1 - capSpeed) * st.value)}</K> × 1,000
+            </span>
+          }
+          bottom={<K c="power">{fmt(KW * (1 - drawAtCap(st.cap / 100)), 3)} kW</K>}
         />
         <Op>=</Op>
         <K c="price">{Number.isFinite(run.pol.capAbove) ? mwh(run.pol.capAbove) : 'never'}</K>
       </Eq>
       <P>
-        In the next demonstration, each bar is an hour of one day’s price at Tech Park, on a logarithmic scale, and the strip beneath is what one A-class GPU draws that
-        hour. The policy caps the GPU whenever the price is above the point where capping pays, and pauses it above the point where pausing pays. Set the value of the work, the
+        In the next demonstration, each bar is an hour of one day’s price at Tech Park, on a logarithmic scale, and the strip beneath is what one A-class GPU, with its
+        share of the server, draws that hour. The policy caps the GPU whenever the price is above the point where capping pays, and pauses it above the point where pausing pays. Set the value of the work, the
         cap, and the day:
       </P>
 
@@ -494,50 +529,59 @@ export default function Lesson() {
         <Legend
           items={[
             { label: 'Running flat out', color: MODE_COLOR.full },
-            { label: `Capped to ${st.cap}% of full power`, color: MODE_COLOR.capped },
+            { label: `GPU capped to ${st.cap}% of its power`, color: MODE_COLOR.capped },
             { label: `Paused (idling at ${pct(IDLE_POWER_SHARE)})`, color: MODE_COLOR.paused },
           ]}
         />
         <Slider label="Value of the work" tone="green" value={st.value} min={VALUE_MIN} max={VALUE_MAX} step={VALUE_STEP} onChange={(v) => s1.set({ value: Math.round(v * 100) / 100 })} display={`${money(st.value)} per GPU-hour`} />
-        <Slider label="Power cap" tone="red" value={st.cap} min={50} max={100} step={5} onChange={(v) => s1.set({ cap: v })} display={st.cap === 100 ? 'no cap' : `${st.cap}% (keeps ${pct(capSpeed)} of speed)`} />
+        <Slider label="GPU power cap" tone="red" value={st.cap} min={50} max={100} step={5} onChange={(v) => s1.set({ cap: v })} display={st.cap === 100 ? 'no cap' : `${st.cap}% (keeps ${pct(capSpeed)} of speed)`} />
         <Slider label="Day of the history" value={st.day} min={1} max={DAYS.length} onChange={(v) => s1.set({ day: v })} display={`day ${st.day}`} />
+        <Caption>{dayCaption}</Caption>
         <Readouts
           items={[
-            { label: 'electricity this day, flat out', value: money(run.energyFlat), tone: 'gold' },
-            { label: 'with the policy', value: money(run.energyPolicy), tone: 'gold' },
-            { label: 'work given up', value: money(run.workLost), tone: 'orange' },
             { label: 'gain over all 120 days', value: money(hist.gain), tone: 'green' },
-            { label: 'hours capped, paused', value: `${hist.hoursCapped}, ${hist.hoursPaused}` },
+            { label: 'hours capped over the 120 days', value: fmt(hist.hoursCapped), tone: 'gold' },
+            { label: 'hours paused over the 120 days', value: solvedA ? fmt(hist.hoursPaused) : 'after challenge a', tone: 'red' },
           ]}
         />
-        <Caption>{dayCaption}</Caption>
       </Figure>
 
       <P>
         It starts on day 73, one of the two evenings of the history when the price passed {usd(2000)}. For three hours it sits near {mwh(MAX_PRICE)}, and at that price a
         flat-out A-class GPU burns {money(SPIKE_FULL.energyCost)} of electricity an hour to do {money(A_PRICE)} of work: it loses {money(-SPIKE_FULL.net)} an hour. Paused, it
-        loses {money(-SPIKE_PAUSE.net)}, because the idle draw is still expensive and the work is gone. Capped to 70%, it loses only {money(-SPIKE_CAP.net)}. For work worth{' '}
+        loses {money(-SPIKE_PAUSE.net)}, because the idle draw is still expensive and the work is gone. With the GPU capped to 70%, it loses only {money(-SPIKE_CAP.net)}. For work worth{' '}
         {money(A_PRICE)} an hour, capping pays above {mwh(SPIKE_POL.capAbove)} and pausing above {mwh(SPIKE_POL.pauseAbove)} — a price this history never reaches. Over the
         whole 120 days the policy caps the GPU for {RUN_240.hoursCapped} hours and gains {money(RUN_240.gain)}, against {money(RUN_240.energyFlat)} of electricity in all.
+        Move the day through the history: only day {CAP_DAYS[CAP_DAYS.length - 1]}, the other evening, ever passes {mwh(SPIKE_POL.capAbove)} too. And lower the cap:
+        a deeper cap pays only at higher prices, {mwh(N_CAP50)} at 50%, because each further step down costs more speed for every kilowatt it saves — though at this
+        history’s two spikes, far above either price, the deeper cap gains more.
       </P>
       <P>
-        Now lower the value of the work. Work that sells for {money(0.95)} an hour — the simulated spot price of Lesson 5.4, the kind of work that is cheap because it can be
-        interrupted — caps above {mwh(POL_095.capAbove)} and pauses above {mwh(POL_095.pauseAbove)}. The policy now pauses {RUN_095.hoursPaused} hours and caps{' '}
-        {RUN_095.hoursCapped}, and gains {money(RUN_095.gain)} over the 120 days. At {money(0.25)} an hour it gains {money(RUN_025.gain)}. The cheaper the work, the more often
-        the electricity is worth more than it.
+        Pausing follows the same rule: the work it gives up, all of it, over the power it saves, which is everything but the idle {pct(IDLE_POWER_SHARE)}:{' '}
+        {fmt(KW, 3)} − {fmt(KW * IDLE_POWER_SHARE, 3)} = {fmt(PAUSE_KW, 3)} kW. So it pays once the price passes the work’s hourly value × 1,000 ÷ {fmt(PAUSE_KW, 3)}:
+        for {money(A_PRICE)} of work, the {mwh(SPIKE_POL.pauseAbove)} this history never reaches. The cheaper the work, the lower that price.
       </P>
 
       <Challenge
         id="a"
-        question="Find the highest value of work, to the nearest 5 cents, at which pausing a GPU pays in at least one hour of the 120-day history."
+        question={`Compute first: the history’s highest price is ${mwh(MAX_PRICE)}. What is the highest value of work, to the nearest 5 cents, at which pausing pays in at least one hour of the 120 days? Then set the value of the work to your answer and check it on day 73.`}
         solved={solvedA}
         status={
-          pauseNow < MAX_PRICE
-            ? `At ${money(st.value)}, pausing pays above ${mwh(pauseNow)}, so the history’s highest prices pause the GPU. Is there a higher value that still does?`
-            : `At ${money(st.value)}, pausing pays only above ${mwh(pauseNow)}, but the history’s highest price is ${mwh(MAX_PRICE)}.`
+          st.value === DAY_DEFAULTS.value
+            ? 'Compute first, then set the value of the work to your answer.'
+            : st.day !== 73
+              ? 'Look at day 73, where the history’s spike is, to check your answer.'
+              : `At ${money(st.value)}, pausing pays above ${mwh(pauseNow)}. Is this the value you computed?`
         }
-        success={`Solved. At ${money(PAUSE_VALUE_ANSWER)} an hour pausing pays above ${mwh(policyOf(PAUSE_VALUE_ANSWER, 70).pauseAbove)}, just under the history’s peak of ${mwh(MAX_PRICE)}; at ${money(PAUSE_VALUE_ANSWER + VALUE_STEP)} it would need ${mwh(policyOf(PAUSE_VALUE_ANSWER + VALUE_STEP, 70).pauseAbove)}. The break-even is the work’s value divided by the power pausing saves, ${fmt(KW * (1 - IDLE_POWER_SHARE), 3)} kW.`}
+        success={`Solved: ${money(PAUSE_VALUE_ANSWER)}. At the peak, ${mwh1(MAX_PRICE)}, the ${fmt(PAUSE_KW, 3)} kW that pausing saves are worth ${fmt(MAX_PRICE, 1)} × ${fmt(PAUSE_KW, 3)} ÷ 1,000 = ${money(N_PAUSE_EXACT)} an hour; at ${money(PAUSE_VALUE_ANSWER)} pausing pays above ${mwh1(policyOf(PAUSE_VALUE_ANSWER, 70).pauseAbove)}, just under the peak, and at ${money(PAUSE_VALUE_ANSWER + VALUE_STEP)} it would need ${mwh(policyOf(PAUSE_VALUE_ANSWER + VALUE_STEP, 70).pauseAbove)}. Work worth any more than that is never worth stopping for the price of power here.`}
       />
+
+      <P>
+        Lower the value further and pausing pays more often. Work that sells for {money(0.95)} an hour — the simulated spot price of Lesson 5.4, the kind of work that is
+        cheap because it can be interrupted — caps above {mwh(POL_095.capAbove)} and pauses above {mwh(POL_095.pauseAbove)}. The policy now pauses {RUN_095.hoursPaused}{' '}
+        hours and caps {RUN_095.hoursCapped}, and gains {money(RUN_095.gain)} over the 120 days. At {money(0.25)} an hour it gains {money(RUN_025.gain)}. The cheaper the
+        work, the more often the electricity is worth more than it.
+      </P>
 
       <H2>How big is the prize?</H2>
       <P>
@@ -560,8 +604,9 @@ export default function Lesson() {
         Capping has a second use that matters far more, and it has nothing to do with the price of electricity. Lesson 4.2 found that a site’s grid connection, not its
         power bill, limits how much computing it can hold, and Lesson 5.2 found GPUs sitting built but dark, waiting for data centers with power for them. Suppose a hall at
         Tech Park is allotted {HALL_MW} MW, counting its cooling at a PUE of {fmt(TECH_PARK_PUE, 2)}. At full power it can run {fmt(FULL.running)} A-class GPUs. If it owns{' '}
-        {fmt(CHALLENGE_OWNED)}, the rest sit dark. Capped, each GPU draws less, so more of them fit under the same connection, and each keeps more of its speed than it gives up
-        in power. In the next demonstration, set how many GPUs the hall owns and the cap they all run at; the curve is the work the hall does at every cap:
+        {fmt(CHALLENGE_OWNED)}, the rest sit dark. Capped, each GPU draws less, so more of them fit under the same connection, and each keeps more of its speed than its server
+        share gives up in power. In the next demonstration, set how many GPUs the hall owns and the cap on every GPU’s power; the curve is the work the hall does at every
+        cap:
       </P>
 
       <Figure name="Power-Aware Scheduler · the connection" scenario={s2}>
@@ -573,15 +618,12 @@ export default function Lesson() {
             { label: hs.linear ? 'Lesson 1.5’s chip' : 'If speed fell in step with power', color: '#9a9a9a', kind: 'line', dashed: true },
           ]}
         />
-        <Slider label="GPUs the hall owns" value={hs.owned} min={13000} max={27000} step={100} onChange={(v) => s2.set({ owned: v })} display={fmt(hs.owned)} />
-        <Slider label="Power cap" tone="red" value={hs.cap} min={CAP_MIN} max={100} onChange={(v) => s2.set({ cap: v })} display={`${hs.cap}%`} />
+        <Slider label="GPUs the hall owns" value={hs.owned} min={OWNED_MIN} max={OWNED_MAX} step={100} onChange={(v) => s2.set({ owned: v })} display={fmt(hs.owned)} />
+        <Slider label="GPU power cap" tone="red" value={hs.cap} min={CAP_MIN} max={100} onChange={(v) => s2.set({ cap: v })} display={`${hs.cap}%`} />
         <Checkbox label="Speed falls in step with power (no lowering of voltage)" checked={hs.linear} onChange={(v) => s2.set({ linear: v })} />
         <Readouts
           items={[
-            { label: 'GPUs running', value: fmt(hall.running), tone: 'orange' },
-            { label: 'GPUs dark', value: fmt(hall.dark) },
             { label: 'work, in GPUs at full speed', value: fmt(hall.work), tone: 'orange' },
-            { label: 'against full power', value: `${signed((hall.work / hallFull.work - 1) * 100, 1)}%` },
             { label: 'power used', value: `${fmt(hall.mw, 1)} of ${HALL_MW} MW`, tone: 'red' },
           ]}
         />
@@ -611,16 +653,19 @@ export default function Lesson() {
 
       <H2>What makes it work</H2>
       <P>
-        Now tick the checkbox in <FigRef to="Power-Aware Scheduler · the connection">the second demonstration</FigRef>. If a capped chip lost speed in exact proportion to its power — if it could only slow its clock, not lower its voltage — the curve would lie
-        flat until every GPU fits, and fall after: every extra GPU that fits would be paid for by slowing the others, and capping would gain nothing. The whole opportunity is the shape of Lesson 1.5’s curve,
+        Now tick the checkbox in <FigRef to="Power-Aware Scheduler · the connection">the second demonstration</FigRef>. If a capped chip lost speed in exact proportion to
+        its power — if it could only slow its clock, not lower its voltage — the curve would fall from the first step: a cap that takes 30% off each GPU takes only{' '}
+        {pct(1 - drawAtCap(0.7))} off its draw, so the extra GPUs that fit would do less than the speed every GPU gives up, and capping would only lose work. The whole
+        opportunity is the shape of Lesson 1.5’s curve,
         where power falls with the square of the voltage and the voltage can fall with the clock. That is the test this chapter asks of every strategy: point to the physics
         that makes it pay, change the physics, and watch it stop paying.
       </P>
       <P>
-        It is also a strategy for GPUs already owned, not a reason to buy more. Filling the {HALL_MW} MW with capped GPUs instead of full-power ones takes{' '}
-        {fmt(EXTRA_GPUS)} more of them at 70%, about {usd(EXTRA_COST / 1e6, 1)} million a year at Lesson 4.5’s {usd(BASE_COST.totalYear)} per GPU, for {fmt(EXTRA_WORK)} GPUs’
-        worth of extra work: {usd(EXTRA_COST / EXTRA_WORK)} a year for each unit of work, where a GPU running flat out gives a unit for {usd(BASE_COST.totalYear)}. When
-        megawatts are the scarce thing and the GPUs are already bought, capping turns dark hardware into work; when GPUs are the scarce thing, it wastes them.
+        It is also a strategy for GPUs already owned, not a reason to buy more. Filling the {HALL_MW} MW with GPUs capped at 70% instead of full-power ones takes{' '}
+        {fmt(EXTRA_GPUS)} more of them: about {usd(EXTRA_COST / 1e6, 1)} million a year of servers, network and upkeep at Lesson 4.5’s {usd(HARDWARE_YEAR)} per GPU —
+        the building and the electricity are the same {HALL_MW} MW either way — for {fmt(EXTRA_WORK)} GPUs’ worth of extra work. Each unit of that work costs{' '}
+        {fmt(EXTRA_COST / EXTRA_WORK / HARDWARE_YEAR, 1)} times the hardware a GPU running flat out needs for one. When megawatts are the scarce thing and the GPUs are
+        already bought, capping turns dark hardware into work; when GPUs are the scarce thing, it wastes them.
       </P>
       <P>
         So for a GPU cloud, electricity is less a price to chase than a capacity to use well. The hourly price matters at the margins — in rare spikes, and for cheap work

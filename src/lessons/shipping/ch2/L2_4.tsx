@@ -77,17 +77,30 @@ export function costsFor(s: CostState, opex: Opex = BASE_OPEX) {
   return { c, b, year };
 }
 
+/** True when the loan, its interest rate and the off-hire days are the starting ones (the repayment period doesn't touch full cost). */
+export function startingFinancing(s: CostState): boolean {
+  return Math.abs(s.ltv - DEFAULTS.ltv) < 1e-9 && Math.abs(s.rate - DEFAULTS.rate) < 1e-9 && s.offHire === DEFAULTS.offHire;
+}
+
 /**
- * The challenge: with the market at $15,000 a day and a new ship, the highest price on the slider
- * (in $0.5 million steps) at which Kestrel still covers her full cost, for whatever financing is set.
+ * The challenge: with the market at $15,000 a day, a new ship and the starting financing, the highest
+ * price on the slider (in $0.5 million steps) at which Kestrel still covers her full cost — predicted
+ * first from the slope of full cost against price.
  */
 export function maxPriceSolved(s: CostState): boolean {
-  if (s.tce !== CHALLENGE_TCE || s.age !== 0) return false;
+  if (s.tce !== CHALLENGE_TCE || s.age !== 0 || !startingFinancing(s)) return false;
   const full = (price: number) => costsFor({ ...s, price }).b.full;
   if (full(s.price) > s.tce + 1e-9) return false;
   const next = Math.round((s.price + PRICE_STEP) * 10) / 10;
   return next > PRICE_MAX + 1e-9 || full(next) > s.tce + 1e-9;
 }
+
+/** What $1 million on her price adds to each daily cost at the starting financing: per calendar day, and to full cost per earning day. */
+export const PER_MILLION = (() => {
+  const a = costsFor(DEFAULTS);
+  const b = costsFor({ ...DEFAULTS, price: DEFAULTS.price - 1 });
+  return { interest: a.c.interest - b.c.interest, depreciation: a.c.depreciation - b.c.depreciation, equity: a.c.equity - b.c.equity, full: a.b.full - b.b.full };
+})();
 
 /** The highest price on the slider grid that covers full cost, or null if none does. */
 export function maxPriceFor(s: CostState): number | null {
@@ -148,7 +161,9 @@ const CAP_COLOR = { interest: GRAPHIC.gold, principal: '#e3c87a', depreciation: 
 
 const k$ = (x: number) => `$${fmt(x / 1000)}k`;
 const perDay = (x: number) => `${usd(x)}/day`;
-const money = (x: number) => (Math.abs(x) >= 1e6 ? `${x < 0 ? '−' : ''}$${fmt(Math.abs(x) / 1e6, 2)} million` : usd(x));
+/** Prices in $ million, as the whole chapter writes them: $36.0 million. */
+const $M = (millions: number) => `${usd(millions, 1)} million`;
+const money = (x: number) => (Math.abs(x) >= 1e6 ? $M(x / 1e6) : usd(x));
 
 interface Seg {
   key: string;
@@ -290,7 +305,7 @@ function AgeBars({ ships, tce }: { ships: ReturnType<typeof agedShip>[]; tce: nu
               {usd(sh.fullBreakeven)}
             </text>
             <text x={xs[i] + W / 2} y={252} textAnchor="middle" className="ax">
-              {AGED[i].name}, ${fmt(sh.price)}m
+              {AGED[i].name}
             </text>
             <text x={xs[i] + W / 2} y={266} textAnchor="middle" style={{ fontSize: 12, fontWeight: 500, fill: covers ? TEXT.green : TEXT.red }}>
               {covers ? 'covers running costs' : 'loses cash trading'}
@@ -327,10 +342,10 @@ function AgeBars({ ships, tce }: { ships: ReturnType<typeof agedShip>[]; tce: nu
 
 export default function Lesson() {
   const sim = useScenario('costs', DEFAULTS);
-  const s = sim.state;
+  // The calculator prices a new ship; ships of other ages are the second demonstration's job (a saved scenario's age is ignored).
+  const s: CostState = { ...sim.state, age: 0 };
   const { c, b, year } = costsFor(s);
   const solved = maxPriceSolved(s);
-  const best = maxPriceFor(s);
   const earning = 365 - s.offHire;
 
   const ag = useScenario('age', { tce: 12_000, bunker: FUELS.vlsfo.price });
@@ -374,14 +389,11 @@ export default function Lesson() {
         <CostBars s={s} c={c} />
         <Readouts
           items={[
-            { label: 'cash break-even', value: perDay(b.cash), tone: 'green' },
-            { label: 'full-cost break-even', value: perDay(b.full), tone: 'green' },
             { label: 'cash flow a year, after the loan', value: money(year.cashFlow), tone: year.cashFlow < 0 ? 'red' : undefined },
             { label: 'profit a year, after depreciation', value: money(year.profit), tone: year.profit < 0 ? 'red' : undefined },
           ]}
         />
-        <Slider label="Purchase price" tone="green" value={s.price} min={PRICE_MIN} max={PRICE_MAX} step={PRICE_STEP} onChange={(v) => sim.set({ price: v })} display={`$${fmt(s.price, 1)} million`} />
-        <Slider label="Age when bought" value={s.age} min={0} max={20} onChange={(v) => sim.set({ age: v })} display={s.age === 0 ? 'new' : `${s.age} years`} />
+        <Slider label="Purchase price" tone="green" value={s.price} min={PRICE_MIN} max={PRICE_MAX} step={PRICE_STEP} onChange={(v) => sim.set({ price: v })} display={$M(s.price)} />
         <Slider label="Loan, share of price" value={s.ltv} min={0} max={0.8} step={0.05} onChange={(v) => sim.set({ ltv: v })} display={pct(s.ltv)} />
         <Slider label="Interest rate" value={s.rate} min={0.03} max={0.12} step={0.0025} onChange={(v) => sim.set({ rate: v })} display={pct(s.rate, 2)} />
         <Slider label="Loan repaid over" value={s.tenor} min={5} max={20} onChange={(v) => sim.set({ tenor: v })} display={`${s.tenor} years`} />
@@ -411,7 +423,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with the purchase as it stands: Kestrel new, at an illustrative {usd(NEW_PRICE)} million, with {pct(DEFAULTS.ltv)} of the price borrowed at{' '}
+        Start with the purchase as it stands: Kestrel new, at an illustrative {$M(NEW_PRICE)}, with {pct(DEFAULTS.ltv)} of the price borrowed at{' '}
         {pct(DEFAULTS.rate)} and repaid over {DEFAULTS.tenor} years. In her first year the loan costs {perDay(d0.c.interest)} in interest and{' '}
         {perDay(d0.c.principal)} in repayments. Add her operating costs and spread the total over the {fmt(365 - DEFAULTS.offHire)} days she isn’t off hire, and
         she needs {perDay(d0.b.cash)} to pay her bills: that is her <K tone="green">cash break-even</K>. At the market’s {perDay(DEFAULTS.tce)} she clears it,
@@ -430,9 +442,10 @@ export default function Lesson() {
       </P>
       <P>
         Now drag the loan. Borrowing more means the owners put in less of their own money, and at {pct(DEFAULTS.rate)} interest the bank is cheaper than the{' '}
-        {pct(EQUITY_RETURN)} they ask, so the full cost edges down, to {perDay(ltv80.b.full)} at an {pct(0.8)} loan. But the loan must be repaid, so the cash
-        break-even climbs to {perDay(ltv80.b.cash)}. Bought outright, Kestrel’s cash break-even is just her operating costs, {perDay(ltv0.b.cash)} — she can
-        survive almost any market — while her full cost rises to {perDay(ltv0.b.full)}. Leverage doesn’t change what the ship earns; it changes who takes the
+        {pct(EQUITY_RETURN)} they ask, so the full cost edges down, to {perDay(ltv80.b.full)} at an {pct(0.8)} loan. (Raise the interest rate to the owners’
+        own {pct(EQUITY_RETURN)} and the loan’s size stops mattering to the full cost; above it, borrowing more raises it.) But the loan must be repaid, so the cash
+        break-even climbs to {perDay(ltv80.b.cash)}. Bought outright, Kestrel’s cash break-even is just her operating costs spread over her{' '}
+        {fmt(365 - DEFAULTS.offHire)} earning days, {perDay(ltv0.b.cash)} — she can survive almost any market — while her full cost rises to {perDay(ltv0.b.full)}. Leverage doesn’t change what the ship earns; it changes who takes the
         risk when earnings fall. The repayment period works on the cash bar alone: repaid over 10 years, the loan puts the cash break-even at{' '}
         {perDay(ten10.b.cash)}; over 20, at {perDay(ten20.b.cash)}.
       </P>
@@ -441,29 +454,35 @@ export default function Lesson() {
         costing money, so every cost is spread over fewer earning days. At the starting {DEFAULTS.offHire} days a year, that adds{' '}
         {perDay(offHireAdd(d0.c.opex + d0.c.interest + d0.c.depreciation + d0.c.equity))} to the full-cost break-even — the gray cap on each bar.
       </P>
+      <P>
+        The price works through three of the four costs in the equation. With the starting financing, each $1 million on Kestrel’s price adds{' '}
+        {usd(PER_MILLION.interest)} a day of interest, {usd(PER_MILLION.depreciation)} of depreciation and {usd(PER_MILLION.equity)} of the owners’ return,
+        all per calendar day; spread over her {fmt(365 - DEFAULTS.offHire)} earning days, that is {usd(PER_MILLION.full)} a day on her full-cost break-even.
+      </P>
 
       <Challenge
         id="a"
         figure="Ship Economics Calculator"
-        question={`Suppose the market is expected to pay ${perDay(CHALLENGE_TCE)} for the whole of Kestrel’s life. With her new and the financing as it is, what is the most Northwind should pay for her and still cover her full cost? Set the market TCE to ${usd(CHALLENGE_TCE)} and find the highest price, to the nearest half million dollars.`}
+        question={`Suppose the market is expected to pay ${perDay(CHALLENGE_TCE)} for the whole of Kestrel’s life. With the starting financing, what is the most Northwind should pay for her and still cover her full cost? Predict it first: at ${$M(NEW_PRICE)} her full cost is ${perDay(d0.b.full)}, and each $1 million off the price takes about ${usd(PER_MILLION.full)} a day off it. Then set the price to your estimate, to the nearest half million, and check.`}
         solved={solved}
         status={
-          s.age !== 0
-            ? 'Set her age back to new first.'
-            : s.tce !== CHALLENGE_TCE
-              ? `Set the market TCE to ${usd(CHALLENGE_TCE)} first; it is ${usd(s.tce)}.`
-              : best === null
-                ? `With this financing, no price on the slider covers full cost at ${usd(CHALLENGE_TCE)}.`
+          s.tce !== CHALLENGE_TCE
+            ? `Set the market TCE back to ${perDay(CHALLENGE_TCE)}; it is ${perDay(s.tce)}.`
+            : !startingFinancing(s)
+              ? `Put the loan back to ${pct(DEFAULTS.ltv)} at ${pct(DEFAULTS.rate)} and the days off hire back to ${DEFAULTS.offHire} — Reset restores all three — so that the prediction applies.`
+              : s.price === NEW_PRICE
+                ? 'Make your prediction, then set the price to it.'
                 : b.full > s.tce
-                  ? `At $${fmt(s.price, 1)} million her full cost is ${perDay(b.full)}, more than the market pays.`
-                  : `At $${fmt(s.price, 1)} million her full cost is ${perDay(b.full)}, inside the market rate. Could Northwind pay more?`
+                  ? `At ${$M(s.price)} her full cost is ${perDay(b.full)}, more than the market pays.`
+                  : `At ${$M(s.price)} her full cost is ${perDay(b.full)}, ${usd(s.tce - b.full)} a day inside the market rate. Could Northwind pay more?`
         }
-        success={`Solved. At $${fmt(s.price, 1)} million her full cost is ${perDay(b.full)}; half a million more would push it past ${usd(CHALLENGE_TCE)}. Price is the only cost a buyer still controls, so expected earnings set what a ship is worth: at ${perDay(CHALLENGE_TCE)}, a new Kestrel is worth well under the ${usd(NEW_PRICE)} million a shipyard asks for her.`}
+        success={`Solved: ${$M(s.price)}, where her full cost is ${perDay(b.full)}; half a million more would push it past ${usd(CHALLENGE_TCE)}. The slope gets there in one step: ${usd(d0.b.full - CHALLENGE_TCE)} a day to shed at ${usd(PER_MILLION.full)} per million is ${$M((d0.b.full - CHALLENGE_TCE) / PER_MILLION.full)} off the price. Price is the only cost a buyer still controls, so expected earnings set what a ship is worth: at ${perDay(CHALLENGE_TCE)}, a new Kestrel is worth well under the ${$M(NEW_PRICE)} a shipyard asks for her.`}
       />
 
       <P>
-        With the starting financing, the answer is {answer === null ? 'below the slider’s range' : `$${fmt(answer, 1)} million`}, where her full cost is{' '}
-        {perDay(answerFull)}. Turn the argument around and it explains how ships are priced. A buyer pays what the ship can earn, so when the market pays
+        With the starting financing, the answer is {answer === null ? 'below the slider’s range' : $M(answer)}, where her full cost is{' '}
+        {perDay(answerFull)}. Treat it as a rule of thumb: the calculator charges her first year’s interest in every year of her life, though the interest
+        falls as the loan is repaid. Turn the argument around and it explains how ships are priced. A buyer pays what the ship can earn, so when the market pays
         less than a new ship costs to build and run, secondhand ships trade below the price of a newbuilding — and when it pays more, buyers queue for ships that
         can start earning now. We’ll watch prices and earnings move together in the next lesson.
       </P>
@@ -473,7 +492,7 @@ export default function Lesson() {
         Kestrel is new. Most of the fleet isn’t, and age changes the balance of costs. An older ship is cheaper to buy, so her capital costs are low. But she costs
         more to keep running: her steel needs more repair, her insurers charge more, she spends longer in drydock, and her older engine and fouled, worn hull
         burn more fuel for the same speed. In the next demonstration, three Kamsarmaxes are compared on the same financing, a {pct(0.6)} loan at {pct(0.07)}. The
-        assumptions are the model’s, illustrative but in the right direction: prices of {AGED.map((a) => `$${fmt(a.price)} million`).join(', ')}; wear-related
+        assumptions are the model’s, illustrative but in the right direction: prices of {AGED.map((a) => $M(a.price)).join(', ')}; wear-related
         operating costs rising {pct(OPEX_GROWTH_PER_YEAR, 1)} a year of age; fuel consumption {pct(FUEL_GROWTH_PER_YEAR)} more per year; and {OFFHIRE_NEW} days
         off hire when new, rising {fmt(OFFHIRE_PER_YEAR, 1)} a year. Because the market’s TCE is what a modern ship earns, an old ship’s extra fuel is a cost she
         must cover on top — shown in red, at {pct(AT_SEA_SHARE)} of her days at sea and {fmt(COMPARE_SPEED)} knots. Change the market and the price of fuel:
@@ -487,11 +506,11 @@ export default function Lesson() {
           rowKey={(r) => r.age}
           columns={[
             { label: 'Ship', cell: (r) => AGED.find((a) => a.age === r.age)!.name },
+            { label: 'Price', cell: (r) => $M(r.price), align: 'right' },
             { label: 'Operating costs', cell: (r) => perDay(r.opex), align: 'right' },
             { label: 'Off hire', cell: (r) => `${fmt(r.offHire)} days`, align: 'right' },
             { label: `Fuel at ${COMPARE_SPEED} kn`, cell: (r) => `${fmt(r.tpd, 1)} t/day`, align: 'right' },
             { label: 'Running break-even', cell: (r) => usd(r.runningBreakeven), align: 'right' },
-            { label: 'Full break-even', cell: (r) => usd(r.fullBreakeven), align: 'right' },
           ]}
         />
         <Slider label="Market TCE" tone="green" value={ag.state.tce} min={5_000} max={25_000} step={250} onChange={(v) => ag.set({ tce: v })} display={perDay(ag.state.tce)} />
@@ -500,8 +519,10 @@ export default function Lesson() {
 
       <P>
         At an illustrative {usd(FUELS.vlsfo.price)} a tonne for fuel, the full-cost break-evens run {ships600.map((sh) => usd(sh.fullBreakeven)).join(', ')} from
-        newest to oldest. The old ship has the lowest full cost, because she was cheap to buy and most of her price comes back when she is scrapped. The black ticks tell a
-        different story. Once a ship is bought, her capital is spent whatever she does, and the question each day is only whether trading beats not trading.
+        newest to oldest. (The new ship’s {usd(ships600[0].fullBreakeven)} is a little below the {usd(d0.b.full)} of{' '}
+        <FigRef to="Ship Economics Calculator">the first demonstration</FigRef> only because a new ship here spends {OFFHIRE_NEW} days a year off hire rather
+        than {DEFAULTS.offHire}.) The old ship has the lowest full cost, because she was cheap to buy and most of her price comes back when she is scrapped. The
+        black ticks tell a different story. Once a ship is bought, her capital is spent whatever she does, and the question each day is only whether trading beats not trading.
         That takes her <b>running-cost break-even</b>: operating costs and extra fuel per earning day — {ships600.map((sh) => usd(sh.runningBreakeven)).join(', ')}.
         The oldest ship needs {pct(ships600[2].runningBreakeven / ships600[0].runningBreakeven - 1)} more than the new one just to pay her way.
       </P>
@@ -516,7 +537,8 @@ export default function Lesson() {
         A single owner can decide when to buy, sell or scrap one ship. The fleet as a whole changes more slowly: new ships are ordered years before they are
         delivered, and old ones leave only when the market pushes them out. In <a href={lessonHref('shipping/2.5')}>the next lesson</a> we’ll order ships, wait
         for them and scrap them, and see why the fleet so often arrives just as it is least needed. The running-cost break-evens of{' '}
-        <FigRef to="Ship Economics Calculator · age">this comparison</FigRef> will decide which ships go first.
+        <FigRef to="Ship Economics Calculator · age">this comparison</FigRef> are why the oldest ships go first: in that lesson’s model, ships of 18 and older
+        go for scrap in numbers once earnings have stayed, for months, below roughly what an old ship needs to cover her running costs.
       </P>
     </LessonPage>
   );

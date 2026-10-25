@@ -133,7 +133,8 @@ function NeedChart({ reserved }: { reserved: number }) {
   );
 }
 
-function DurationChart({ reserved }: { reserved: number }) {
+/** The sorted need; the level at two-thirds of the hours is labeled only once `reveal` is set (it is the first challenge's answer). */
+function DurationChart({ reserved, reveal }: { reserved: number; reveal: boolean }) {
   const top = 22;
   const bot = 154;
   const sx = scale(0, 1, X0, X1);
@@ -148,7 +149,7 @@ function DurationChart({ reserved }: { reserved: number }) {
       className="chart"
       viewBox="0 0 640 190"
       role="img"
-      aria-label={`The same four weeks sorted from the busiest hour to the quietest. The need is above ${fmt(reserved)} GPUs in ${share(above)} of hours; reserving pays up to the level it exceeds in two-thirds of hours, about ${fmt(LEVEL_AT_BREAK_EVEN)} GPUs.`}
+      aria-label={`The same four weeks sorted from the busiest hour to the quietest. The need is above ${fmt(reserved)} GPUs in ${share(above)} of hours; reserving pays up to the level it exceeds in two-thirds of hours${reveal ? `, about ${fmt(LEVEL_AT_BREAK_EVEN)} GPUs` : ''}.`}
     >
       <text className="ax" x={X0} y={12}>
         The same hours, busiest first
@@ -164,9 +165,11 @@ function DurationChart({ reserved }: { reserved: number }) {
       <text className="ax" x={sx(BREAK_EVEN) + 6} y={top + 12}>
         two-thirds of hours
       </text>
-      <text className="ax" x={sx(BREAK_EVEN) + 8} y={sy(LEVEL_AT_BREAK_EVEN) - 8} style={{ fill: '#333' }}>
-        {fmt(LEVEL_AT_BREAK_EVEN)} GPUs
-      </text>
+      {reveal && (
+        <text className="ax" x={sx(BREAK_EVEN) + 8} y={sy(LEVEL_AT_BREAK_EVEN) - 8} style={{ fill: '#333' }}>
+          {fmt(LEVEL_AT_BREAK_EVEN)} GPUs
+        </text>
+      )}
       {[0, 0.25, 0.5, 0.75, 1].map((t) => (
         <text key={t} className="ax ax-m" x={sx(t)} y={172}>
           {fmt(t * 100)}%
@@ -207,15 +210,23 @@ export function cheapestInterval(job: JobId, reclaims: number) {
   return { interval: m, cost: spotRun(JOBS[job], PRICE.spot, reclaims, m).perUsefulHour };
 }
 
-/** Within this share of the cheapest counts: the bottom of the curve is flat. */
-export const INTERVAL_TOLERANCE = 0.0005;
-
-/** Challenge b: the fine-tuning job, at two reclaims per server a day, checkpointed at its cheapest interval. */
+/**
+ * Challenge b: the fine-tuning job, at two reclaims per server a day, checkpointed at an interval whose cost per useful
+ * GPU-hour reads the same, to the cent, as the cheapest interval's. The bottom of the curve is flat, so a range of
+ * intervals counts, exactly the ones the readout can't tell apart.
+ */
 export function intervalSolved(s: SpotState): boolean {
   if (s.job !== 'tune8' || s.reclaims !== SPOT_DEFAULTS.reclaims) return false;
   const best = cheapestInterval('tune8', s.reclaims);
-  return spotOf(s).perUsefulHour <= best.cost * (1 + INTERVAL_TOLERANCE);
+  return dollars(spotOf(s).perUsefulHour) === dollars(best.cost);
 }
+
+/** The intervals on the slider that solve challenge b: the flat bottom of the curve. */
+export const FLAT_INTERVALS = (() => {
+  const best = dollars(cheapestInterval('tune8', SPOT_DEFAULTS.reclaims).cost);
+  const ok = Array.from({ length: INTERVAL_MAX }, (_, i) => i + 1).filter((interval) => dollars(spotOf({ ...SPOT_DEFAULTS, interval }).perUsefulHour) === best);
+  return { from: Math.min(...ok), to: Math.max(...ok) };
+})();
 
 function minutesText(m: number): string {
   return m < 1 ? `${fmt(m * 60)} s` : `${fmt(m, m < 10 ? 1 : 0)} min`;
@@ -540,6 +551,8 @@ export const LESSON_NUMBERS = {
   tune60: TUNE_60.perUsefulHour,
   tuneInterruptions: TUNE_60.interruptionsPerDay,
   tuneBestInterval: TUNE_BEST.interval,
+  /** The rule of thumb's estimate: √(2 × write time × time between interruptions), minutes. */
+  tuneRuleOfThumb: Math.sqrt(2 * checkpointMinutes(TUNE) * (1440 / TUNE_60.interruptionsPerDay)),
   tuneBestCost: TUNE_BEST.cost,
   tuneBestUseful: TUNE_BEST_RUN.usefulShare,
   trainInterruptions: TRAIN_BEST_RUN.interruptionsPerDay,
@@ -587,6 +600,8 @@ export default function Lesson() {
   const finite = Number.isFinite(run.perUsefulHour);
   const solvedB = intervalSolved(sp);
   const bestNow = cheapestInterval(sp.job, sp.reclaims);
+  // The cheapest interval is challenge b's answer: keep it out of the caption in the challenge's setting until solved.
+  const hideBest = !solvedB && sp.job === 'tune8' && sp.reclaims === SPOT_DEFAULTS.reclaims;
   const statusB =
     sp.job !== 'tune8'
       ? 'Choose the fine-tuning job.'
@@ -616,10 +631,10 @@ export default function Lesson() {
         <a href={lessonHref('compute/4.5')}>Lesson 4.5</a>). Someone has to pay for the hours nobody uses. How the capacity is sold decides who.
       </P>
       <P>
-        There is no central auction where GPU-hours clear at one price every hour, as megawatt-hours do in the electricity course. Capacity is sold by the companies that own
-        it, mostly in a few standard forms, through private contracts, and through a handful of newer marketplaces. Three forms matter here. <K tone="green">Reserved</K>{' '}
+        With no single exchange for GPU-hours (<a href={lessonHref('compute/5.1')}>Lesson 5.1</a>), capacity is sold by the companies that own it, mostly in a few standard
+        forms, through private contracts, and through a handful of newer marketplaces. Three forms matter here. <K tone="green">Reserved</K>{' '}
         capacity is committed for a long term, typically a year or more, and paid for every hour whether it is used or not. <K tone="green">On-demand</K> capacity is
-        paid for only in the hours it is used, at a higher price, with the understanding that it will be there when asked for. <K tone="green">Interruptible</K>{' '}
+        paid for only in the hours it is used, at a higher price, with an expectation, not a guarantee, that it will be there when asked for. <K tone="green">Interruptible</K>{' '}
         capacity, usually called spot, is the cheapest, because the provider can take it back at short notice. For the A-class 80 GB, our simulated prices are{' '}
         {dollars(PRICE.reserved)}, {dollars(PRICE.onDemand)} and an average of {dollars(PRICE.spot)} per GPU-hour.
       </P>
@@ -634,7 +649,7 @@ export default function Lesson() {
 
       <Figure name="Compute Pricing Laboratory" scenario={s1}>
         <NeedChart reserved={R} />
-        <DurationChart reserved={R} />
+        <DurationChart reserved={R} reveal={solvedA} />
         <Legend
           items={[
             { label: 'reserved and used', color: tint(COLOR.reserved, 0.55) },
@@ -645,7 +660,6 @@ export default function Lesson() {
         <Slider label="Reserved GPUs" tone="green" value={R} min={0} max={RESERVE_MAX} onChange={(v) => s1.set({ reserved: v })} display={`${fmt(R)} GPUs`} />
         <Readouts
           items={[
-            { label: 'per used GPU-hour', value: dollars(b.perUsefulHour), tone: 'green' },
             { label: 'bill for four weeks', value: usd(b.total), tone: 'green' },
             { label: 'reserved hours idle', value: share(idleShare) },
             { label: 'GPU-hours on demand', value: fmt(odHours) },
@@ -678,7 +692,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Choose the reservation that makes the service’s four weeks cheapest."
+        question="Predict first: on the sorted chart, where the dashed two-thirds line meets the curve, about how many GPUs does the need exceed in two-thirds of the hours? Then reserve that many, and check that no other reservation makes the service’s four weeks cheaper."
         solved={solvedA}
         status={statusA}
         success={`Solved. The need is above about ${fmt(N.levelAtBreakEven)} GPUs in exactly two-thirds of the hours, so ${fmt(CHEAPEST.reserved)} reserved GPUs is the cheapest mix: ${usd(BEST.total)} for the four weeks, ${dollars(N.bestPerHour)} per used GPU-hour. One more reserved GPU would be needed in fewer than two-thirds of the hours, and would cost more than it saves.`}
@@ -736,7 +750,7 @@ export default function Lesson() {
         />
         <Caption>
           {finite
-            ? `Its ${fmt(job.servers)} servers are reclaimed ${fmt(run.interruptionsPerDay, run.interruptionsPerDay % 1 ? 1 : 0)} times a day in all. The cheapest interval here is ${fmt(bestNow.interval)} minutes, at ${dollars(bestNow.cost)} per useful GPU-hour.`
+            ? `Its ${fmt(job.servers)} servers are reclaimed ${fmt(run.interruptionsPerDay, run.interruptionsPerDay % 1 ? 1 : 0)} times a day in all.${hideBest ? '' : ` The cheapest interval here is ${fmt(bestNow.interval)} minutes, at ${dollars(bestNow.cost)} per useful GPU-hour.`}`
             : `With ${fmt(run.interruptionsPerDay, run.interruptionsPerDay % 1 ? 1 : 0)} interruptions a day, the job loses work faster than it can do it.${Number.isFinite(bestNow.cost) ? ` Its best interval, ${fmt(bestNow.interval)} minutes, gives ${dollars(bestNow.cost)} per useful GPU-hour.` : ''}`}
         </Caption>
       </Figure>
@@ -750,10 +764,10 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Compute Pricing Laboratory · interruptible"
-        question="At two reclaims per server a day, find the checkpoint interval that makes the fine-tuning job’s interruptible hours cheapest."
+        question={`Estimate first with a long-standing rule of thumb: the best interval is about √(2 × the time to write a checkpoint × the time between interruptions), here ${minutesText(N.tuneWriteMin)} and ${fmt(1440 / N.tuneInterruptions / 60)} hours. Then, at two reclaims per server a day, find a checkpoint interval that makes the fine-tuning job’s interruptible hours as cheap as they get, to the cent.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved. Around ${fmt(N.tuneBestInterval)} minutes the time spent writing checkpoints balances the work lost to interruptions, and ${share(N.tuneBestUseful)} of paid hours do useful work: ${dollars(N.tuneBestCost)} per useful GPU-hour, well below the ${dollars(PRICE.reserved)} reserved price.`}
+        success={`Solved. The rule of thumb gives about ${fmt(N.tuneRuleOfThumb)} minutes, and every interval from ${fmt(FLAT_INTERVALS.from)} to ${fmt(FLAT_INTERVALS.to)} minutes gives ${dollars(N.tuneBestCost)} per useful GPU-hour, well below the ${dollars(PRICE.reserved)} reserved price. The exact minimum is at ${fmt(N.tuneBestInterval)} minutes, where the time spent writing checkpoints balances the work lost to interruptions and ${share(N.tuneBestUseful)} of paid hours do useful work.`}
       />
 
       <P>

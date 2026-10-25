@@ -33,6 +33,7 @@ import { ringAllReduce, scaleOutLink } from '../../../engines/compute/collective
 import { workloadFit } from '../../../engines/compute/compatibility';
 import { ACCELERATORS, SERVERS } from '../../../model/compute/hardware';
 import { MODELS, matmulParams } from '../../../model/compute/models';
+import { useProgress } from '../../../course/progress';
 
 // ---------------------------------------------------------------------------
 // The fabric of the first demonstration.
@@ -147,6 +148,10 @@ export const LESSON_NUMBERS = {
   pack40: PACK40,
   scat40: SCAT40,
   saving48: C32.costPerGpu - C48.costPerGpu,
+  /** The same 3 : 1 saving on the first demonstration's 1,024 GPUs. */
+  saving48Small: F32.costPerGpu - F48.costPerGpu,
+  /** The largest two-tier fabric: the 2,048-GPU cluster, non-blocking. */
+  f2048: fabric({ gpus: maxTwoTierGpus(32), downPorts: 32 }),
   /** GPU-hours the 3 : 1 fabric adds to the run. */
   extraGpuHours: (RUN48.days - BASE.days) * 24 * RUN.gpus,
   tuneGpus: TUNE_GPUS,
@@ -306,7 +311,7 @@ interface FabricPoint {
   days: number;
 }
 
-function CostChart({ points, current, ariaLabel }: { points: FabricPoint[]; current: FabricPoint; ariaLabel: string }) {
+function CostChart({ points, current, revealed, ariaLabel }: { points: FabricPoint[]; current: FabricPoint; revealed: boolean; ariaLabel: string }) {
   const x = scale(1800, 4400, 70, 610);
   const y = scale(16, 40, 196, 24);
   const yc = (d: number) => y(Math.min(40, d));
@@ -321,10 +326,11 @@ function CostChart({ points, current, ariaLabel }: { points: FabricPoint[]; curr
       <text className="ax ax-e" x={610} y={y(limit) - 5} style={{ fill: TEXT.teal }}>
         {`5% longer than non-blocking: ${days(limit)}`}
       </text>
-      <path d={linePath(points.map((p) => x(p.cost)), points.map((p) => yc(p.days)))} fill="none" stroke={NET} strokeWidth={1.5} />
-      {points.map((p) => (
-        <circle key={p.down} cx={x(p.cost)} cy={yc(p.days)} r={p.down === current.down ? 3.5 : 2.5} fill={NET} />
-      ))}
+      {/* Every fabric's point is drawn only once the challenge is solved: until then, just the current one. */}
+      {revealed && <path d={linePath(points.map((p) => x(p.cost)), points.map((p) => yc(p.days)))} fill="none" stroke={NET} strokeWidth={1.5} />}
+      {revealed &&
+        points.map((p) => <circle key={p.down} cx={x(p.cost)} cy={yc(p.days)} r={p.down === current.down ? 3.5 : 2.5} fill={NET} />)}
+      {!revealed && <circle cx={x(current.cost)} cy={yc(current.days)} r={3.5} fill={NET} />}
       <circle cx={x(current.cost)} cy={yc(current.days)} r={7} fill="none" stroke="#111" strokeWidth={2} />
       {current.days > 40 && (
         <text className="lab" x={x(current.cost) + 10} y={y(40) + 4}>
@@ -374,14 +380,20 @@ export default function Lesson() {
   }, []);
   const current: FabricPoint = { down: st.down, cost: cf.costPerGpu, days: r.days };
   const solved = cheapestSolved(st);
+  // The cost chart draws every fabric only once the challenge is solved (now or on an earlier visit).
+  const progress = useProgress();
+  const revealed = solved || (progress['compute/4.4']?.includes('a') ?? false);
   const hidden = r.dpCommS < 0.005;
   const caption2 = hidden
-    ? `The run gets ${pct(share)} of each card. Its gradient exchange takes ${secs(ex)}, inside the ${secs(HIDE_WINDOW)} the backward pass can hide: ${days(r.days)}.`
-    : `The run gets ${pct(share)} of each card. Its gradient exchange takes ${secs(ex)}, and ${secs(r.dpCommS)} of it sticks out past the backward pass in every step: ${days(r.days)}, ${pct(longer)} longer.`;
+    ? `The run gets ${pct(share)} of each card, ${fmt(NIC_GBPS * share)} Gb/s. Its gradient exchange takes ${secs(ex)}, inside the ${secs(HIDE_WINDOW)} the backward pass can hide.`
+    : `The run gets ${pct(share)} of each card, ${fmt(NIC_GBPS * share)} Gb/s. Its gradient exchange takes ${secs(ex)}, and ${secs(r.dpCommS)} of it sticks out past the backward pass in every step.`;
   const aria2 = `One training step of the 70B run: ${secs(r.computeS)} of arithmetic, ${secs(r.dpCommS)} waiting for gradients and ${secs(r.tpCommS)} of exchanges inside servers. The gradient exchange takes ${secs(ex)} at ${pct(share)} of each network card.`;
-  const aria3 = `Network cost per GPU against days to train, for leaves with ${DOWN_MIN} to ${RUN_DOWN_MAX} ports facing GPUs. The current fabric costs ${usd(cf.costPerGpu)} per GPU and the run takes ${days(r.days)}.`;
+  const aria3 = revealed
+    ? `Network cost per GPU against days to train, for leaves with ${DOWN_MIN} to ${RUN_DOWN_MAX} ports facing GPUs. The current fabric costs ${usd(cf.costPerGpu)} per GPU and the run takes ${days(r.days)}.`
+    : `Network cost per GPU against days to train, for the current fabric only: ${usd(cf.costPerGpu)} per GPU, and the run takes ${days(r.days)}.`;
   let status: string;
   if (r.days > BASE.days * WITHIN + 1e-9) status = `The run takes ${days(r.days)}, ${pct(longer, 1)} longer than on a non-blocking network: over the 5% allowed.`;
+  else if (st.down === RUN_DEFAULTS.down) status = 'Make your prediction, then move the ports toward the GPUs.';
   else status = `The run takes ${days(r.days)}, within 5%, on a fabric costing ${usd(cf.costPerGpu)} per GPU. Can a cheaper one keep it there?`;
   const nextDays = runAt(jobNetworkShare(clusterFabric(CHEAPEST.down + 1), RUN.gpus, 'packed', 0)).days;
 
@@ -400,8 +412,10 @@ export default function Lesson() {
         the network is built in two tiers. Every GPU’s card plugs into a <K tone="blue">leaf switch</K>. Each leaf gives some of its {SWITCH_PORTS} ports to GPUs and
         the rest to links upward, one or more to every <K tone="blue">spine switch</K>, so any two GPUs are at most three switches apart: leaf, spine, leaf. If a leaf
         has as many links up as GPUs below, everything its GPUs send can leave at full speed, and the network is called non-blocking. Two tiers of 64-port switches
-        built that way reach at most {fmt(maxTwoTierGpus(32))} GPUs; larger clusters add a third tier. In the next demonstration, choose the number of GPUs and how many of
-        each leaf’s ports face them:
+        built that way reach at most {fmt(maxTwoTierGpus(32))} GPUs; larger clusters add a third tier. Give a leaf more GPUs than links up and the ratio of the two, its{' '}
+        <K tone="blue">oversubscription</K>, is how many GPUs share each link up when they all send across the fabric at once. And a network’s{' '}
+        <K tone="blue">bisection bandwidth</K> is how fast one half of its GPUs can send to the other half. In the next demonstration, choose the number of GPUs and how
+        many of each leaf’s ports face them:
       </P>
 
       <Figure name="Data Center Network Simulator" scenario={s1}>
@@ -415,10 +429,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'switches', value: `${f.leaves} leaves + ${f.spines} spines` },
             { label: 'network cost per GPU', value: usd(f.costPerGpu), tone: 'green' },
-            { label: 'oversubscription', value: ratio(f), tone: 'blue' },
-            { label: 'each GPU across the fabric, all sending', value: `${fmt(perGpuGbps)} Gb/s`, tone: 'blue' },
             { label: 'bisection bandwidth', value: `${fmt(f.bisectionTbps, 1)} Tb/s`, tone: 'blue' },
           ]}
         />
@@ -448,13 +459,14 @@ export default function Lesson() {
         Start with 1,024 GPUs and half of every leaf facing them. That takes {N.f32.leaves} leaves — one for each of Lesson 4.1’s racks of 32 GPUs — and{' '}
         {N.f32.spines} spines: {N.f32.switches} switches, {fmt(N.f32.optics)} optical transceivers (a simulated {usd(OPTIC_PRICE)} each) for the links between the tiers,
         which need one at each end, and a cable for every GPU. At our simulated prices that is {millions(N.f32.costTotal)}, or {usd(N.f32.costPerGpu)} per GPU: about {pct(N.serverShare)} of what each
-        GPU’s share of its server costs. Across the middle of the fabric, half the GPUs can send to the other half at {fmt(N.f32.bisectionTbps, 1)} terabits per second
-        — the <K tone="blue">bisection bandwidth</K>.
+        GPU’s share of its server costs. The fabric’s bisection bandwidth is {fmt(N.f32.bisectionTbps, 1)} terabits per second: half the GPUs sending to the other half, each
+        at its full {NIC_GBPS} Gb/s. Push the GPUs to {fmt(N.f2048.gpus)} and the non-blocking fabric takes {N.f2048.leaves} leaves and {N.f2048.spines} spines, every port of every spine in
+        use: as large as two tiers of these switches get.
       </P>
       <P>
         Now give the GPUs more of each leaf. With 48 ports down and 16 up, the same 1,024 GPUs need only {N.f48.leaves} leaves and {N.f48.spines} spines, and the
         network costs {usd(N.f48.costPerGpu)} per GPU, {pct(N.cheaper48)} less: fewer switches, and about a third as many of the costly links between the tiers. The catch
-        is in the ratio. Forty-eight GPUs now share 16 links up, an <K tone="blue">oversubscription</K> of 3 : 1, so when they all send across the fabric at once,
+        is in the ratio. Forty-eight GPUs now share 16 links up, an oversubscription of 3 : 1, so when they all send across the fabric at once,
         each gets a third of its card: {fmt(NIC_GBPS / 3)} Gb/s. The bisection bandwidth falls to {fmt(N.f48.bisectionTbps, 1)} Tb/s.
       </P>
 
@@ -484,12 +496,10 @@ export default function Lesson() {
             { label: 'waiting on the network', color: WAIT },
           ]}
         />
-        <CostChart points={points} current={current} ariaLabel={aria3} />
+        <CostChart points={points} current={current} revealed={revealed} ariaLabel={aria3} />
         <Readouts
           items={[
             { label: 'network cost per GPU', value: usd(cf.costPerGpu), tone: 'green' },
-            { label: 'the run’s share of each card', value: `${pct(share)} · ${fmt(NIC_GBPS * share)} Gb/s`, tone: 'blue' },
-            { label: 'gradient exchange per step', value: secs(ex), tone: 'blue' },
             { label: 'days to train', value: `${days(r.days)}${longer > 0.0005 ? ` (+${pct(longer, 1)})` : ''}`, tone: 'teal' },
           ]}
         />
@@ -529,7 +539,8 @@ export default function Lesson() {
         costs the run nothing. That stays true as the ports shift toward the GPUs, right up to the point where the run’s share of each card falls below{' '}
         {pct(HIDE_SHARE)}. Past it, the extra seconds land directly on every step. At 3 : 1 the exchange takes {secs(N.exchange48)}, and the run stretches to{' '}
         {days(N.run48.days)}: {pct(N.run48.days / N.base.days - 1)} longer, on a network that cost {usd(N.saving48)} less per GPU across this {fmt(CLUSTER_GPUS)}-GPU
-        cluster.
+        cluster. (On the {fmt(N.f32.gpus)} GPUs of the first demonstration, the same 3 : 1 saved {usd(N.saving48Small)}; switches come in whole numbers, so the saving
+        shifts a little with the cluster’s size.)
       </P>
       <P>
         Placement matters as much as the hardware. Scatter the run among other tenants whose traffic fills half of the links up, and even the non-blocking fabric
@@ -540,10 +551,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Find the cheapest fabric — the lowest network cost per GPU — that keeps the 70B run within 5% of its time on a non-blocking network."
+        question={`Find the cheapest fabric — the lowest network cost per GPU — that keeps the 70B run within 5% of its time on a non-blocking network. Predict first: packed onto leaves of its own, the run gets a leaf’s ports up divided by its ports down. At how many ports facing GPUs does that last stay above ${pct(HIDE_SHARE)}? Then check whether a cheaper fabric still keeps the run within 5%.`}
         solved={solved}
         status={status}
-        success={`Solved. With ${CHEAPEST.down} of each leaf’s ports facing GPUs (${ratio(clusterFabric(CHEAPEST.down))}), the run gets ${pct(CHEAPEST.share)} of each card; its exchange sticks out of each step only slightly, and it takes ${days(CHEAPEST.days)}, ${pct(CHEAPEST.days / BASE.days - 1, 1)} longer, on a network costing ${usd(CHEAPEST.cost)} per GPU — ${usd(C32.costPerGpu - CHEAPEST.cost)} less than non-blocking. One more port facing GPUs and the run takes ${days(nextDays)}, past the limit.`}
+        success={`Solved. Up to ${CHEAPEST.down - 1} ports down, the run gets ${pct(runShare({ down: CHEAPEST.down - 1, placement: 'packed', others: 0 }))} of each card or more and its exchange hides completely. With ${CHEAPEST.down} (${ratio(clusterFabric(CHEAPEST.down))}), it gets ${pct(CHEAPEST.share)}; its exchange sticks out of each step only slightly, and it takes ${days(CHEAPEST.days)}, ${pct(CHEAPEST.days / BASE.days - 1, 1)} longer, on a network costing ${usd(CHEAPEST.cost)} per GPU — ${usd(C32.costPerGpu - CHEAPEST.cost)} less than non-blocking. One more port facing GPUs and the run takes ${days(nextDays)}, past the limit.`}
       />
 
       <H2>Two networks for two kinds of work</H2>

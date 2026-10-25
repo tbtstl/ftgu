@@ -13,7 +13,7 @@
 
 import { solveLP, type Sense } from '../market/lp';
 
-export type NodeId = 'basin' | 'coldwater' | 'kessler' | 'inland' | 'calder' | 'seaboard' | 'northport' | 'eastbay';
+export type NodeId = 'basin' | 'coldwater' | 'kessler' | 'inland' | 'corran' | 'seaboard' | 'northport' | 'eastbay';
 
 export interface NetworkInputs {
   /** Production, kb/d. */
@@ -22,7 +22,7 @@ export interface NetworkInputs {
   seaboardSupply: number;
   /** Refinery demand that must be met, kb/d. */
   inlandDemand: number;
-  calderDemand: number;
+  corranDemand: number;
   /** Link capacities, kb/d. */
   pipeline: number;
   coldwaterLine: number;
@@ -33,10 +33,10 @@ export interface NetworkInputs {
   gathering: number;
   railCost: number;
   /** Tanker freight per barrel on each route. */
-  freightSeaboardCalder: number;
+  freightSeaboardCorran: number;
   freightSeaboardNorthport: number;
-  freightCalderNorthport: number;
-  freightCalderEastbay: number;
+  freightCorranNorthport: number;
+  freightCorranEastbay: number;
   /** Market prices, $/bbl. */
   northportPrice: number;
   eastbayPremium: number;
@@ -49,7 +49,7 @@ export const NETWORK_DEFAULTS: NetworkInputs = {
   coldwaterSupply: 250,
   seaboardSupply: 250,
   inlandDemand: 250,
-  calderDemand: 600,
+  corranDemand: 600,
   pipeline: 480,
   coldwaterLine: 350,
   rail: 150,
@@ -57,10 +57,10 @@ export const NETWORK_DEFAULTS: NetworkInputs = {
   coldwaterTariff: 4.0,
   gathering: 1.0,
   railCost: 10,
-  freightSeaboardCalder: 1.2,
+  freightSeaboardCorran: 1.2,
   freightSeaboardNorthport: 2.0,
-  freightCalderNorthport: 2.5,
-  freightCalderEastbay: 3.2,
+  freightCorranNorthport: 2.5,
+  freightCorranEastbay: 3.2,
   northportPrice: 79,
   eastbayPremium: 1.5,
   floor: 50,
@@ -70,13 +70,13 @@ export const LINK_IDS = [
   'basinKessler',
   'coldwaterKessler',
   'kesslerInland',
-  'kesslerCalderPipe',
-  'kesslerCalderRail',
-  'seaboardCalder',
+  'kesslerCorranPipe',
+  'kesslerCorranRail',
+  'seaboardCorran',
   'seaboardNorthport',
-  'calderNorthport',
-  'northportCalder',
-  'calderEastbay',
+  'corranNorthport',
+  'northportCorran',
+  'corranEastbay',
 ] as const;
 export type LinkId = (typeof LINK_IDS)[number];
 
@@ -84,13 +84,13 @@ export const LINK_ENDS: Record<LinkId, [NodeId, NodeId]> = {
   basinKessler: ['basin', 'kessler'],
   coldwaterKessler: ['coldwater', 'kessler'],
   kesslerInland: ['kessler', 'inland'],
-  kesslerCalderPipe: ['kessler', 'calder'],
-  kesslerCalderRail: ['kessler', 'calder'],
-  seaboardCalder: ['seaboard', 'calder'],
+  kesslerCorranPipe: ['kessler', 'corran'],
+  kesslerCorranRail: ['kessler', 'corran'],
+  seaboardCorran: ['seaboard', 'corran'],
   seaboardNorthport: ['seaboard', 'northport'],
-  calderNorthport: ['calder', 'northport'],
-  northportCalder: ['northport', 'calder'],
-  calderEastbay: ['calder', 'eastbay'],
+  corranNorthport: ['corran', 'northport'],
+  northportCorran: ['northport', 'corran'],
+  corranEastbay: ['corran', 'eastbay'],
 };
 
 export interface NetworkSolution {
@@ -125,27 +125,27 @@ export function solveNetwork(inp: NetworkInputs = NETWORK_DEFAULTS, extra?: { no
   // Node balances: inflow + supply = outflow + demand.
   add({ basinKessler: 1, shutBasin: 1 }, '=', inp.basinSupply + x('basin'));
   add({ coldwaterKessler: 1, shutColdwater: 1 }, '=', inp.coldwaterSupply + x('coldwater'));
-  add({ seaboardCalder: 1, seaboardNorthport: 1, shutSeaboard: 1 }, '=', inp.seaboardSupply + x('seaboard'));
-  add({ basinKessler: 1, coldwaterKessler: 1, kesslerInland: -1, kesslerCalderPipe: -1, kesslerCalderRail: -1 }, '=', -x('kessler'));
+  add({ seaboardCorran: 1, seaboardNorthport: 1, shutSeaboard: 1 }, '=', inp.seaboardSupply + x('seaboard'));
+  add({ basinKessler: 1, coldwaterKessler: 1, kesslerInland: -1, kesslerCorranPipe: -1, kesslerCorranRail: -1 }, '=', -x('kessler'));
   add({ kesslerInland: 1 }, '=', inp.inlandDemand - x('inland'));
-  add({ kesslerCalderPipe: 1, kesslerCalderRail: 1, seaboardCalder: 1, northportCalder: 1, calderNorthport: -1, calderEastbay: -1 }, '=', inp.calderDemand - x('calder'));
-  add({ seaboardNorthport: 1, calderNorthport: 1, buyNorthport: 1, northportCalder: -1, sellNorthport: -1 }, '=', -x('northport'));
+  add({ kesslerCorranPipe: 1, kesslerCorranRail: 1, seaboardCorran: 1, northportCorran: 1, corranNorthport: -1, corranEastbay: -1 }, '=', inp.corranDemand - x('corran'));
+  add({ seaboardNorthport: 1, corranNorthport: 1, buyNorthport: 1, northportCorran: -1, sellNorthport: -1 }, '=', -x('northport'));
   const ub = Array<number>(n).fill(Infinity);
-  ub[ix.kesslerCalderPipe] = inp.pipeline;
-  ub[ix.kesslerCalderRail] = inp.rail;
+  ub[ix.kesslerCorranPipe] = inp.pipeline;
+  ub[ix.kesslerCorranRail] = inp.rail;
   ub[ix.coldwaterKessler] = inp.coldwaterLine;
   // Objective: maximize sales value − transport − purchases (+ the floor value of held-back oil).
   const c = Array<number>(n).fill(0);
   c[ix.basinKessler] = inp.gathering;
   c[ix.coldwaterKessler] = inp.coldwaterTariff;
   c[ix.kesslerInland] = 0.3;
-  c[ix.kesslerCalderPipe] = inp.pipelineTariff;
-  c[ix.kesslerCalderRail] = inp.railCost;
-  c[ix.seaboardCalder] = inp.freightSeaboardCalder;
+  c[ix.kesslerCorranPipe] = inp.pipelineTariff;
+  c[ix.kesslerCorranRail] = inp.railCost;
+  c[ix.seaboardCorran] = inp.freightSeaboardCorran;
   c[ix.seaboardNorthport] = inp.freightSeaboardNorthport;
-  c[ix.calderNorthport] = inp.freightCalderNorthport;
-  c[ix.northportCalder] = inp.freightCalderNorthport;
-  c[ix.calderEastbay] = inp.freightCalderEastbay - (inp.northportPrice + inp.eastbayPremium);
+  c[ix.corranNorthport] = inp.freightCorranNorthport;
+  c[ix.northportCorran] = inp.freightCorranNorthport;
+  c[ix.corranEastbay] = inp.freightCorranEastbay - (inp.northportPrice + inp.eastbayPremium);
   c[ix.shutBasin] = -inp.floor;
   c[ix.shutColdwater] = -inp.floor;
   c[ix.shutSeaboard] = -inp.floor;
@@ -163,7 +163,7 @@ export function solveNetwork(inp: NetworkInputs = NETWORK_DEFAULTS, extra?: { no
   };
 }
 
-export const NODE_IDS: NodeId[] = ['basin', 'coldwater', 'kessler', 'inland', 'calder', 'seaboard', 'northport', 'eastbay'];
+export const NODE_IDS: NodeId[] = ['basin', 'coldwater', 'kessler', 'inland', 'corran', 'seaboard', 'northport', 'eastbay'];
 
 /**
  * Crude price at each node, $/bbl: the value of one more barrel there. Eastbay's is its market
@@ -193,25 +193,25 @@ export function nodePrices(inp: NetworkInputs = NETWORK_DEFAULTS): Record<NodeId
  * where thousands of weeks of history need prices quickly). Agrees with nodePrices away from the
  * exact boundaries between regimes.
  */
-export function hubPricesFast(inp: NetworkInputs = NETWORK_DEFAULTS): { kessler: number; calder: number } {
+export function hubPricesFast(inp: NetworkInputs = NETWORK_DEFAULTS): { kessler: number; corran: number } {
   const surplus = inp.basinSupply + Math.min(inp.coldwaterSupply, inp.coldwaterLine) - inp.inlandDemand;
-  const exportParity = Math.max(inp.northportPrice - inp.freightCalderNorthport, inp.northportPrice + inp.eastbayPremium - inp.freightCalderEastbay);
-  const calderFrom = (fromKessler: number) => {
-    const need = inp.calderDemand - fromKessler;
-    if (need > inp.seaboardSupply + 1e-9) return inp.northportPrice + inp.freightCalderNorthport;
-    if (need > 1e-9) return inp.northportPrice - inp.freightSeaboardNorthport + inp.freightSeaboardCalder;
+  const exportParity = Math.max(inp.northportPrice - inp.freightCorranNorthport, inp.northportPrice + inp.eastbayPremium - inp.freightCorranEastbay);
+  const corranFrom = (fromKessler: number) => {
+    const need = inp.corranDemand - fromKessler;
+    if (need > inp.seaboardSupply + 1e-9) return inp.northportPrice + inp.freightCorranNorthport;
+    if (need > 1e-9) return inp.northportPrice - inp.freightSeaboardNorthport + inp.freightSeaboardCorran;
     return exportParity;
   };
   if (surplus < inp.pipeline - 1e-9) {
-    const calder = calderFrom(surplus);
-    return { kessler: calder - inp.pipelineTariff, calder };
+    const corran = corranFrom(surplus);
+    return { kessler: corran - inp.pipelineTariff, corran };
   }
   const railed = Math.min(inp.rail, surplus - inp.pipeline);
-  const calder = calderFrom(inp.pipeline + railed);
-  if (surplus - inp.pipeline < inp.rail - 1e-9) return { kessler: calder - inp.railCost, calder };
+  const corran = corranFrom(inp.pipeline + railed);
+  if (surplus - inp.pipeline < inp.rail - 1e-9) return { kessler: corran - inp.railCost, corran };
   const heldBack = surplus - inp.pipeline - inp.rail;
   const kessler = heldBack < Math.min(inp.coldwaterSupply, inp.coldwaterLine) - 1e-9 ? inp.floor + inp.coldwaterTariff : inp.floor + inp.gathering;
-  return { kessler, calder };
+  return { kessler, corran };
 }
 
 /** Spread between the coastal benchmark (Northport) and the inland hub (Kessler), $/bbl. */

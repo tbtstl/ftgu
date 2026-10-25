@@ -1,12 +1,14 @@
-// Lesson 7.5's strategy test: the capstone business (cloud.ts's simulateBusiness) with two more
-// drivers exposed — the price of energy, and how many years the servers must pay for themselves in
-// (Lesson 4.5's server-life bet). With both at their starting values it reproduces simulateBusiness
-// exactly; it only rescales the design's power cost and recomputes its yearly fixed cost.
+// Lesson 7.5's strategy test: the capstone business (cloud.ts's simulateBusiness) with three more
+// drivers exposed — the price of energy, how many years the servers must pay for themselves in
+// (Lesson 4.5's server-life bet), and how much of each customer's work a B-class GPU does (the
+// hardware edge Chapters 2 and 3 measured). With all three at their starting values it reproduces
+// simulateBusiness exactly; it only rescales the design's power cost, recomputes its yearly fixed
+// cost, and rescales the B-class's productivity (and so what each customer buys).
 
 import { gaussian, rng } from '../../model/random';
 import { GPU_IDS } from '../../model/compute/hardware';
 import { SITES } from '../../model/compute/sites';
-import { FINANCE, WORLD_DEFAULT, operateWith, prepare, type BusinessResult, type Customer, type FleetDesign, type OpsContext, type OpsPlan, type PriceBook, type WorldScenario } from './cloud';
+import { FINANCE, WORLD_DEFAULT, offers, operateWith, prepare, type BusinessResult, type Customer, type FleetDesign, type OpsContext, type OpsPlan, type PriceBook, type WorldScenario } from './cloud';
 import { gpuHourCost } from './facilityCost';
 
 export interface Levers {
@@ -14,6 +16,8 @@ export interface Levers {
   energyScale: number;
   /** Years the servers and network must pay for themselves in. */
   serverLifeYears: number;
+  /** Multiplier on how much of every workload's work a B-class GPU does (1: Chapter 3's figures). */
+  bWork?: number;
 }
 
 export const LEVERS_DEFAULT: Levers = { energyScale: 1, serverLifeYears: FINANCE.serverLifeYears };
@@ -34,10 +38,16 @@ export function fixedPerYearFor(ctx: OpsContext, serverLifeYears: number): numbe
 /** The design's operating context with the levers applied. */
 export function contextUnder(customers: Customer[], book: PriceBook, f: FleetDesign, levers: Levers = LEVERS_DEFAULT): OpsContext {
   const ctx = prepare(customers, book, f);
-  if (levers.energyScale === 1 && levers.serverLifeYears === FINANCE.serverLifeYears) return ctx;
+  const bWork = levers.bWork ?? 1;
+  if (levers.energyScale === 1 && levers.serverLifeYears === FINANCE.serverLifeYears && bWork === 1) return ctx;
   const powerPerBusyHour = { ...ctx.ev.powerPerBusyHour };
   for (const g of GPU_IDS) powerPerBusyHour[g] *= levers.energyScale;
-  return { ...ctx, ev: { ...ctx.ev, powerPerBusyHour, fixedPerYear: fixedPerYearFor(ctx, levers.serverLifeYears) } };
+  const ev = { ...ctx.ev, powerPerBusyHour, fixedPerYear: fixedPerYearFor(ctx, levers.serverLifeYears) };
+  if (bWork === 1) return { ...ctx, ev };
+  // A B-class GPU that does more (or less) of every workload's work changes what each unit of work
+  // costs on it, and so which accelerator each customer buys and how many of its buyers buy.
+  const prod = Object.fromEntries(Object.entries(ctx.prod).map(([w, p]) => [w, { ...p, B: p.B * bWork }])) as OpsContext['prod'];
+  return { ...ctx, ev, prod, off: offers(customers, book, f, prod) };
 }
 
 /**

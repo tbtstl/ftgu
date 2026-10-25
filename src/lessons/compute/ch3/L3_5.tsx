@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import {
   Caption,
   Challenge,
@@ -12,6 +12,7 @@ import {
   LessonPage,
   P,
   Segmented,
+  Slider,
   TEXT,
   fmt,
   lessonHref,
@@ -19,7 +20,7 @@ import {
   tint,
   useScenario,
 } from '../../../framework';
-import { checkAssignment, fitTable, workloadFit, type Fit, type ServeFit, type TrainFit } from '../../../engines/compute/compatibility';
+import { checkAssignment, fitTable, serveFit, workloadFit, type Fit, type ServeFit, type TrainFit } from '../../../engines/compute/compatibility';
 import { maxBatch, memoryPlan, servingPoint, type ServeConfig } from '../../../engines/compute/inference';
 import { trainingRun } from '../../../engines/compute/training';
 import { ACCELERATORS, GPU_COLOR, GPU_IDS, type GpuId } from '../../../model/compute/hardware';
@@ -39,9 +40,98 @@ export const ALL_ON_A: Assignment = { chat70: 'A', code8: 'A', batch8: 'A', fron
 /** Every workload on every accelerator (computed once; about 5 ms). */
 export const TABLE = fitTable(WORKLOAD_IDS);
 
-/** The challenge: every workload placed on an accelerator that can run it, and no accelerator over its count. */
-export function fleetSolved(a: Assignment): boolean {
-  return checkAssignment(a, FLEET).feasible;
+// The first demonstration's one requirement the reader can change: code completion's limit on time per token.
+
+const CODE = WORKLOADS.code8 as ServingWorkload;
+/** Code completion's limit on time per token as the workload defines it, ms. */
+export const CODE_MS_DEFAULT = Math.round(CODE.tpotMax * 1000);
+export const CODE_MS_MIN = 5;
+export const CODE_MS_MAX = 60;
+
+export type FleetState = Assignment & { codeMs: number };
+export const FLEET_DEFAULTS: FleetState = { ...ALL_ON_A, codeMs: CODE_MS_DEFAULT };
+
+const tableCache = new Map<number, Record<WorkloadId, Record<GpuId, Fit>>>();
+
+/** The table with code completion held to `codeMs` per token (the other rows don't change; memoized). */
+export function tableAt(codeMs: number): Record<WorkloadId, Record<GpuId, Fit>> {
+  if (codeMs === CODE_MS_DEFAULT) return TABLE;
+  let t = tableCache.get(codeMs);
+  if (!t) {
+    const w: ServingWorkload = { ...CODE, tpotMax: codeMs / 1000 };
+    const code = {} as Record<GpuId, Fit>;
+    for (const g of GPU_IDS) code[g] = serveFit(w, g);
+    t = { ...TABLE, code8: code };
+    tableCache.set(codeMs, t);
+  }
+  return t;
+}
+
+export interface FleetCheck {
+  used: Record<GpuId, number>;
+  overBy: Record<GpuId, number>;
+  /** Every workload has an accelerator that can run it, and no accelerator is over its count. */
+  feasible: boolean;
+}
+
+/** An assignment checked against the fleet, with code completion held to `codeMs` per token. */
+export function fleetCheck(a: Assignment, codeMs = CODE_MS_DEFAULT): FleetCheck {
+  const t = tableAt(codeMs);
+  const used: Record<GpuId, number> = { L: 0, A: 0, B: 0 };
+  let runs = true;
+  for (const id of WORKLOAD_IDS) {
+    const f = t[id][a[id]];
+    if (f.feasible) used[a[id]] += f.gpus;
+    else runs = false;
+  }
+  const overBy: Record<GpuId, number> = { L: Math.max(0, used.L - FLEET.L), A: Math.max(0, used.A - FLEET.A), B: Math.max(0, used.B - FLEET.B) };
+  return { used, overBy, feasible: runs && overBy.L + overBy.A + overBy.B === 0 };
+}
+
+/** Every assignment that fits the fleet with code completion held to `codeMs` per token. */
+export function solutionsAt(codeMs: number): Assignment[] {
+  const out: Assignment[] = [];
+  const rec = (i: number, cur: Partial<Assignment>) => {
+    if (i === WORKLOAD_IDS.length) {
+      if (fleetCheck(cur as Assignment, codeMs).feasible) out.push({ ...cur } as Assignment);
+      return;
+    }
+    for (const g of GPU_IDS) rec(i + 1, { ...cur, [WORKLOAD_IDS[i]]: g });
+  };
+  rec(0, {});
+  return out;
+}
+
+/** The challenge: with the workloads as given, every workload placed on an accelerator that can run it, and no accelerator over its count. */
+export function fleetSolved(a: Assignment, codeMs = CODE_MS_DEFAULT): boolean {
+  return codeMs === CODE_MS_DEFAULT && fleetCheck(a, codeMs).feasible;
+}
+
+export interface CodeSweep {
+  /** The tightest limit on the slider that still leaves some assignment, ms. */
+  tightestWithAnswer: number;
+  /** The loosest limit on the slider with no assignment at all, ms (below `tightestWithAnswer`). */
+  noAnswerAt: number;
+  /** The tightest limit at which a second assignment appears, ms. */
+  secondFrom: number;
+  /** The assignment that appears there. */
+  second: Assignment;
+}
+
+let sweepCache: CodeSweep | null = null;
+
+/** How the number of answers changes as code completion's limit moves across the slider. */
+export function codeSweep(): CodeSweep {
+  if (sweepCache) return sweepCache;
+  const counts: Array<{ ms: number; sols: Assignment[] }> = [];
+  for (let ms = CODE_MS_MIN; ms <= CODE_MS_MAX; ms++) counts.push({ ms, sols: solutionsAt(ms) });
+  const firstWith = counts.find((c) => c.sols.length > 0)!;
+  const none = [...counts].reverse().find((c) => c.ms < firstWith.ms && c.sols.length === 0);
+  const two = counts.find((c) => c.ms > CODE_MS_DEFAULT && c.sols.length > 1)!;
+  const base = solutionsAt(CODE_MS_DEFAULT)[0];
+  const second = two.sols.find((x) => WORKLOAD_IDS.some((id) => x[id] !== base[id]))!;
+  sweepCache = { tightestWithAnswer: firstWith.ms, noAnswerAt: none ? none.ms : NaN, secondFrom: two.ms, second };
+  return sweepCache;
 }
 
 /** GPUs a workload needs on an accelerator (Infinity if it can't run there). */
@@ -153,9 +243,9 @@ function gpuCount(n: number): string {
   return Number.isFinite(n) ? fmt(n) : '—';
 }
 
-/** One line describing what a workload asks for. */
-function needs(id: WorkloadId): string {
-  const w = WORKLOADS[id];
+/** One line describing what a workload asks for (code completion's limit as the first demonstration sets it). */
+function needs(id: WorkloadId, codeMs = CODE_MS_DEFAULT): string {
+  const w = id === 'code8' ? { ...CODE, tpotMax: codeMs / 1000 } : WORKLOADS[id];
   if (w.kind === 'train') return `${w.model} · ${w.tokens >= 1e12 ? `${fmt(w.tokens / 1e12)} trillion` : `${fmt(w.tokens / 1e9)} billion`} tokens in ${w.deadlineDays} days`;
   const lim = Number.isFinite(w.tpotMax) ? `≤ ${fmt(w.tpotMax * 1000)} ms per token` : 'no latency limit';
   return `${w.model}${w.precision === 'fp8' ? ' FP8' : ''} · ${lim} · ${fmt(w.demandTokensPerS)} tokens/s`;
@@ -168,7 +258,17 @@ function reasonShort(f: Fit): string {
 // ---------------------------------------------------------------------------
 // Figure 1: the assignment table and the fleet bars.
 
-function AssignTable({ assign, onPick }: { assign: Assignment; onPick: (id: WorkloadId, g: GpuId) => void }) {
+function AssignTable({
+  assign,
+  table,
+  codeMs,
+  onPick,
+}: {
+  assign: Assignment;
+  table: Record<WorkloadId, Record<GpuId, Fit>>;
+  codeMs: number;
+  onPick: (id: WorkloadId, g: GpuId) => void;
+}) {
   const cell: CSSProperties = { padding: '4px 6px', textAlign: 'right' };
   return (
     <div className="tbwrap">
@@ -196,10 +296,10 @@ function AssignTable({ assign, onPick }: { assign: Assignment; onPick: (id: Work
             <tr key={id}>
               <td style={{ whiteSpace: 'normal', paddingRight: 8 }}>
                 <div style={{ fontWeight: 500 }}>{WORKLOADS[id].name}</div>
-                <div style={{ fontSize: 12, color: '#6f6f6f', lineHeight: 1.35 }}>{needs(id)}</div>
+                <div style={{ fontSize: 12, color: '#6f6f6f', lineHeight: 1.35 }}>{needs(id, codeMs)}</div>
               </td>
               {GPU_IDS.map((g) => {
-                const f = TABLE[id][g];
+                const f = table[id][g];
                 const on = assign[id] === g;
                 const ok = f.feasible;
                 return (
@@ -521,15 +621,19 @@ export const LESSON_NUMBERS = {
 };
 
 export default function Lesson() {
-  const s1 = useScenario('assign', ALL_ON_A);
-  const assign = s1.state;
-  const check = checkAssignment(assign, FLEET);
-  const solved = check.feasible;
+  const s1 = useScenario('assign', FLEET_DEFAULTS);
+  const { codeMs, ...assign } = s1.state;
+  const table = tableAt(codeMs);
+  const check = fleetCheck(assign, codeMs);
+  const solved = fleetSolved(assign, codeMs);
   const overList = GPU_IDS.filter((g) => check.overBy[g] > 0).map((g) => `the ${ACCELERATORS[g].short} by ${fmt(check.overBy[g])}`);
-  const status = overList.length ? `This assignment overruns ${overList.join(' and ')}.` : 'Every workload has an accelerator.';
-  const caption = solved
-    ? `All six workloads run, on ${fmt(check.used.L)} L-class, ${fmt(check.used.A)} A-class and ${fmt(check.used.B)} B-class GPUs.`
-    : `${status} Move a workload to another accelerator.`;
+  const overText = overList.length ? `This assignment overruns ${overList.join(' and ')}.` : 'Every workload has an accelerator.';
+  const codeChanged = codeMs !== CODE_MS_DEFAULT;
+  const status = codeChanged ? `Code completion is held to ${codeMs} ms per token. Set it back to ${CODE_MS_DEFAULT} ms: the challenge is for the workloads as given.` : overText;
+  const caption = check.feasible
+    ? `All six workloads run, on ${fmt(check.used.L)} L-class, ${fmt(check.used.A)} A-class and ${fmt(check.used.B)} B-class GPUs${codeChanged ? `, with code completion held to ${codeMs} ms per token` : ''}.`
+    : `${overText} Move a workload to another accelerator${codeChanged ? ', or change code completion’s limit' : ''}.`;
+  const sweep = useMemo(() => codeSweep(), []);
 
   const s2 = useScenario('why', { workload: 'chat70' as WorkloadId, gpu: 'L' as GpuId });
   const wid = s2.state.workload;
@@ -542,14 +646,15 @@ export default function Lesson() {
   return (
     <LessonPage id="compute/3.5">
       <P>
-        The previous lesson kept one copy of the 70B model busy without letting its queue run away. Every lesson of this chapter has worked like that, taking one kind
-        of work and asking what it needs from a GPU: the 8B model reading a prompt, the 70B model writing to hundreds of people at once, a training run spread over a
+        The previous lesson kept one copy of the 70B model busy without letting its queue run away. Every lesson of this chapter has taken one kind of work and asked
+        what it needs from a GPU: the 8B model reading a prompt, the 70B model writing to hundreds of people at once, a training run spread over a
         thousand GPUs. A real GPU cloud is asked for all of them at the same time, on whatever hardware it happens to own. This lesson puts six workloads side by side
         on the course’s three accelerators and asks what it takes to run them together on one fleet.
       </P>
       <P>
-        Four of the six serve a model. The <b>chat assistant</b> runs the 70B model, with 1,000-token prompts and 300-token replies, and must produce each token of a
-        reply within {ms(CHAT.tpotMax)}; at its busiest it needs {fmt(CHAT.demandTokensPerS)} tokens a second. <b>Code completion</b> runs the 8B model and is far
+        Four of the six serve a model. The <b>chat assistant</b> runs the 70B model, with 1,000-token prompts and 300-token replies, and keeps the promise of
+        Lessons <a href={lessonHref('compute/3.2')}>3.2</a> and <a href={lessonHref('compute/3.4')}>3.4</a>: each token of a reply within {ms(CHAT.tpotMax)},
+        and the first within {fmt(CHAT.ttftMax, 1)} s. At its busiest it needs {fmt(CHAT.demandTokensPerS)} tokens a second. <b>Code completion</b> runs the 8B model and is far
         stricter — {ms((WORKLOADS.code8 as ServingWorkload).tpotMax)} per token, and its first suggestion within{' '}
         {fmt((WORKLOADS.code8 as ServingWorkload).ttftMax, 1)} s, or the programmer has typed past it. <b>Batch summarization</b> runs the same 8B model overnight with
         no latency limit at all. The <b>frontier assistant</b> serves the 400B model, its weights stored in FP8 to save memory. The other two train: a{' '}
@@ -562,13 +667,22 @@ export default function Lesson() {
         the fewest GPUs, split the best way, that finish in time (<a href={lessonHref('compute/3.3')}>Lesson 3.3</a>). The result is a count of GPUs — a lower bound, since it assumes every copy of a model
         runs at its steady best, with none of the headroom that <a href={lessonHref('compute/3.4')}>Lesson 3.4</a> showed a real service needs. The fleet has{' '}
         {fmt(FLEET.L)} {L.name}, {fmt(FLEET.A)} {A.name} and {fmt(FLEET.B)} {B.name} GPUs. In the next demonstration, each row is a workload and each cell the GPUs
-        it would need on that accelerator. Press a cell to run the workload there; the bars compare what the assignment uses with what the fleet has. Everything
-        starts on the A-class, the workhorse:
+        it would need on that accelerator. Press a cell to run the workload there; the bars compare what the assignment uses with what the fleet has, and the
+        slider sets code completion’s limit on time per token — leave it at {CODE_MS_DEFAULT} ms for now. Everything starts on the A-class, the workhorse:
       </P>
 
       <Figure name="GPU Compatibility Optimizer" scenario={s1}>
-        <AssignTable assign={assign} onPick={(id, g) => s1.set({ [id]: g } as Partial<Assignment>)} />
+        <AssignTable assign={assign} table={table} codeMs={codeMs} onPick={(id, g) => s1.set({ [id]: g } as Partial<FleetState>)} />
         <FleetBars used={check.used} />
+        <Slider
+          label="Code completion’s limit per token"
+          tone="teal"
+          value={codeMs}
+          min={CODE_MS_MIN}
+          max={CODE_MS_MAX}
+          onChange={(v) => s1.set({ codeMs: v })}
+          display={`${codeMs} ms`}
+        />
         <Caption>{caption}</Caption>
       </Figure>
 
@@ -576,7 +690,7 @@ export default function Lesson() {
         It doesn’t fit. On the A-class alone the six workloads need {fmt(LESSON_NUMBERS.allOnA)} GPUs, {fmt(LESSON_NUMBERS.allOnAOver)} more than the fleet has,
         while the other two accelerators sit idle. Read the table across a row and the three accelerators look very different. For every workload the {B.short} gets by with{' '}
         {fmt(100 / LESSON_NUMBERS.bGainMax)}–{fmt(100 / LESSON_NUMBERS.bGainMin)}% as many GPUs as the {A.short}, as its memory, bandwidth and links would suggest (<a href={lessonHref('compute/2.4')}>Lesson 2.4</a>). The {L.short}, where it can run the work at all, needs between{' '}
-        {fmt(LESSON_NUMBERS.lLossMin, 1)} and {fmt(LESSON_NUMBERS.lLossMax)} times more. And one cell is empty: the frontier assistant can’t run on the {L.short} at
+        {fmt(LESSON_NUMBERS.lLossMin, 1)} and {fmt(LESSON_NUMBERS.lLossMax)} times as many. And one cell is empty: the frontier assistant can’t run on the {L.short} at
         any count.
       </P>
 
@@ -585,14 +699,14 @@ export default function Lesson() {
         question={`Assign every workload to an accelerator so that all six run within the fleet: ${fmt(FLEET.L)} L-class, ${fmt(FLEET.A)} A-class and ${fmt(FLEET.B)} B-class GPUs.`}
         solved={solved}
         status={status}
-        success={`Solved — and it’s the only assignment that works. The pretraining run takes ${fmt(TRAIN.A.gpus)} A-class GPUs, the chat and frontier assistants share ${fmt(gpusFor('chat70', 'B') + gpusFor('frontier400', 'B'))} of the 24 B-class GPUs, batch summarization fills all 64 L-class GPUs exactly, and code completion and fine-tuning take ${fmt(gpusFor('code8', 'A') + gpusFor('tune8', 'A'))} more A-class GPUs: ${fmt(check.used.A)} of 336.`}
+        success={`Solved — and at these steady, best-case counts, it’s the only assignment that works; with the headroom of Lesson 3.4, the fleet would be tighter still. The pretraining run takes ${fmt(TRAIN.A.gpus)} A-class GPUs, the chat and frontier assistants share ${fmt(gpusFor('chat70', 'B') + gpusFor('frontier400', 'B'))} of the 24 B-class GPUs, batch summarization fills all 64 L-class GPUs exactly, and code completion and fine-tuning take ${fmt(gpusFor('code8', 'A') + gpusFor('tune8', 'A'))} more A-class GPUs: ${fmt(check.used.A)} of 336.`}
       />
 
       <H2>What sets each number</H2>
       <P>
         Each count comes from whichever requirement runs out first, and it isn’t the same requirement everywhere. In the next demonstration, choose a workload and an
-        accelerator to see which. For serving, the table lists every way of splitting the model over a server’s GPUs — whether the weights fit, how many requests
-        the cache has room for, the time per token for a request alone, the largest batch within the limits, and the GPUs needed — and the bars show the chosen
+        accelerator to see which. For serving, the table lists every way of splitting the model over a server’s GPUs — how many requests the cache has room for, if
+        the weights fit at all, the time per token for a request alone, the largest batch within the limits, and the GPUs needed — and the bars show the chosen
         split’s memory and its time per token against the limit. For training, the bars show memory per GPU, one training step, and the days to finish:
       </P>
 
@@ -617,8 +731,7 @@ export default function Lesson() {
               rowClass={(r) => (r.tp === chosenTp ? 'hl' : !r.fits || r.batch === 0 ? 'dim' : '')}
               columns={[
                 { label: 'GPUs per copy', cell: (r) => (r.tp === chosenTp ? `${r.tp}, chosen` : String(r.tp)) },
-                { label: 'Fits', cell: (r) => (r.fits ? 'yes' : 'no'), align: 'right' },
-                { label: 'Room', cell: (r) => (r.fits ? fmt(r.room) : '—'), align: 'right' },
+                { label: 'Room', cell: (r) => (r.fits ? fmt(r.room) : 'doesn’t fit'), align: 'right' },
                 { label: 'Token, alone', cell: (r) => (r.fits ? ms(r.oneTpot) : '—'), align: 'right' },
                 { label: 'Batch', cell: (r) => (r.batch > 0 ? fmt(r.batch) : '—'), align: 'right' },
                 { label: 'GPUs', cell: (r) => gpuCount(r.gpus), align: 'right' },
@@ -647,7 +760,7 @@ export default function Lesson() {
         <K tone="violet">graphics memory</K> at {fmt(L.bandwidthTBs, 2)} TB/s, so even a single request takes {ms(LESSON_NUMBERS.chatL4OneTpot)} per token — over the{' '}
         {ms(CHAT.tpotMax)} limit before any batching. On eight, a lone request takes {ms(LESSON_NUMBERS.chatL8OneTpot)}, and{' '}
         {ms(LESSON_NUMBERS.chatL8Comm)} of that is spent in all-reduces between cards that can only reach one another through PCIe{' '}
-        (<a href={lessonHref('compute/2.5')}>Lesson 2.5</a>). There is room for just {fmt(LESSON_NUMBERS.chatL8Batch)} requests before each token takes longer than{' '}
+        (<a href={lessonHref('compute/2.5')}>Lesson 2.5</a>). Only {fmt(LESSON_NUMBERS.chatL8Batch)} requests can share a step before each token takes longer than{' '}
         {ms(CHAT.tpotMax)}, so serving the assistant’s demand takes {fmt(gpusFor('chat70', 'L'))} cards, {fmt(ratio('chat70', 'L', 'A'))} times the{' '}
         {A.short}’s {fmt(gpusFor('chat70', 'A'))}. The latency limit sets the count, and what runs into it is <K tone="violet">bandwidth</K> and{' '}
         <K tone="blue">links</K> together.
@@ -687,13 +800,24 @@ export default function Lesson() {
         the blocks have to fit. GPU clouds reason the same way, keeping their newest, best-connected accelerators for the work only they can do and moving tolerant work
         onto older or cheaper hardware.
       </P>
+      <P>
+        Is that one answer a fact about the hardware, or an accident of the numbers? Test it with code completion’s limit in the{' '}
+        <FigRef to="GPU Compatibility Optimizer">first demonstration</FigRef>. At {CODE_MS_DEFAULT} ms a token, the {L.short} needs{' '}
+        {fmt(gpusFor('code8', 'L'))} cards for code completion, {fmt(ratio('code8', 'L', 'A'))} times the {A.short}’s {fmt(gpusFor('code8', 'A'))}: reading the
+        weights from its slow memory takes most of each step, so few requests can share one. Loosen the limit to {sweep.secondFrom} ms and it needs{' '}
+        {fmt(tableAt(sweep.secondFrom).code8.L.gpus)}, exactly the fleet’s, and a second answer appears: code completion on the {L.short}, batch summarization on
+        the {A.short}. Tighten it to {sweep.noAnswerAt} ms and there is none, since code completion then needs {fmt(tableAt(sweep.noAnswerAt).code8.A.gpus)}{' '}
+        {A.short} GPUs or {fmt(tableAt(sweep.noAnswerAt).code8.B.gpus)} {B.short} GPUs, and no arrangement of the others frees that many. The answer comes from
+        what each workload asks of memory, bandwidth and links, and what each accelerator has.
+      </P>
 
       <H2>An hour isn’t one thing</H2>
       <P>
         The table shows why compute is hard to sell as a single commodity. An hour on the {L.short} is worth something to batch summarization and almost nothing to
         the chat assistant; an hour on the {B.short} can do work no {L.short} hour can do at any price. What an hour of one accelerator is worth depends on which
         work wants it and what that work’s next-best option would cost. Where the GPUs are matters too: code completion tolerates a round trip of only{' '}
-        {fmt(WORKLOADS.code8.maxRttMs)} ms to its users, so a GPU far away can’t serve it however idle it is. A market for capacity, which{' '}
+        {fmt(WORKLOADS.code8.maxRttMs)} ms to its users, so a GPU far away can’t serve it however idle it is — a limit the table leaves out, and one{' '}
+        <a href={lessonHref('compute/6.3')}>Lesson 6.3</a> takes up. A market for capacity, which{' '}
         <a href={lessonHref('compute/5.5')}>Chapter 5</a> builds, has to price each kind of accelerator, in each place, separately.
       </P>
       <P>

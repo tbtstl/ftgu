@@ -64,12 +64,12 @@ export function floating(cargo: number, cb: number, rho: number) {
 
 /**
  * The challenge: loading in fresh water, take on as much cargo as the summer mark allows once the
- * ship reaches the sea — within one 100-tonne slider step of the limit, and never over it.
+ * ship reaches the sea. In the river that means loading to the F mark, one fresh water allowance
+ * above the summer mark: the river draft at or below it, and one more 100-tonne slider step past it.
  */
 export function freshLoadSolved(cargo: number, cb: number, rho: number) {
   if (rho > RHO_FRESH + 1e-9 || Math.abs(cb - K_.cb) > 1e-9) return false;
-  const f = floating(cargo, cb, rho);
-  return f.seaDraft <= K_.designDraft + 1e-9 && cargo > MAX_CARGO - 100;
+  return floating(cargo, cb, rho).draft <= MARKS.F + 1e-9 && floating(cargo + 100, cb, rho).draft > MARKS.F + 1e-9;
 }
 
 /** Drafts are read to the nearest centimeter. */
@@ -83,17 +83,40 @@ export function surveyResult(cargo: number, ballastLeft: number, dockRho: number
   return { before, after, ...s, error: s.cargo - cargo };
 }
 
+/**
+ * The survey figure keeps Kestrel within her marks: cargo plus the ballast left aboard may not exceed
+ * her cargo intake, so the ballast slider stops at the room the cargo leaves, in its 250-tonne steps.
+ */
+export function surveyBallastRoom(cargo: number): number {
+  return Math.max(0, Math.min(10_000, Math.floor((MAX_CARGO - cargo) / 250) * 250));
+}
+
+/** Cargo that brings her summer mark to the surface in fresh water, on the slider's 100-tonne grid. */
+export const SUMMER_MARK_FRESH_CARGO = Math.floor((displacementAt(K_, K_.designDraft, RHO_FRESH) - K_.lightship - CONSUMABLES) / 100) * 100;
+/** Extra cargo the fresh water allowance lets her load: her summer displacement in sea water less that in fresh, tonnes. */
+export const FWA_TONNES = SUMMER - displacementAt(K_, K_.designDraft, RHO_FRESH);
+
+/** The survey at the figure's starting settings, when the surveyor assumes sea water: the prose quotes its error. */
+const SURVEY_SEA = surveyResult(72_000, 0, 1.012, true);
+
 export default function Lesson() {
   const sim = useScenario('floating', { cargo: 40_000, cb: K_.cb, rho: RHO_SEA });
   const { cargo, cb, rho } = sim.state;
   const f = floating(cargo, cb, rho);
   const overSummer = f.seaDraft > K_.designDraft + 1e-9;
+  /** In lighter water the figure shows only what a loading officer could see: her marks. */
+  const atSea = rho >= RHO_SEA - 1e-9;
+  const markMm = (f.draft - K_.designDraft) * 1000;
+  const markText = `summer mark ${markMm >= 0 ? 'under water' : 'above the water'} by`;
   const solved = freshLoadSolved(cargo, cb, rho);
   const fill = Math.min(1, (cargo * DRAW_STOWAGE) / (K_.holdVolume ?? 1));
   const water = rho <= 1.0005 ? 'fresh water' : rho >= 1.0245 ? 'sea water' : 'brackish water';
 
   const ds = useScenario('draft-survey', { cargo: 72_000, ballastLeft: 0, dockRho: 1.012, surveyor: 'dock' as 'dock' | 'sea' });
-  const sv = surveyResult(ds.state.cargo, ds.state.ballastLeft, ds.state.dockRho, ds.state.surveyor === 'sea');
+  const ballastRoom = surveyBallastRoom(ds.state.cargo);
+  /** Ballast left aboard, never more than her marks allow (a saved scenario may predate the cap). */
+  const ballastLeft = Math.min(ds.state.ballastLeft, ballastRoom);
+  const sv = surveyResult(ds.state.cargo, ballastLeft, ds.state.dockRho, ds.state.surveyor === 'sea');
   const surveyRho = ds.state.surveyor === 'sea' ? RHO_SEA : ds.state.dockRho;
   const curve = useMemo(() => ({ xs: Array.from({ length: 21 }, (_, i) => 6 + i * 0.5) }), []);
 
@@ -106,18 +129,17 @@ export default function Lesson() {
   const deckY = KEEL - K_.depth * sz;
   const dimX = sideX + sideW * 0.5;
 
-  const fwaExample = freshWaterAllowanceMm(K_);
-
   return (
     <LessonPage id="shipping/1.1">
       <P>
         A ship is transportation capacity that moves, slowly. Most of what the world trades in bulk — iron ore, coal, grain, crude oil — crosses an ocean in a hull
         like the one we’ll follow through this course, and what it costs to send a tonne of cargo from Brazil to China depends on how many such hulls happen to be
-        in the right place at the right time. Before we can price that capacity we need to know where it comes from. So we’ll start with a single ship and the
+        in the right place at the right time. (A tonne is a metric ton, 1,000 kilograms; shipping weighs its cargo in tonnes, and so
+        will we.) Before we can price that capacity we need to know where it comes from. So we’ll start with a single ship and the
         oldest question in naval architecture: how much can it carry?
       </P>
       <P>
-        Our ship is <i>Kestrel</i>, a bulk carrier of a size the industry calls a Kamsarmax: 229 meters long, 32.25 meters wide and 20 meters deep from her keel
+        Our ship is <i>Kestrel</i>, a bulk carrier of a size the industry calls a Kamsarmax: 229 meters long overall, 32.25 meters wide and 20 meters deep from her keel
         to her main deck. Empty, with no fuel, water or cargo aboard, her steel and machinery weigh {t(K_.lightship)}. Steel is nearly eight times as dense as
         water, yet she floats — and loaded, she carries close to seven times her own weight in cargo.
       </P>
@@ -176,11 +198,13 @@ export default function Lesson() {
           items={[
             { label: 'displacement', value: t(f.displacement), tone: 'orange' },
             { label: `draft in ${water}`, value: m2(f.draft), tone: 'blue' },
-            {
-              label: overSummer ? 'over the summer limit, at sea' : 'more she could load before the summer mark, at sea',
-              value: t(Math.abs(f.summerDisp - f.displacement)),
-              tone: overSummer ? 'red' : undefined,
-            },
+            atSea
+              ? {
+                  label: overSummer ? 'over the summer limit, at sea' : 'more she could load before the summer mark, at sea',
+                  value: t(Math.abs(f.summerDisp - f.displacement)),
+                  tone: overSummer ? 'red' : undefined,
+                }
+              : { label: markText, value: `${fmt(Math.abs(markMm))} mm`, tone: 'blue' },
           ]}
         />
         <Slider label="Cargo" tone="orange" value={cargo} min={0} max={90_000} step={100} onChange={(v) => sim.set({ cargo: v })} display={t(cargo)} />
@@ -205,8 +229,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The equation is Archimedes’ principle with the hull’s shape written out. Underwater, Kestrel is close to a long box 225 meters between her bow and stern
-        and 32.25 meters wide, filled to the depth of her draft. The <K tone="blue">block coefficient</K>, C<sub>b</sub>, is the fraction of that box her hull
+        The equation is Archimedes’ principle with the hull’s shape written out. Underwater, Kestrel is close to a box 225 meters long — her length between
+        perpendiculars, measured along the waterline from her bow to her rudder’s axis, a little less than her length overall — and 32.25 meters wide, filled to
+        the depth of her draft. The <K tone="blue">block coefficient</K>, C<sub>b</sub>, is the fraction of that box her hull
         actually fills once the rounded bilges and the tapering bow and stern are taken out: 0.87 for Kestrel. Multiply the volume by the water’s density ρ, in
         tonnes per cubic meter, and you have the weight of water displaced. Real hulls are finer near the keel than at the waterline, so their block coefficient
         changes a little with draft; our model keeps it fixed, which makes the draft rise in exact proportion to the weight aboard.
@@ -255,18 +280,16 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Kestrel is loading at a river berth in fresh water and will sail straight out to sea. With her hull fullness at 0.87, load as much cargo as you can without her summer mark being under water once she reaches the sea."
+        question={`Kestrel is loading at a river berth in fresh water and will sail straight out to sea. Predict first: her fresh water allowance is ${fmt(FWA_MM)} mm, and each centimeter of draft holds about ${fmt(TPC, 1)} tonnes, so how much more cargo does the allowance let her load than stopping with her summer mark at the river’s surface? Then, with her hull fullness at 0.87 and the density at 1.000, load as much as you can without her summer mark being under water once she reaches the sea. At the berth, all you can read is her marks.`}
         solved={solved}
         status={
           Math.abs(cb - K_.cb) > 1e-9
             ? `Set the hull fullness back to Kestrel’s 0.87 first.`
             : rho > RHO_FRESH + 1e-9
               ? `The berth is in fresh water: set the density to 1.000. Right now it is ${rho.toFixed(3)}.`
-              : overSummer
-                ? `At sea, ${t(cargo)} would put her ${fmt((f.seaDraft - K_.designDraft) * 100, 1)} cm past the summer mark.`
-                : `At sea, ${t(cargo)} would leave her ${fmt((K_.designDraft - f.seaDraft) * 100, 1)} cm short of the summer mark: room for ${t(f.summerDisp - f.displacement)} more.`
+              : `With ${t(cargo)} aboard she floats at ${m2(f.draft)} in the river, her ${markText} ${fmt(Math.abs(markMm))} mm.`
         }
-        success={`Solved. With ${t(cargo)} aboard, she floats at ${m2(f.draft)} in the river — ${fmt((f.draft - K_.designDraft) * 1000)} mm past her summer mark, almost exactly her ${fmt(fwaExample)} mm fresh water allowance, so the F mark sits at the surface. In the sea the same weight floats ${fmt(((f.draft - f.seaDraft) * 1000))} mm higher, right at the summer mark. Loading by the summer mark in the river would have left about ${t(f.summerDisp - displacementAt(K_, K_.designDraft, RHO_FRESH))} of paying cargo on the quay.`}
+        success={`Solved. With ${t(cargo)} aboard she floats at ${m2(f.draft)} in the river, her summer mark ${fmt(markMm)} mm under — her whole fresh water allowance, so the F mark sits at the surface. In the sea the same weight floats ${fmt((f.draft - f.seaDraft) * 1000)} mm higher, right at the summer mark. Stopping with the summer mark at the river’s surface would have meant about ${t(SUMMER_MARK_FRESH_CARGO)}, so the allowance is worth about ${t(Math.round(FWA_TONNES / 10) * 10)} of paying cargo. The estimate ${fmt(FWA_MM / 10, 1)} cm × ${fmt(TPC, 1)} t ≈ ${t(Math.round((FWA_MM / 10) * TPC / 10) * 10)} comes out a little high, because in fresh water a centimeter of her draft holds only ${fmt(TPC * (RHO_FRESH / RHO_SEA), 1)} tonnes.`}
       />
 
       <H2>Weighing a cargo with the sea</H2>
@@ -314,7 +337,7 @@ export default function Lesson() {
           overlay={(x, y) => {
             const yb = y(sv.dispBefore);
             const ya = y(sv.dispAfter);
-            const xr = x(15.7);
+            const xr = x(Math.max(15.7, sv.after.draft + 0.4));
             return (
               <g>
                 <line x1={x(sv.before.draft)} x2={xr} y1={yb} y2={yb} stroke="#9a9a9a" strokeDasharray="3 3" />
@@ -340,12 +363,29 @@ export default function Lesson() {
             { label: 'survey error', value: `${sv.error >= 0 ? '+' : '−'}${t(Math.abs(sv.error))}`, tone: Math.abs(sv.error) > 200 ? 'red' : undefined },
           ]}
         />
-        <Slider label="Cargo actually loaded" tone="orange" value={ds.state.cargo} min={40_000} max={78_000} step={500} onChange={(v) => ds.set({ cargo: v })} display={t(ds.state.cargo)} />
-        <Slider label="Ballast left aboard" value={ds.state.ballastLeft} min={0} max={10_000} step={250} onChange={(v) => ds.set({ ballastLeft: v })} display={t(ds.state.ballastLeft)} />
+        <Slider
+          label="Cargo actually loaded"
+          tone="orange"
+          value={ds.state.cargo}
+          min={40_000}
+          max={78_000}
+          step={500}
+          onChange={(v) => ds.set({ cargo: v, ballastLeft: Math.min(ds.state.ballastLeft, surveyBallastRoom(v)) })}
+          display={t(ds.state.cargo)}
+        />
+        <Slider
+          label="Ballast left aboard"
+          value={ballastLeft}
+          min={0}
+          max={ballastRoom}
+          step={250}
+          onChange={(v) => ds.set({ ballastLeft: Math.min(v, ballastRoom) })}
+          display={ballastLeft >= ballastRoom ? `${t(ballastLeft)} · at her marks` : t(ballastLeft)}
+        />
         <Slider label="Dock water density" tone="blue" value={ds.state.dockRho} min={1.0} max={1.025} step={0.001} onChange={(v) => ds.set({ dockRho: v })} display={`${ds.state.dockRho.toFixed(3)} t/m³`} />
         <Caption>
           The survey multiplies each draft by {surveyRho.toFixed(3)} × {K_.cb} × 225 × 32.25 = {fmt(surveyRho * K_.cb * 225 * 32.25)} tonnes per meter, then subtracts the{' '}
-          {t(ARRIVAL_BALLAST - ds.state.ballastLeft)} of ballast pumped out.
+          {t(ARRIVAL_BALLAST - ballastLeft)} of ballast pumped out.
         </Caption>
       </Figure>
 
@@ -357,10 +397,13 @@ export default function Lesson() {
       <P>
         Now switch the surveyor to assuming sea water. Every displacement is overstated by the ratio of the two densities, and the error doesn’t cancel between the
         two readings, because the after reading is so much larger than the before. At the starting settings, with the dock at 1.012, the survey credits
-        Kestrel with {t(surveyResult(72_000, 0, 1.012, true).cargo)} instead of {t(surveyResult(72_000, 0, 1.012, false).cargo)}, and a buyer
-        paying for iron ore would be invoiced for {t(surveyResult(72_000, 0, 1.012, true).cargo - surveyResult(72_000, 0, 1.012, false).cargo)} that never
-        left the quay. Ballast matters just as much: water still in the tanks after loading weighs exactly as much as cargo, so the survey must sound every tank. Turn
-        the ballast up and watch the dot climb without the cargo changing.
+        Kestrel with {t(SURVEY_SEA.cargo)} against the {t(72_000)} actually loaded, and a buyer paying for iron ore would be invoiced for {t(SURVEY_SEA.error)}{' '}
+        that never left the quay.
+      </P>
+      <P>
+        Ballast is the other trap. Water still in the tanks after loading weighs exactly as much as cargo, so the surveyor sounds every tank and subtracts what is
+        there. Turn the ballast up: the after dot climbs, but the survey’s answer barely moves, because this surveyor counts the water. One who assumed the tanks
+        were empty would bill every tonne left in them as cargo.
       </P>
       <P>
         So a ship’s carrying capacity is fixed by geometry and the density of water: her length, beam and fullness, and the draft the load-line rules allow. That

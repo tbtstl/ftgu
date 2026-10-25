@@ -17,11 +17,14 @@ import {
   linePath,
   mix,
   scale,
+  usd,
   useScenario,
 } from '../../../framework';
 import {
   DEFAULT_NETWORK,
   ORIGINS,
+  RAIL_RATE,
+  arcs,
   districtProduction,
   networkCapacity,
   routeCrop,
@@ -98,10 +101,46 @@ export function fillShare(c: CapState): number {
   return t.filter((x) => x > cap).length / t.length;
 }
 
-/** Challenge 2: the least rail capacity (in steps of 10 million bushels) that fills the network in no more than one season in ten. */
+/** The harvest that one season in ten of the 400 exceeds, million bushels: what the reader plans the network against. */
+export function bigCropOneInTen(): number {
+  const t = [...seasons().totals].sort((a, b) => a - b);
+  return t[Math.round(t.length * 0.9) - 1];
+}
+
+/** The valley’s own use of corn in a year at the default network, million bushels: the ethanol plants and the feedyards. */
+export const VALLEY_USE = DEFAULT_NETWORK.ethanol + DEFAULT_NETWORK.feed;
+
+/**
+ * Challenge 2: the least rail capacity (in steps of 10 million bushels) that fills the network in no more than one season in ten.
+ * The reader predicts it: the network takes the valley’s use plus both routes, and must reach the one-in-ten big crop.
+ */
 export function railSolved(c: CapState): boolean {
   if (c.river !== CAP0.river || c.ethanol !== CAP0.ethanol) return false;
   return fillShare(c) <= 0.1 && fillShare({ ...c, rail: c.rail - 10 }) > 0.1;
+}
+
+/** Freight on one of the network's arcs at the default barge rate, $ per bushel. */
+function freight(id: string): number {
+  return arcs(DEFAULT_NETWORK.barge).find((a) => a.id === id)?.cost ?? NaN;
+}
+
+/** What an Upland Ridge bushel nets at the default rates: by truck to Crane Landing and barge, or by truck to Ashby and rail. */
+export const RIDGE_BY_BARGE = DEFAULT_NETWORK.sable - DEFAULT_NETWORK.barge - freight('ridge-landing');
+export const RIDGE_BY_RAIL = DEFAULT_NETWORK.westhaven - (RAIL_RATE.ashby ?? NaN) - freight('ridge-ashby');
+
+/** Million bushels left in the bins, with a decimal when it is under a million so a small remainder doesn’t read as none. */
+export function leftInBins(stored: number): string {
+  return stored < 0.05 ? '0' : fmt(stored, stored < 1 ? 1 : 0);
+}
+
+/** The prose’s low-water case: the river cut to this many million bushels, with an average harvest. */
+export const LOW_RIVER = 120;
+
+/** Rail room left over in the average year, and the corn (million bushels) left in the bins at low water. */
+export function lowWater(): { railSpare: number; left: number } {
+  const base = routeCrop(settingsOf(NET0));
+  const low = routeCrop(settingsOf({ ...NET0, river: LOW_RIVER }));
+  return { railSpare: NET0.rail - (base?.exports.westhaven ?? NaN), left: low?.stored ?? NaN };
 }
 
 const PLACES_SHOWN = ['halsted', 'dunmore', 'fairview', 'ashby', 'landing', 'bluestem', 'feedyards', 'sable', 'westhaven'];
@@ -135,7 +174,7 @@ function NetworkMap({ r }: { r: Routing }) {
       fill={(id) => valueFill(lv[id])}
       label={(id) => [perBu(lv[id])]}
       places={PLACES_SHOWN}
-      ariaLabel={`The valley’s corn routes. ${fmt(r.exports.sable)} million bushels go by barge to Port Sable and ${fmt(r.exports.westhaven)} million by rail to Westhaven${r.stored > 0.5 ? `; ${fmt(r.stored)} million stay in the bins` : ''}. A bushel is worth ${ORIGINS.map((o) => `${perBu(lv[o])} in ${DISTRICT[o].name}`).join(', ')}.`}
+      ariaLabel={`The valley’s corn routes. ${fmt(r.exports.sable)} million bushels go by barge to Port Sable and ${fmt(r.exports.westhaven)} million by rail to Westhaven${r.stored >= 0.05 ? `; ${leftInBins(r.stored)} million stay in the bins` : ''}. A bushel is worth ${ORIGINS.map((o) => `${perBu(lv[o])} in ${DISTRICT[o].name}`).join(', ')}.`}
       beneath={
         <g>
           <Flow d="M400 236 L470 322" f={f('prairie-landing')} color={truck} />
@@ -152,7 +191,7 @@ function NetworkMap({ r }: { r: Routing }) {
           <Flow d="M470 322 C 540 344, 590 352, 640 392" f={f('landing-sable')} color={GRAPHIC.blue} />
           {Object.entries(HUB_XY).map(([h, [x, y]]) => {
             const s = f(`${h}-stored`);
-            return s > 0.5 ? <circle key={h} cx={x} cy={y} r={3 + Math.sqrt(s) * 1.6} fill={STORED} opacity={0.45} /> : null;
+            return s > 0.05 ? <circle key={h} cx={x} cy={y} r={3 + Math.sqrt(s) * 1.6} fill={STORED} opacity={0.45} /> : null;
           })}
         </g>
       }
@@ -224,30 +263,36 @@ export default function Lesson() {
   const share = fillShare(c.state);
   const solved2 = railSolved(c.state);
   const totals = seasons().totals;
+  const bigCrop = useMemo(bigCropOneInTen, []);
+  const low = useMemo(lowWater, []);
 
   return (
     <LessonPage id="agriculture/4.4">
       <P>
         The Crane Valley grows about 506 million bushels of corn in an average season, and it can’t use most of it. The ethanol plants around Bluestem take 96
         million bushels a year and the High Plains feedyards 120 million — the 18 million a month of <a href={lessonHref('agriculture/4.2')}>Lesson 4.2</a>. The other
-        290 million have to leave, and there are two ways out, the same two that carry grain out of the American Midwest. <K tone="gold">Shuttle trains</K> — about
-        110 hopper cars that load at one elevator and run straight through to a port — carry corn west to Westhaven, on the coast. Barges carry it down the Crane from
-        Crane Landing to Port Sable. A single river barge holds about 1,500 tons, more than 50,000 bushels of corn, and a towboat on the upper Mississippi pushes
-        fifteen of them at once. Most of the corn the United States exports leaves from the Gulf of Mexico after just such a trip down the Mississippi; much of the
+        290 million have to leave, and there are two ways out, the same two that carry grain out of the American Midwest. The shuttle trains of{' '}
+        <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> carry corn west to the export terminal at Westhaven. Barges carry it down the Crane from the river
+        terminal at Crane Landing to Port Sable. A single river barge holds about 1,500 tons, more than 50,000 bushels of corn, and a towboat on the upper
+        Mississippi pushes fifteen of them at once. Most of the corn the United States exports leaves from the Gulf of Mexico after just such a trip down the Mississippi; much of the
         rest goes by shuttle train to the Pacific Northwest or by rail to Mexico.
       </P>
       <P>
-        Westhaven pays $5.95 a bushel for corn loaded onto a ship, and Port Sable $5.60 — simulated prices, like every price in this course. Getting there costs
-        money. Rail freight to Westhaven runs from $1.05 a bushel at Dunmore, the nearest station, to $1.32 at Ashby, the farthest; barge freight from Crane Landing to
-        Port Sable is 45 cents; trucks charge 6 to 34 cents for the shorter hauls between farms, elevators, ethanol plants and feedyards. A port’s price less the
-        freight to reach it is a bushel’s <K tone="gold">export parity</K>: the most an exporter could pay for it and break even. And each route can carry only so
+        Westhaven pays {usd(DEFAULT_NETWORK.westhaven, 2)} a bushel for corn loaded onto a ship, and Port Sable {usd(DEFAULT_NETWORK.sable, 2)} — simulated prices,
+        like every price in this course. Port Sable’s is the world price of the next lesson. Westhaven’s extra{' '}
+        {centsPlain(DEFAULT_NETWORK.westhaven - DEFAULT_NETWORK.sable)} is ocean freight its buyers save: it lies a shorter voyage from the feed mills of East Asia,
+        much as corn loaded in the Pacific Northwest often fetches more than corn loaded on the Gulf. Getting to either port costs money. Rail freight to Westhaven
+        runs from $1.05 a bushel at Dunmore, the nearest station, to $1.32 at Ashby, the farthest; barge freight from Crane Landing to Port Sable is 45 cents;
+        trucks charge 6 to 34 cents for the shorter hauls between farms, elevators, ethanol plants and feedyards. A port’s price less the freight to reach it is a
+        bushel’s <K tone="gold">export parity</K>: the most an exporter could pay for it and break even. And each route can carry only so
         much in a year — in our valley, 170 million bushels by rail and 180 million by river.
       </P>
       <P>
         Routing a year’s crop is then a puzzle with an exact answer. A linear program finds it, sending each bushel by whichever route leaves the most money at the
-        farm without overfilling any route. In the next demonstration the map shows the answer. Each district’s corn goes first to its own elevator; the lines are
-        where it goes from there, as wide as the flow, and each district is labeled with what one more bushel of its corn would be worth. Change the harvest, the
-        barge rate and the two routes’ capacities:
+        farm without overfilling any route. In the next demonstration the map shows the answer. Each district’s corn goes first to its own elevator — on this map one
+        hub stands for all of a district’s elevators, so “Fairview” carries the whole Black Prairie crop, about {fmt(seasons().supply.prairie)} million bushels, not
+        just the 12 million of the one elevator we ran in Lesson 4.3. The lines are where the corn goes from there, as wide as the flow, and each district is
+        labeled with what one more bushel of its corn would be worth. Change the harvest, the barge rate and the two routes’ capacities:
       </P>
 
       <Figure name="Grain Logistics Network" scenario={n}>
@@ -264,7 +309,7 @@ export default function Lesson() {
           items={[
             { label: 'by barge to Port Sable', value: `${fmt(route?.exports.sable ?? 0)} million bu`, tone: 'blue' },
             { label: 'by rail to Westhaven', value: `${fmt(route?.exports.westhaven ?? 0)} million bu` },
-            { label: 'left in the bins', value: `${fmt(route?.stored ?? 0)} million bu`, tone: (route?.stored ?? 0) > 0.5 ? 'red' : 'ink' },
+            { label: 'left in the bins', value: `${leftInBins(route?.stored ?? 0)} million bu`, tone: (route?.stored ?? 0) >= 0.05 ? 'red' : 'ink' },
             { label: 'river space worth', value: `${centsPlain(route?.riverValue ?? 0)} a bushel`, tone: 'red' },
           ]}
         />
@@ -276,13 +321,19 @@ export default function Lesson() {
 
       <P>
         The river is the better deal. A bushel at Crane Landing nets $5.15 by barge, while one at the Fairview elevator nets $4.75 by rail, so the river fills first:
-        180 million bushels go by barge, and the other 110 million take the train. (That $4.75 at Fairview is the price “at the terminal” that the elevator of{' '}
-        <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> set its bids against.) Now look at the labels. Each is a <K tone="green">location value</K> — what one more
+        180 million bushels go by barge, and the other 110 million take the train. That $4.75 is the terminal price{' '}
+        <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a>’s elevator bid against, and here is the whole chain from port to farm: Westhaven’s{' '}
+        {usd(DEFAULT_NETWORK.westhaven, 2)}, less {usd(RAIL_RATE.fairview ?? NaN, 2)} of rail freight, is{' '}
+        {usd(DEFAULT_NETWORK.westhaven - (RAIL_RATE.fairview ?? NaN), 2)} for corn loaded at Fairview, and 35 cents under that is the $4.40 that Fairview paid for
+        Cedar Bend’s corn in <a href={lessonHref('agriculture/4.1')}>Lesson 4.1</a>. Now look at the labels. Each is a <K tone="green">location value</K> — what one more
         bushel at that place adds to the value of the whole network — and it is what a competitive buyer can afford to pay there. In the Black Prairie it is $4.65: an
-        extra bushel would be trucked to Fairview for 10 cents and railed west for $1.20, which is its export parity. The surprise is the River Bottoms. Its corn is a
+        extra bushel would be trucked to Fairview for 10 cents and railed west for $1.20, which is its export parity. The High Plains is worth the most, $4.83,
+        because its corn feeds the feedyards next door and spares them a long haul from Fairview. The surprise is the River Bottoms. Its corn is a
         short truck ride from the barges, yet it is worth no more than the Black Prairie’s, because the river is full: an extra Bottoms bushel can get on a barge only
-        by pushing an Upland Ridge bushel off it and onto a train. The barge’s 42-cent advantage over the train reaches no farm. It belongs to the river space itself,
-        as its <K tone="red">scarcity value</K>.
+        by pushing an Upland Ridge bushel off it and onto a train. For that Ridge bushel the barge is worth {centsPlain(RIDGE_BY_BARGE - RIDGE_BY_RAIL)} more than
+        the train: trucked {centsPlain(freight('ridge-landing'))} to Crane Landing and barged, it nets {usd(RIDGE_BY_BARGE, 2)}; trucked{' '}
+        {centsPlain(freight('ridge-ashby'))} to Ashby and railed for {usd(RAIL_RATE.ashby ?? NaN, 2)}, only {usd(RIDGE_BY_RAIL, 2)}. That advantage reaches no farm.
+        It belongs to the river space itself, as its <K tone="red">scarcity value</K> — the “river space worth” readout.
       </P>
 
       <Challenge
@@ -296,7 +347,7 @@ export default function Lesson() {
               ? `At ${n.state.barge}¢, corn is worth less in ${lower.map((o) => DISTRICT[o].name).join(', ')}.`
               : `At ${n.state.barge}¢, every district’s corn is worth what it was at 45¢. Could the rate go higher?`
         }
-        success={`Solved: at ${n.state.barge}¢ the barge leaves Upland Ridge corn exactly what the train does, the river space has no scarcity value left, and every district’s corn is worth what it was at 45 cents. One cent more and Ridge corn switches to the train, the river runs short of full, and a bushel in the River Bottoms is worth less. Until then, a higher barge rate only moves the river’s scarcity value from whoever holds barge space to the barge lines.`}
+        success={`Solved: at ${n.state.barge}¢ the barge leaves Upland Ridge corn exactly what the train does, the river space has no scarcity value left, and every district’s corn is worth what it was at 45 cents. The two routes are now tied for Ridge corn, so the map may already show it on the train and the river short of full; it makes no difference to anyone’s corn. One cent more and the barge is the worse deal for the Ridge, and a bushel in the River Bottoms, which has no railroad, is worth less. Until then, a higher barge rate only moves the river’s scarcity value from whoever holds barge space to the barge lines.`}
       />
 
       <P>
@@ -310,10 +361,11 @@ export default function Lesson() {
         In any one year the routes are what they are. The harvest isn’t. Make it 20% larger than average in <FigRef to="Grain Logistics Network">the network</FigRef>{' '}
         and both routes fill: 42 million bushels can’t leave and stay in the valley’s bins, carried into the next year. We value a bushel carried over at $4.00 at
         the elevator — what next year’s buyers might pay, less a year of storage and interest. Now the last bushel’s outlet is a bin rather than a port, and every
-        district’s corn loses 63 cents of value; the Black Prairie’s falls to $4.02. Low water does the same from the other side. Cut the river to 120 million
-        bushels, as when barges must load light in a dry autumn, and the train can’t carry the difference; a few hundred thousand bushels stay behind, and that small
-        remainder takes 63 cents or more off corn across the valley, because prices are set by the last bushel. Real markets are less abrupt — the ports’ prices and
-        next year’s value move too — but they move the same way. In the autumn of 2022 the Mississippi ran so low that barges were loaded light, freight rates set
+        district’s corn loses 63 cents of value; the Black Prairie’s falls to $4.02. Low water does the same from the other side. Cut the river to {LOW_RIVER} million
+        bushels, as when barges must load light in a dry autumn, and the trains, with only {fmt(low.railSpare, 1)} million bushels of room to spare, can’t quite
+        carry the {NET0.river - LOW_RIVER} million taken off the barges. About {fmt(Math.round(low.left * 100) * 1e4)} bushels stay behind, and that small
+        remainder takes 63 cents or more off corn across the valley, because prices are set by the last bushel. Real markets are less abrupt — the ports’ prices
+        and next year’s value move too — but they move the same way. In the autumn of 2022 the Mississippi ran so low that barges were loaded light, freight rates set
         records, and corn at river elevators weakened sharply against the futures price; low water returned the next autumn.
       </P>
       <P>
@@ -357,16 +409,16 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Planners build for the bad years. With the river at 180 million bushels and the ethanol plants at 96 million, how much rail capacity, to the nearest 10 million bushels, does the valley need for its network to fill in no more than one season in ten?"
+        question={`Planners build for the bad years. In one season in ten of the 400, the valley grows more than ${fmt(bigCrop)} million bushels. Predict first, then check: with the river at 180 million bushels and the ethanol plants at 96 million, how much rail capacity, to the nearest 10 million bushels, does the network need to fill in no more than one season in ten?`}
         solved={solved2}
         status={
           c.state.river !== CAP0.river || c.state.ethanol !== CAP0.ethanol
             ? 'Keep the river at 180 million bushels and the ethanol plants at 96 million.'
             : share > 0.1
-              ? `With ${c.state.rail} million bushels of rail, the network fills in ${fmt(share * 100, 1)}% of seasons.`
-              : `${fmt(share * 100, 1)}% of seasons fill the network. Could less rail do?`
+              ? `With ${c.state.rail} million bushels of rail, the network fills more often than one season in ten.`
+              : `With ${c.state.rail} million bushels of rail, the network fills in no more than one season in ten.`
         }
-        success={`Solved: ${c.state.rail} million bushels of rail lets the valley use and ship ${fmt(cap)} million bushels a year, and only ${fmt(share * SEASONS)} of the 400 seasons grow more. The extra ${fmt(c.state.rail - CAP0.rail)} million bushels — ${fmt((c.state.rail - CAP0.rail) / 0.4)} more shuttle trains a year — halves how often the valley’s corn gets stuck. Whether that is worth building is the same question the valley’s farmers asked about bins in Lesson 4.2: what does the capacity cost, and how often will it pay?`}
+        success={`Solved: the network takes the valley’s own ${fmt(VALLEY_USE)} million bushels (${fmt(CAP0.ethanol)} at the ethanol plants, ${fmt(DEFAULT_NETWORK.feed)} at the feedyards) and ${fmt(CAP0.river)} million by river, so the rail must carry at least ${fmt(bigCrop)} − ${fmt(VALLEY_USE + CAP0.river)} = ${fmt(bigCrop - VALLEY_USE - CAP0.river)} million: ${c.state.rail}, to the nearest 10. The valley can then use and ship ${fmt(cap)} million bushels a year, and only ${fmt(share * SEASONS)} of the 400 seasons grow more, against ${fmt(fillShare({ ...c.state, rail: c.state.rail - 10 }) * SEASONS)} with ${c.state.rail - 10} million of rail. The extra ${fmt(c.state.rail - CAP0.rail)} million bushels — ${fmt((c.state.rail - CAP0.rail) / 0.4)} more shuttle trains a year — halves how often the valley’s corn gets stuck. Whether that is worth building is the same question the valley’s farmers asked about bins in Lesson 4.2: what does the capacity cost, and how often will it pay?`}
       />
 
       <P>

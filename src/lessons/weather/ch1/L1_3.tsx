@@ -5,7 +5,6 @@ import {
   Eq,
   FigRef,
   Figure,
-  Frac,
   GRAPHIC,
   GridY,
   H2,
@@ -47,7 +46,7 @@ import { WX } from '../shared/tones';
 // ---------------------------------------------------------------------------
 // The first demonstration: a sample of air on the saturation curve.
 
-/** A July afternoon at Calder Bay: 30 °C, 14 g/kg of vapor, 1,000 hPa. */
+/** A July afternoon at Fenwick Bay: 30 °C, 14 g/kg of vapor, 1,000 hPa. */
 export const AFTERNOON_AIR = { tC: 30, w: 14, p: 1000 };
 
 export interface AirSample {
@@ -63,7 +62,6 @@ export interface AirSample {
 export function airState(s: AirSample) {
   const w = s.w / 1000;
   const e0 = vaporPressure(w, s.p);
-  const dew = dewPoint(e0);
   const c = condense(s.tC, w, s.p);
   const e = vaporPressure(c.w, s.p);
   return {
@@ -71,7 +69,10 @@ export function airState(s: AirSample) {
     e0,
     /** Vapor pressure after, hPa. */
     e,
-    dew,
+    /** Dew point of the vapor the sample started with, °C. */
+    dew0: dewPoint(e0),
+    /** Dew point of the vapor left after any condensation, °C: equal to the temperature once saturated. */
+    dew: dewPoint(e),
     tC: c.tC,
     vapor: c.w * 1000,
     liquid: c.liquid * 1000,
@@ -81,13 +82,14 @@ export function airState(s: AirSample) {
 }
 
 /**
- * The first challenge: the afternoon air cooled to its dew point — the lowest temperature, on
- * the slider's half-degree steps, at which none of its vapor condenses.
+ * The first challenge: the afternoon air cooled to within half a degree of its dew point (19.04 °C),
+ * so either half-degree step beside it counts: 19.5 °C, where it is 97% saturated, or 19.0 °C,
+ * where it is just saturated and a hundredth of a gram per kilogram condenses.
  */
 export function dewPointSolved(s: AirSample): boolean {
   if (Math.abs(s.w - AFTERNOON_AIR.w) > 0.05 || s.p !== AFTERNOON_AIR.p) return false;
   const dew = dewPoint(vaporPressure(s.w / 1000, s.p));
-  return s.tC >= dew && s.tC - dew < 0.5;
+  return Math.abs(s.tC - dew) < 0.5;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +177,7 @@ function SaturationChart({ s }: { s: AirSample }) {
       role="img"
       aria-label={
         condensing
-          ? `Air cooled toward ${fmt(s.tC, 1)} °C with ${fmt(s.w, 1)} g/kg of vapor at ${fmt(s.p)} hPa passes its dew point of ${fmt(a.dew, 1)} °C: ${fmt(a.liquid, 2)} g/kg condenses, and its latent heat leaves the saturated air at ${fmt(a.tC, 1)} °C.`
+          ? `Air cooled toward ${fmt(s.tC, 1)} °C with ${fmt(s.w, 1)} g/kg of vapor at ${fmt(s.p)} hPa passes its dew point of ${fmt(a.dew0, 1)} °C: ${fmt(a.liquid, 2)} g/kg condenses, and its latent heat leaves the saturated air at ${fmt(a.tC, 1)} °C, which is now its dew point too.`
           : `Air at ${fmt(s.tC, 1)} °C with ${fmt(s.w, 1)} g/kg of vapor at ${fmt(s.p)} hPa: vapor pressure ${fmt(a.e, 1)} hPa against a saturation vapor pressure of ${fmt(satVaporPressure(a.tC), 1)} hPa, a relative humidity of ${fmt(a.rh * 100)}% and a dew point of ${fmt(a.dew, 1)} °C.`
       }
     >
@@ -296,7 +298,6 @@ export default function Lesson() {
   const condensing = a.liquid > 1e-6;
   const solved = dewPointSolved(s.state);
   const es = satVaporPressure(a.tC);
-  const dewNow = dewPoint(vaporPressure(s.state.w / 1000, s.state.p));
 
   const l = useScenario('lift', { surfaceC: 25, dewC: 15, topM: 3000 });
   const { surfaceC, dewC, topM } = l.state;
@@ -309,6 +310,7 @@ export default function Lesson() {
   const dawn = airState({ ...AFTERNOON_AIR, tC: 20 });
   const cooled = airState({ ...AFTERNOON_AIR, tC: 15 });
   const nearDew = airState({ ...AFTERNOON_AIR, tC: 19.5 });
+  const atDew = airState({ ...AFTERNOON_AIR, tC: 19 });
   const at850 = dewPoint(vaporPressure(AFTERNOON_AIR.w / 1000, 850));
   const ref = liftProfile(25, 15);
   const ref3k = 300;
@@ -316,9 +318,8 @@ export default function Lesson() {
 
   let caption: string;
   if (condensing)
-    caption = `Cooled to ${fmt(s.state.tC, 1)} °C, this air couldn’t hold all its vapor. ${fmt(a.liquid, 2)} g/kg condenses into droplets, and the heat that releases leaves the air at ${fmt(a.tC, 1)} °C, saturated.`;
-  else
-    caption = `This air holds ${fmt(a.vapor, 1)} of the ${fmt(a.capacity, 1)} g/kg it could hold at ${fmt(a.tC, 1)} °C. Cooled to ${fmt(a.dew, 1)} °C with nothing added or removed, it would be saturated.`;
+    caption = `Cooled toward ${fmt(s.state.tC, 1)} °C, this air couldn’t hold all its vapor. The heat released as it condenses leaves the air at ${fmt(a.tC, 1)} °C, saturated: its dew point now.`;
+  else caption = 'The dashed line shows this air cooling with nothing added or removed. Where it meets the curve, at the dew point, the air would be saturated.';
 
   return (
     <LessonPage id="weather/1.3">
@@ -338,7 +339,7 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the teal curve is the saturation vapor pressure at each temperature, and the red dot is a sample of air, placed by its temperature
-        and the pressure its vapor exerts. It starts as a humid July afternoon at Calder Bay: 30 °C, with 14 grams of vapor per kilogram, at 1,000 hPa. Change the
+        and its <b>vapor pressure</b>, the pressure its vapor exerts. It starts as a humid July afternoon at Fenwick Bay: 30 °C, with 14 grams of vapor per kilogram, at 1,000 hPa. Change the
         temperature, the amount of water vapor and the air’s pressure:
       </P>
 
@@ -354,8 +355,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'relative humidity', value: `${fmt(a.rh * 100)}%`, tone: WX.moisture },
-            { label: 'dew point', value: `${fmt(dewNow, 1)} °C`, tone: WX.moisture },
-            { label: 'water vapor', value: `${fmt(a.vapor, 1)} g/kg`, tone: WX.moisture },
             condensing
               ? { label: 'condensed, warming the air', value: `${fmt(a.liquid, 2)} g/kg · +${fmt(a.tC - s.state.tC, 1)} °C`, tone: WX.temperature }
               : { label: 'most it could hold', value: `${fmt(a.capacity, 1)} g/kg`, tone: WX.moisture },
@@ -376,15 +375,6 @@ export default function Lesson() {
           <Op>=</Op>
           <K tone={WX.moisture}>{fmt(es, 1)} hPa</K>
         </Eq>
-        <Eq label={`Relative humidity: ${fmt(a.e, 1)} over ${fmt(es, 1)} hectopascals, ${fmt(a.rh * 100)} percent`}>
-          <span>RH</span>
-          <Op>=</Op>
-          <Frac top={<K tone={WX.moisture}>e</K>} bottom={<K tone={WX.moisture}>e<Sub>s</Sub></K>} />
-          <Op>=</Op>
-          <Frac top={`${fmt(a.e, 1)} hPa`} bottom={`${fmt(es, 1)} hPa`} />
-          <Op>=</Op>
-          <K tone={WX.moisture}>{fmt(a.rh * 100)}%</K>
-        </Eq>
         <Caption>{caption}</Caption>
       </Figure>
 
@@ -403,30 +393,36 @@ export default function Lesson() {
       </P>
       <P>
         The moisture itself is better measured by the <K tone={WX.moisture}>dew point</K>: the temperature at which the air’s vapor would saturate it, where the
-        dashed line meets the curve. For the afternoon air it’s {fmt(afternoon.dew, 1)} °C, and it stays there all evening as the temperature falls toward it.
-        Pressure matters too, a little. At a lower pressure the same grams of vapor exert less vapor pressure, so the same air at 850 hPa has a dew point of{' '}
-        {fmt(at850, 1)} °C instead. Rising air, as we’ll see, carries its dew point down with it.
-      </P>
-      <P>
-        Cool the air past its dew point and it can no longer hold all its vapor. The excess condenses — on grass as dew, on dust and salt particles in the air as the
-        droplets of fog and cloud. Drag the temperature down to 15 °C. The dot doesn’t stop at 15 °C, because condensing water releases heat: {fmt(cooled.liquid, 1)}{' '}
-        g/kg condenses, and the heat it gives up leaves the air at {fmt(cooled.tC, 1)} °C, saturated, on the curve. The slider sets how far we try to cool the air;
-        the latent heat pushes back.
+        dashed line meets the curve. Cooling the air doesn’t move it — only adding or removing vapor does — so it stays put all evening as the temperature falls
+        toward it.
       </P>
 
       <Challenge
         id="a"
-        question="Start from the afternoon air — 30 °C, with 14 g/kg of vapor, at 1,000 hPa — and cool it to its dew point: find the lowest temperature, on the slider’s half-degree steps, at which none of its vapor condenses."
+        question={`The afternoon air holds 14 g/kg of vapor, about half the ${fmt(satMixingRatio(30, 1000) * 1000, 1)} g/kg it could hold at 30 °C. Predict first, from how fast the curve climbs: about how cool must the evening get before this air is saturated? Then cool it to its dew point, to within half a degree.`}
         solved={solved}
         status={
           Math.abs(s.state.w - AFTERNOON_AIR.w) > 0.05 || s.state.p !== AFTERNOON_AIR.p
             ? 'First set the water vapor back to 14 g/kg and the pressure to 1,000 hPa.'
-            : condensing
-              ? `At ${fmt(s.state.tC, 1)} °C, ${fmt(a.liquid, 2)} g/kg condenses. That’s too cold.`
-              : `At ${fmt(s.state.tC, 1)} °C the relative humidity is ${fmt(a.rh * 100)}%. Can it go lower without condensing?`
+            : s.state.tC >= AFTERNOON_AIR.tC
+              ? 'Predict first, then cool the air.'
+              : condensing
+                ? 'Vapor is condensing: that’s past the dew point.'
+                : 'Not saturated yet. Keep cooling.'
         }
-        success={`Solved. The dew point of this air is ${fmt(afternoon.dew, 2)} °C, so at 19.5 °C it is ${fmt(nearDew.rh * 100)}% saturated, and half a degree colder a little of its vapor condenses. A summer night at Calder Bay that cools below about 19 °C brings dew or fog; the dew point itself doesn’t move as the temperature falls toward it.`}
+        success={`Solved. The air holds about half what it could at 30 °C, so it saturates where the curve has fallen to about half its height. The curve only nearly doubles every 10 °C, so that takes a little more than 10 °C of cooling: the dew point is ${fmt(afternoon.dew, 2)} °C. At 19.5 °C the air is ${fmt(nearDew.rh * 100)}% saturated; at 19.0 °C it just passes saturation, and ${fmt(atDew.liquid, 2)} g/kg — the first droplets — condenses. A summer night at Fenwick Bay that cools below about 19 °C brings dew or fog.`}
       />
+
+      <P>
+        Pressure matters too, a little. At a lower pressure the same grams of vapor exert less vapor pressure, so the same air at 850 hPa has a dew point of{' '}
+        {fmt(at850, 1)} °C instead of {fmt(afternoon.dew, 1)}. Rising air, as we’ll see, carries its dew point down with it.
+      </P>
+      <P>
+        Cool the air past its dew point and it can no longer hold all its vapor. The excess condenses — on grass as dew, on dust and salt particles in the air as the
+        droplets of fog and cloud. Drag the temperature down to 15 °C. The dot doesn’t stop at 15 °C, because condensing water releases heat: {fmt(cooled.liquid, 1)}{' '}
+        g/kg condenses, and the heat it gives up leaves the air at {fmt(cooled.tC, 1)} °C, saturated, on the curve. Its dew point has fallen to the same{' '}
+        {fmt(cooled.dew, 1)} °C, because less vapor is left. The slider sets how far we try to cool the air; the latent heat pushes back.
+      </P>
 
       <H2>Latent heat</H2>
       <P>
@@ -453,7 +449,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'cloud base', value: `${fmt(prof.baseM)} m`, tone: WX.moisture },
             { label: 'temperature at the top', value: `${fmt(prof.parcel[top], 1)} °C`, tone: WX.temperature },
             { label: 'if nothing condensed', value: `${fmt(prof.dry[top], 1)} °C`, tone: WX.temperature },
             { label: 'water condensed', value: `${fmt(prof.condensed[top], 1)} g/kg`, tone: WX.moisture },
@@ -492,12 +487,14 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="On a summer morning the surface air is 28 °C. What dew point puts the base of the clouds that form when it’s lifted at 1,000 m, to within 50 m?"
+        question="On a summer morning the surface air is 28 °C. Predict first, with the 120 m rule: what dew point puts the base of the clouds that form when it’s lifted at 1,000 m? Then set it and check, to within 50 m."
         solved={solved2}
         status={
           surfaceC !== CLOUD_TARGET.surfaceC
             ? 'First set the surface temperature to 28 °C.'
-            : `With a dew point of ${fmt(Math.min(dewC, surfaceC), 1)} °C, the cloud base is at ${fmt(prof.baseM)} m.`
+            : prof.baseM > CLOUD_TARGET.baseM
+              ? 'The cloud base is too high: this air is too dry.'
+              : 'The cloud base is too low: this air is too moist.'
         }
         success={`Solved. A 1,000 m base needs the air to be about 1,000 ÷ 120 ≈ 8 °C warmer than its dew point. Here the dew point is ${fmt(Math.min(dewC, surfaceC), 1)} °C and the base is at ${fmt(prof.baseM)} m. Moister air would make lower clouds; drier air, higher ones.`}
       />

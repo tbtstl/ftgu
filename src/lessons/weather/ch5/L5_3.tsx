@@ -55,9 +55,12 @@ export function specOf(month: MonthKey): ContractSpec {
   return monthContract('HDD', MONTH_OF[month]);
 }
 
-/** The simulated market with the reader's changes: whether it prices ENSO, and how stale its forecasts are. */
-export function marketFor(usesEnso: boolean, lag: number, halfSpread = MARKET.halfSpread): MarketModel {
-  return { ...MARKET, usesEnso, infoDelay: lag, halfSpread };
+/**
+ * The simulated market with the reader's changes: whether it prices ENSO, how stale its forecasts
+ * are, its half-spread, and any risk premium it adds to its expected index (index points).
+ */
+export function marketFor(usesEnso: boolean, lag: number, halfSpread = MARKET.halfSpread, premium = MARKET.premium): MarketModel {
+  return { ...MARKET, usesEnso, infoDelay: lag, halfSpread, premium };
 }
 
 // ---------------------------------------------------------------------------
@@ -68,14 +71,20 @@ export interface EdgeState {
   year: number;
   /** Decision day, relative to the month's first day (−60 = sixty days before it). */
   day: number;
-  /** Winter warming at Calder Bay per °C of Niño-3.4, °F. */
+  /** Winter warming at Fenwick Bay per °C of Niño-3.4, °F. */
   ensoF: number;
   usesEnso: boolean;
   /** How many days stale the market's forecasts are. */
   lag: number;
+  /** Risk premium in the market's price: added to its expected index, index points. */
+  premium: number;
 }
 
-export const EDGE_DEFAULTS: EdgeState = { month: 'jan', year: 20, day: FIRST_DAY, ensoF: 1, usesEnso: false, lag: 2 };
+export const EDGE_DEFAULTS: EdgeState = { month: 'jan', year: 20, day: FIRST_DAY, ensoF: 1, usesEnso: false, lag: 2, premium: 0 };
+/** The premium the prose sets: hedgers crowding the selling side push the price 10 points under the forecast. */
+export const PREMIUM_EXAMPLE = -10;
+/** With no physical gap, a premium of this size leaves a trade worth taking after the spread. */
+export const PREMIUM_PAID = -15;
 
 interface TimelinePoint {
   rel: number;
@@ -96,14 +105,15 @@ export interface Timeline {
 const timelineCache = new Map<string, Timeline>();
 
 /** The market's quotes and our expected index on every day from 60 days before the month to its end. */
-export function timeline(st: Pick<EdgeState, 'month' | 'year' | 'ensoF' | 'usesEnso' | 'lag'>): Timeline {
-  const key = `${st.month}|${st.year}|${st.ensoF}|${st.usesEnso}|${st.lag}`;
+export function timeline(st: Pick<EdgeState, 'month' | 'year' | 'ensoF' | 'usesEnso' | 'lag'> & { premium?: number }): Timeline {
+  const premium = st.premium ?? 0;
+  const key = `${st.month}|${st.year}|${st.ensoF}|${st.usesEnso}|${st.lag}|${premium}`;
   const hit = timelineCache.get(key);
   if (hit) return hit;
   const spec = specOf(st.month);
   const { start, days } = contractSpan(spec, st.year);
   const knobs = { ensoF: st.ensoF };
-  const m = marketFor(st.usesEnso, st.lag);
+  const m = marketFor(st.usesEnso, st.lag, MARKET.halfSpread, premium);
   const points: TimelinePoint[] = [];
   for (let rel = FIRST_DAY; rel <= days - 1; rel++) {
     const t = start + rel;
@@ -153,6 +163,7 @@ export function gapSolved(st: EdgeState): boolean {
     st.ensoF === EDGE_DEFAULTS.ensoF &&
     st.usesEnso === EDGE_DEFAULTS.usesEnso &&
     st.lag === EDGE_DEFAULTS.lag &&
+    st.premium === EDGE_DEFAULTS.premium &&
     st.year === biggestGapYear()
   );
 }
@@ -163,7 +174,10 @@ export interface Views {
   market: Float64Array;
   oursSd: number;
   marketSd: number;
-  /** Probability the month finishes colder than normal (index above the normal), each side's view. */
+  /**
+   * Probability the month finishes colder than normal (index above the normal): ours, and the one
+   * the market's price implies (its own distribution, moved by any premium in the price).
+   */
   pOurs: number;
   pMarket: number;
 }
@@ -177,7 +191,7 @@ const viewCache = new Map<string, Views>();
  * removes the simulation's sampling noise without changing its spread.
  */
 export function views(st: EdgeState): Views {
-  const key = `${st.month}|${st.year}|${st.day}|${st.ensoF}|${st.usesEnso}|${st.lag}`;
+  const key = `${st.month}|${st.year}|${st.day}|${st.ensoF}|${st.usesEnso}|${st.lag}|${st.premium}`;
   const hit = viewCache.get(key);
   if (hit) return hit;
   const spec = specOf(st.month);
@@ -216,9 +230,13 @@ export const REPLAY_DEFAULTS: ReplayState = { month: 'jan', lead: 60, threshold:
 
 const replayCache = new Map<string, { trades: Trade[]; stats: TradeStats }>();
 
-/** The rule replayed over winters 2–40, one contract per trade, with the settings' physics and market. */
-export function replayOf(st: ReplayState): { trades: Trade[]; stats: TradeStats } {
-  const key = JSON.stringify(st);
+/**
+ * The rule replayed over winters 2–40, one contract per trade, with the settings' physics and
+ * market, and optionally a risk premium in the market's price (the prose's example; the
+ * demonstration has none).
+ */
+export function replayOf(st: ReplayState, premium = 0): { trades: Trade[]; stats: TradeStats } {
+  const key = `${JSON.stringify(st)}|${premium}`;
   const hit = replayCache.get(key);
   if (hit) return hit;
   const trades = replay(
@@ -226,7 +244,7 @@ export function replayOf(st: ReplayState): { trades: Trade[]; stats: TradeStats 
     YEARS_TRADED,
     st.lead,
     { threshold: st.threshold, size: 1, view: {} },
-    marketFor(st.usesEnso, st.lag, st.halfSpread),
+    marketFor(st.usesEnso, st.lag, st.halfSpread, premium),
     { ensoF: st.ensoF, variability: st.variability },
   );
   const out = { trades, stats: tradeStats(trades) };
@@ -234,6 +252,10 @@ export function replayOf(st: ReplayState): { trades: Trade[]; stats: TradeStats 
   replayCache.set(key, out);
   return out;
 }
+
+/** Half-spreads the prose tries, index points: the cost of trading eating the edge. */
+export const WIDE_SPREAD = 10;
+export const WIDER_SPREAD = 12;
 
 /** The decision lead of the second challenge: five days before January. */
 export const VANISH_LEAD = 5;
@@ -263,6 +285,11 @@ const SETTLED_C = GRAPHIC.orange;
 function dayLabel(rel: number, month: number): string {
   if (rel < 0) return `${-rel} days before ${MONTH_NAMES[month]} 1`;
   return `${MONTH_NAMES[month]} ${rel + 1}`;
+}
+
+/** The decision day as the start of a sentence: “With 60 days to go” or “On January 5”. */
+function whenLabel(rel: number, month: number): string {
+  return rel < 0 ? `With ${-rel} days to go` : `On ${dayLabel(rel, month)}`;
 }
 
 function contractLabel(month: MonthKey, year: number): string {
@@ -348,7 +375,7 @@ function TimelineChart({ st, tl, v }: { st: EdgeState; tl: Timeline; v: Views })
       ))}
 
       <text className="ax" x={X0} y={240}>
-        On {dayLabel(st.day, month)}: what each side thinks the month will settle at
+        {dayLabel(st.day, month)}: what each side thinks the month will settle at
       </text>
       <path d={oursArea} fill={tint(OURS_C, 0.35)} />
       <path d={linePath(gx, dOurs.map(dy))} fill="none" stroke={OURS_C} strokeWidth={2} />
@@ -357,7 +384,7 @@ function TimelineChart({ st, tl, v }: { st: EdgeState; tl: Timeline; v: Views })
       {inRange(tl.normal) && (
         <g>
           <line x1={dx(tl.normal)} x2={dx(tl.normal)} y1={246} y2={330} stroke="#9a9a9a" strokeDasharray="2 3" />
-          <text className="ax" x={dx(tl.normal) + 4} y={256}>
+          <text className="ax" x={dx(tl.normal) + 4} y={325} style={{ paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 3 }}>
             normal
           </text>
         </g>
@@ -436,6 +463,9 @@ function proseNumbers() {
   const bigTl = timeline({ ...start, year: big });
   const bigT = contractSpan(spec, big).start + FIRST_DAY;
   const r = (patch: Partial<ReplayState>) => replayOf({ ...REPLAY_DEFAULTS, ...patch }).stats;
+  const wins = replayOf(REPLAY_DEFAULTS).trades.filter((x) => x.pnl > 0);
+  const paid = replayOf({ ...REPLAY_DEFAULTS, ensoF: 0 }, PREMIUM_PAID).stats;
+  const paidTl = timeline({ ...start, ensoF: 0, premium: PREMIUM_PAID }).points[0];
   return {
     p60,
     v,
@@ -458,8 +488,18 @@ function proseNumbers() {
     calm: r({ variability: 0.5 }),
     wild: r({ variability: 1.5 }),
     dec: r({ month: 'dec' }),
+    wideSpread: r({ halfSpread: WIDE_SPREAD }),
+    widerSpread: r({ halfSpread: WIDER_SPREAD }),
+    th10: r({ threshold: 10 }),
+    th20: r({ threshold: 20 }),
     near: r({ lead: VANISH_LEAD }),
     nearNoPull: r({ lead: VANISH_LEAD, ensoF: 0 }),
+    avgWin: wins.reduce((a, x) => a + x.pnl, 0) / Math.max(1, wins.length),
+    premMid: timeline({ ...start, premium: PREMIUM_EXAMPLE }).points[0].mid,
+    premView: views({ ...start, premium: PREMIUM_EXAMPLE }),
+    paidNet: Math.abs(paidTl.ours - paidTl.mid) - (paidTl.ask - paidTl.mid),
+    paid,
+    paidSe: paid.trades ? paid.sd / Math.sqrt(paid.trades) : 0,
   };
 }
 
@@ -471,9 +511,9 @@ export default function Lesson() {
   const days = contractSpan(spec, st.year).days;
   const day = Math.min(st.day, days - 2);
   const est = { ...st, day };
-  const tl = useMemo(() => timeline(est), [est.month, est.year, est.ensoF, est.usesEnso, est.lag]);
+  const tl = useMemo(() => timeline(est), [est.month, est.year, est.ensoF, est.usesEnso, est.lag, est.premium]);
   const deferred = useDeferredValue(est);
-  const v = useMemo(() => views(deferred), [deferred.month, deferred.year, deferred.day, deferred.ensoF, deferred.usesEnso, deferred.lag]);
+  const v = useMemo(() => views(deferred), [deferred.month, deferred.year, deferred.day, deferred.ensoF, deferred.usesEnso, deferred.lag, deferred.premium]);
   const cur = tl.points[day - FIRST_DAY];
   const gap = cur.ours - cur.mid;
   const net = Math.abs(gap) - (cur.ask - cur.mid);
@@ -494,26 +534,27 @@ export default function Lesson() {
   return (
     <LessonPage id="weather/5.3">
       <P>
-        The last two lessons wrote contracts on Calder Bay’s weather and priced them: settle the days already past, forecast the next fortnight, and fill in the
+        The last two lessons wrote contracts on Fenwick Bay’s weather and priced them: settle the days already past, forecast the next fortnight, and fill in the
         rest from the climate (<a href={lessonHref('weather/5.2')}>Lesson 5.2</a>). That gives a fair value. But nobody trades at a fair value they computed
         themselves. They trade at the market’s price, and the market’s price is someone else’s forecast. This lesson asks what a price says about the weather, and
         when it’s worth disagreeing with it.
       </P>
       <P>
-        A price can be read as a forecast. A degree-day future pays $20 a point, so a January future quoted at {usd(Math.round(n.p60.mid) * CME_TICK)} says the
-        market expects the index to settle at {fmt(n.p60.mid)}. A contract that pays $1,000 if January turns out colder than normal, quoted at{' '}
+        A price can be read as a forecast. A future struck at the expected index is worth nothing to either side (
+        <a href={lessonHref('weather/5.2')}>Lesson 5.2</a>), so a market that will trade January futures at a strike of {fmt(n.p60.mid)} says it expects the
+        index to settle there. A contract that pays $1,000 if January turns out colder than normal, quoted at{' '}
         {usd(Math.round(n.v.pMarket * 100) * 10)}, says the market puts the chance at {pct(n.v.pMarket)} — the{' '}
-        <K tone={WX.probability}>market-implied probability</K>, the price divided by the payout (ignoring interest and any premium for taking the risk). A
+        <K tone={WX.probability}>market-implied probability</K>, the price divided by the payout (ignoring interest, and for now any premium for taking the risk). A
         forecaster has a distribution of her own, and implies her own probabilities from it. The <K tone={WX.money}>edge</K> is the difference between the two
         views, and it pays only if it is larger than the cost of trading — here the bid–ask spread, 5 index points either side of the market’s mid, or $100 a
         contract.
       </P>
       <P>
-        The market in this lesson is simulated, like everything in the course’s archive. It knows the climate of Calder Bay, trend included, so it isn’t naive.
+        The market in this lesson is simulated, like everything in the course’s archive. It knows the climate of Fenwick Bay, trend included, so it isn’t naive.
         But its forecasts are two days stale, and it doesn’t watch the Pacific. In the next demonstration, choose a winter month and a year, and follow its HDD
         future from 60 days before the month to its last day. The green band is the market’s bid and ask, the blue line our expected index, made each day from
         only what was known that day; the dashed orange line is where the month finally settled, and the dotted gray one the climate’s normal. The lower chart
-        shows both sides’ whole distributions on the decision day. The last three controls change the physics and the market:
+        shows both sides’ whole distributions on the decision day. The controls after the first two change the physics and the market:
       </P>
 
       <Figure name="Forecast Edge Explorer" scenario={e}>
@@ -530,16 +571,15 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'market bid–ask', value: `${fmt(cur.bid)}–${fmt(cur.ask)}`, tone: WX.money },
-            { label: 'our expected index', value: fmt(cur.ours), tone: WX.probability },
-            { label: `edge after the spread (${side})`, value: net > 0 ? `${usd(net * CME_TICK)} a contract` : 'none', tone: net > 0 ? WX.money : 'ink' },
-            { label: 'colder than normal: market / ours', value: `${pct(v.pMarket)} / ${pct(v.pOurs)}`, tone: WX.probability },
+            { label: 'edge after spread', value: net > 0 ? `${usd(net * CME_TICK)} to ${side}` : 'none', tone: net > 0 ? WX.money : 'ink' },
+            { label: 'colder: market/ours', value: `${pct(v.pMarket)} / ${pct(v.pOurs)}`, tone: WX.probability },
             { label: 'Niño-3.4 that day', value: `${signed(ninoAt(t), 1)} °C`, tone: WX.temperature },
           ]}
         />
         <Slider label="Year" value={st.year} min={FIRST_YEAR} max={LAST_YEAR} onChange={(y) => e.set({ year: y })} display={contractLabel(st.month, st.year)} />
         <Slider label="Decision day" value={day} min={FIRST_DAY} max={days - 2} onChange={(d) => e.set({ day: d })} display={dayLabel(day, month)} />
         <Slider
-          label="Pacific’s pull on the winter"
+          label="ENSO’s pull on the winter"
           tone={WX.temperature}
           value={st.ensoF}
           min={0}
@@ -549,58 +589,83 @@ export default function Lesson() {
           display={`${fmt(st.ensoF, 1)} °F per °C`}
         />
         <Slider label="Market’s forecasts are" value={st.lag} min={0} max={5} onChange={(x) => e.set({ lag: x })} display={st.lag === 0 ? 'fresh' : `${st.lag} day${st.lag > 1 ? 's' : ''} stale`} />
+        <Slider
+          label="Risk premium in the price"
+          tone={WX.money}
+          value={st.premium}
+          min={-20}
+          max={20}
+          onChange={(x) => e.set({ premium: x })}
+          display={st.premium === 0 ? 'none' : `${signed(st.premium)} points`}
+        />
         <Checkbox label="The market prices ENSO" checked={st.usesEnso} onChange={(x) => e.set({ usesEnso: x })} />
         <Caption>
           {Math.abs(gap) < 0.5
-            ? `On ${dayLabel(day, month)} we and the market expect the same index.`
-            : `On ${dayLabel(day, month)} we expect ${fmt(Math.abs(gap), 1)} points ${gap > 0 ? 'more' : 'fewer'} heating degree days than the market: a ${gap > 0 ? 'colder' : 'milder'} month.`}{' '}
-          {day < -15 ? (st.usesEnso || st.ensoF === 0 ? 'No forecast reaches this far, and the Pacific adds nothing the market lacks.' : 'No forecast reaches this far: the whole gap is the Pacific.') : 'Forecasts now reach into the month, and the market’s are older than ours.'}
+            ? `${whenLabel(day, month)}, our expected index, ${fmt(cur.ours)}, and the market’s price agree.`
+            : `${whenLabel(day, month)}, we expect ${fmt(cur.ours)} heating degree days, ${fmt(Math.abs(gap), 1)} ${gap > 0 ? 'more' : 'fewer'} than the market’s price: a ${gap > 0 ? 'colder' : 'milder'} month.`}{' '}
+          {day < -15
+            ? st.usesEnso || st.ensoF === 0
+              ? `No forecast reaches this far, and the Pacific adds nothing the market lacks${st.premium ? ': the whole gap is the premium.' : '.'}`
+              : `No forecast reaches this far: the gap is ${st.premium ? 'the Pacific plus the premium' : 'the Pacific'}.`
+            : `Forecasts now reach into the month, and the market’s are ${st.lag === 0 ? 'as fresh as ours' : 'older than ours'}.${st.premium ? ` Its price also sits ${Math.abs(st.premium)} points ${st.premium > 0 ? 'above' : 'below'} its own forecast.` : ''}`}
         </Caption>
       </Figure>
 
       <P>
         It opens on January of year {EDGE_DEFAULTS.year}, 60 days ahead. No weather forecast reaches that far, so the market quotes the climate: {fmt(n.p60.mid)}{' '}
         heating degree days, exactly the normal. We expect {fmt(n.p60.ours)}. The difference is the Pacific. That autumn Niño-3.4 stood at{' '}
-        {signed(n.nino60, 1)} °C, an El Niño, and as <a href={lessonHref('weather/2.4')}>Lesson 2.4</a> showed, El Niño tilts Calder Bay’s winters mild. So we
+        {signed(n.nino60, 1)} °C, an El Niño, and as <a href={lessonHref('weather/2.4')}>Lesson 2.4</a> showed, El Niño tilts Fenwick Bay’s winters mild. So we
         would sell: the gap is {fmt(Math.abs(n.p60.ours - n.p60.mid), 1)} points, {usd((Math.abs(n.p60.ours - n.p60.mid) - MARKET.halfSpread) * CME_TICK)} a
         contract after the spread. In probabilities, the market prices a colder-than-normal January at {pct(n.v.pMarket)}, and we put it at {pct(n.v.pOurs)}.
       </P>
       <P>
         Look at the distributions, though. Each has a standard deviation of about {fmt(Math.round(n.v.oursSd / 10) * 10)} points, and they overlap almost
-        completely: an edge of {fmt(Math.abs(n.p60.ours - n.p60.mid))} points against a spread of {fmt(Math.round(n.v.oursSd / 10) * 10)}. The month settled at{' '}
+        completely: an edge of {fmt(Math.abs(n.p60.ours - n.p60.mid))} points against a standard deviation of about {fmt(Math.round(n.v.oursSd / 10) * 10)}. The month settled at{' '}
         {fmt(n.settled)}, far milder than either side expected. Selling won, but the weather, not the edge, did most of the winning.
       </P>
       <P>
         Now move the decision day toward January. From about two weeks out, the forecasts of <a href={lessonHref('weather/3.5')}>Lesson 3.5</a> reach into the
         month, and both lines start to move: the information about each day’s weather arrives from upstream, piece by piece, as{' '}
         <a href={lessonHref('weather/3.3')}>Lesson 3.3</a> showed. The market moves too, but it is two days behind. On January 1 the gap is{' '}
-        {fmt(Math.abs(n.jan1Gap))} points, and {fmt(Math.abs(n.jan1LagGap))} of them remain even with the Pacific’s pull set to zero: that much is the forecast’s
-        freshness alone. Through the month both sides learn each settled day, the lines close in, and on the last day they meet at the settlement.
+        {fmt(Math.abs(n.jan1Gap))} points, and {fmt(Math.abs(n.jan1LagGap))} of them remain even with ENSO’s pull set to zero: that much is the forecast’s
+        freshness alone. Through the month both sides learn each settled day. The gap doesn’t shrink steadily — each fresh forecast can open it again — but the
+        days left to disagree about run out, and on the last day the two lines meet at the settlement.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the physics and the market as they start. Among years 2–40, which January did the market misprice most 60 days ahead — the largest gap, either way, between its price and our expected index?"
+        question="Keep the physics and the market as they start, and decide 60 days before January. No forecast reaches that far, so every gap there is the Pacific’s doing, and the further Niño-3.4 stands from zero, either way, the harder it tilts the winter. Predict from the Niño-3.4 readout which January, among years 2–40, the market mispriced most — the largest gap, either way, between its price and our expected index. Then check."
         solved={solved}
         status={
           st.month !== 'jan' || day !== FIRST_DAY
             ? 'Choose January, and set the decision day to 60 days before it.'
-            : st.ensoF !== EDGE_DEFAULTS.ensoF || st.usesEnso || st.lag !== EDGE_DEFAULTS.lag
+            : st.ensoF !== EDGE_DEFAULTS.ensoF || st.usesEnso || st.lag !== EDGE_DEFAULTS.lag || st.premium !== EDGE_DEFAULTS.premium
               ? 'Put the physics and the market back as they started.'
-              : `In January of year ${st.year} the gap is ${fmt(Math.abs(gap), 1)} points. Is there a bigger one?`
+              : `Sixty days before January of year ${st.year}, Niño-3.4 stood at ${signed(ninoAt(t), 1)} °C. Is there a more extreme autumn?`
         }
-        success={`Solved. Sixty days before January of year ${n.big}, we expected ${fmt(n.bigOurs)} heating degree days and the market quoted ${fmt(n.bigMid)}: a gap of ${fmt(n.bigGap, 1)} points, the largest in the archive. Niño-3.4 stood at ${signed(n.bigNino, 1)} °C, a strong La Niña, which tilts Calder Bay’s winters cold, and a market that prices only the climate couldn’t see it. That January settled at ${fmt(n.bigSettled)}.`}
+        success={`Solved. Sixty days before January of year ${n.big}, Niño-3.4 stood at ${signed(n.bigNino, 1)} °C, the most extreme in the archive: a strong La Niña, which tilts Fenwick Bay’s winters cold. We expected ${fmt(n.bigOurs)} heating degree days and the market, which prices only the climate, quoted ${fmt(n.bigMid)}: a gap of ${fmt(n.bigGap, 1)} points, the largest of any year. That is close to what the physics alone suggests — ${fmt(Math.abs(n.bigNino), 1)} °C × ${fmt(EDGE_DEFAULTS.ensoF, 1)} °F per °C × 31 days ≈ ${fmt(Math.abs(n.bigNino) * EDGE_DEFAULTS.ensoF * 31)} degree days. That January settled at ${fmt(n.bigSettled)}.`}
       />
 
       <H2>Where the gap comes from</H2>
       <P>
-        Every gap in <FigRef to="Forecast Edge Explorer">the first demonstration</FigRef> has a physical source you can switch off. Months ahead, the only
-        information either side can have in this world beyond the climate is the state of the Pacific. Slide its pull on Calder Bay’s winter to zero — a world where the jet
+        Every gap we have met in <FigRef to="Forecast Edge Explorer">the first demonstration</FigRef> has a physical source you can switch off. Months ahead, the only
+        information either side can have in this world beyond the climate is the state of the Pacific. Slide ENSO’s pull on Fenwick Bay’s winter to zero — a world where the jet
         stream doesn’t respond to the tropical Pacific — and the two lines lie on top of each other until the forecasts arrive. Or leave the physics alone and let
         the market price ENSO: the gap disappears just the same. Days ahead, the gap is the age of the market’s forecast. Make its forecasts fresh and the
-        short-range gaps vanish. The edge also depends on how the index is counted. Both sides add up expected degree days day by day, with the hinge of{' '}
-        <a href={lessonHref('weather/4.1')}>Lesson 4.1</a>; a trader who took the degree days of the expected temperature instead would misprice the shoulder
-        months, where the days straddle 65 °F.
+        short-range gaps vanish. The edge also depends on counting the index right: a trader who took the degree days of the expected temperature, ignoring the
+        hinge of <a href={lessonHref('weather/4.1')}>Lesson 4.1</a>, would misprice the shoulder months, where the days straddle 65 °F.
+      </P>
+      <P>
+        One control in <FigRef to="Forecast Edge Explorer">the first demonstration</FigRef> has no physical source at all. A price is not only a forecast. If
+        more hedgers want to sell January degree days than to buy them — a gas utility like Fenwick Gas &amp; Light, which loses in mild winters, hedges by
+        selling them — the price has to fall below the market’s expected index before anyone will take the other side. The difference is a{' '}
+        <K tone={WX.money}>risk premium</K>: what the hedgers pay to be rid of the risk, and what whoever buys from them is paid to carry it. Set it to{' '}
+        {signed(PREMIUM_EXAMPLE)} points in January of year {EDGE_DEFAULTS.year} and the market will trade at {fmt(n.premMid)}; the chance of a colder-than-normal
+        January that its price implies falls from {pct(n.v.pMarket)} to {pct(n.premView.pMarket)}, though nobody’s view of the weather has changed. A price reads
+        as a forecast only once the premium is taken out. And the premium pays: set ENSO’s pull to zero, so that we and the market agree about the weather, and a
+        premium of {signed(PREMIUM_PAID)} points still leaves {usd(n.paidNet * CME_TICK)} a contract after the spread. Bought in {n.paid.trades === 39 ? 'every winter' : `${n.paid.trades} winters`}, it would have averaged{' '}
+        {usd(n.paid.mean)} a trade, with a standard error of {usd(n.paidSe)}: pay for carrying the risk, not for knowing more, and too small a tilt to see in 39
+        winters. The simulated market in the rest of this chapter charges no premium.
       </P>
       <P>
         One winter proves nothing. In the next demonstration, the same rule is replayed over every winter in the archive: on the decision day, compare our expected
@@ -619,8 +684,8 @@ export default function Lesson() {
             { label: 'winners', value: rep.stats.trades ? pct(rep.stats.hitRate) : '—' },
             { label: 'total', value: usd(rep.stats.total), tone: tone(rep.stats.total) },
             { label: 'worst trade', value: usd(rep.stats.worst), tone: tone(rep.stats.worst) },
-            { label: 'with no pull from the Pacific', value: `${withoutPull.trades} trades, ${usd(withoutPull.total)}`, tone: tone(withoutPull.total) },
-            { label: 'if the market watched the Pacific', value: `${marketWatches.trades} trades, ${usd(marketWatches.total)}`, tone: tone(marketWatches.total) },
+            { label: 'with ENSO’s pull at zero', value: `${withoutPull.trades} trades, ${usd(withoutPull.total)}`, tone: tone(withoutPull.total) },
+            { label: 'if the market priced ENSO', value: `${marketWatches.trades} trades, ${usd(marketWatches.total)}`, tone: tone(marketWatches.total) },
           ]}
         />
         <Slider
@@ -634,7 +699,7 @@ export default function Lesson() {
         <Slider label="Threshold beyond the spread" tone={WX.index} value={rs.threshold} min={0} max={30} onChange={(x) => rp.set({ threshold: x })} display={`${rs.threshold} points`} />
         <Slider label="Half the bid–ask spread" tone={WX.money} value={rs.halfSpread} min={0} max={15} onChange={(x) => rp.set({ halfSpread: x })} display={`${rs.halfSpread} points · ${usd(rs.halfSpread * CME_TICK)}`} />
         <Slider
-          label="Pacific’s pull on the winter"
+          label="ENSO’s pull on the winter"
           tone={WX.temperature}
           value={rs.ensoF}
           min={0}
@@ -652,12 +717,13 @@ export default function Lesson() {
         Traded 60 days before January, the rule makes {n.base.trades} trades in 39 winters. {fmt(Math.round(n.base.hitRate * n.base.trades))} win, and{' '}
         {fmt(n.base.trades - Math.round(n.base.hitRate * n.base.trades))} lose; the average trade earns {usd(n.base.mean)}, the worst loses{' '}
         {usd(-n.base.worst)}, and the total is {usd(n.base.total)}. That is what an edge looks like: not a sure thing, but a small tilt in the odds, visible only
-        over many trades, with losses along the way that are as large as the average gain. A trade’s outcome swings by about {usd(n.base.sd)} either way, three
+        over many trades, with losses along the way as large as a typical win — the average winner made {usd(n.avgWin)}. A trade’s outcome swings by about{' '}
+        {usd(n.base.sd)} either way, three
         times its expected profit. December happened to do better here, {n.dec.trades} trades averaging {usd(n.dec.mean)}, but with so few winters the
         difference between months is within the noise.
       </P>
       <P>
-        Now break it. Set the Pacific’s pull to zero and there is nothing to trade 60 days out: {n.noPull.trades} trades. Let the market price ENSO and only{' '}
+        Now break it. Set ENSO’s pull to zero and there is nothing to trade 60 days out: {n.noPull.trades} trades. Let the market price ENSO and only{' '}
         {n.marketEnso.trades} remain. Halve the pull and the gaps shrink to the size of the spread and the threshold: {n.half.trades} trades, averaging{' '}
         {usd(n.half.mean)} — the physics is still there, but too weak to show through the weather in 39 winters. Double it and the rule trades{' '}
         {n.double.trades} times, averaging {usd(n.double.mean)}. The day-to-day variability works on the other side of the ledger. It doesn’t change the gaps,
@@ -665,8 +731,14 @@ export default function Lesson() {
         {pct(n.calm.hitRate)} of trades win; at one and a half times, by {usd(n.wild.sd)}.
       </P>
       <P>
-        Move the decision to {VANISH_LEAD} days before January and the second edge joins the first: {n.near.trades} trades averaging {usd(n.near.mean)}. With the
-        Pacific’s pull at zero, {n.nearNoPull.trades} trades averaging {usd(n.nearNoPull.mean)} are left, and those come entirely from the market’s two-day-old
+        The spread and the threshold set the bar a gap has to clear. Widen the market’s half-spread from {REPLAY_DEFAULTS.halfSpread} points to {WIDE_SPREAD} and the rule makes{' '}
+        {n.wideSpread.trades} trades averaging {usd(n.wideSpread.mean)}; at {WIDER_SPREAD}, the {usd(n.widerSpread.mean)} a trade that is left disappears in the
+        noise. Raising our threshold — a margin for our own forecast’s errors — also cuts the trades, to {n.th10.trades} at 10 points and {n.th20.trades} at 20,
+        while their average swings between {usd(Math.min(n.th10.mean, n.th20.mean))} and {usd(Math.max(n.th10.mean, n.th20.mean))}: within the noise.
+      </P>
+      <P>
+        Move the decision to {VANISH_LEAD} days before January and the second edge joins the first: {n.near.trades} trades averaging {usd(n.near.mean)}. With
+        ENSO’s pull at zero, {n.nearNoPull.trades} trades averaging {usd(n.nearNoPull.mean)} are left, and those come entirely from the market’s two-day-old
         forecasts.
       </P>
 
@@ -682,14 +754,14 @@ export default function Lesson() {
               ? 'Keep the market blind to ENSO, and the threshold and spread at 5 points.'
               : `Right now the rule still makes ${rep.stats.trades} trade${rep.stats.trades === 1 ? '' : 's'}.`
         }
-        success="Solved. One edge was physical: with no teleconnection, the Pacific carries no news about Calder Bay’s winter, so a market that ignores it misses nothing. The other was informational: with fresh forecasts, the market knows what we know about the next fortnight. Remove both and our expected index and the market’s are the same number every time — there is no gap for the rule to trade."
+        success="Solved. One edge was physical: with no teleconnection, the Pacific carries no news about Fenwick Bay’s winter, so a market that ignores it misses nothing. The other was informational: with fresh forecasts, the market knows what we know about the next fortnight. Remove both and our expected index and the market’s are the same number every time — there is no gap for the rule to trade."
       />
 
       <P>
-        None of this is investment advice, and the market here is a simple, simulated one. Real weather markets are thinner, their spreads can be wider, and the
-        traders in them watch the Pacific too; an edge that everyone can see is priced in quickly, which is exactly what the checkbox does. What carries over is the
-        method. Write down what the market’s price implies, write down what your forecast implies, and before trading the difference, name the physical reason the
-        two disagree and check that the difference survives the spread.
+        None of this is investment advice, and the market here is a simple, simulated one. Real weather markets are thinner, with wider spreads, and their
+        traders watch the Pacific too: an edge everyone can see is priced in quickly, which is what the checkbox does. What carries over is the
+        method. Write down what the market’s price implies, take out any premium, write down what your forecast implies, and before trading the difference, name
+        the physical reason the two disagree and check that the difference survives the spread.
       </P>
       <P>
         The same forecast can be expressed in more than one market. A forecast that next week will be colder than the market thinks moves degree-day futures, but

@@ -20,11 +20,12 @@ import {
   niceTicks,
   useScenario,
 } from '../../../framework';
+import { lineCapacity } from '../../../engines/gas/compression';
 import { planFor, scenarioYear, simulateYear, type YearDay } from '../../../engines/gas/market';
-import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
-import { OIL_SWITCH_VALUE, PROTECTED_VALUE } from '../../../model/gas/demand';
+import { MMBTU_PER_MCF, psia } from '../../../engines/gas/properties';
+import { COAL_SWITCH_BLOCKS, OIL_SWITCH_VALUE, PROTECTED_VALUE } from '../../../model/gas/demand';
 import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS, monthOfDay, weatherYear } from '../../../model/gas/weather';
-import { BASINS, PIPELINE, PRODUCTION_COST } from '../../../model/gas/world';
+import { BASINS, PIPELINE, PRODUCTION_COST, stationLineOf } from '../../../model/gas/world';
 import { XYChart } from '../shared/XYChart';
 import { basis, bcfd, gp, money } from '../shared/format';
 
@@ -47,6 +48,11 @@ export const BASIS_WINTER_SEED: Record<BasisWinter, number> = { mild: 2, typical
 export const BASIS_DEFAULTS = { winter: 'harsh' as BasisWinter, northline: NL.capacityBcfd, express: RE.capacityBcfd };
 export type BasisState = typeof BASIS_DEFAULTS;
 const CAP_STEP = 0.05;
+
+/** What Northline carries at its promised pressure with one of its compressor stations out (Lesson 1.4), MMcf/d. */
+export const NORTHLINE_STATION_OUT_MMCFD = lineCapacity({ ...stationLineOf(NL), stations: NL.stations - 1 }, psia(NL.minDeliveryPsig));
+/** The same on the capacity sliders' 0.05 Bcf/d steps (Lesson 5.5 uses the same figure), Bcf/d. */
+export const NORTHLINE_STATION_OUT = round2(Math.round(NORTHLINE_STATION_OUT_MMCFD / 1000 / CAP_STEP) * CAP_STEP);
 
 /** The gas year under the chosen winter and pipeline capacities, with the storage plan redrawn for them. */
 export function basisYear(s: BasisState): YearDay[] {
@@ -210,7 +216,9 @@ export function latestYearSolved(s: typeof GROWTH_DEFAULTS): boolean {
 const HARSH = basisStatsFor(BASIS_DEFAULTS);
 const MILD = basisStatsFor({ ...BASIS_DEFAULTS, winter: 'mild' });
 const TYPICAL = basisStatsFor({ ...BASIS_DEFAULTS, winter: 'typical' });
-const NL_15 = basisStatsFor({ ...BASIS_DEFAULTS, northline: 1.5 });
+const NL_OUT = basisStatsFor({ ...BASIS_DEFAULTS, northline: NORTHLINE_STATION_OUT });
+const SWITCH_STEP = COAL_SWITCH_BLOCKS[0].value - COAL_SWITCH_BLOCKS[1].value;
+const SWITCH_BLOCK = COAL_SWITCH_BLOCKS[0].bcfd;
 const RE_16 = basisStatsFor({ ...BASIS_DEFAULTS, express: round2(RIDGEBACK_PROD - CL.capacityBcfd - FIELD_USE - CAP_STEP) });
 /** The lowest Ridgeback Express capacity, on the slider's steps, that still carries all of Ridgeback's gas out. */
 export const EXPRESS_ENOUGH = round2(RIDGEBACK_PROD - CL.capacityBcfd - FIELD_USE);
@@ -273,8 +281,8 @@ export default function Lesson() {
       : Math.abs(st.express - RE.capacityBcfd) > 1e-9
         ? `Put Ridgeback Express back to its ${bcfd(RE.capacityBcfd, 1)} first.`
         : stats.metroOver1 > 0
-          ? `At ${bcfd(st.northline)}, Metro trades more than $1 over Calder on ${stats.metroOver1} day${stats.metroOver1 === 1 ? '' : 's'}.`
-          : `At ${bcfd(st.northline)}, Metro never trades more than $1 over Calder. Would a smaller Northline do?`;
+          ? `At ${bcfd(st.northline)}, Metro’s line on the lower chart still rises above the $1 line.`
+          : `At ${bcfd(st.northline)}, Metro’s line stays under the $1 line all year. Would a smaller Northline do?`;
 
   const statusB =
     g.state.size !== '0.5'
@@ -298,7 +306,9 @@ export default function Lesson() {
         anyone could buy at the cheap end, ship, and sell at the dear end. A basis wider than the cost of transport needs something that stops the shipping. That
         something is always a full pipeline — a cut, in the language of <a href={lessonHref('gas/3.2')}>Lesson 3.2</a> — and there are two places in our region where
         one can bind. Gas can fail to get <i>into</i> a market, as it does into Metro on the coldest days, or fail to get <i>out of</i> a basin, as it would out of
-        Ridgeback if the basin produced more than its pipelines could carry.
+        Ridgeback if the basin produced more than its pipelines could carry. Either way, someone collects the gap. Whoever holds space on the full pipe can still
+        buy at the cheap end, ship, and sell at the dear end, and keeps the price gap beyond the cost of the trip on every MMBtu the pipe carries: the pipe’s{' '}
+        <K c="price">rent</K>.
       </P>
       <P>
         Lesson 4.2 looked at single days. In the next demonstration, the region runs through a whole gas year, April to March, with the weather of one of that
@@ -366,7 +376,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'Metro’s average basis', value: basis(stats.metroAvg), tone: 'green' },
-            { label: 'days Metro is $1+ over Calder', value: fmt(stats.metroOver1) },
             { label: 'Ridgeback’s average basis', value: basis(stats.ridgebackAvg), tone: 'green' },
             { label: 'rent on Northline', value: money(stats.northlineRent), tone: 'green' },
             { label: 'rent on Ridgeback Express', value: money(stats.expressRent), tone: 'green' },
@@ -383,16 +392,17 @@ export default function Lesson() {
       <P>
         Start with the harsh winter and the pipelines as built. For {HARSH.metroAtTrip} days of the year Metro sits at {basis(NL.variableCost)}, the cost
         of a trip up Northline, and Ridgeback at {basis(-RE.variableCost)}, the cost of the trip down Ridgeback Express. On {HARSH.metroOver1} winter days Northline fills,
-        Hollow Creek can’t make up the rest, and Metro breaks away, as high as {basis(HARSH.metroMax)}. The year’s average basis is only {basis(HARSH.metroAvg)}, but the
-        rent on those few days — the price gap beyond the cost of the trip, times the gas Northline carried — comes to {money(HARSH.northlineRent)}. That money goes to
-        whoever holds Northline’s capacity: it is the firm capacity value of <a href={lessonHref('gas/4.3')}>Lesson 4.3</a>, counted over all of the pipe. The typical
+        Hollow Creek can’t make up the rest, and Metro breaks away, as high as {basis(HARSH.metroMax)}. The year’s average basis is only {basis(HARSH.metroAvg)}, but
+        Northline’s rent on those few days comes to {money(HARSH.northlineRent)}. That money goes to whoever holds Northline’s capacity: it is the firm capacity value of <a href={lessonHref('gas/4.3')}>Lesson 4.3</a>, counted over all of the pipe. The typical
         winter makes {rentText(TYPICAL.northlineRent)}, and the mild one {rentText(MILD.northlineRent)}.
       </P>
 
       <H2>Into a market</H2>
       <P>
-        Lower Northline’s capacity to {bcfd(1.5, 1)}, as if a compressor station were out all year. The basis doesn’t widen a little every day. Most days are
-        untouched; what changes is how many days cross the line — {NL_15.metroOver1} instead of {HARSH.metroOver1} — and the average rises to {basis(NL_15.metroAvg)}. A
+        Lower Northline’s capacity to {bcfd(NORTHLINE_STATION_OUT)}, as if one of its three compressor stations were out all year: the two left can push about{' '}
+        {fmt(NORTHLINE_STATION_OUT_MMCFD)} MMcf/d through it, as <a href={lessonHref('gas/1.4')}>Lesson 1.4</a> found. The basis doesn’t widen a little every day. Most
+        days are untouched; what changes is how many days cross the line — {NL_OUT.metroOver1} instead of {HARSH.metroOver1} — and the average rises to{' '}
+        {basis(NL_OUT.metroAvg)}. A
         basis into a market is set by the market’s cold days, and the pipe decides how cold a day has to be before it binds.
       </P>
       <P>
@@ -404,7 +414,7 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Regional Basis Simulator"
-        question="In the harsh winter, with Ridgeback Express as built, what’s the least capacity Northline needs, on the slider’s steps, for Metro never to trade more than $1 above Calder?"
+        question={`In the harsh winter, with Ridgeback Express as built, what’s the least capacity Northline needs, on the slider’s steps, for Metro never to trade more than $1 above Calder? Judge it from the lower chart and its $1 line. Before you move the slider, guess what Northline’s ${money(HARSH.northlineRent)} rent falls to at that size.`}
         solved={solvedA}
         status={statusA}
         success={`Solved: ${bcfd(st.northline)}, ${bcfd(st.northline - NL.capacityBcfd)} more than Northline has. A step less and Metro still breaks away on ${basisStatsFor({ ...st, northline: round2(st.northline - CAP_STEP) }).metroOver1} day${basisStatsFor({ ...st, northline: round2(st.northline - CAP_STEP) }).metroOver1 === 1 ? '' : 's'}. Expanded that far, Northline would earn its holders ${money(stats.northlineRent)} in the harsh winter instead of ${money(HARSH.northlineRent)} — an expansion destroys the very rent that measures how much it is needed, which is why it has to be paid for by contracts signed in advance.`}
@@ -421,8 +431,11 @@ export default function Lesson() {
       </P>
       <P>
         Watch Calder at the same time. Only {bcfd(RIDGEBACK_PROD - (RE_BELOW + CL.capacityBcfd + FIELD_USE))} is stranded, but the hub averages {gp(RE_16.calderAvg)} for
-        the year against {gp(HARSH.calderAvg)} with the pipe as built. The same cut that floods the basin starves the market: the gap opens from both sides at once,
-        and Ridgeback Express’s holders collect {money(RE_16.expressRent)} on it.
+        the year against {gp(HARSH.calderAvg)} with the pipe as built. A small loss moves the hub that far because the region’s demand is steep at the margin: most
+        of the gas is given up by Metro’s power plants, which switch between coal and gas in blocks of {bcfd(SWITCH_BLOCK)} set {fmt(SWITCH_STEP * 100)}¢ apart (
+        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>). Losing one block’s worth of gas moves the region about one block up its demand curve, about{' '}
+        {fmt(SWITCH_STEP * 100)}¢ on the average day. The same cut that floods the basin starves the market: the gap opens from both sides at once, and Ridgeback
+        Express’s holders collect {money(RE_16.expressRent)} on it.
       </P>
 
       <H2>Growth and lumps</H2>
@@ -430,7 +443,8 @@ export default function Lesson() {
         Pipelines aren’t derated for a year very often. The usual way a basin’s basis blows out is growth. Wells are drilled every month, so production rises smoothly;
         pipelines are built a few at a time, take years to plan and come online all at once. Suppose Ridgeback’s production grows by{' '}
         {bcfd(GROWTH.perYear)} a year from today’s {bcfd(GROWTH.start, 1)}, and suppose there is a buyer for every new cubic foot — Bayport’s LNG terminal, say, adding
-        liquefaction as fast. Ridgeback’s takeaway is {bcfd(TAKEAWAY)}. In the next demonstration the region runs through six years of that growth, each with its own
+        liquefaction as fast. Ridgeback’s <K tone="orange">takeaway</K> capacity — the most gas that can leave the basin through Ridgeback Express and the Coastal
+        Line, plus what the field burns itself — is {bcfd(TAKEAWAY)}. In the next demonstration the region runs through six years of that growth, each with its own
         weather; the upper chart is Ridgeback’s basis, month by month, and the lower one compares production with the takeaway. Choose when an expansion of
         Ridgeback Express comes online, and how big it is:
       </P>
@@ -502,16 +516,17 @@ export default function Lesson() {
         {money(NEVER.rent.reduce((a, b) => a + b, 0))} over the six years.
       </P>
       <P>
-        Bring an expansion online and the basis snaps back to the cost of the trip — not gradually, but the day the new capacity opens. Size matters as well as timing:
-        production reaches {bcfd(END_PRODUCTION)} by the end of year 6, so a {bcfd(0.25, 2)} expansion in year 4 buys only a couple of years before the basis
-        breaks again{QUARTER_BAD >= 0 ? `, in ${monthLabel(QUARTER_BAD)}` : ''}. A basin’s basis follows a sawtooth: tight, blown out, relieved by a new pipe, and tight
-        again as drilling catches up.
+        Bring an expansion online and the basis snaps back to the cost of the trip — not gradually, but the day the new capacity opens. Size matters as well as timing,
+        up to a point. Production reaches {bcfd(END_PRODUCTION)} by the end of year 6, so a {bcfd(0.25, 2)} expansion in year 4 buys only a couple of years before
+        the basis breaks again{QUARTER_BAD >= 0 ? `, in ${monthLabel(QUARTER_BAD)}` : ''}, while a {bcfd(1, 2)} expansion does no better than a {bcfd(0.5, 2)} one:
+        the smaller one already lifts the takeaway to {bcfd(TAKEAWAY + 0.5)}, more than the six years ever produce. A basin’s basis follows a sawtooth: tight,
+        blown out, relieved by a new pipe, and tight again as drilling catches up.
       </P>
 
       <Challenge
         id="b"
         figure="Regional Basis Simulator · growth and expansion"
-        question="With a 0.5 Bcf/d expansion of Ridgeback Express, what’s the latest year it can come online so that no month sees Ridgeback trading more than $0.20 below Calder?"
+        question="With a 0.5 Bcf/d expansion of Ridgeback Express, what’s the latest year it can come online so that no month sees Ridgeback trading more than $0.20 below Calder? Predict it from the month the basis first breaks, then check."
         solved={solvedB}
         status={statusB}
         success={`Solved: year ${g.state.online}. Production reaches the takeaway during year ${CROSS_YEAR + 1}, so the new capacity has to be there by then — and a pipeline takes years to plan, permit and build. The shippers who sign up for it are betting on production they can only forecast, which is why basins tend to run short of pipe before the pipe arrives.`}

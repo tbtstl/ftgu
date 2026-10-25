@@ -28,10 +28,10 @@ import {
 import { cargoChoice, lngCargo, netback, overseasPrices, type CargoChoice, type LngVoyage } from '../../../engines/gas/lng';
 import { normalPlan, scenarioYear, type YearDay } from '../../../engines/gas/market';
 import { LNG_VALUE } from '../../../model/gas/demand';
-import { GAS_MONTHS, GAS_MONTH_START, GAS_YEAR_DAYS, INJECTION_DAYS } from '../../../model/gas/weather';
+import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS, INJECTION_DAYS, monthOfDay, weatherYear } from '../../../model/gas/weather';
 import { BAYPORT_LNG, BAYPORT_LNG_FEEDGAS_BCFD, PIPELINE, REFERENCE_DAYS } from '../../../model/gas/world';
 import { XYChart } from '../shared/XYChart';
-import { MONTHS, gp, money } from '../shared/format';
+import { MONTHS, MONTH_NAMES, gp, money } from '../shared/format';
 
 // ---------------------------------------------------------------------------
 // The trader: one cargo a month for two years, against simulated overseas prices.
@@ -63,6 +63,9 @@ export const TRADER_DEFAULTS: TraderState = { level: 100, charter: BAYPORT_LNG.c
 export const LEVEL_MIN = 30;
 export const LEVEL_MAX = 150;
 export const LEVEL_STEP = 5;
+/** The charter slider's ends, $/day. */
+export const CHARTER_LOW = 20_000;
+export const CHARTER_HIGH = 300_000;
 
 function termsWith(charter: number): Terms {
   return { ...BAYPORT_LNG, charterPerDay: charter };
@@ -144,6 +147,21 @@ export function firstCancelLevel(charter: number, shift: number): number {
 }
 
 export const FIRST_CANCEL_LEVEL = firstCancelLevel(TRADER_DEFAULTS.charter, 0);
+/** The months (0 = January of year 1) whose cargoes are cancelled first, at that level. */
+export const FIRST_CANCELLED = traderMonths({ ...TRADER_DEFAULTS, level: FIRST_CANCEL_LEVEL })
+  .filter((x) => x.choice.cancel)
+  .map((x) => x.m);
+
+const STARTING_MONTHS = traderMonths(TRADER_DEFAULTS);
+
+/** How far a month's better netback sits above the band's lower edge (115% of Calder) at the starting prices, $/MMBtu. */
+export function edgeGap(m: number): number {
+  const x = STARTING_MONTHS[m];
+  return Math.max(x.choice.netback.europe, x.choice.netback.asia) - BAYPORT_LNG.feedMultiplier * x.calder;
+}
+
+/** The month whose cargo sits closest to the lower edge at the starting prices: the one to watch. */
+export const CLOSEST_TO_EDGE = Array.from({ length: TRADER_MONTHS }, (_, m) => m).reduce((a, m) => (edgeGap(m) < edgeGap(a) ? m : a), 0);
 
 /** The challenge: the highest level with a cancellation, with the starting charter rate and Calder prices. */
 export function cancelLevelSolved(s: TraderState): boolean {
@@ -151,7 +169,7 @@ export function cancelLevelSolved(s: TraderState): boolean {
 }
 
 /** How much more Asia must pay than Europe for a cargo to earn the same netback there, $/MMBtu. */
-export function asiaPremium(europe: number, charter = BAYPORT_LNG.charterPerDay): number {
+export function asiaPremium(europe: number, charter: number = BAYPORT_LNG.charterPerDay): number {
   const target = netback(voyageTo('europe', 3, charter), europe);
   let lo = europe;
   let hi = europe + 10;
@@ -195,18 +213,38 @@ export interface HomeStats {
   /** Days the terminal takes less than its full feed gas, in all and in the injection season. */
   cutDays: number;
   summerCut: number;
+  /** The days of the gas year on which the terminal is cut back. */
+  cutDayList: number[];
 }
 
 function statsOf(y: YearDay[], cap: number): HomeStats {
   const full = BAYPORT_LNG_FEEDGAS_BCFD - 1e-6;
+  const cut = y.filter((d) => d.sectors.lng < full);
   return {
     cap,
     calderAvg: y.reduce((s, d) => s + d.price.calder, 0) / y.length,
     calderMax: Math.max(...y.map((d) => d.price.calder)),
     lngAvg: y.reduce((s, d) => s + d.sectors.lng, 0) / y.length,
-    cutDays: y.filter((d) => d.sectors.lng < full).length,
-    summerCut: y.filter((d) => d.day < INJECTION_DAYS && d.sectors.lng < full).length,
+    cutDays: cut.length,
+    summerCut: cut.filter((d) => d.day < INJECTION_DAYS).length,
+    cutDayList: cut.map((d) => d.day),
   };
+}
+
+/** The coldest day of the typical winter's gas year at Metro, and its temperature, °F. */
+export const HOME_COLDEST = (() => {
+  const t = weatherYear(HOME_SEED).temp;
+  const day = t.indexOf(Math.min(...t));
+  return { day, temp: t[day] };
+})();
+
+/** "March 9 and 10", or "December 31 and March 9": days of the gas year in prose. */
+export function daysText(days: number[]): string {
+  const date = (d: number) => ({ month: GAS_MONTH_NAMES[monthOfDay(d)], n: d - GAS_MONTH_START[monthOfDay(d)] + 1 });
+  const ds = days.map(date);
+  const sameMonth = ds.every((x) => x.month === ds[0].month);
+  const parts = ds.map((x, i) => (sameMonth && i > 0 ? `${x.n}` : `${x.month} ${x.n}`));
+  return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
 const homeCache = new Map<number, HomeStats>();
@@ -233,6 +271,19 @@ export function firstSummerCut(): number {
   return NaN;
 }
 
+/** How far the cap falls for each dollar off Asia's price, from $9 to $6, $/MMBtu. */
+export const CAP_PER_DOLLAR = (homeCap(9) - homeCap(6)) / 3;
+
+/** Calder's summer (April–October) monthly average prices, lowest and highest, with Asia at the starting $9. */
+export const SUMMER_RANGE = (() => {
+  const y = homeYear(HOME_DEFAULTS.asia);
+  const months = Array.from({ length: 7 }, (_, m) => {
+    const ds = y.filter((d) => monthOfDay(d.day) === m);
+    return ds.reduce((a, d) => a + d.price.calder, 0) / ds.length;
+  });
+  return { lo: Math.min(...months), hi: Math.max(...months) };
+})();
+
 export function summerCutSolved(asia: number): boolean {
   return Math.abs(asia - firstSummerCut()) < 1e-9;
 }
@@ -249,6 +300,12 @@ const CANCEL = TEXT.red;
 const DEST: Record<Dest, string> = { europe: 'Europe', asia: 'Asia' };
 
 const monthLabel = (m: number) => `${MONTHS[m % 12]}, year ${Math.floor(m / 12) + 1}`;
+const monthName = (m: number) => `${MONTH_NAMES[m % 12]} of year ${Math.floor(m / 12) + 1}`;
+/** "September of year 1 and March of year 2". */
+function monthsList(ms: number[]): string {
+  const names = ms.map(monthName);
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
 
 function stepLine(values: number[]): { xs: number[]; ys: number[] } {
   const xs: number[] = [];
@@ -301,6 +358,8 @@ export default function Lesson() {
   const AT_LOSS_EXAMPLE = SEP1.choice;
   const L = traderSummary(traderMonths({ ...TRADER_DEFAULTS, level: FIRST_CANCEL_LEVEL }));
   const LOW = traderSummary(traderMonths({ ...TRADER_DEFAULTS, level: 60 }));
+  const CH_HI = traderSummary(traderMonths({ ...TRADER_DEFAULTS, charter: CHARTER_HIGH }));
+  const CH_LO = traderSummary(traderMonths({ ...TRADER_DEFAULTS, charter: CHARTER_LOW }));
   const H9 = homeStats(9);
   const H6 = homeStats(6);
   const H4 = homeStats(4);
@@ -399,7 +458,7 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Overseas prices" tone="green" value={st.level} min={LEVEL_MIN} max={LEVEL_MAX} step={LEVEL_STEP} onChange={(v) => s.set({ level: v })} display={`${st.level}% of the simulated path`} />
-        <Slider label="Charter rate" value={st.charter} min={20_000} max={300_000} step={5_000} onChange={(v) => s.set({ charter: v })} display={`${usd(st.charter)} a day`} />
+        <Slider label="Charter rate" value={st.charter} min={CHARTER_LOW} max={CHARTER_HIGH} step={5_000} onChange={(v) => s.set({ charter: v })} display={`${usd(st.charter)} a day`} />
         <Slider
           label="Calder Hub price"
           tone="green"
@@ -441,7 +500,9 @@ export default function Lesson() {
         January Asia pays {usd(JAN1.asia, 2)} against Europe’s {usd(JAN1.europe, 2)}, {fmt((JAN1.asia - JAN1.europe) * 100)}¢ more — less than the longer voyage costs —
         so that cargo goes to Europe, netting {usd(JAN1.choice.netback.europe, 2)}. A month later Asia jumps to {usd(FEB1.asia, 2)} and the next cargo goes to Asia. Cargoes
         switch sides whenever the spread crosses the cost of the longer voyage, and in the real market that switching is what keeps the two regions’ prices from drifting
-        further apart than the cost of sailing between them.
+        further apart than the cost of sailing between them. The charter rate is a large part of that cost. Raise it to {usd(CHARTER_HIGH)} a day and Asia’s premium over a $9.00 Europe grows from{' '}
+        {fmt(PREMIUM_9 * 100)}¢ to {usd(asiaPremium(9, CHARTER_HIGH), 2)}: only {CH_HI.asia} cargoes make the long voyage, and{' '}
+        {CH_HI.cancelled} are cancelled outright; at {usd(CHARTER_LOW)} a day Asia takes {CH_LO.asia} and only {CH_LO.atLoss} sail at a loss.
       </P>
       <P>
         Now look at the orange dots. In {DS.atLoss} of the 24 months the better netback falls inside the band: above what the gas costs at{' '}
@@ -457,8 +518,8 @@ export default function Lesson() {
       <H2>When cargoes stop</H2>
       <P>
         A cargo is cancelled only when even the better netback falls below the lower edge of the band: when the gas itself costs more at Bayport than it fetches
-        overseas, after shipping. Lower the overseas prices in <FigRef to="Global Gas Trader">the first demonstration</FigRef> and watch it happen. At{' '}
-        {FIRST_CANCEL_LEVEL}% of the simulated path, {L.cancelled} cargoes are cancelled; at 60%, {LOW.cancelled}. Something like this happened in 2020. As the
+        overseas, after shipping. Lower the overseas prices in <FigRef to="Global Gas Trader">the first demonstration</FigRef> and watch it happen: at 60% of the
+        simulated path, {LOW.cancelled} of the 24 cargoes are cancelled. Something like this happened in 2020. As the
         pandemic cut demand, gas prices in Europe and Asia fell to their lowest in years, and buyers cancelled many cargoes from the United States, leaving more gas at
         home in a market that already had plenty. Raising Calder’s price does the same from the other end: gas that’s dear at home is worth exporting less often.
       </P>
@@ -466,7 +527,7 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Global Gas Trader"
-        question="With the starting charter rate and Calder prices, lower the overseas prices until cargoes start being cancelled. What’s the highest level, on the slider’s steps, at which at least one cargo is cancelled?"
+        question="With the starting charter rate and Calder prices, lower the overseas prices until cargoes start being cancelled. Predict first: which month’s cargo will be the first to go? Then find the highest level, on the slider’s steps, at which at least one cargo is cancelled."
         solved={solvedA}
         status={
           st.charter !== TRADER_DEFAULTS.charter || Math.abs(st.shift) > 1e-9
@@ -475,15 +536,16 @@ export default function Lesson() {
               ? `At ${st.level}% every cargo sails.`
               : `At ${st.level}%, ${sum.cancelled} cargo${sum.cancelled === 1 ? ' is' : 'es are'} cancelled. Is there a higher level with a cancellation?`
         }
-        success={`Solved: ${FIRST_CANCEL_LEVEL}%. There ${L.cancelled} cargoes are cancelled, and a step higher none is. Below that level the weakest months’ best netback no longer covers ${pct(BAYPORT_LNG.feedMultiplier)} of Calder’s price, so sailing would add a loss on the gas to the fee the buyer owes anyway. Notice how many cargoes sail at a loss before the first is cancelled: the fee makes the buyer’s results swing a long way before the gas stops flowing.`}
+        success={`Solved: ${FIRST_CANCEL_LEVEL}%. There ${L.cancelled} cargoes are cancelled, ${monthsList(FIRST_CANCELLED)}, and a step higher none is. At full prices the month whose better netback sat closest to the band’s lower edge was ${monthName(CLOSEST_TO_EDGE)}, ${usd(edgeGap(CLOSEST_TO_EDGE), 2)} above it. Below that level the weakest months’ best netback no longer covers ${pct(BAYPORT_LNG.feedMultiplier)} of Calder’s price, so sailing would add a loss on the gas to the fee the buyer owes anyway. Notice how many cargoes sail at a loss before the first is cancelled: the fee makes the buyer’s results swing a long way before the gas stops flowing.`}
       />
 
       <H2>Back home</H2>
       <P>
         Cancelled cargoes don’t vanish from the region’s accounts. The gas they would have carried stays in the region’s pipelines, looking for another buyer, and
-        Bayport’s terminal is the biggest single buyer there is. When overseas prices are high, the terminal takes its {fmt(BAYPORT_LNG_FEEDGAS_BCFD, 1)} Bcf/d whatever
-        Calder costs, as in Chapter 4. When they fall, the terminal becomes the region’s most price-sensitive customer: it keeps loading only while Calder stays below
-        the netback divided by {fmt(BAYPORT_LNG.feedMultiplier, 2)}, its <K c="price">cap</K>. In the next demonstration overseas prices hold steady for a whole gas year
+        Bayport’s terminal is the biggest single buyer there is. When overseas prices are high, the terminal takes its full {fmt(BAYPORT_LNG_FEEDGAS_BCFD, 1)} Bcf/d
+        on all but the tightest days, as it did in Chapter 4 with its feed gas worth {gp(LNG_VALUE)} at Bayport (<a href={lessonHref('gas/4.1')}>Lesson 4.1</a>).
+        What sets the limit is the netback: the terminal keeps loading only while Calder stays below the netback divided by {fmt(BAYPORT_LNG.feedMultiplier, 2)}, its{' '}
+        <K c="price">cap</K>. When overseas prices fall, the cap falls with them, and the terminal gives way on more and more ordinary days. In the next demonstration overseas prices hold steady for a whole gas year
         — Asia at the price you choose and Europe {usd(HOME_EUROPE_GAP, 2)} below it — while the region runs through the typical winter of{' '}
         <a href={lessonHref('gas/5.1')}>Lesson 5.1</a>. The upper chart is Calder’s daily price, with the dashed line the same year at Chapter 4’s LNG value; the lower
         one is the terminal’s feed gas:
@@ -534,7 +596,7 @@ export default function Lesson() {
             { label: 'the terminal’s cap at Calder', value: gp(hs.cap), tone: 'green' },
             { label: 'Calder’s average', value: gp(hs.calderAvg), tone: 'green' },
             { label: 'LNG exports, average', value: `${fmt(hs.lngAvg, 2)} Bcf/d`, tone: 'orange' },
-            { label: 'days cut back', value: `${hs.cutDays} · ${hs.summerCut} Apr–Oct` },
+            { label: 'days cut back', value: String(hs.cutDays) },
           ]}
         />
         <Slider
@@ -558,9 +620,11 @@ export default function Lesson() {
 
       <P>
         With Asia at {usd(9, 2)} the cap is {usd(H9.cap, 2)}, and the year looks almost exactly like Chapter 4’s: Calder averages {usd(H9.calderAvg, 2)}, the same to
-        the cent as at Chapter 4’s LNG value. The difference is on the coldest days. Calder can’t rise above {usd(H9.cap, 2)}, because at that price the terminal would rather cut
-        back than pay more for its gas; on {H9.cutDays} days it does, and the gas it leaves behind goes to the region’s own customers. LNG exports are a release valve for the region’s
-        winter peaks.
+        the cent as at Chapter 4’s LNG value. The difference is on the tightest days. Calder can’t rise above {usd(H9.cap, 2)}, because at that price the terminal would
+        rather cut back than pay more for its gas; it does on {H9.cutDays} days, {daysText(H9.cutDayList)}, and the gas it leaves behind goes to the region’s own
+        customers. Those aren’t the year’s coldest days — that is {daysText([HOME_COLDEST.day])}, at {fmt(HOME_COLDEST.temp)} °F — but late-winter ones, when a winter
+        of withdrawals has drawn storage down; <a href={lessonHref('gas/5.5')}>Lesson 5.5</a> comes back to why late cold is the most dangerous. LNG exports are a
+        release valve for the region’s winter peaks.
       </P>
       <P>
         Lower the price in Asia and the valve opens wider. At {usd(6, 2)} the cap falls to {usd(H6.cap, 2)}, below many winter days’ prices, and the terminal cuts back
@@ -574,14 +638,14 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Global Gas Trader · back home"
-        question="Lower the price in Asia from where it starts. At what price, on the slider’s steps, is Bayport’s terminal first cut back on a day between April and October?"
+        question={`Lower the price in Asia from where it starts. The terminal is cut back in summer only once its cap falls into Calder’s summer prices, which average ${usd(SUMMER_RANGE.lo, 2)} to ${usd(SUMMER_RANGE.hi, 2)} month by month. Predict first, from the caps at $9 and $6: at what price in Asia, on the slider’s steps, does the terminal first give way on a day between April and October? Then check on the feed-gas chart.`}
         solved={solvedB}
         status={
           hs.summerCut > 0
-            ? `At ${usd(h.state.asia, 2)} the terminal is cut back on ${hs.summerCut} days between April and October. Is that the first price where it happens?`
-            : `At ${usd(h.state.asia, 2)} it takes its full feed gas all summer; its ${hs.cutDays} cut days are all in winter.`
+            ? `At ${usd(h.state.asia, 2)} the cap is ${usd(hs.cap, 2)}, and the terminal is cut back in summer too. Is this the first price where that happens?`
+            : `At ${usd(h.state.asia, 2)} the cap is ${usd(hs.cap, 2)}; the terminal takes its full feed gas all summer.`
         }
-        success={`Solved: ${usd(SUMMER_ANSWER, 2)}. There the cap is ${usd(S_ANSWER.cap, 2)} and the terminal is cut back on ${S_ANSWER.summerCut} days between April and October; a step higher, at ${usd(SUMMER_ANSWER + HOME_STEP, 2)}, the cap is ${usd(S_ABOVE.cap, 2)} and every cut falls in winter. In summer the terminal competes with the storage fields for the region’s spare gas. Once its cap falls to what storage owners will pay to fill up for winter, the two share the gas and the summer price settles at the cap.`}
+        success={`Solved: ${usd(SUMMER_ANSWER, 2)}. From ${usd(H9.cap, 2)} at $9 to ${usd(H6.cap, 2)} at $6, the cap falls about ${fmt(CAP_PER_DOLLAR * 100)}¢ for each dollar off Asia’s price, so ${fmt((6 - SUMMER_ANSWER) * 100)}¢ less than $6 brings it to ${usd(S_ANSWER.cap, 2)}, inside summer’s prices: the terminal is cut back on ${S_ANSWER.summerCut} days between April and October. A step higher, at ${usd(SUMMER_ANSWER + HOME_STEP, 2)}, the cap is ${usd(S_ABOVE.cap, 2)}, above every summer month, and every cut falls in winter. In summer the terminal competes with the storage fields for the region’s spare gas. Once its cap falls to what storage owners will pay to fill up for winter, the two share the gas and the summer price settles at the cap.`}
       />
 
       <P>

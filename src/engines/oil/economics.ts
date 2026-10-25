@@ -95,23 +95,23 @@ export function breakeven(npvAt: (price: number) => number, lo = 0, hi = 300): n
   return (lo + hi) / 2;
 }
 
-/** The course's standard Ridgeback well: a 10,000 ft lateral with 50 fracture stages. */
+/** The course's standard Pinyon well: a 10,000 ft lateral with 50 fracture stages. */
 export const STANDARD_WELL: WellDesign = { type: 'fractured', lateral: 10000, stages: 50 };
 
 const profileCache = new Map<string, number[]>();
-/** Monthly rates (b/d) of a Ridgeback well design, scaled by rock quality (1 = the core of the play). */
-export function ridgebackRates(d: WellDesign = STANDARD_WELL, quality = 1): number[] {
+/** Monthly rates (b/d) of a Pinyon well design, scaled by rock quality (1 = the core of the play). */
+export function pinyonRates(d: WellDesign = STANDARD_WELL, quality = 1): number[] {
   const key = `${d.type}|${d.lateral}|${d.stages}`;
   let r = profileCache.get(key);
   if (!r) {
-    r = wellProfile(d, rockOf('ridgeback'), 360).rate;
+    r = wellProfile(d, rockOf('pinyon'), 360).rate;
     profileCache.set(key, r);
   }
   return quality === 1 ? r : r.map((q) => q * quality);
 }
 
-export function ridgebackWellCost(d: WellDesign = STANDARD_WELL): number {
-  return wellCost(d, rockOf('ridgeback')).total;
+export function pinyonWellCost(d: WellDesign = STANDARD_WELL): number {
+  return wellCost(d, rockOf('pinyon')).total;
 }
 
 export interface WellEconomics {
@@ -126,7 +126,7 @@ export interface WellEconomics {
 }
 
 export function wellEconomics(price: number, d: WellDesign = STANDARD_WELL, quality = 1, t: Terms = TERMS): WellEconomics {
-  const { cash, oil } = wellCashFlows(ridgebackRates(d, quality), ridgebackWellCost(d), price, t);
+  const { cash, oil } = wellCashFlows(pinyonRates(d, quality), pinyonWellCost(d), price, t);
   let run = 0;
   let payback = NaN;
   cash.forEach((c, i) => {
@@ -136,16 +136,16 @@ export function wellEconomics(price: number, d: WellDesign = STANDARD_WELL, qual
   return { npv: npv(cash, t.discount), irr: irr(cash), payback, eur: oil.reduce((a, b) => a + b, 0), life: cash.length - 1, cash };
 }
 
-/** Breakeven benchmark price of a Ridgeback well. */
+/** Breakeven benchmark price of a Pinyon well. */
 export function wellBreakeven(d: WellDesign = STANDARD_WELL, quality = 1, t: Terms = TERMS): number {
   return breakeven((p) => wellEconomics(p, d, quality, t).npv);
 }
 
 // ---------------------------------------------------------------------------
-// A development program: Ridgeback wells drilled each year, and Northfield's waterflood.
+// A development program: Pinyon wells drilled each year, and Northfield's waterflood.
 
 export interface Program {
-  /** Ridgeback wells drilled per year, for each of the next five years. */
+  /** Pinyon wells drilled per year, for each of the next five years. */
   wellsPerYear: number;
   /** Fund Northfield's waterflood, starting next year. */
   waterflood: boolean;
@@ -179,7 +179,7 @@ export interface ProgramResult {
   /** Monthly oil by source, b/d. */
   northfield: number[];
   flood: number[];
-  ridgeback: number[];
+  pinyon: number[];
   /** Monthly net cash, $. */
   cash: number[];
   capital: number;
@@ -190,9 +190,9 @@ export function runProgram(p: Program, months = 240, t: Terms = TERMS): ProgramR
   const base = northfieldMonthly(false, p.price, months);
   const withFlood = p.waterflood ? northfieldMonthly(true, p.price, months) : base;
   const flood = withFlood.map((q, i) => Math.max(0, q - base[i]));
-  const rates = ridgebackRates();
-  const wellCapital = ridgebackWellCost();
-  const ridgeback = Array<number>(months).fill(0);
+  const rates = pinyonRates();
+  const wellCapital = pinyonWellCost();
+  const pinyon = Array<number>(months).fill(0);
   const cash = Array<number>(months).fill(0);
   let capital = 0;
   const per = netbackPerBbl(p.price, t) - t.opexPerBbl;
@@ -206,7 +206,7 @@ export function runProgram(p: Program, months = 240, t: Terms = TERMS): ProgramR
     cash[0] -= WATERFLOOD.capital;
     capital += WATERFLOOD.capital;
   }
-  // Ridgeback wells: spread evenly through each of the first five years.
+  // Pinyon wells: spread evenly through each of the first five years.
   for (let y = 0; y < 5; y++) {
     for (let w = 0; w < p.wellsPerYear; w++) {
       const start = y * 12 + Math.floor((w * 12) / Math.max(1, p.wellsPerYear));
@@ -214,11 +214,11 @@ export function runProgram(p: Program, months = 240, t: Terms = TERMS): ProgramR
       capital += wellCapital;
       for (let k = 0; k < wc.cash.length && start + k < months; k++) {
         cash[start + k] += wc.cash[k];
-        if (k > 0) ridgeback[start + k] += wc.oil[k] / (365.25 / 12);
+        if (k > 0) pinyon[start + k] += wc.oil[k] / (365.25 / 12);
       }
     }
   }
-  return { northfield: base, flood, ridgeback, cash, capital, npv: npv(cash, t.discount) };
+  return { northfield: base, flood, pinyon, cash, capital, npv: npv(cash, t.discount) };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ export interface Project {
 }
 
 /**
- * Breakevens for the world's projects. Ridgeback's are computed from the well model; the others
+ * Breakevens for the world's projects. Pinyon's are computed from the well model; the others
  * are set to sit at realistic levels for their kind of project.
  */
 export function worldProjects(): Project[] {
@@ -249,9 +249,9 @@ export function worldProjects(): Project[] {
   const halfCycle = TERMS.differential + TERMS.opexPerBbl / ((1 - TERMS.royalty) * (1 - TERMS.productionTax));
   return [
     { id: 'flood', name: 'Northfield waterflood', volume: 75, fullCycle: 22, halfCycle: 14, leadTime: 1 },
-    { id: 'core', name: 'Ridgeback core wells (300)', volume: 300 * coreEur, fullCycle: core, halfCycle, leadTime: 0.5 },
+    { id: 'core', name: 'Pinyon core wells (300)', volume: 300 * coreEur, fullCycle: core, halfCycle, leadTime: 0.5 },
     { id: 'seaboard', name: 'Seaboard offshore expansion', volume: 180, fullCycle: 48, halfCycle: 18, leadTime: 5 },
     { id: 'coldwater', name: 'Coldwater steam project', volume: 220, fullCycle: 64, halfCycle: 32, leadTime: 4 },
-    { id: 'fringe', name: 'Ridgeback fringe wells (400)', volume: 400 * fringeEur, fullCycle: fringe, halfCycle, leadTime: 0.5 },
+    { id: 'fringe', name: 'Pinyon fringe wells (400)', volume: 400 * fringeEur, fullCycle: fringe, halfCycle, leadTime: 0.5 },
   ].sort((a, b) => a.fullCycle - b.fullCycle);
 }

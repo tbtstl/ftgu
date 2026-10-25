@@ -1,10 +1,11 @@
-import { useDeferredValue, useMemo } from 'react';
-import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, usd, useScenario } from '../../../framework';
-import { arbitrage, closingFreight, crudeNetback, qualityDifferentials, type ArbInputs, type ArbResult } from '../../../engines/oil/arbitrage';
-import { ladenDays, voyage } from '../../../engines/oil/tanker';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { Caption, Challenge, Checkbox, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, usd, useScenario } from '../../../framework';
+import { arbitrage, crudeBreakeven, qualityDifferentials, standaloneValue, type ArbInputs, type ArbResult } from '../../../engines/oil/arbitrage';
+import { NETWORK_DEFAULTS } from '../../../engines/oil/network';
+import { cheapestSpeed, ladenDays, voyage } from '../../../engines/oil/tanker';
 import { CRUDE_COLOR, CRUDE_IDS, CRUDE_SPECS, type CrudeId } from '../../../model/oil/crudes';
-import { CALDER_DOCK_LIMIT, KESSLER_CALDER, LIGHTERING_COST, ROUTES, VESSELS, type VesselId } from '../../../model/oil/logistics';
-import { CALDER, CRUDE_PRICE, PRODUCT_PRICE } from '../../../model/oil/refinery';
+import { CORRAN_DOCK_LIMIT, KESSLER_CORRAN, LIGHTERING_COST, ROUTES, VESSELS, type VesselId } from '../../../model/oil/logistics';
+import { CORRAN, CRUDE_PRICE, PRODUCT_PRICE } from '../../../model/oil/refinery';
 import { XYChart } from '../shared/charts';
 
 const NAME: Record<CrudeId, string> = Object.fromEntries(CRUDE_SPECS.map((s) => [s.id, s.name])) as Record<CrudeId, string>;
@@ -13,50 +14,74 @@ const VESSEL_IDS: VesselId[] = ['aframax', 'suezmax', 'vlcc'];
 // ---------------------------------------------------------------------------
 // Figure 1: a cargo from Kessler to Northport.
 
-/** Speed the cargoes sail at, knots. */
-export const SPEED = 13;
-/** The cost assumptions for a cargo from Kessler, through Port Calder, to Northport. */
+/** How the crude reaches the coast: by pipeline while it has room, by rail once it is full (Lesson 4.4). */
+export type Leg = 'pipe' | 'rail';
+/** What each way to the coast costs, $/bbl: the network's pipeline tariff and rail freight. */
+export const LEG_COST: Record<Leg, number> = { pipe: NETWORK_DEFAULTS.pipelineTariff, rail: NETWORK_DEFAULTS.railCost };
+
+/** The physical route a cargo takes: its leg to the coast, and whether Port Corran's channel has been dredged. */
+export interface CoastRoute {
+  leg: Leg;
+  dredged: boolean;
+}
+export const REFERENCE_ROUTE: CoastRoute = { leg: 'pipe', dredged: false };
+/** Challenge a's route: the pipeline full, so the crude goes to the coast by rail; the channel as it is. */
+export const CHALLENGE_ROUTE: CoastRoute = { leg: 'rail', dredged: false };
+
+/** The cost assumptions for a cargo from Kessler, through Port Corran, to Northport. */
 export const ARB = {
-  pipelineTariff: 2.0,
   terminalFees: 0.4,
   insurance: 0.0005,
   losses: 0.002,
   financingRate: 0.06,
-  transitDays: ladenDays('northport', SPEED),
 };
 export const KESSLER_DEFAULT = 74.5;
 export const NORTHPORT_DEFAULT = 79;
 export const PRICE_STEP = 0.1;
 
-/** Freight per barrel, Port Calder to Northport, for a vessel at 13 knots (VLCCs pay to top up offshore). */
-export function freightFor(v: VesselId): number {
-  return voyage({ vessel: v, route: 'northport', speed: SPEED }).perBbl;
+/** Each ship sails at its cheapest speed at the default hire and bunker price (Lesson 4.2), knots. */
+export function speedFor(v: VesselId): number {
+  return cheapestSpeed(v);
 }
 
-export function arbInputs(v: VesselId, kessler: number, northport: number): ArbInputs {
-  return { ...ARB, originPrice: kessler, destinationPrice: northport, freight: freightFor(v) };
+/** Freight per barrel, Port Corran to Northport (a VLCC pays to top up offshore unless the channel is dredged). */
+export function freightFor(v: VesselId, dredged = false): number {
+  return voyage({ vessel: v, route: 'northport', speed: speedFor(v), atCorran: !dredged }).perBbl;
 }
 
-export function arbFor(v: VesselId, kessler: number, northport: number): ArbResult {
-  return arbitrage(arbInputs(v, kessler, northport));
+export function arbInputs(v: VesselId, kessler: number, northport: number, route: CoastRoute = REFERENCE_ROUTE): ArbInputs {
+  return {
+    ...ARB,
+    pipelineTariff: LEG_COST[route.leg],
+    transitDays: ladenDays('northport', speedFor(v)),
+    originPrice: kessler,
+    destinationPrice: northport,
+    freight: freightFor(v, route.dredged),
+  };
+}
+
+export function arbFor(v: VesselId, kessler: number, northport: number, route: CoastRoute = REFERENCE_ROUTE): ArbResult {
+  return arbitrage(arbInputs(v, kessler, northport, route));
 }
 
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
 /**
- * Challenge a: with Northport at $79, the highest Kessler price (to 10 cents) at which a cargo
- * makes money in any of the three vessels — and the vessel that does it.
+ * Challenge a: with the pipeline full (rail to the coast), the channel undredged and Northport at
+ * $79, the highest Kessler price (to 10 cents) at which a cargo makes money in any of the three
+ * vessels — and the vessel that does it.
  */
-export function arbSolved(v: VesselId, kessler: number, northport: number): boolean {
+export function arbSolved(v: VesselId, kessler: number, northport: number, route: CoastRoute): boolean {
+  if (route.leg !== CHALLENGE_ROUTE.leg || route.dredged !== CHALLENGE_ROUTE.dredged) return false;
   if (Math.abs(northport - NORTHPORT_DEFAULT) > 1e-9) return false;
   const next = round1(kessler + PRICE_STEP);
-  return arbFor(v, kessler, northport).margin > 0 && VESSEL_IDS.every((w) => arbFor(w, next, northport).margin <= 0);
+  return arbFor(v, kessler, northport, route).margin > 0 && VESSEL_IDS.every((w) => arbFor(w, next, northport, route).margin <= 0);
 }
 
-/** The highest Kessler price at which each vessel's arbitrage to Northport ($79) is open. */
-export function highestOpen(v: VesselId, northport = NORTHPORT_DEFAULT): number {
+/** The highest Kessler price (to 10 cents) at which a vessel's arbitrage to Northport is open. */
+export function highestOpen(v: VesselId, northport = NORTHPORT_DEFAULT, route: CoastRoute = REFERENCE_ROUTE): number {
   let best = NaN;
-  for (let k = 650; k <= 800; k++) if (arbFor(v, k / 10, northport).margin > 0) best = k / 10;
+  for (let k = 500; k <= 900; k++) if (arbFor(v, k / 10, northport, route).margin > 0) best = k / 10;
   return best;
 }
 
@@ -65,16 +90,19 @@ export function highestOpen(v: VesselId, northport = NORTHPORT_DEFAULT): number 
 
 export const DIESEL_DEFAULT = PRODUCT_PRICE.diesel;
 export const FUEL_OIL_DEFAULT = PRODUCT_PRICE.hsfo;
-/** What each crude costs delivered to Calder, less Ridgeback Light: the market's differentials (simulated). */
-export const MARKET_DIFF: Record<CrudeId, number> = Object.fromEntries(CRUDE_IDS.map((k) => [k, CRUDE_PRICE[k] - CRUDE_PRICE.ridgeback])) as Record<CrudeId, number>;
+/** Corran's coker, kb/d, and the range the quality figure lets it take. */
+export const COKER_DEFAULT = CORRAN.capacity.coker;
+export const COKER_RANGE = { min: 10, max: 40, step: 5 };
+/** What each crude costs delivered to Corran, less Pinyon Light: the market's differentials (simulated). */
+export const MARKET_DIFF: Record<CrudeId, number> = Object.fromEntries(CRUDE_IDS.map((k) => [k, CRUDE_PRICE[k] - CRUDE_PRICE.pinyon])) as Record<CrudeId, number>;
 
 const diffCache = new Map<string, Record<CrudeId, number>>();
-/** Calder's netback differentials (each crude run alone, less Ridgeback) at a fuel-oil and diesel price. */
-export function differentialsAt(fuelOil: number, diesel: number): Record<CrudeId, number> {
-  const key = `${fuelOil}|${diesel}`;
+/** Corran's value gaps: each crude's stand-alone value less Pinyon's, at a fuel-oil and diesel price and a coker size (kb/d). */
+export function differentialsAt(fuelOil: number, diesel: number, coker = COKER_DEFAULT): Record<CrudeId, number> {
+  const key = `${fuelOil}|${diesel}|${coker}`;
   let d = diffCache.get(key);
   if (!d) {
-    d = qualityDifferentials({ productPrice: { hsfo: fuelOil, diesel } });
+    d = qualityDifferentials({ productPrice: { hsfo: fuelOil, diesel }, config: { ...CORRAN, capacity: { ...CORRAN.capacity, coker } } });
     if (diffCache.size > 400) diffCache.clear();
     diffCache.set(key, d);
   }
@@ -82,11 +110,11 @@ export function differentialsAt(fuelOil: number, diesel: number): Record<CrudeId
 }
 
 /**
- * Challenge b: the fuel-oil price (whole dollars, diesel at its reference price) at which Coldwater
- * Heavy's value gap at Calder comes closest to its $14.50 market discount.
+ * Challenge b: the fuel-oil price (whole dollars, diesel and the coker at their reference values) at
+ * which Coldwater Heavy's value gap at Corran comes closest to its $14.50 market discount.
  */
-export function qualitySolved(fuelOil: number, diesel: number): boolean {
-  if (diesel !== DIESEL_DEFAULT) return false;
+export function qualitySolved(fuelOil: number, diesel: number, coker = COKER_DEFAULT): boolean {
+  if (diesel !== DIESEL_DEFAULT || coker !== COKER_DEFAULT) return false;
   const err = (h: number) => Math.abs(differentialsAt(h, diesel).coldwater - MARKET_DIFF.coldwater);
   return err(fuelOil) <= err(fuelOil - 1) && err(fuelOil) <= err(fuelOil + 1);
 }
@@ -102,8 +130,9 @@ function signedMoney(x: number): string {
 }
 
 /** The delivered cost of a cargo, step by step, against what it sells for. */
-function Waterfall({ r, northport }: { r: ArbResult; northport: number }) {
-  const short = ['Kessler price', 'Pipeline', 'Terminals', 'Freight', 'Insurance', 'Financing'];
+function Waterfall({ r, northport, leg }: { r: ArbResult; northport: number; leg: Leg }) {
+  const short = ['Kessler price', leg === 'rail' ? 'Rail' : 'Pipeline', 'Terminals', 'Freight', 'Insurance', 'Financing'];
+  const partLabel = (i: number, label: string) => (i === 1 && leg === 'rail' ? 'rail to the coast' : label.toLowerCase());
   const cols = r.parts.length + 2;
   const X0 = 64;
   const X1 = 624;
@@ -133,7 +162,7 @@ function Waterfall({ r, northport }: { r: ArbResult; northport: number }) {
       role="img"
       aria-label={`A cargo from Kessler to Northport: crude at ${money(r.parts[0].value)}, plus ${r.parts
         .slice(1)
-        .map((p) => `${p.label.toLowerCase()} ${money(p.value)}`)
+        .map((p, i) => `${partLabel(i + 1, p.label)} ${money(p.value)}`)
         .join(', ')}, delivers at ${money(r.delivered)} a barrel. It sells for ${money(r.revenue)} after losses, so the arbitrage is ${open ? 'open' : 'closed'} by ${money(Math.abs(r.margin))}.`}
     >
       <text className="ax" x={X0} y={14}>
@@ -191,7 +220,7 @@ function Waterfall({ r, northport }: { r: ArbResult; northport: number }) {
   );
 }
 
-/** Each crude's value gap at Calder (bar) against its market differential (tick), $/bbl. */
+/** Each crude's value gap at Corran (stand-alone value less Pinyon's; bar) against its market differential (tick), $/bbl. */
 function QualityBars({ diffs }: { diffs: Record<CrudeId, number> }) {
   const X0 = 150;
   const X1 = 610;
@@ -205,10 +234,10 @@ function QualityBars({ diffs }: { diffs: Record<CrudeId, number> }) {
       className="chart"
       viewBox={`0 0 640 ${top + rowH * 4 + 26}`}
       role="img"
-      aria-label={`Each crude’s value at Calder relative to Ridgeback Light, against what it costs relative to Ridgeback: ${CRUDE_IDS.map((k) => `${NAME[k]} worth ${signedMoney(diffs[k])}, priced ${signedMoney(MARKET_DIFF[k])}`).join('; ')}.`}
+      aria-label={`Each crude’s stand-alone value at Corran relative to Pinyon Light, against what it costs relative to Pinyon: ${CRUDE_IDS.map((k) => `${NAME[k]} worth ${signedMoney(diffs[k])}, priced ${signedMoney(MARKET_DIFF[k])}`).join('; ')}.`}
     >
       <text className="ax" x={X0} y={14}>
-        Value at Calder relative to Ridgeback Light (bar) and price relative to it (tick), $ per barrel
+        Relative to Pinyon Light: stand-alone value at Corran (bar) and price (tick), $ per barrel
       </text>
       {[-30, -20, -10, 0].map((v) => (
         <g key={v}>
@@ -230,12 +259,12 @@ function QualityBars({ diffs }: { diffs: Record<CrudeId, number> }) {
             </text>
             <rect x={a} y={y + 8} width={Math.max(1, Math.abs(sx(d) - sx(0)))} height={rowH - 16} fill={CRUDE_COLOR[k]} opacity={0.85} />
             <line x1={sx(MARKET_DIFF[k])} x2={sx(MARKET_DIFF[k])} y1={y + 3} y2={y + rowH - 3} stroke="#333" strokeWidth={2.5} />
-            {k !== 'ridgeback' && (
+            {k !== 'pinyon' && (
               <text x={Math.max(sx(0), sx(d), sx(MARKET_DIFF[k])) + 6} y={y + rowH / 2 + 4} style={{ fontSize: 12, fontWeight: 500, fill: gap >= 0 ? '#3f7a1e' : '#c4382f' }}>
-                {gap >= 0 ? `a bargain by ${money(gap)}` : `dear by ${money(-gap)}`}
+                {gap >= 0 ? `cheap by ${money(gap)}` : `dear by ${money(-gap)}`}
               </text>
             )}
-            {k === 'ridgeback' && (
+            {k === 'pinyon' && (
               <text x={sx(0) + 6} y={y + rowH / 2 + 4} className="ax">
                 the reference
               </text>
@@ -249,27 +278,53 @@ function QualityBars({ diffs }: { diffs: Record<CrudeId, number> }) {
 
 export default function Lesson() {
   // ---- Figure 1.
-  const s1 = useScenario('arb', { vessel: 'aframax' as VesselId, kessler: KESSLER_DEFAULT, northport: NORTHPORT_DEFAULT });
-  const { vessel, kessler, northport } = s1.state;
-  const r = arbFor(vessel, kessler, northport);
-  const freight = freightFor(vessel);
-  const closing = closingFreight(arbInputs(vessel, kessler, northport));
-  const solvedA = arbSolved(vessel, kessler, northport);
+  const s1 = useScenario('arb', { vessel: 'aframax' as VesselId, kessler: KESSLER_DEFAULT, northport: NORTHPORT_DEFAULT, leg: REFERENCE_ROUTE.leg, dredged: REFERENCE_ROUTE.dredged });
+  const { vessel, kessler, northport, leg, dredged } = s1.state;
+  const route: CoastRoute = { leg, dredged };
+  const r = arbFor(vessel, kessler, northport, route);
+  const freight = freightFor(vessel, dredged);
+  const solvedA = arbSolved(vessel, kessler, northport, route);
   const atDefault = useMemo(() => Object.fromEntries(VESSEL_IDS.map((v) => [v, arbFor(v, KESSLER_DEFAULT, NORTHPORT_DEFAULT)])) as Record<VesselId, ArbResult>, []);
   const open = useMemo(() => Object.fromEntries(VESSEL_IDS.map((v) => [v, highestOpen(v)])) as Record<VesselId, number>, []);
-  const vlccLightering = (Math.max(0, VESSELS.vlcc.cargo - CALDER_DOCK_LIMIT) * LIGHTERING_COST) / VESSELS.vlcc.cargo;
+  const vlccLightering = (Math.max(0, VESSELS.vlcc.cargo - CORRAN_DOCK_LIMIT) * LIGHTERING_COST) / VESSELS.vlcc.cargo;
+  const transit = { fastest: ladenDays('northport', Math.max(...VESSEL_IDS.map(speedFor))), slowest: ladenDays('northport', Math.min(...VESSEL_IDS.map(speedFor))) };
+  // The causes of the band: a dredged channel, and a full pipeline (rail to the coast).
+  const causes = useMemo(() => {
+    const dredgedRoute: CoastRoute = { leg: 'pipe', dredged: true };
+    const railRoute: CoastRoute = { leg: 'rail', dredged: false };
+    return {
+      dredgedVlcc: arbFor('vlcc', KESSLER_DEFAULT, NORTHPORT_DEFAULT, dredgedRoute),
+      openDredged: highestOpen('vlcc', NORTHPORT_DEFAULT, dredgedRoute),
+      railRise: arbFor('vlcc', KESSLER_DEFAULT, NORTHPORT_DEFAULT, railRoute).delivered - arbFor('vlcc', KESSLER_DEFAULT, NORTHPORT_DEFAULT).delivered,
+      openRail: highestOpen('vlcc', NORTHPORT_DEFAULT, railRoute),
+    };
+  }, []);
 
   // ---- Figure 2.
-  const s2 = useScenario('quality', { fuelOil: FUEL_OIL_DEFAULT, diesel: DIESEL_DEFAULT });
-  const { fuelOil, diesel } = s2.state;
-  const diffs = useMemo(() => differentialsAt(fuelOil, diesel), [fuelOil, diesel]);
+  const s2 = useScenario('quality', { fuelOil: FUEL_OIL_DEFAULT, diesel: DIESEL_DEFAULT, coker: COKER_DEFAULT });
+  const { fuelOil, diesel, coker } = s2.state;
+  const diffs = useMemo(() => differentialsAt(fuelOil, diesel, coker), [fuelOil, diesel, coker]);
   const dDiesel = useDeferredValue(diesel);
-  const sweep = useMemo(() => SWEEP.map((h) => ({ h, d: differentialsAt(h, dDiesel) })), [dDiesel]);
-  const solvedB = qualitySolved(fuelOil, diesel);
+  const dCoker = useDeferredValue(coker);
+  const sweep = useMemo(() => SWEEP.map((h) => ({ h, d: differentialsAt(h, dDiesel, dCoker) })), [dDiesel, dCoker]);
+  const solvedB = qualitySolved(fuelOil, diesel, coker);
+  // The market lines cross the value-gap curves at challenge b's answer, so the chart draws them once it has been solved.
+  const [revealedB, setRevealedB] = useState(false);
+  useEffect(() => {
+    if (solvedB) setRevealedB(true);
+  }, [solvedB]);
   const ref = useMemo(() => differentialsAt(FUEL_OIL_DEFAULT, DIESEL_DEFAULT), []);
-  const netbacks = useMemo(() => Object.fromEntries(CRUDE_IDS.map((k) => [k, crudeNetback(k)])) as Record<CrudeId, number>, []);
+  const standalone = useMemo(() => Object.fromEntries(CRUDE_IDS.map((k) => [k, standaloneValue(k)])) as Record<CrudeId, number>, []);
+  // Lesson 3.5's marginal values, for comparison.
+  const marginal = useMemo(() => ({ pinyon: crudeBreakeven('pinyon'), coldwater: crudeBreakeven('coldwater'), northfield: crudeBreakeven('northfield') }), []);
   const at = (h: number, d = DIESEL_DEFAULT) => differentialsAt(h, d);
-  const noCokerColdwater = useMemo(() => crudeNetback('coldwater', { config: { ...CALDER, capacity: { ...CALDER.capacity, coker: 0 } } }), []);
+  const noCokerColdwater = useMemo(() => standaloneValue('coldwater', { config: { ...CORRAN, capacity: { ...CORRAN.capacity, coker: 0 } } }), []);
+  // Coldwater's value gap with other cokers, for the prose.
+  const cokerCase = useMemo(() => {
+    const gap = (c: number, h = FUEL_OIL_DEFAULT) => differentialsAt(h, DIESEL_DEFAULT, c).coldwater;
+    return { small: gap(15), big: gap(35), swingSmall: gap(15, 80) - gap(15, 30), swingRef: gap(COKER_DEFAULT, 80) - gap(COKER_DEFAULT, 30), swingBig: gap(35, 80) - gap(35, 30) };
+  }, []);
+  const slope = (ref.coldwater - at(30).coldwater) / (FUEL_OIL_DEFAULT - 30);
 
   return (
     <LessonPage id="oil/4.5">
@@ -280,63 +335,89 @@ export default function Lesson() {
         dear — and at a second kind of difference that has nothing to do with location: quality.
       </P>
       <P>
-        Take a cargo of crude bought at the Kessler hub, piped {fmt(KESSLER_CALDER.lengthMiles)} miles to Port Calder and shipped across to Northport, the deep market whose price behaves like
+        Take a cargo of crude bought at the Kessler hub, piped {fmt(KESSLER_CORRAN.lengthMiles)} miles to Port Corran and shipped across to Northport, the deep market whose price behaves like
         Brent. Every step costs something. The pipeline charges its tariff. Terminals charge to load the tanker and to unload it. The ship is paid for by the day and
-        burns fuel (<a href={lessonHref('oil/4.2')}>Lesson 4.2</a>). The cargo is insured, and the money tied up in it for the {fmt(ARB.transitDays)} days at sea costs
-        interest. And not every barrel arrives: a little evaporates or stays behind in the tanks. Add all that to the price paid at Kessler and you have the{' '}
-        <K c="price">delivered cost</K>. If Northport pays more than that, there is money to be made moving oil — the <b>arbitrage</b>, which traders shorten to the
-        “arb” — and the arb is said to be open.
+        burns fuel; here each ship sails at its cheapest speed, from <a href={lessonHref('oil/4.2')}>Lesson 4.2</a>. The cargo is insured, and the money tied up in it
+        for the {fmt(transit.fastest)}–{fmt(transit.slowest)} days at sea costs interest. And not every barrel arrives: a little evaporates or stays behind in the tanks.
+        Add all that to the price paid at Kessler and you have the <K c="price">delivered cost</K>. If Northport pays more than that, there is money to be made moving
+        oil — the <b>arbitrage</b>, which traders shorten to the “arb” — and the arb is said to be open.
       </P>
       <P>
         In the next demonstration, the bars build the delivered cost of a barrel step by step and set it against what the barrel sells for at Northport. All the prices
-        are simulated. Choose the ship, and set the two prices:
+        are simulated. Choose the ship and how the crude reaches the coast, set the two prices, and if you like, dredge Port Corran’s channel:
       </P>
 
       <Figure name="Crude Arbitrage Lab" scenario={s1}>
         <Segmented label="Vessel" value={vessel} onChange={(v) => s1.set({ vessel: v })} options={VESSEL_IDS.map((v) => ({ value: v, label: `${VESSELS[v].name}, ${fmt(VESSELS[v].cargo / 1e6, 1)} million bbl` }))} />
-        <Waterfall r={r} northport={northport} />
-        <Readouts
-          items={[
-            { label: <K c="price">delivered cost</K>, value: money(r.delivered), tone: 'green' },
-            { label: 'sold at Northport', value: money(r.revenue), tone: 'green' },
-            { label: 'margin per barrel', value: signedMoney(r.margin), tone: r.margin > 0 ? 'green' : 'red' },
-            { label: 'freight that would just close it', value: money(closing) },
+        <Segmented
+          label="To the coast"
+          value={leg}
+          onChange={(v) => s1.set({ leg: v })}
+          options={[
+            { value: 'pipe' as const, label: `Pipeline has room: ${money(LEG_COST.pipe)} tariff` },
+            { value: 'rail' as const, label: `Pipeline full: rail, ${money(LEG_COST.rail)}` },
           ]}
         />
+        <Waterfall r={r} northport={northport} leg={leg} />
         <Slider label="Kessler price" tone="green" value={kessler} min={65} max={80} step={PRICE_STEP} onChange={(v) => s1.set({ kessler: round1(v) })} display={`${money(kessler)}/bbl`} />
         <Slider label="Northport price" tone="green" value={northport} min={70} max={90} step={PRICE_STEP} onChange={(v) => s1.set({ northport: round1(v) })} display={`${money(northport)}/bbl`} />
+        <Checkbox label="Dredge Port Corran’s channel so a VLCC can load fully at the dock" checked={dredged} onChange={(d) => s1.set({ dredged: d })} />
         <Caption>
-          A {VESSELS[vessel].name} carries {fmt(VESSELS[vessel].cargo)} barrels {fmt(ROUTES.northport.nm)} nautical miles at {SPEED} knots, for {money(freight)} a
-          barrel{vessel === 'vlcc' ? `, including ${money(vlccLightering)} for topping the cargo up offshore, since Port Calder’s dock can load only ${fmt(CALDER_DOCK_LIMIT / 1e6, 0)} million barrels` : ''}.
-          On a cargo, the margin comes to {usd(r.margin * VESSELS[vessel].cargo)}.
+          {leg === 'rail' ? `The pipeline is full, so the crude goes to the coast by rail, at ${money(LEG_COST.rail)} a barrel. ` : ''}
+          {vessel === 'aframax' ? 'An' : 'A'} {VESSELS[vessel].name} carries{' '}
+          {fmt(VESSELS[vessel].cargo)} barrels {fmt(ROUTES.northport.nm)} nautical miles at {fmt(speedFor(vessel), 1)} knots, its cheapest speed, for {money(freight)} a
+          barrel
+          {vessel === 'vlcc'
+            ? dredged
+              ? ', loading its whole cargo at the dredged dock'
+              : `, including ${money(vlccLightering)} for topping the cargo up offshore, since Port Corran’s dock can load only ${fmt(CORRAN_DOCK_LIMIT / 1e6, 0)} million barrels`
+            : ''}
+          . On a cargo, the margin comes to {usd(r.margin * VESSELS[vessel].cargo)}.
         </Caption>
       </Figure>
 
       <P>
-        Start with an Aframax, Kessler at {money(KESSLER_DEFAULT)} and Northport at {money(NORTHPORT_DEFAULT)}. The barrel costs {money(atDefault.aframax.delivered)}{' '}
-        delivered and sells for {money(atDefault.aframax.revenue)}, so the arb is closed by {money(-atDefault.aframax.margin)}: a {money(NORTHPORT_DEFAULT - KESSLER_DEFAULT)}{' '}
-        difference between the two prices isn’t enough to pay for the journey. A Suezmax narrows the gap to {money(-atDefault.suezmax.margin)}. A VLCC, carrying twice
-        as much as a Suezmax for not much more cost a day, gets within {money(-atDefault.vlcc.margin)} — even after paying {money(vlccLightering)} a barrel to top up its
-        cargo offshore, because it can’t load fully at Port Calder’s dock.
+        Start with an Aframax and the pipeline, Kessler at {money(KESSLER_DEFAULT)} and Northport at {money(NORTHPORT_DEFAULT)}. The barrel costs{' '}
+        {money(atDefault.aframax.delivered)} delivered and sells for {money(atDefault.aframax.revenue)}, so the arb is closed by {money(-atDefault.aframax.margin)}: a{' '}
+        {money(NORTHPORT_DEFAULT - KESSLER_DEFAULT)} difference between the two prices isn’t enough to pay for the journey. A Suezmax narrows the gap to{' '}
+        {money(-atDefault.suezmax.margin)}. A VLCC, carrying twice as much as a Suezmax for not much more cost a day, gets within {money(-atDefault.vlcc.margin)} — even
+        after paying {money(vlccLightering)} a barrel to top up its cargo offshore, because it can’t load fully at Port Corran’s dock.
       </P>
       <P>
-        So the two prices can sit about five dollars apart without anyone moving a barrel between them. That’s the general rule. Between any two places there is a
-        band, as wide as the cost of moving oil from one to the other, inside which the prices move independently. If the spread grows past the band, traders ship
-        cargoes, buying at Kessler and selling at Northport, and their buying and selling push the prices back together. Arbitrage doesn’t make prices equal; it keeps
-        them from drifting further apart than it costs to close the gap.
+        So the two prices can sit about five dollars apart without anyone moving a barrel between them. Between any two places there is a
+        band, as wide as the cost of moving one more barrel from one to the other, inside which the prices move independently, and it works from either end: hold
+        Kessler at {money(KESSLER_DEFAULT)} and raise Northport by a dime, to {money(NORTHPORT_DEFAULT + 0.1)}, and the VLCC’s arb opens. Once the spread grows past
+        the band, traders buying at Kessler and selling at Northport push the prices back together. Arbitrage doesn’t make prices equal; it keeps them from drifting
+        further apart than it costs to close the gap. The biggest ship sets the band: with Northport at {money(NORTHPORT_DEFAULT)}, a VLCC’s arb stays open up to a
+        Kessler price of {money(open.vlcc)}, an Aframax’s only to {money(open.aframax)} — which is why long-haul crude moves in the largest ships the ports allow.
+      </P>
+      <P>
+        Ship size is one of the physical facts that set the band; the others are the ones this chapter has taken apart. Choose the VLCC and dredge Port Corran’s
+        channel in this demonstration: the ship loads its whole cargo at the dock and saves the {money(vlccLightering)} a barrel it paid for topping up, so at the
+        starting prices its arb opens, by {money(causes.dredgedVlcc.margin)}, and stays open up to a Kessler price of {money(causes.openDredged)}. The bigger cause is
+        the one <a href={lessonHref('oil/4.4')}>Lesson 4.4</a> found. Once the Kessler–Corran pipeline is full, the next barrel out of Kessler goes by rail, at{' '}
+        {money(LEG_COST.rail)} a barrel instead of the {money(LEG_COST.pipe)} tariff.
       </P>
 
       <Challenge
         id="a"
-        question={`With Northport at ${money(NORTHPORT_DEFAULT)}, what is the highest Kessler price, to the nearest 10 cents, at which a cargo to Northport still makes money — in whichever ship does best?`}
+        question={`Send the crude to the coast by rail, leave the channel undredged and keep Northport at ${money(NORTHPORT_DEFAULT)}. Predict first, from how close the VLCC came at the starting prices: what is the highest Kessler price at which a cargo still makes money now? Then find it, to the nearest 10 cents, in whichever ship does best.`}
         solved={solvedA}
         status={
-          Math.abs(northport - NORTHPORT_DEFAULT) > 1e-9
-            ? `Set Northport back to ${money(NORTHPORT_DEFAULT)}.`
-            : `At ${money(kessler)}, a ${VESSELS[vessel].name} cargo ${r.margin > 0 ? 'makes' : 'loses'} ${money(Math.abs(r.margin))} a barrel.`
+          leg !== CHALLENGE_ROUTE.leg || dredged !== CHALLENGE_ROUTE.dredged
+            ? 'Send the crude to the coast by rail, and leave the channel undredged.'
+            : Math.abs(northport - NORTHPORT_DEFAULT) > 1e-9
+              ? `Set Northport back to ${money(NORTHPORT_DEFAULT)}.`
+              : `At ${money(kessler)}, a ${VESSELS[vessel].name} cargo ${r.margin > 0 ? 'makes' : 'loses'} ${money(Math.abs(r.margin))} a barrel.`
         }
-        success={`Solved: ${money(kessler)} in a VLCC. The VLCC’s arb stays open up to ${money(open.vlcc)}, against ${money(open.suezmax)} for a Suezmax and ${money(open.aframax)} for an Aframax: the bigger ship moves oil about ${money(open.vlcc - open.aframax)} a barrel more cheaply, so it sets how wide the spread can get. That is why long-haul crude moves in the largest ships the ports allow.`}
+        success={`Solved: ${money(kessler)} in a VLCC, ${money(open.vlcc - kessler)} below the ${money(open.vlcc)} it could pay with the crude going by pipeline. Rail adds ${money(LEG_COST.rail - LEG_COST.pipe)} a barrel, and a couple of cents more interest on a dearer cargo: the delivered cost rises by ${money(causes.railRise)}, and the band widens from ${money(NORTHPORT_DEFAULT - open.vlcc)} to ${money(NORTHPORT_DEFAULT - causes.openRail)}.`}
       />
+
+      <P>
+        The barrels already in the pipe still pay only the tariff, so whoever holds space on the line keeps the difference. But no trader can push another barrel
+        through it, and nothing pulls the two prices back together until Kessler falls far enough for rail to pay. That is Lesson 4.4’s price cliff, seen from the
+        trader’s side.
+      </P>
 
       <H2>Quality differentials</H2>
       <P>
@@ -346,31 +427,40 @@ export default function Lesson() {
         refinery to work on them.
       </P>
       <P>
-        One way to compare crudes at a refinery is its <b>netback</b> for each: run the refinery on that crude alone, and divide what the products sell for, less the
-        cost of running the units, by the barrels run. At Calder, with the reference prices, Ridgeback Light nets {money(netbacks.ridgeback)} a barrel, Seaboard Blend{' '}
-        {money(netbacks.seaboard)}, Northfield Sour {money(netbacks.northfield)} and Coldwater Heavy {money(netbacks.coldwater)}. Measured from Ridgeback, that makes
-        Seaboard worth {signedMoney(ref.seaboard)}, Northfield {signedMoney(ref.northfield)} and Coldwater {signedMoney(ref.coldwater)}. The market prices them, delivered
-        to Calder, at {signedMoney(MARKET_DIFF.seaboard)}, {signedMoney(MARKET_DIFF.northfield)} and {signedMoney(MARKET_DIFF.coldwater)}. Seaboard costs much more
-        than it’s worth to Calder; Coldwater’s discount more than covers its shortcomings. (These are values for running each crude on its own. In the refinery’s actual
-        slate, as Lesson 3.5 showed, a crude’s value also depends on what else is running: Northfield, for instance, competes with Coldwater for room in the
-        hydrotreater.)
+        One way to compare crudes is each one’s <b>stand-alone value</b> at a refinery: run the refinery on that crude alone, and divide what the products sell for,
+        less the cost of running the units, by the barrels run. At Corran, with the reference prices, Pinyon Light is worth {money(standalone.pinyon)} a barrel
+        this way, Seaboard Blend {money(standalone.seaboard)}, Northfield Sour {money(standalone.northfield)} and Coldwater Heavy {money(standalone.coldwater)}. These
+        aren’t Lesson 3.5’s values, which put Pinyon at {money(marginal.pinyon)} and Coldwater at {money(marginal.coldwater)}, because they answer a different
+        question. Lesson 3.5’s value was marginal: the price at which Corran, already running a full slate, would just start or stop buying a crude. A marginal barrel
+        has to push another crude out of units that are already full, so its value is tied to the prices of the crudes it competes with. A stand-alone value has every unit to itself and keeps the whole refining margin, so it runs higher, and its level means little. What
+        it’s good for is the differences between crudes, which measure what each crude’s own molecules are worth, apart from whatever else a refinery happens to run.
       </P>
       <P>
-        Those values move with product prices. In the next demonstration, set the price of high-sulfur fuel oil, the outlet for the heaviest, sourest part of every
-        barrel, and the price of diesel; the chart traces the heavy and sour crudes’ value gaps across fuel-oil prices:
+        Subtract Pinyon’s and you have each crude’s <b>value gap</b> at Corran: Seaboard {signedMoney(ref.seaboard)}, Northfield {signedMoney(ref.northfield)} and
+        Coldwater {signedMoney(ref.coldwater)}. The market prices them, delivered to Corran, at {signedMoney(MARKET_DIFF.seaboard)},{' '}
+        {signedMoney(MARKET_DIFF.northfield)} and {signedMoney(MARKET_DIFF.coldwater)} relative to Pinyon. Seaboard costs much more than its quality is worth, and
+        Coldwater’s discount more than covers its shortcomings, which agrees with Lesson 3.5, where Corran left the one and bought the other. Northfield shows where
+        the two measures part. On its own it looks cheap for its quality, by {money(ref.northfield - MARKET_DIFF.northfield)}, yet Corran doesn’t buy it: in Corran’s
+        actual slate the hydrotreater is already full, so Northfield’s sour diesel would have to compete for room in it, and at the margin the crude is worth{' '}
+        {money(CRUDE_PRICE.northfield - marginal.northfield)} less than its price.
+      </P>
+      <P>
+        Those values move with product prices, and with the refinery. In the next demonstration, set the price of high-sulfur fuel oil, the outlet for the heaviest,
+        sourest part of every barrel, the price of diesel, and the size of Corran’s coker from <a href={lessonHref('oil/3.2')}>Lesson 3.2</a>; the chart traces the
+        heavy and sour crudes’ value gaps across fuel-oil prices:
       </P>
 
       <Figure name="Crude Arbitrage Lab · quality" scenario={s2}>
         <QualityBars diffs={diffs} />
         <Legend
           items={[
-            { label: 'Coldwater Heavy: value gap at Calder', color: CRUDE_COLOR.coldwater, kind: 'line' },
+            { label: 'Coldwater Heavy: value gap at Corran', color: CRUDE_COLOR.coldwater, kind: 'line' },
             { label: 'Northfield Sour', color: CRUDE_COLOR.northfield, kind: 'line' },
-            { label: 'Their market differentials', color: '#777', kind: 'line', dashed: true },
+            ...(revealedB ? [{ label: 'Their market differentials', color: '#777', kind: 'line' as const, dashed: true }] : []),
           ]}
         />
         <XYChart
-          ariaLabel={`Value gap relative to Ridgeback Light against the fuel-oil price, at diesel ${money(dDiesel)}: Coldwater Heavy ${sweep.map((p) => `${money(p.d.coldwater)} at ${usd(p.h)}`).join(', ')}. The market discounts are ${money(-MARKET_DIFF.coldwater)} and ${money(-MARKET_DIFF.northfield)}.`}
+          ariaLabel={`Value gap relative to Pinyon Light against the fuel-oil price, at diesel ${money(dDiesel)} and a ${fmt(dCoker)} kb/d coker: Coldwater Heavy ${sweep.map((p) => `${money(p.d.coldwater)} at ${usd(p.h)}`).join(', ')}.${revealedB ? ` The market discounts are ${money(-MARKET_DIFF.coldwater)} and ${money(-MARKET_DIFF.northfield)}.` : ''}`}
           height={210}
           x={[30, 90]}
           y={[-30, 5]}
@@ -379,14 +469,18 @@ export default function Lesson() {
           xFormat={(v) => `$${v}`}
           yFormat={(v) => (v === 0 ? '$0' : `−$${-v}`)}
           xLabel="fuel-oil price, $ per barrel"
-          yLabel="Value relative to Ridgeback Light, $/bbl"
+          yLabel="Value relative to Pinyon Light, $/bbl"
           series={[
             { points: sweep.map((p) => [p.h, p.d.coldwater] as [number, number]), color: CRUDE_COLOR.coldwater, width: 2.5 },
             { points: sweep.map((p) => [p.h, p.d.northfield] as [number, number]), color: CRUDE_COLOR.northfield, width: 2.5 },
           ]}
           refs={[
-            { axis: 'y', at: MARKET_DIFF.coldwater, color: CRUDE_COLOR.coldwater, dash: '5 4' },
-            { axis: 'y', at: MARKET_DIFF.northfield, color: CRUDE_COLOR.northfield, dash: '5 4' },
+            ...(revealedB
+              ? [
+                  { axis: 'y' as const, at: MARKET_DIFF.coldwater, color: CRUDE_COLOR.coldwater, dash: '5 4' },
+                  { axis: 'y' as const, at: MARKET_DIFF.northfield, color: CRUDE_COLOR.northfield, dash: '5 4' },
+                ]
+              : []),
             { axis: 'x', at: fuelOil, cursor: true },
           ]}
           markers={[
@@ -396,27 +490,38 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'Coldwater’s value gap at Calder', value: signedMoney(diffs.coldwater), tone: 'green' },
-            { label: 'its market differential', value: signedMoney(MARKET_DIFF.coldwater), tone: 'green' },
-            { label: 'Northfield’s value gap', value: signedMoney(diffs.northfield), tone: 'green' },
+            { label: <K c="price">Coldwater’s value gap at Corran</K>, value: signedMoney(diffs.coldwater), tone: 'green' },
+            { label: <K c="price">Northfield’s value gap</K>, value: signedMoney(diffs.northfield), tone: 'green' },
           ]}
         />
         <Slider label="High-sulfur fuel oil" tone="green" value={fuelOil} min={30} max={90} onChange={(v) => s2.set({ fuelOil: v })} display={`${usd(fuelOil)}/bbl`} />
         <Slider label="Diesel" tone="green" value={diesel} min={90} max={125} onChange={(v) => s2.set({ diesel: v })} display={`${usd(diesel)}/bbl`} />
+        <Slider
+          label="Corran’s coker"
+          value={coker}
+          min={COKER_RANGE.min}
+          max={COKER_RANGE.max}
+          step={COKER_RANGE.step}
+          onChange={(v) => s2.set({ coker: v })}
+          display={`${fmt(coker)} kb/d`}
+        />
       </Figure>
 
       <P>
-        Fuel oil moves the heavy crude’s value most. At a fuel-oil price of {usd(30)}, Coldwater Heavy is worth {money(-at(30).coldwater)} less than Ridgeback Light at
-        Calder; at {usd(FUEL_OIL_DEFAULT)}, {money(-ref.coldwater)} less; at {usd(80)}, only {money(-at(80).coldwater)}. A third of Coldwater is residue, and whatever the
+        Fuel oil moves the heavy crude’s value most. At a fuel-oil price of {usd(30)}, Coldwater Heavy is worth {money(-at(30).coldwater)} less than Pinyon Light at
+        Corran; at {usd(FUEL_OIL_DEFAULT)}, {money(-ref.coldwater)} less; at {usd(80)}, only {money(-at(80).coldwater)}. A third of Coldwater is residue, and whatever the
         coker can’t take leaves as fuel oil, so its price is written into Coldwater’s. Northfield, with less residue, moves less: from {signedMoney(at(30).northfield)} to{' '}
         {signedMoney(at(80).northfield)} over the same range. Diesel matters too, more gently: at a diesel price of {usd(90)} Coldwater’s gap is{' '}
         {signedMoney(at(FUEL_OIL_DEFAULT, 90).coldwater)}, at {usd(125)} {signedMoney(at(FUEL_OIL_DEFAULT, 125).coldwater)}, since a light crude makes more of the diesel
         whose price has risen.
       </P>
       <P>
-        Markets have run this experiment. When the global cap on sulfur in ships’ fuel took effect in 2020 — the limit from <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>{' '}
-        — high-sulfur fuel oil fell sharply relative to crude, and the discounts on high-sulfur crudes widened for a time. And the market’s differential isn’t set by
-        Calder alone. Refineries differ.{' '}
+        Markets have run this experiment. Around the time the global cap on sulfur in ships’ fuel took effect, at the start of 2020 — the limit from{' '}
+        <a href={lessonHref('oil/1.2')}>Lesson 1.2</a> — high-sulfur fuel oil fell sharply relative to crude, and the discounts on high-sulfur crudes widened for a
+        time. And the market’s differential isn’t set by Corran alone. Refineries differ, as the coker slider shows. At the reference prices,
+        shrinking Corran’s coker from {fmt(COKER_DEFAULT)} to 15 kb/d widens Coldwater’s gap from {signedMoney(ref.coldwater)} to {signedMoney(cokerCase.small)};
+        growing it to 35 narrows the gap to {signedMoney(cokerCase.big)}, and beyond that it is the sulfur plant, not the coker, that is full. A bigger coker also loosens fuel oil’s grip: between {usd(30)} and {usd(80)} fuel oil, Coldwater’s gap moves {money(cokerCase.swingSmall)} with
+        a 15 kb/d coker, {money(cokerCase.swingRef)} with Corran’s, and only {money(cokerCase.swingBig)} with 35.{' '}
         {noCokerColdwater === 0
           ? 'A refinery without a coker can’t run Coldwater Heavy on its own at all in our model: however it blends, its fuel oil would carry more than 3.5% sulfur.'
           : `A refinery without a coker would value Coldwater Heavy at only ${money(noCokerColdwater)} a barrel.`}{' '}
@@ -425,23 +530,24 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`With diesel at its reference ${usd(DIESEL_DEFAULT)}, find the fuel-oil price, to the nearest dollar, at which Coldwater Heavy’s value gap at Calder comes closest to its ${money(-MARKET_DIFF.coldwater)} market discount.`}
+        question={`With diesel at its reference ${usd(DIESEL_DEFAULT)} and Corran’s ${fmt(COKER_DEFAULT)} kb/d coker, estimate first, from Coldwater’s gaps at ${usd(30)} and ${usd(FUEL_OIL_DEFAULT)} fuel oil: how much does its value gap move for each dollar of fuel oil, and how far below ${usd(FUEL_OIL_DEFAULT)} must fuel oil fall to widen the gap from ${signedMoney(ref.coldwater)} to Coldwater’s ${signedMoney(MARKET_DIFF.coldwater)} market differential? Then find that fuel-oil price, to the nearest dollar.`}
         solved={solvedB}
         status={
-          diesel !== DIESEL_DEFAULT
-            ? `Set diesel back to ${usd(DIESEL_DEFAULT)}.`
-            : `At ${usd(fuelOil)} fuel oil, Coldwater is worth ${signedMoney(diffs.coldwater)} relative to Ridgeback; the market charges ${signedMoney(MARKET_DIFF.coldwater)}.`
+          diesel !== DIESEL_DEFAULT || coker !== COKER_DEFAULT
+            ? `Set diesel back to ${usd(DIESEL_DEFAULT)} and the coker to ${fmt(COKER_DEFAULT)} kb/d.`
+            : `At ${usd(fuelOil)} fuel oil, Coldwater is worth ${signedMoney(diffs.coldwater)} relative to Pinyon; the market charges ${signedMoney(MARKET_DIFF.coldwater)}.`
         }
-        success={`Solved: ${usd(fuelOil)}. There Coldwater is worth ${signedMoney(diffs.coldwater)} at Calder, almost exactly its market discount. With fuel oil any cheaper, Calder would rather pay the extra for Ridgeback Light — unless the market widened Coldwater’s discount to match, which is what happens when fuel oil falls and every complex refinery is making the same calculation.`}
+        success={`Solved: ${usd(fuelOil)}. The gap moves about ${fmt(slope * 100)}¢ for each dollar of fuel oil, so widening it by ${money(ref.coldwater - MARKET_DIFF.coldwater)} takes about ${usd((ref.coldwater - MARKET_DIFF.coldwater) / slope)} less; at ${usd(fuelOil)} Coldwater is worth ${signedMoney(diffs.coldwater)} at Corran, almost exactly its market discount. With fuel oil any cheaper, the discount would no longer cover what Coldwater’s residue loses, and the crude would be dear for its quality — unless the market widened its discount to match, which is what happens when fuel oil falls and every complex refinery is making the same calculation.`}
       />
 
       <H2>Why location matters</H2>
       <P>
         That answers the chapter’s question. Oil is easy to store and move compared with electricity or natural gas, but moving it is never free and never unlimited.
-        Pipelines cost more per barrel the harder they’re pushed and have a ceiling; tankers charge by the day and burn fuel by the mile; tanks cost rent and interest.
+        Pipelines move a barrel cheaply when they’re full, but have a hard ceiling; tankers charge by the day and burn fuel by the mile; tanks cost rent and interest.
         So a barrel’s price depends on where it is, within bands set by the cost of moving it, and when a link fills, by more. Quality adds a second layer: the same
         barrel is worth different amounts to different refineries. Both show up as differentials, and physical traders earn their living closing the ones that grow
-        wider than the cost of closing them. You can return to <FigRef to="Crude Arbitrage Lab">the first demonstration</FigRef> to see how much spread each ship needs.
+        wider than the cost of closing them. <FigRef to="Crude Arbitrage Lab">The first demonstration</FigRef> shows the spread each ship and each way to the
+        coast needs.
       </P>
       <P>
         Through this chapter the benchmark prices themselves have been given. Where do they come from? Chapter 5 builds them up from the physical balance of the

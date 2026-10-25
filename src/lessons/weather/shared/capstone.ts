@@ -1,7 +1,10 @@
 // The weather capstone's shared state: the reader's region (6.1), forecaster (6.2), business
-// (6.3) and trading desk (6.4), carried from lesson to lesson and replayed in 6.5. Kept only in the
-// reader's browser; storage can be unavailable, so every access is guarded and the lessons work
-// without it.
+// (6.3) and trading desk (6.4), carried from lesson to lesson and replayed in 6.5. The forecaster
+// is read only by 6.2: from 6.3 on, every forecast is the calibrated model's, and the lessons say so.
+// The lessons' text quotes the reference settings (Fenwick Bay, the utility at × 1, the starting
+// desk or the reference book); each lesson shows the reader's own state against them.
+// Kept only in the reader's browser; storage can be unavailable, so every access is guarded and the
+// lessons work without it.
 
 import { useSyncExternalStore } from 'react';
 import type { WorldKnobs } from '../../../model/weather/archive';
@@ -22,12 +25,12 @@ export interface RegionSettings {
   trend: number;
 }
 
-/** The starting region is Calder Bay itself. */
+/** The starting region is Fenwick Bay itself. */
 export const REGION_DEFAULTS: RegionSettings = {
-  latitude: STATIONS.calder.latitude,
-  continentality: STATIONS.calder.continentality,
-  elevation: STATIONS.calder.elevation,
-  ensoF: STATIONS.calder.ensoF ?? 1,
+  latitude: STATIONS.fenwick.latitude,
+  continentality: STATIONS.fenwick.continentality,
+  elevation: STATIONS.fenwick.elevation,
+  ensoF: STATIONS.fenwick.ensoF ?? 1,
   variability: 1,
   trend: 0.03,
 };
@@ -67,6 +70,17 @@ export interface DeskSettings {
 }
 
 export const DESK_DEFAULTS: DeskSettings = { hedgeStrips: 0, months: [11, 0, 1], lead: 60, threshold: 5, size: 10 };
+
+/** The reference book Lesson 6.5's text replays: the starting desk, hedged with 2,800 strips. */
+export const REFERENCE_BOOK: DeskSettings = { ...DESK_DEFAULTS, hedgeStrips: 2800 };
+
+/** The capstone's controls share these ranges in every lesson that shows them. */
+export const DESK_RANGE = {
+  strips: { max: 6000, step: 100 },
+  lead: { max: 90, step: 5 },
+  threshold: { max: 50, step: 1 },
+  size: { max: 100, step: 5 },
+} as const;
 
 export interface WeatherCapstone {
   region: RegionSettings;
@@ -172,6 +186,60 @@ export function resetCapstone(part?: keyof WeatherCapstone) {
   else write({ ...read(), [part]: CAPSTONE_DEFAULTS[part] });
 }
 
+/** Replace several parts at once: the reference settings, or an undo of them. */
+export function setCapstoneParts(parts: Partial<WeatherCapstone>) {
+  write({ ...read(), ...parts });
+}
+
+const close = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+
+/** Whether one part of two capstone states is the same (to rounding). */
+export function samePart<K extends keyof WeatherCapstone>(part: K, a: WeatherCapstone[K], b: WeatherCapstone[K]): boolean {
+  if (part === 'business') {
+    const x = a as BusinessSettings;
+    const y = b as BusinessSettings;
+    return x.kind === y.kind && close(x.scale, y.scale);
+  }
+  if (part === 'desk') {
+    const x = a as DeskSettings;
+    const y = b as DeskSettings;
+    return (
+      close(x.hedgeStrips, y.hedgeStrips) &&
+      close(x.lead, y.lead) &&
+      close(x.threshold, y.threshold) &&
+      close(x.size, y.size) &&
+      x.months.length === y.months.length &&
+      x.months.every((m) => y.months.includes(m))
+    );
+  }
+  const x = a as unknown as Record<string, number>;
+  const y = b as unknown as Record<string, number>;
+  return Object.keys(x).every((k) => close(x[k], y[k]));
+}
+
+const RESET_QUESTION: Record<keyof WeatherCapstone, string> = {
+  region: 'Reset puts your region back to Fenwick Bay, and Lessons 6.2–6.5 will use Fenwick Bay too. Reset it?',
+  forecaster: 'Reset puts your forecaster back to the calibrated model’s settings, in both demonstrations. Reset it?',
+  business: 'Reset puts your business back to Fenwick Gas & Light at × 1, and Lessons 6.4 and 6.5 will use that. Reset it?',
+  desk: 'Reset puts your trading desk back to its starting settings, with no strips sold, and Lesson 6.5 will replay that. Reset it?',
+};
+
+/**
+ * A figure's Reset for the part its lesson owns. If the reader has changed that part, it asks
+ * first (later lessons use it); it touches no other part. Returns whether it went ahead.
+ */
+export function confirmResetPart(part: keyof WeatherCapstone): boolean {
+  if (samePart(part, read()[part], CAPSTONE_DEFAULTS[part])) return true;
+  let ok = false;
+  try {
+    ok = window.confirm(RESET_QUESTION[part]);
+  } catch {
+    ok = false;
+  }
+  if (ok) resetCapstone(part);
+  return ok;
+}
+
 /** The region's climate. */
 export function regionClimate(r: RegionSettings): Climate {
   return climateOf({ latitude: r.latitude, continentality: r.continentality, elevation: r.elevation, ensoF: r.ensoF });
@@ -182,7 +250,7 @@ export function regionKnobs(r: RegionSettings): WorldKnobs {
   return { climate: regionClimate(r), ensoF: r.ensoF, variability: r.variability, trend: r.trend };
 }
 
-/** Whether the region is still Calder Bay's. */
-export function isCalder(r: RegionSettings): boolean {
+/** Whether the region is still Fenwick Bay's. */
+export function isFenwick(r: RegionSettings): boolean {
   return (Object.keys(REGION_DEFAULTS) as Array<keyof RegionSettings>).every((k) => Math.abs(r[k] - REGION_DEFAULTS[k]) < 1e-9);
 }

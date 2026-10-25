@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import {
   Challenge,
+  DataTable,
   FigRef,
   Figure,
   GRAPHIC,
@@ -24,15 +25,16 @@ import {
   useScenario,
 } from '../../../framework';
 import { CORN_ON_CORN_EXTRA_N, CORN_ON_CORN_PENALTY, WHEAT_ON_WHEAT_PENALTY, YEARS, cropMix, expectedYieldByPlantDay, isWorkable, plantingRun, type MixResult } from '../../../engines/agriculture/farm';
+import { supplyArea, supplySteps, switchPrice, valleyCornSupply, type AreaPlan, type ValleySupply } from '../../../engines/agriculture/supply';
 import { REFERENCE_YEAR, simulatedYear } from '../../../model/agriculture/climate';
 import { PLAN_PRICE } from '../../../model/agriculture/economics';
-import { dateLabel, dayOf, type DistrictId } from '../../../model/agriculture/region';
+import { VALLEY_CORN_KAC, dateLabel, dayOf, type DistrictId } from '../../../model/agriculture/region';
 import { DayChart, type DayBand } from '../shared/DayChart';
 import { buAc, perAcre, perBu } from '../shared/format';
 import { CROP_LINE } from '../shared/tones';
 
 const FARM_ACRES = 1600;
-const SHARES = Array.from({ length: 21 }, (_, i) => i * 0.05);
+const SHARES = Array.from({ length: 41 }, (_, i) => i * 0.025);
 
 type Place = DistrictId | 'plainsIrrigated';
 const PLACES: Array<{ value: Place; label: string }> = [
@@ -45,7 +47,7 @@ const PLACES: Array<{ value: Place; label: string }> = [
 ];
 const districtOf = (p: Place): DistrictId => (p === 'plainsIrrigated' ? 'plains' : p);
 
-/** Expected farm return over variable costs for every corn share, 0–100% in 5% steps. */
+/** Expected farm return over variable costs for every corn share, 0–100% in 2.5% steps. */
 export function mixCurve(place: Place, prices: { corn: number; wheat: number }): MixResult[] {
   return SHARES.map((s) => cropMix(districtOf(place), FARM_ACRES, s, prices, place === 'plainsIrrigated'));
 }
@@ -55,6 +57,16 @@ export function allCornSolved(place: Place, corn: number, wheat: number): boolea
   if (place !== 'prairie' || Math.abs(wheat - 6) > 1e-6) return false;
   const beats = (p: number) => cropMix('prairie', FARM_ACRES, 1, { corn: p, wheat }).mean > cropMix('prairie', FARM_ACRES, 0.5, { corn: p, wheat }).mean;
   return beats(corn) && !beats(Math.round((corn - 0.1) * 100) / 100);
+}
+
+/** The lowest wheat price, in 10-cent steps from $4 to $8, at which a district's best plan is all wheat, with corn at the plan price. */
+export function allWheatPrice(place: Place): number {
+  for (let w = 40; w <= 80; w++) {
+    const prices = { corn: PLAN_PRICE.corn, wheat: w / 10 };
+    const m = [0, 0.5, 1].map((share) => cropMix(districtOf(place), FARM_ACRES, share, prices, place === 'plainsIrrigated').mean);
+    if (m[0] > m[1] && m[0] > m[2]) return w / 10;
+  }
+  return NaN;
 }
 
 const PLANTERS = [
@@ -68,9 +80,14 @@ const CORN_ACRES = 1000;
 const WET_SPRING = 3;
 const DEADLINE = dayOf(6, 20);
 
+/** Expected Prairie corn yield by planting day, averaged over all 200 seasons, on a grid that runs past the June 20 deadline. */
+export function plantYield(): (day: number) => number {
+  return expectedYieldByPlantDay('prairie', { years: YEARS, through: DEADLINE });
+}
+
 /** Planting Cedar Bend's corn from `start` at `perDay` acres per workable day in every simulated spring. */
 export function plantingStats(start: number, perDay: number) {
-  const ey = expectedYieldByPlantDay('prairie');
+  const ey = plantYield();
   let best = 0;
   for (let d = dayOf(4, 5); d <= DEADLINE; d++) best = Math.max(best, ey(d));
   const finish: number[] = [];
@@ -98,14 +115,14 @@ function MixChart({ curve, share, place }: { curve: MixResult[]; share: number; 
   const [lo, hi] = niceDomain(Math.min(0, ...p10s), Math.max(...means), 4);
   const x = scale(0, 1, 70, 610);
   const y = scale(lo, hi, 210, 30);
-  const i = Math.round(share * 20);
+  const i = Math.round(share * 40);
   const bestI = means.reduce((a, m, k) => (m > means[a] ? k : a), 0);
   return (
     <svg
       className="chart"
       viewBox="0 0 640 250"
       role="img"
-      aria-label={`Expected return over variable costs for a 1,600-acre farm in ${PLACES.find((p) => p.value === place)!.label}, by share of corn. At ${fmt(share * 100)}% corn it is ${usd(means[i])} an acre on average, and ${usd(p10s[i])} in a 1-in-10 bad season. The best average is at ${fmt(SHARES[bestI] * 100)}% corn.`}
+      aria-label={`Expected return over variable costs for a 1,600-acre farm in ${PLACES.find((p) => p.value === place)!.label}, by share of corn. At ${fmt(share * 100, Math.round(share * 40) % 2 ? 1 : 0)}% corn it is ${usd(means[i])} an acre on average, and ${usd(p10s[i])} in a 1-in-10 bad season. The best average is at ${fmt(SHARES[bestI] * 100)}% corn.`}
     >
       <text className="ax" x={70} y={14}>
         Return over variable costs, $ per acre
@@ -128,15 +145,74 @@ function MixChart({ curve, share, place }: { curve: MixResult[]; share: number; 
   );
 }
 
+const SUPPLY_LO = 3;
+const SUPPLY_HI = 6.5;
+const SUPPLY_MAX_KAC = 7000;
+const MIX_LABEL: Record<number, string> = { 0: 'all wheat', 0.5: 'half corn', 1: 'all corn' };
+
+/** The valley's corn acres at every corn price, wheat at `wheat`: a staircase, one step for each change of plan. */
+function SupplyChart({ wheat, corn, supply }: { wheat: number; corn: number; supply: ValleySupply }) {
+  const steps = useMemo(() => supplySteps(wheat, SUPPLY_LO, SUPPLY_HI), [wheat]);
+  const x = scale(0, SUPPLY_MAX_KAC, 70, 610);
+  const y = scale(SUPPLY_LO, SUPPLY_HI, 214, 30);
+  let acres = valleyCornSupply({ corn: SUPPLY_LO, wheat }).cornKAcres;
+  const first = acres;
+  let d = `M${x(acres).toFixed(1)} ${y(SUPPLY_LO).toFixed(1)}`;
+  for (const st of steps) {
+    d += ` L${x(acres).toFixed(1)} ${y(st.price).toFixed(1)}`;
+    acres += st.area.kAcres * (st.to - st.from);
+    d += ` L${x(acres).toFixed(1)} ${y(st.price).toFixed(1)}`;
+  }
+  d += ` L${x(acres).toFixed(1)} ${y(SUPPLY_HI).toFixed(1)}`;
+  const today = x(VALLEY_CORN_KAC);
+  return (
+    <svg
+      className="chart"
+      viewBox="0 0 640 256"
+      role="img"
+      aria-label={`The Crane Valley’s corn acres at every corn price from ${usd(SUPPLY_LO, 2)} to ${usd(SUPPLY_HI, 2)}, with wheat at ${usd(wheat, 2)}: a staircase from ${fmt(first / 1000, 1)} to ${fmt(acres / 1000, 1)} million acres, with ${steps.length} steps. At ${usd(corn, 2)} corn the valley plants ${fmt(supply.cornKAcres / 1000, 2)} million acres; it plants ${fmt(VALLEY_CORN_KAC / 1000, 1)} million today.`}
+    >
+      <text className="ax" x={70} y={14}>
+        Corn price, $ per bushel
+      </text>
+      <GridY y={y} ticks={[3, 4, 5, 6]} x0={70} x1={610} format={(v) => usd(v, 2)} />
+      <line x1={today} x2={today} y1={30} y2={214} stroke="#8a8270" strokeWidth={1.5} strokeDasharray="4 3" />
+      <text className="ax" x={today + 5} y={42}>
+        planted today
+      </text>
+      <path d={d} fill="none" stroke={CROP_LINE.corn} strokeWidth={2.5} strokeLinejoin="round" />
+      <line x1={70} x2={610} y1={y(corn)} y2={y(corn)} stroke={TEXT.green} strokeWidth={1.5} strokeDasharray="6 4" />
+      <circle cx={x(supply.cornKAcres)} cy={y(corn)} r={5.5} fill={CROP_LINE.corn} stroke="#fcfcfb" strokeWidth={2} />
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((v) => (
+        <text key={v} className="ax ax-m" x={x(v * 1000)} y={232}>
+          {v}
+        </text>
+      ))}
+      <text className="ax ax-e" x={610} y={250}>
+        corn planted in the valley, million acres
+      </text>
+    </svg>
+  );
+}
+
 export default function Lesson() {
-  const s = useScenario('mix', { place: 'prairie' as Place, share: 0.6, corn: PLAN_PRICE.corn, wheat: PLAN_PRICE.wheat });
+  const s = useScenario('mix', { place: 'prairie' as Place, share: 0.625, corn: PLAN_PRICE.corn, wheat: PLAN_PRICE.wheat });
   const { place, share, corn, wheat } = s.state;
   const prices = useMemo(() => ({ corn, wheat }), [corn, wheat]);
   const curve = useMemo(() => mixCurve(place, prices), [place, prices]);
-  const now = curve[Math.round(share * 20)];
+  const now = curve[Math.round(share * 40)];
   const solved = useMemo(() => allCornSolved(place, corn, wheat), [place, corn, wheat]);
-  const half = curve[10];
-  const all = curve[20];
+  const half = curve[20];
+  const all = curve[40];
+  const northWheatSwitch = useMemo(() => allWheatPrice('north'), []);
+
+  const v = useScenario('valley', { corn: PLAN_PRICE.corn, wheat: PLAN_PRICE.wheat });
+  const supply = useMemo(() => valleyCornSupply({ corn: v.state.corn, wheat: v.state.wheat }), [v.state.corn, v.state.wheat]);
+  const atPlan = useMemo(() => valleyCornSupply(PLAN_PRICE), []);
+  const cheapWheat = useMemo(() => valleyCornSupply({ corn: PLAN_PRICE.corn, wheat: 5 }), []);
+  const sw = (id: string, from: number, to: number) => usd(switchPrice(supplyArea(id), from, to, PLAN_PRICE.wheat), 2);
+  const wells = supplyArea('plainsIrrigated').kAcres;
+  const dryland = supplyArea('plains').kAcres;
 
   const p = useScenario('planting', { planter: '16' as Planter, season: 'reference' as 'reference' | 'wet', start: dayOf(4, 25) });
   const perDay = PLANTERS.find((x) => x.value === p.state.planter)!.perDay;
@@ -144,7 +220,9 @@ export default function Lesson() {
   const weather = useMemo(() => simulatedYear(year, 'prairie'), [year]);
   const run = useMemo(() => plantingRun(weather, p.state.start, CORN_ACRES, perDay, DEADLINE), [weather, p.state.start, perDay]);
   const stats = useMemo(() => plantingStats(p.state.start, perDay), [p.state.start, perDay]);
-  const ey = expectedYieldByPlantDay('prairie');
+  const small = useMemo(() => plantingStats(dayOf(4, 25), 90), []);
+  const large = useMemo(() => plantingStats(dayOf(4, 25), 270), []);
+  const ey = plantYield();
   const runDays = run.daily.map((_, i) => p.state.start + i);
   const bands: DayBand[] = [];
   for (let d = dayOf(4, 1); d <= DEADLINE; d++) {
@@ -191,14 +269,13 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'farm return, average season', value: usd(now.mean), tone: 'green' },
-            { label: 'per acre', value: perAcre(now.mean / FARM_ACRES), tone: 'green' },
+            { label: 'per acre, average season', value: perAcre(now.mean / FARM_ACRES), tone: 'green' },
             { label: 'per acre, 1-in-10 bad season', value: perAcre(now.p10 / FARM_ACRES), tone: 'red' },
             { label: 'corn, average yield', value: now.cornAcres ? buAc(now.cornYield) : '—', tone: 'gold' },
             { label: 'wheat, average yield', value: now.wheatAcres ? buAc(now.wheatYield) : '—', tone: 'orange' },
           ]}
         />
-        <Slider label="Corn share" tone="gold" value={share} min={0} max={1} step={0.05} onChange={(v) => s.set({ share: Math.round(v * 20) / 20 })} display={`${fmt(share * 100)}% · ${fmt(now.cornAcres)} acres`} />
+        <Slider label="Corn share" tone="gold" value={share} min={0} max={1} step={0.025} onChange={(v) => s.set({ share: Math.round(v * 40) / 40 })} display={`${fmt(share * 100, Math.round(share * 40) % 2 ? 1 : 0)}% · ${fmt(now.cornAcres)} acres`} />
         <Slider label="Corn price" tone="green" value={corn} min={3} max={6.5} step={0.1} onChange={(v) => s.set({ corn: Math.round(v * 10) / 10 })} display={perBu(corn)} />
         <Slider label="Wheat price" tone="green" value={wheat} min={4} max={8} step={0.1} onChange={(v) => s.set({ wheat: Math.round(v * 10) / 10 })} display={perBu(wheat)} />
       </Figure>
@@ -206,11 +283,13 @@ export default function Lesson() {
       <P>
         On the Black Prairie an acre of corn returns $357 over its variable costs in an average season and an acre of wheat $195. Corn wins easily — but only up to
         half the farm. Beyond that the extra corn goes onto last year’s corn ground, and the rotation penalty makes the curve turn down: a 50–50 split averages $276
-        an acre, all corn $256. Cedar Bend’s own split of 1,000 acres of corn and 600 of wheat sits just past the peak, at $271. In the River Bottoms the story is the
-        same. In the North Tier and on the Upland Ridge, where corn yields less, an acre of corn and an acre of wheat return almost the same — $189 and $185 in the
-        North — and the rotation alone decides the split. On the dry High Plains, unirrigated corn loses $79 an acre on average while wheat returns $134, so the best
-        plan is all wheat; with wells, irrigated corn returns $208 and a 50–50 rotation is best again. The valley’s land use follows: mostly wheat on the Plains, its
-        corn almost all irrigated, roughly half and half elsewhere, tilting toward corn on the best ground.
+        an acre, all corn $256. Cedar Bend’s own split of 1,000 acres of corn and 600 of wheat, where the demonstration starts, sits just past the peak, at $271.
+        Leaning toward corn costs it about $5 an acre in our model, which charges every acre of corn after corn the same 10% penalty; on real farms the penalty
+        varies from field to field, and a farmer can put a second year of corn where it is smallest. In the River Bottoms the story is the same. In the North Tier
+        and on the Upland Ridge, where corn yields less, an acre of corn and an acre of wheat return almost the same — $189 and $185 in the North — and the rotation
+        alone decides the split. That near-tie makes the North quick to change its plan when the wheat price moves: raise wheat to{' '}
+        {usd(northWheatSwitch, 2)} and its best plan tips from half corn to all wheat. On the dry High Plains, unirrigated corn loses $79 an acre on average while wheat returns $134, so the best plan is all wheat; with
+        wells, irrigated corn returns $208 and a 50–50 rotation is best again.
       </P>
       <P>
         The dashed curve tells a second story. Corn and wheat grow in different months, so a bad corn summer and a bad wheat spring don’t usually come together —
@@ -231,16 +310,75 @@ export default function Lesson() {
                 ? `At ${perBu(corn)}, all corn averages ${perAcre(all.mean / FARM_ACRES)} against ${perAcre(half.mean / FARM_ACRES)} for 50–50. Is there a lower price where it still wins?`
                 : `At ${perBu(corn)}, all corn averages ${perAcre(all.mean / FARM_ACRES)} against ${perAcre(half.mean / FARM_ACRES)} for 50–50.`
         }
-        success={`Solved: at ${perBu(corn)} all corn averages ${perAcre(all.mean / FARM_ACRES)} an acre and a 50–50 rotation ${perAcre(half.mean / FARM_ACRES)}. When corn is dear enough relative to wheat, the rotation penalty is worth paying, and farmers shift acres to corn. That response — more acres of a crop when its price rises — is the beginning of a supply curve, and we’ll meet it again when prices are set in Chapter 5.`}
+        success={`Solved: at ${perBu(corn)} all corn averages ${perAcre(all.mean / FARM_ACRES)} an acre and a 50–50 rotation ${perAcre(half.mean / FARM_ACRES)}. When corn is dear enough relative to wheat, the rotation penalty is worth paying, and farmers shift acres to corn. That response — more acres of a crop when its price rises — is the beginning of a supply curve, and the next demonstration adds it up across the valley.`}
       />
+
+      <H2>From one farm to a valley</H2>
+      <P>
+        The challenge found the price at which one district changes its plan. Every part of the valley has prices like that, and they differ, because corn and wheat
+        yield differently on each soil and in each climate. In the next demonstration, each part of the valley plants the mix that earns it the most at the prices
+        you set — the peak of its curve in <FigRef to="Farm Planner">the planner</FigRef> — and the valley’s corn acres are added up. Each of those curves is two
+        straight lines that meet at 50–50, so the best plan is always all wheat, half and half, or all corn. The High Plains is split in two: the{' '}
+        {fmt(wells * 1000)} acres under wells, enough for today’s irrigated corn in rotation with wheat, and its {fmt(dryland / 1000, 2)} million acres of dryland.
+        The gold staircase is the valley’s corn acres at every corn price, for the wheat price you choose:
+      </P>
+
+      <Figure name="Farm Planner · the valley" scenario={v}>
+        <SupplyChart wheat={v.state.wheat} corn={v.state.corn} supply={supply} />
+        <Legend
+          items={[
+            { label: 'Corn planted at each corn price', color: CROP_LINE.corn, kind: 'line' },
+            { label: 'The corn price you set', color: TEXT.green, kind: 'line', dashed: true },
+            { label: 'Corn the valley plants today', color: '#8a8270', kind: 'line', dashed: true },
+          ]}
+        />
+        <Readouts
+          items={[
+            { label: 'corn planted in the valley', value: `${fmt(supply.cornKAcres / 1000, 2)} million acres`, tone: 'gold' },
+            { label: 'expected corn harvest', value: `${fmt(supply.cornMBu)} million bu`, tone: 'gold' },
+          ]}
+        />
+        <DataTable
+          caption="Each part of the valley’s best plan at these prices"
+          columns={[
+            { label: 'Part of the valley', cell: (r: AreaPlan) => r.area.label },
+            { label: 'Cropland, acres', cell: (r) => fmt(r.area.kAcres * 1000), align: 'right' },
+            { label: 'Best plan', cell: (r) => MIX_LABEL[r.share] },
+            { label: 'Corn, acres', cell: (r) => fmt(r.cornKAcres * 1000), align: 'right' },
+          ]}
+          rows={supply.areas}
+          rowKey={(r) => r.area.id}
+          rowClass={(r) => (r.share > 0 ? '' : 'dim')}
+        />
+        <Slider label="Corn price" tone="green" value={v.state.corn} min={SUPPLY_LO} max={SUPPLY_HI} step={0.05} onChange={(x) => v.set({ corn: Math.round(x * 20) / 20 })} display={perBu(v.state.corn)} />
+        <Slider label="Wheat price" tone="green" value={v.state.wheat} min={4} max={8} step={0.1} onChange={(x) => v.set({ wheat: Math.round(x * 10) / 10 })} display={perBu(v.state.wheat)} />
+      </Figure>
+
+      <P>
+        At {usd(PLAN_PRICE.corn, 2)} corn and {usd(PLAN_PRICE.wheat, 2)} wheat, every part of the valley but the dry High Plains sits at its 50–50 rotation, and
+        the valley plants about {fmt(atPlan.cornKAcres / 1000, 1)} million acres of corn, which grow about {fmt(atPlan.cornMBu)} million bushels in an average
+        season. Lower the corn price and corn leaves the poorest corn ground first: the North Tier and the Ridge turn to all wheat at about{' '}
+        {sw('north', 0, 0.5)}, the irrigated Plains at {sw('plainsIrrigated', 0, 0.5)}, and the Prairie, last, at {sw('prairie', 0, 0.5)}. Raise it and the best
+        corn ground goes first to corn after corn: the Prairie at {sw('prairie', 0.5, 1)}, the River Bottoms at {sw('bottoms', 0.5, 1)}, the irrigated Plains at{' '}
+        {sw('plainsIrrigated', 0.5, 1)}. The wheat price moves the whole staircase, because every acre of corn is an acre not in wheat: with wheat at $5.00
+        instead of $6.00, the same {usd(PLAN_PRICE.corn, 2)} corn draws {fmt(cheapWheat.cornKAcres / 1000, 1)} million acres.
+      </P>
+      <P>
+        Each step is a whole district changing its plan at once, because our model gives every farm in a district the same soil, costs and prices. A real region
+        has thousands of farms, each changing its plan at a slightly different price, and the steps blur into a smooth rising line: the region’s{' '}
+        <K tone="green">supply curve</K>, how much of a crop it grows at each price. The valley’s farmers actually plant a little more corn than the staircase says:{' '}
+        {fmt(VALLEY_CORN_KAC / 1000, 1)} million acres at these prices, about {fmt((VALLEY_CORN_KAC - atPlan.cornKAcres) * 1000)} more, because farms on the
+        best ground, like Cedar Bend, grow some corn after corn.
+      </P>
 
       <H2>Getting the crop in</H2>
       <P>
         Deciding to plant 1,000 acres of corn is one thing; planting them is another. A planter can only run on days when the soil is dry enough to work and warm
         enough for seed — not in the rain, and not for a day or two after a soaking. And, as <a href={lessonHref('agriculture/1.2')}>Lesson 1.2</a> showed, corn
         planted late runs its grain fill into the cooler, darker weeks of autumn and risks being stopped by the first cold spell. Averaged over the model’s 200
-        seasons, the expected Prairie yield is nearly flat for anything planted from mid-April to mid-May, about 176 bushels, then falls: 172.5 for corn planted May
-        25, 164.6 on June 4, 148.5 on June 14.
+        seasons, the expected Prairie yield is nearly flat for anything planted from mid-April to mid-May, about 176 bushels, then falls: {fmt(ey(dayOf(5, 25)), 1)}{' '}
+        for corn planted May 25, {fmt(ey(dayOf(6, 4)), 1)} on June 4, {fmt(ey(dayOf(6, 14)), 1)} on June 14 and {fmt(ey(DEADLINE), 1)} on June 20, the last day
+        Cedar Bend will plant corn.
       </P>
       <P>
         In the next demonstration, Cedar Bend plants its 1,000 acres of corn with a choice of planter, starting on a date you choose. The shaded days are the ones the
@@ -279,13 +417,13 @@ export default function Lesson() {
           series={[{ values: curveDays.map((d) => ey(d)), color: '#777', width: 2 }]}
           from={dayOf(4, 1)}
           to={DEADLINE}
-          yMin={140}
+          yMin={130}
           yMax={180}
-          yTicks={[140, 150, 160, 170, 180]}
+          yTicks={[130, 140, 150, 160, 170, 180]}
           yLabel="Expected corn yield by planting date, bu/ac"
           yFormat={(v) => fmt(v)}
           height={150}
-          ariaLabel="Expected corn yield on the Black Prairie by planting date, averaged over 200 simulated seasons: about 176 bushels through mid-May, falling to 148.5 by mid-June."
+          ariaLabel={`Expected corn yield on the Black Prairie by planting date, averaged over 200 simulated seasons: about 176 bushels through mid-May, falling to ${fmt(ey(dayOf(6, 14)), 1)} by mid-June and ${fmt(ey(DEADLINE), 1)} on June 20.`}
         />
         <Legend
           items={[
@@ -309,9 +447,10 @@ export default function Lesson() {
         Starting April 25 with the 16-row planter, Cedar Bend finishes on May 10 in the reference season, after six days of planting. The 8-row planter needs twelve
         workable days and finishes May 21. In the wet spring the field days come in ones and twos between storms: by June 20 the 8-row planter has found only eight
         of them and still has 280 acres to go, and even the 16-row isn’t done until May 30. Averaged over every spring, though, the bigger planter saves surprisingly
-        little. Measured against planting everything in the best week, the 8-row loses about 676 bushels a year to late planting and the 24-row about 212 — a
-        difference worth about $2,100 at $4.60. The difference lives in the bad springs: in the worst of the 200, the 8-row loses 13,017 bushels and the 24-row
-        1,033. Machinery capacity is a kind of insurance, and whether it’s worth its cost is a question of marginal returns, which is where we go next.
+        little. Measured against planting everything in the best week, the 8-row loses about {fmt(small.meanLost)} bushels a year to late planting and the 24-row
+        about {fmt(large.meanLost)} — a difference worth about {usd(Math.round(((small.meanLost - large.meanLost) * PLAN_PRICE.corn) / 100) * 100)} at{' '}
+        {usd(PLAN_PRICE.corn, 2)}. The difference lives in the bad springs: in the worst of the 200, the 8-row loses {fmt(small.worstLost)} bushels and the 24-row{' '}
+        {fmt(large.worstLost)}. Machinery capacity is a kind of insurance, and whether it’s worth its cost is a question of marginal returns, which is where we go next.
       </P>
 
       <P>

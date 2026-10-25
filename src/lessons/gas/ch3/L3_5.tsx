@@ -50,9 +50,10 @@ import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
 import { stationLine } from '../../../engines/gas/compression';
 import { BAYPORT_LNG, BAYPORT_LNG_FEEDGAS_BCFD, PIPELINE, REFERENCE_DAYS, stationLineOf } from '../../../model/gas/world';
 import { money } from '../shared/format';
+import { chargePerMMBtu, design } from './L3_1';
 
 // ---------------------------------------------------------------------------
-// The chain's settings, shared by both demonstrations.
+// The chain's settings. Each demonstration has its own, starting from the same defaults.
 
 export type Dest = 'europe' | 'asia';
 const DESTS: Dest[] = ['europe', 'asia'];
@@ -77,28 +78,33 @@ export function voyageOf(s: Pick<ChainState, 'hub' | 'dest' | 'charter'>): LngVo
   };
 }
 
-/** The challenge: a cargo to Asia selling at a simulated $9.00, at the world's charter rate. */
-export const CHALLENGE = { dest: 'asia' as Dest, destPrice: 9, charter: BAYPORT_LNG.charterPerDay as number };
+/** The challenge: a cargo to Asia, at the world's charter rate, worth as much at Bayport as one to Europe at a simulated $9.00. */
+export const CHALLENGE = { dest: 'asia' as Dest, charter: BAYPORT_LNG.charterPerDay as number, europePrice: 9 };
+/** The price slider's step in Figure 2, $/MMBtu. */
+export const PRICE_STEP = 0.25;
+const PRICE_MIN = 4;
+const PRICE_MAX = 16;
+/** Europe's netback at $9.00, the challenge's target. */
+export const EUROPE_NETBACK = netback(voyageOf(CHAIN_DEFAULTS), CHALLENGE.europePrice);
 
-const nextHub = (h: number) => Math.round((h + HUB_STEP) * 100) / 100;
-
-/**
- * Solved when, for the Asia cargo at $9.00 and the starting charter rate, the Calder price is the
- * highest on the slider's 5-cent grid at which the cargo still covers every cost.
- */
-export function breakevenSolved(s: ChainState): boolean {
-  if (s.dest !== CHALLENGE.dest || s.destPrice !== CHALLENGE.destPrice || s.charter !== CHALLENGE.charter) return false;
-  return cargoMargin(voyageOf(s), s.destPrice) >= 0 && cargoMargin(voyageOf({ ...s, hub: nextHub(s.hub) }), s.destPrice) < 0;
-}
-
-/** The challenge's answer on the slider grid. */
+/** The challenge's answer: the price in Asia, on the slider's 25-cent grid, whose netback is closest to Europe's at $9.00 ($9.75). */
 export function challengeAnswer(): number {
   let best = NaN;
-  for (let i = 0; i <= 140; i++) {
-    const h = Math.round((1 + i * HUB_STEP) * 100) / 100;
-    if (cargoMargin(voyageOf({ ...CHALLENGE, hub: h }), CHALLENGE.destPrice) >= 0) best = h;
+  let gap = Infinity;
+  for (let p = PRICE_MIN; p <= PRICE_MAX + 1e-9; p += PRICE_STEP) {
+    const g = Math.abs(netback(voyageOf({ ...CHAIN_DEFAULTS, dest: CHALLENGE.dest }), p) - EUROPE_NETBACK);
+    if (g < gap) {
+      gap = g;
+      best = Math.round(p * 100) / 100;
+    }
   }
   return best;
+}
+const ANSWER = challengeAnswer();
+
+/** Solved when a cargo to Asia, at the starting charter rate, sells at the price that makes it worth as much at Bayport as Europe at $9.00. */
+export function matchSolved(s: ChainState): boolean {
+  return s.dest === CHALLENGE.dest && s.charter === CHALLENGE.charter && Math.abs(s.destPrice - ANSWER) < 1e-9;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +126,15 @@ const SHIPS_AS = AS.roundTripDays / DAYS_PER_CARGO;
 const EU_NETBACK_9 = netback(voyageOf(CHAIN_DEFAULTS), 9);
 const EU_BE_9 = breakevenHub(voyageOf(CHAIN_DEFAULTS), 9);
 const EU_MARGIN_9 = cargoMargin(voyageOf(CHAIN_DEFAULTS), 9);
-const ANSWER = challengeAnswer();
+/** A cargo to Asia at the same $9.00. */
+const AS_NETBACK_9 = netback(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia' }), 9);
+const AS_BE_9 = breakevenHub(voyageOf({ ...CHAIN_DEFAULTS, dest: 'asia' }), 9);
+/** What the LNG chain adds to the hub price on the way to Europe, $/MMBtu. */
+export const LNG_ADDER = EU.delivered$ - CHAIN_DEFAULTS.hub;
+/** Northline's cost of moving an MMBtu when it runs full: its variable charge plus Lesson 3.1's capital charge. */
+const NL_DESIGN = design(NORTHLINE.id, NORTHLINE.sizeIn, NORTHLINE.stations);
+export const NORTHLINE_CAPITAL = chargePerMMBtu(NL_DESIGN.cost, NL_DESIGN.capacityBcfd, 1);
+export const NORTHLINE_ALL_IN = NORTHLINE.variableCost + NORTHLINE_CAPITAL;
 
 const mm = (x: number) => fmt(x / 1e6, 2) + ' million';
 
@@ -417,26 +431,37 @@ export default function Lesson() {
   const rows = DESTS.map((d) => ({ dest: d, c: lngCargo(voyageOf({ ...st, dest: d })) }));
   const lost = 1 - c.sentOut / c.feed;
 
+  // Figure 2 has its own settings, so the numbers quoted for its starting settings hold whatever was done in Figure 1.
+  const w = useScenario('voyage', CHAIN_DEFAULTS);
+  const ws = w.state;
+  const v2 = voyageOf(ws);
+  const c2 = lngCargo(v2);
+
   const play = usePlay(true);
   const [t, setT] = useState(0);
   useAnimationFrame((dt) => setT((x) => x + dt), play.playing);
-  const day = (t / SEC_PER_DAY) % c.roundTripDays;
+  const day = (t / SEC_PER_DAY) % c2.roundTripDays;
 
-  const revenue = st.destPrice * c.sentOut;
-  const cost = c.costs.feed + c.costs.liquefaction + c.costs.shipping + c.costs.regas;
+  const revenue = ws.destPrice * c2.sentOut;
+  const cost = c2.costs.feed + c2.costs.liquefaction + c2.costs.shipping + c2.costs.regas;
   const margin = revenue - cost;
-  const nb = netback(v, st.destPrice);
-  const be = breakevenHub(v, st.destPrice);
-  const solved = breakevenSolved(st);
-  const atChallenge = st.dest === CHALLENGE.dest && st.destPrice === CHALLENGE.destPrice && st.charter === CHALLENGE.charter;
-  const nextMargin = cargoMargin(voyageOf({ ...st, hub: nextHub(st.hub) }), st.destPrice);
+  const nb = netback(v2, ws.destPrice);
+  const be = breakevenHub(v2, ws.destPrice);
+  const solved = matchSolved(ws);
 
-  const hubSlider = (
-    <Slider label="Calder Hub price" tone="green" value={st.hub} min={1} max={8} step={HUB_STEP} onChange={(x) => s.set({ hub: x })} display={`${usd(st.hub, 2)}/MMBtu`} />
+  type Sc = typeof s;
+  const hubSlider = (sc: Sc) => (
+    <Slider label="Calder Hub price" tone="green" value={sc.state.hub} min={1} max={8} step={HUB_STEP} onChange={(x) => sc.set({ hub: x })} display={`${usd(sc.state.hub, 2)}/MMBtu`} />
   );
-  const destSeg = (
-    <Segmented label="Destination" value={st.dest} onChange={(d) => s.set({ dest: d })} options={DESTS.map((d) => ({ value: d, label: `To ${BAYPORT_LNG.destinations[d].name}` }))} />
+  const destSeg = (sc: Sc) => (
+    <Segmented label="Destination" value={sc.state.dest} onChange={(d) => sc.set({ dest: d })} options={DESTS.map((d) => ({ value: d, label: `To ${BAYPORT_LNG.destinations[d].name}` }))} />
   );
+  const challengeStatus =
+    ws.charter !== CHALLENGE.charter
+      ? `This demonstration’s charter rate isn’t the starting ${usd(CHALLENGE.charter)} a day: press Reset.`
+      : ws.dest !== CHALLENGE.dest
+        ? 'Choose Asia.'
+        : `At ${usd(ws.destPrice, 2)} in Asia the netback is ${usd(nb, 2)} per MMBtu loaded, against Europe’s ${usd(EUROPE_NETBACK, 2)} at ${usd(CHALLENGE.europePrice, 2)}.`;
 
   return (
     <LessonPage id="gas/3.5">
@@ -444,8 +469,8 @@ export default function Lesson() {
         <a href={lessonHref('gas/3.4')}>The previous lesson</a> ended with the region tied together by pipelines and storage. Not all of its gas stays inside it. At
         Bayport, on the coast, {fmt(BAYPORT_LNG_FEEDGAS_BCFD, 1)} Bcf/d leaves the pipelines for good: it’s cooled until it becomes a liquid and loaded onto ships
         bound for other continents. Gas pipelines can run under seas, but none crosses an ocean. To sell gas across one, it has to be carried, and a gas is far too
-        bulky to carry as it is. LNG is now one of the main ways gas crosses the world; the United States, the largest exporter since 2023, ships it from
-        terminals along its Gulf Coast.
+        bulky to carry as it is. LNG is now one of the main ways gas crosses the world; the United States, which became the largest exporter in 2023, ships it
+        from terminals along its Gulf Coast.
       </P>
       <P>
         Cooled to about −162 °C (−260 °F) at atmospheric pressure, methane condenses into a clear liquid, <b>liquefied natural gas</b>, or LNG, that takes up about
@@ -462,7 +487,7 @@ export default function Lesson() {
       </P>
 
       <Figure name="LNG Supply Chain" scenario={s}>
-        {destSeg}
+        {destSeg(s)}
         <ChainDiagram c={c} dest={st.dest} />
         <Legend
           items={[
@@ -475,22 +500,12 @@ export default function Lesson() {
         <Legend items={(Object.keys(COST_NAMES) as Array<keyof typeof COST_NAMES>).map((kk) => ({ label: COST_NAMES[kk], color: COST_COLORS[kk] }))} />
         <Readouts
           items={[
-            { label: `delivered cost to ${BAYPORT_LNG.destinations[st.dest].name}`, value: `${usd(c.delivered$, 2)}/MMBtu`, tone: 'green' },
             { label: 'gas burned along the way', value: pct(lost, 1), tone: 'red' },
             { label: 'the ship’s round trip', value: `${c.roundTripDays} days` },
-            { label: 'sent out per cargo', value: `${mm(c.sentOut)} MMBtu`, tone: 'gold' },
           ]}
         />
-        {hubSlider}
-        <Slider
-          label="Charter rate"
-          value={st.charter}
-          min={20_000}
-          max={300_000}
-          step={5_000}
-          onChange={(x) => s.set({ charter: x })}
-          display={`${usd(st.charter)} a day`}
-        />
+        {hubSlider(s)}
+        <Slider label="Charter rate" value={st.charter} min={20_000} max={300_000} step={5_000} onChange={(x) => s.set({ charter: x })} display={`${usd(st.charter)} a day`} />
         <Caption>
           With gas at {usd(st.hub, 2)} at Calder Hub, each MMBtu reaching {BAYPORT_LNG.destinations[st.dest].name} costs {usd(c.delivered$, 2)}:{' '}
           {usd(c.delivered$ - st.hub, 2)} more than it cost at the hub.
@@ -511,9 +526,11 @@ export default function Lesson() {
         {usd(BAYPORT_LNG.liquefactionFee, 2)} fee that pays for the plant itself. Then the buyer pays for the ship: {usd(BAYPORT_LNG.charterPerDay)} a day for a{' '}
         {EU.roundTripDays}-day round trip, {BAYPORT_LNG.destinations.europe.ladenDays} days out laden, {BAYPORT_LNG.destinations.europe.ladenDays} back empty
         and {PORT_DAYS} in each port, which is {money(EU.costs.shipping)}, or {usd(EU.perMMBtu.shipping, 2)} per MMBtu. The import terminal charges{' '}
-        {usd(BAYPORT_LNG.regasFee, 2)}. Gas bought for $3.00 at Calder Hub arrives in Europe at {usd(EU.delivered$, 2)}, {usd(EU.delivered$ - 3, 2)} more —
-        nearly {fmt(Math.round((EU.delivered$ - 3) / NORTHLINE.variableCost))} times the {usd(NORTHLINE.variableCost, 2)} it costs to move an MMBtu through
-        Northline. And of everything added on top of the gas, the biggest piece isn’t the voyage; it’s the fixed fee for the liquefaction plant.
+        {usd(BAYPORT_LNG.regasFee, 2)}. Gas bought for {usd(CHAIN_DEFAULTS.hub, 2)} at Calder Hub arrives in Europe at {usd(EU.delivered$, 2)}, {usd(LNG_ADDER, 2)}{' '}
+        more. Moving an MMBtu through Northline costs {usd(NORTHLINE.variableCost, 2)}, plus the {usd(NORTHLINE_CAPITAL, 2)} capital charge that{' '}
+        <a href={lessonHref('gas/3.1')}>Lesson 3.1</a> found when the line runs full: {usd(NORTHLINE_ALL_IN, 2)} in all. The LNG chain adds about{' '}
+        {fmt(Math.round(LNG_ADDER / NORTHLINE_ALL_IN))} times as much. And of everything added on top of the gas, the biggest piece isn’t the voyage; it’s the fixed
+        fee for the liquefaction plant.
       </P>
 
       <H2>Farther away</H2>
@@ -533,15 +550,15 @@ export default function Lesson() {
 
       <H2>What a cargo earns</H2>
       <P>
-        Whether a cargo is worth sending depends on the price at the other end. In the next demonstration a carrier sails the route you choose, and the figures
-        under it settle one cargo at a simulated price at the destination. The most useful of them is the <b>netback</b>: the destination price, less the costs of
+        Whether a cargo is worth sending depends on the price at the other end. In the next demonstration, which begins again from the starting settings — ships at{' '}
+        {usd(BAYPORT_LNG.charterPerDay)} a day — a carrier sails the route you choose, and the figures under it settle one cargo at a simulated price at the destination. The most useful of them is the <b>netback</b>: the destination price, less the costs of
         shipping and regasifying, per MMBtu loaded at Bayport. It’s the most a buyer could pay at the export terminal and still break even, and it ties a price
         overseas back to a price at Calder Hub:
       </P>
 
-      <Figure name="LNG Supply Chain · a voyage" scenario={s} play={play}>
-        {destSeg}
-        <VoyageMap dest={st.dest} day={day} c={c} />
+      <Figure name="LNG Supply Chain · a voyage" scenario={w} play={play}>
+        {destSeg(w)}
+        <VoyageMap dest={ws.dest} day={day} c={c2} />
         <Readouts
           items={[
             { label: 'the cargo sells for', value: money(revenue), tone: 'green' },
@@ -565,16 +582,16 @@ export default function Lesson() {
           <K c="price">{usd(be, 2)}</K>
         </Eq>
         <Slider
-          label={`Price in ${BAYPORT_LNG.destinations[st.dest].name} (simulated)`}
+          label={`Price in ${BAYPORT_LNG.destinations[ws.dest].name} (simulated)`}
           tone="green"
-          value={st.destPrice}
-          min={4}
-          max={16}
-          step={0.25}
-          onChange={(x) => s.set({ destPrice: x })}
-          display={`${usd(st.destPrice, 2)}/MMBtu`}
+          value={ws.destPrice}
+          min={PRICE_MIN}
+          max={PRICE_MAX}
+          step={PRICE_STEP}
+          onChange={(x) => w.set({ destPrice: x })}
+          display={`${usd(ws.destPrice, 2)}/MMBtu`}
         />
-        {hubSlider}
+        {hubSlider(w)}
       </Figure>
 
       <P>
@@ -587,31 +604,25 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="LNG Supply Chain · a voyage"
-        question={`A buyer in Asia pays a simulated $${CHALLENGE.destPrice.toFixed(2)} per MMBtu, and the ship costs ${usd(CHALLENGE.charter)} a day. What’s the highest Calder Hub price, to the nearest 5 cents, at which a cargo to Asia still covers every cost?`}
+        question={`A buyer in Asia wants Bayport’s next cargo. To the nearest 25 cents, what price in Asia makes a cargo there worth as much at Bayport — the same netback — as one to Europe at ${usd(CHALLENGE.europePrice, 2)}? Predict it first from the delivered costs to the two destinations, ${usd(EU.delivered$, 2)} and ${usd(AS.delivered$, 2)}, then check.`}
         solved={solved}
-        status={
-          !atChallenge
-            ? `Set the destination to Asia, the price there to $${CHALLENGE.destPrice.toFixed(2)} and the charter rate back to ${usd(CHALLENGE.charter)} a day.`
-            : margin >= 0
-              ? `At ${usd(st.hub, 2)} the cargo earns ${money(margin)}. Could the gas cost more?`
-              : `At ${usd(st.hub, 2)} the cargo loses ${money(-margin)}.`
-        }
-        success={`Solved: ${usd(ANSWER, 2)}. The cargo earns ${money(margin)} there, and at ${usd(nextHub(ANSWER), 2)} it would lose ${money(-nextMargin)}. The netback from Asia is ${usd(nb, 2)} per MMBtu loaded — less than Europe’s ${usd(EU_NETBACK_9, 2)} at the same price, because of the longer voyage and the canal — and (${usd(nb, 2)} − ${usd(BAYPORT_LNG.liquefactionFee, 2)}) ÷ 1.15 = ${usd(be, 2)}. The same overseas price supports a lower price at home the farther away the buyer is.`}
+        status={challengeStatus}
+        success={`Solved: ${usd(ANSWER, 2)}, about ${usd(ANSWER - CHALLENGE.europePrice, 2)} more than Europe pays, close to the ${usd(AS.delivered$ - EU.delivered$, 2)} more it costs to put an MMBtu ashore in Asia. The netback there is ${usd(nb, 2)}, against Europe’s ${usd(EUROPE_NETBACK, 2)}, and the gas at Calder Hub could cost up to ${usd(be, 2)}, against ${usd(EU_BE_9, 2)}. At the same ${usd(CHALLENGE.europePrice, 2)}, a cargo to Asia would net back only ${usd(AS_NETBACK_9, 2)}, and the most the gas could cost would fall to ${usd(AS_BE_9, 2)}: the same overseas price supports a lower price at home the farther away the buyer is.`}
       />
 
       <P>
         The netback is how a price on another continent reaches back into the region. While cargoes pay, Bayport takes its {fmt(BAYPORT_LNG_FEEDGAS_BCFD, 1)}{' '}
         Bcf/d day after day — more than Metro uses on a summer day, {fmt(REFERENCE_DAYS.summer.demand.metro, 1)} Bcf/d — competing with the region’s own customers for the gas in Gulfward and the Coastal Line.
         When they stop paying, that demand can vanish. Not every cost in <FigRef to="LNG Supply Chain">the first demonstration</FigRef> disappears when a cargo is
-        cancelled, though — the plant’s fee is often owed regardless — and which costs are sunk decides whether a cargo sails. We’ll come back to that in{' '}
+        canceled, though — the plant’s fee is often owed regardless — and which costs are sunk decides whether a cargo sails. We’ll come back to that in{' '}
         <a href={lessonHref('gas/5.4')}>Lesson 5.4</a>.
       </P>
 
       <H2>Scarce here, plentiful there</H2>
       <P>
         This chapter asked why gas can be scarce in one place while it’s abundant in another. The answer is that gas can only be where the network can carry it, when
-        the network can carry it. Every pipeline has a capacity set by the physics of Chapter 1, and building more costs billions, so networks are sized for the
-        coldest day and no more (<a href={lessonHref('gas/3.1')}>Lesson 3.1</a>). Once the pipelines into a place are full, more gas at a basin does it no good, however
+        the network can carry it. Every pipeline has a capacity set by the physics of Chapter 1, and new pipe costs hundreds of millions to billions of dollars, so
+        networks are sized for the coldest day and no more (<a href={lessonHref('gas/3.1')}>Lesson 3.1</a>). Once the pipelines into a place are full, more gas at a basin does it no good, however
         plentiful (<a href={lessonHref('gas/3.2')}>Lesson 3.2</a>). Within a day, the gas packed into a pipeline covers the morning and evening peaks — but only a few
         hours’ worth, and less the fuller the line (<a href={lessonHref('gas/3.3')}>Lesson 3.3</a>). Across seasons, storage carries summer’s gas into winter, at a
         rate that falls as the field empties (<a href={lessonHref('gas/3.4')}>Lesson 3.4</a>). And LNG links the region to the rest of the world, at a cost of

@@ -1,4 +1,4 @@
-// The Calder refinery's barrels as a Sankey diagram: crudes → crude-unit cuts → conversion and
+// The Corran refinery's barrels as a Sankey diagram: crudes → crude-unit cuts → conversion and
 // treating units → products, from a solved refinery plan (engines/oil/refinery).
 
 import { fmt } from '../../../framework';

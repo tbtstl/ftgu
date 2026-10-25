@@ -17,7 +17,7 @@ export const REF_DISTILLATE = 0.42;
 export const RUNS_STEP = 0.5;
 export const DISTILLATE_STEP = 0.0025;
 /** The first challenge's floor for distillate stocks, million barrels. */
-export const DISTILLATE_FLOOR = 700;
+export const DISTILLATE_FLOOR = 725;
 /** A refinery outage: 1.5 mb/d of runs lost in August and September. */
 export const OUTAGE = { size: 1.5, start: 7, months: 2 };
 
@@ -51,7 +51,8 @@ const lowestDistillate = (st: MarketState) => minOf(marketFor(st).map((m) => m.d
 
 /**
  * Challenge a: at the reference runs and with no outage, the smallest distillate yield (on the
- * slider's steps) that keeps distillate stocks at or over 700 million barrels all year.
+ * slider's steps) that keeps distillate stocks at or over 725 million barrels all year. The reader
+ * predicts it from the prose's first quarter point (681 → 700 million): about 2.3 steps, so three.
  */
 export function distillateFloorSolved(st: MarketState): boolean {
   if (Math.abs(st.runs - REF_RUNS) > 1e-9 || st.outage !== 'none') return false;
@@ -60,7 +61,7 @@ export function distillateFloorSolved(st: MarketState): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Figure 2: how far the Calder refinery can swing its output.
+// Figure 2: how far the Corran refinery can swing its output.
 
 export const DIESEL_MIN = 70;
 export const DIESEL_MAX = 140;
@@ -76,7 +77,7 @@ export interface FrontierPoint {
 let frontierCache: FrontierPoint[] | null = null;
 
 /**
- * Calder's output as the diesel price runs from $70 to $140 a barrel with gasoline at its reference
+ * Corran's output as the diesel price runs from $70 to $140 a barrel with gasoline at its reference
  * price, holding the crude slate at the reference plan's mix so only the routing changes.
  */
 export function frontier(): FrontierPoint[] {
@@ -97,7 +98,7 @@ export function outputAt(price: number): FrontierPoint {
   return f[Math.max(0, Math.min(f.length - 1, Math.round(price) - DIESEL_MIN))];
 }
 
-/** Challenge b: the lowest diesel price (whole dollars) at which Calder makes more diesel than gasoline. */
+/** Challenge b: the lowest diesel price (whole dollars) at which Corran makes more diesel than gasoline. */
 export function moreDieselSolved(price: number): boolean {
   const more = (p: number) => {
     const o = outputAt(p);
@@ -116,8 +117,9 @@ function kbd(x: number): string {
   return `${fmt(x, 1)} kb/d`;
 }
 
-function pctYield(y: number): string {
-  return `${fmt(y * 100, 2).replace(/0$/, '')}%`;
+/** A yield as a percentage, with as many decimals as it needs (44%, 42.5%, 42.25%). */
+export function pctYield(y: number): string {
+  return `${fmt(y * 100, 2).replace(/\.?0+$/, '')}%`;
 }
 
 /** Points for a stepped line, one step per whole-dollar price. */
@@ -146,6 +148,7 @@ export default function Lesson() {
   const gCracks = months.map((m) => m.gasolineCrack);
   const dCracks = months.map((m) => m.distillateCrack);
   const minD = minOf(dStocks);
+  const minDAt = dStocks.indexOf(minD);
   const minG = minOf(gStocks);
   const solvedA = distillateFloorSolved(st);
   const GAS = PRODUCT_COLOR.gasoline;
@@ -166,13 +169,13 @@ export default function Lesson() {
   const harder = marketFor({ ...MARKET_DEFAULTS, runs: REF_RUNS + RUNS_STEP });
   const harderStill = marketFor({ ...MARKET_DEFAULTS, runs: REF_RUNS + 1 });
   const shifted = marketFor({ ...MARKET_DEFAULTS, distillate: REF_DISTILLATE + DISTILLATE_STEP });
-  const withOutage = marketFor({ ...MARKET_DEFAULTS, outage: 'august' });
+  const shiftedLow = minOf(shifted.map((m) => m.distillateStock));
   const gasCrackRef = REF_PRICES.gasoline - REF_PRICES.brent;
   const dslCrackRef = REF_PRICES.diesel - REF_PRICES.brent;
   const ref = outputAt(PRODUCT_PRICE.diesel);
   const cheap = outputAt(DIESEL_MIN);
-  const mid = outputAt(87);
   const switchPoint = fr.find((p) => p.dieselOut > p.gasoline)!;
+  const mid = outputAt(switchPoint.diesel - 1);
   const dear = outputAt(DIESEL_MAX);
   const gasRange = { min: minOf(fr.map((p) => p.gasoline)), max: maxOf(fr.map((p) => p.gasoline)) };
 
@@ -194,10 +197,12 @@ export default function Lesson() {
         like these, less the products it sells below the price of crude.
       </P>
       <P>
-        Demand for products follows the calendar. Gasoline is used most in summer, when people drive more. Distillate — diesel, heating oil and jet fuel — is
-        strongest in the northern winter, when heating oil is burned. Refineries, though, run at a fairly steady pace, and from every barrel they make both gasoline and
-        distillate. In our model the world’s refineries run {fmt(REF_RUNS)} million barrels a day, about the real figure in recent years, and turn{' '}
-        {pctYield(YIELD_SUM - REF_DISTILLATE)} of each barrel into gasoline and {pctYield(REF_DISTILLATE)} into distillate. Inventories absorb the difference, and in
+        Demand for products follows the calendar. Gasoline is used most in summer, when people drive more. Distillate — diesel, heating oil and, in our model, jet
+        fuel — is strongest in the northern winter, when heating oil is burned, although jet fuel on its own peaks in the summer travel season. Refineries, though,
+        run at a fairly steady pace, and from every barrel they make both gasoline and distillate. In our model the world’s refineries run {fmt(REF_RUNS)} million
+        barrels a day, about the real figure in recent years, and turn {pctYield(YIELD_SUM - REF_DISTILLATE)} of each barrel into gasoline and{' '}
+        {pctYield(REF_DISTILLATE)} into distillate. That split is the model’s own, closer to an American refinery’s than to the world’s: worldwide, distillates
+        outsell gasoline. Inventories absorb the difference, and in
         the model a product’s crack rises by {usd(PRODUCT_DEFAULTS.crackSensitivity, 2)} for every 1% its stocks sit under normal — a simulated relation in the spirit
         of <a href={lessonHref('oil/5.1')}>Lesson 5.1</a>, where crude prices followed crude stocks. In the next demonstration, set the world’s refinery runs and the
         split of each barrel between distillate and gasoline, and follow a year:
@@ -308,7 +313,7 @@ export default function Lesson() {
         past {usd(maxOf(harder.map((m) => m.gasolineCrack)), 2)}; at {fmt(REF_RUNS + 1, 1)} mb/d it falls as low as{' '}
         {usd(minOf(harderStill.map((m) => m.gasolineCrack)), 2)}. Or they can shift the split of each barrel, the swing cuts and cracker settings of{' '}
         <a href={lessonHref('oil/3.1')}>Lessons 3.1</a> and <a href={lessonHref('oil/3.2')}>3.2</a>. That makes more distillate only by making less gasoline:
-        moving a quarter of a percentage point of the barrel to distillate lifts its low point to {mb(minOf(shifted.map((m) => m.distillateStock)))} and drops
+        moving a quarter of a percentage point of the barrel to distillate lifts its low point from {fmt(dStock.min)} to {mb(shiftedLow)} and drops
         gasoline’s to {mb(minOf(shifted.map((m) => m.gasolineStock)))}, sending its September crack to {usd(shifted[8].gasolineCrack, 2)}.
       </P>
       <P>
@@ -321,29 +326,26 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Product Market Model"
-        question={`Keep runs at ${fmt(REF_RUNS)} mb/d with no outage. Find the smallest distillate yield that keeps distillate stocks at or over ${fmt(DISTILLATE_FLOOR)} million barrels all year — the least gasoline given up.`}
+        question={`Keep runs at ${fmt(REF_RUNS)} mb/d with no outage. Predict first: one quarter of a percentage point lifted distillate’s low point by about ${fmt(shiftedLow - dStock.min)} million barrels. How many quarter points does ${fmt(DISTILLATE_FLOOR)} million take? Then find the smallest distillate yield that keeps distillate stocks at or over ${fmt(DISTILLATE_FLOOR)} million barrels all year — the least gasoline given up.`}
         solved={solvedA}
         status={
           Math.abs(st.runs - REF_RUNS) > 1e-9 || st.outage !== 'none'
             ? `Set runs to ${fmt(REF_RUNS)} mb/d and choose no outage.`
             : `At ${pctYield(st.distillate)} distillate, its stocks bottom out at ${mb(minD)}.`
         }
-        success={`Solved: ${pctYield(st.distillate)} distillate and ${pctYield(YIELD_SUM - st.distillate)} gasoline. Distillate stocks now stay at ${mb(minD)} or more, but gasoline’s low point falls to ${mb(minG)} and its top crack rises to ${usd(maxOf(gCracks), 2)}. One market’s relief is the other’s squeeze.`}
+        success={`Solved: ${pctYield(st.distillate)} distillate and ${pctYield(YIELD_SUM - st.distillate)} gasoline. Distillate stocks now stay at ${mb(minD)} or more, but gasoline’s low point falls to ${mb(minG)} and its top crack rises to ${usd(maxOf(gCracks), 2)}. Each quarter point lifted distillate’s low a little less than the one before, because the low moved earlier, to ${MONTHS[minDAt]}, with fewer months of the extra yield behind it. One market’s relief is the other’s squeeze.`}
       />
 
       <P>
-        Outages bite the same way. Choose the outage in <FigRef to="Product Market Model">the demonstration</FigRef>: losing {fmt(OUTAGE.size, 1)} million barrels a
-        day of runs in August and September — as when a hurricane shuts refineries on a coast — lifts gasoline’s September crack from {usd(REF[8].gasolineCrack, 2)} to{' '}
-        {usd(withOutage[8].gasolineCrack, 2)} and distillate’s December crack from {usd(REF[11].distillateCrack, 2)} to {usd(withOutage[11].distillateCrack, 2)}. The
-        crude those refineries would have run doesn’t vanish; it backs up in tanks, which weighs on crude prices just as product prices rise. Cracks widen from both
-        sides at once. <a href={lessonHref('oil/5.5')}>Lesson 5.5</a> returns to shocks like this.
+        <FigRef to="Product Market Model">The demonstration</FigRef>’s other switch takes {fmt(OUTAGE.size, 1)} million barrels a day of runs out in August and
+        September, as a hurricane on a refining coast might. That is a shock rather than a season, and <a href={lessonHref('oil/5.5')}>Lesson 5.5</a> takes it up.
       </P>
 
       <H2>How far can a refinery swing?</H2>
       <P>
         The yield slider made shifting a barrel between products look easy. A real refinery is bound by its units, as <a href={lessonHref('oil/3.5')}>Lesson 3.5</a>{' '}
-        showed. In the next demonstration, the Calder refinery’s linear program is solved again at every diesel price from {usd(DIESEL_MIN)} to {usd(DIESEL_MAX)} a
-        barrel, with gasoline held at {usd(PRODUCT_PRICE.gasoline)}. We hold the crude slate at the reference plan’s mix of Ridgeback Light and Coldwater Heavy, so only
+        showed. In the next demonstration, the Corran refinery’s linear program is solved again at every diesel price from {usd(DIESEL_MIN)} to {usd(DIESEL_MAX)} a
+        barrel, with gasoline held at {usd(PRODUCT_PRICE.gasoline)}. We hold the crude slate at the reference plan’s mix of Pinyon Light and Coldwater Heavy, so only
         the routing of streams through the units can change. Move the diesel price:
       </P>
 
@@ -357,7 +359,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Calder’s output against the diesel price, with gasoline at ${usd(PRODUCT_PRICE.gasoline)}. At ${usd(s2.state.diesel)}: gasoline ${kbd(here.gasoline)}, diesel ${kbd(here.dieselOut)}, jet fuel ${kbd(here.jet)}, fuel oil ${kbd(here.fuelOil)}.`}
+          ariaLabel={`Corran’s output against the diesel price, with gasoline at ${usd(PRODUCT_PRICE.gasoline)}. At ${usd(s2.state.diesel)}: gasoline ${kbd(here.gasoline)}, diesel ${kbd(here.dieselOut)}, jet fuel ${kbd(here.jet)}, fuel oil ${kbd(here.fuelOil)}.`}
           height={250}
           x={[DIESEL_MIN, DIESEL_MAX]}
           y={[0, 60]}
@@ -365,7 +367,7 @@ export default function Lesson() {
           xFormat={(v) => `$${v}`}
           yTicks={[0, 20, 40, 60]}
           xLabel="diesel price, $ per barrel (gasoline fixed)"
-          yLabel="Calder’s output, thousand barrels a day"
+          yLabel="Corran’s output, thousand barrels a day"
           series={(
             [
               ['gasoline', PRODUCT_COLOR.gasoline],
@@ -404,28 +406,28 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Output moves in a few steps, not smoothly. At the reference {usd(PRODUCT_PRICE.diesel)}, Calder makes {kbd(ref.gasoline)} of gasoline and {kbd(ref.dieselOut)}{' '}
+        Output moves in a few steps, not smoothly. At the reference {usd(PRODUCT_PRICE.diesel)}, Corran makes {kbd(ref.gasoline)} of gasoline and {kbd(ref.dieselOut)}{' '}
         of diesel. Cheapen diesel to {usd(DIESEL_MIN)} and diesel output falls to {kbd(cheap.dieselOut)} — but mostly because diesel-range oil stops being worth
         hydrotreating and goes into fuel oil, which rises from {kbd(ref.fuelOil)} to {kbd(cheap.fuelOil)}. Gasoline gains only{' '}
-        {kbd(cheap.gasoline - ref.gasoline)}. The real swing between the two products happens between {usd(mid.diesel)} and {usd(switchPoint.diesel)}, where the
-        coker’s gas oil moves from the cracker, which turns it into gasoline, to the hydrotreater, which turns it into diesel. Push diesel to {usd(DIESEL_MAX)} and
-        Calder squeezes out {kbd(dear.dieselOut)} of diesel, partly by giving up jet fuel. Across the whole range, gasoline output stays between{' '}
+        {kbd(cheap.gasoline - ref.gasoline)}. Push diesel to {usd(DIESEL_MAX)} and
+        Corran squeezes out {kbd(dear.dieselOut)} of diesel, partly by giving up jet fuel. Across the whole range, gasoline output stays between{' '}
         {kbd(gasRange.min)} and {kbd(gasRange.max)}: a swing of {kbd(gasRange.max - gasRange.min)}, about {fmt(((gasRange.max - gasRange.min) / 150) * 100)}% of the
         crude it runs.
       </P>
 
       <Challenge
         id="b"
-        question={`With gasoline at ${usd(PRODUCT_PRICE.gasoline)}, find the lowest diesel price, to the nearest dollar, at which Calder makes more diesel than gasoline.`}
+        question={`Gasoline sells for ${usd(PRODUCT_PRICE.gasoline)}. Predict first: does Corran make more diesel than gasoline only once diesel sells for more than gasoline, or already below that? Then find the lowest diesel price, to the nearest dollar, at which it does.`}
         solved={solvedB}
-        status={`At ${usd(s2.state.diesel)}, Calder makes ${kbd(here.dieselOut)} of diesel and ${kbd(here.gasoline)} of gasoline.`}
-        success={`Solved: ${usd(switchPoint.diesel)}. Below it Calder’s gasoline wins; at it, the coker’s gas oil switches to the hydrotreater and diesel output jumps to ${kbd(switchPoint.dieselOut)}. Diesel overtakes gasoline even while it sells for less than gasoline’s ${usd(PRODUCT_PRICE.gasoline)}. A refinery’s mix is set mostly by its crudes and its equipment; prices nudge it at the edges.`}
+        status={`At ${usd(s2.state.diesel)}, Corran makes ${kbd(here.dieselOut)} of diesel and ${kbd(here.gasoline)} of gasoline.`}
+        success={`Solved: ${usd(switchPoint.diesel)}, well below gasoline’s ${usd(PRODUCT_PRICE.gasoline)}. This is where the real swing between the two products happens: between ${usd(mid.diesel)} and ${usd(switchPoint.diesel)}, the coker’s gas oil moves from the cracker, which turns it into gasoline, to the hydrotreater, which turns it into diesel, and diesel output jumps from ${kbd(mid.dieselOut)} to ${kbd(switchPoint.dieselOut)}. A refinery’s mix is set mostly by its crudes and its equipment; prices nudge it at the edges.`}
       />
 
       <P>
         So refined product prices are formed the same way crude prices are — by stocks against a calendar of demand — with one twist: the supplies are joined at the
         hip. Refiners can lean their output a little toward whichever product pays more, but not far, so each product’s crack carries the imbalance the other can’t
-        absorb. Those cracks are what a refinery earns, and the 3:2:1 crack spread that Chapter 6 trades is built from them.
+        absorb. Those cracks are what a refinery earns, and Chapter 6 trades a blend of them: the <b>3:2:1 crack spread</b>, the margin on turning three barrels of
+        crude into two of gasoline and one of distillate, quoted per barrel of crude.
       </P>
       <P>
         Every price so far has been a price for oil today. Yet much of the oil business is priced for months ahead: refiners sell next winter’s heating oil, producers

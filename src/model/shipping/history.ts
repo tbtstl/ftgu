@@ -14,7 +14,7 @@ export const HISTORY_SEED = 17;
 export const HISTORY_EVENTS: CycleEvent[] = [
   { from: 40, to: 46, label: 'Port congestion in China', congestion: { QIN: 4 } },
   { from: 64, to: 72, label: 'Disruption at Brazil’s ore mines', routeScale: { 'C-TUB-QIN': 0.6, 'C-TUB-ROT': 0.6 } },
-  { from: 100, to: 106, label: 'Drought restricts the Panama Canal', closed: ['panama'] },
+  { from: 100, to: 106, label: 'Drought closes the Panama Canal', closed: ['panama'] },
 ];
 
 /** A bunker price path: a mean-reverting random walk around the baseline, $/t. */

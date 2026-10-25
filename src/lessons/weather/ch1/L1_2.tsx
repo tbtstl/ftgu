@@ -262,7 +262,6 @@ export default function Lesson() {
   const s = useScenario('parcel', PARCEL_DEFAULTS);
   const { tC, pHpa, mode } = s.state;
   const rho = density(pHpa, tC);
-  const vol = specificVolume(pHpa, tC);
   const theta = potentialTemperature(tC, pHpa);
   const solved = descentSolved(s.state);
 
@@ -290,7 +289,7 @@ export default function Lesson() {
         The previous lesson ended with a planet that has too much energy at the equator and too little at the poles, and an atmosphere that carries the difference
         by moving. To see how heat turns into motion, we need a way to follow the air itself. Meteorologists do it with a <b>parcel</b>: a body of air large enough to
         have a definite temperature, and small enough that its temperature and pressure are the same throughout. Picture a balloon with a weightless skin that lets it
-        expand and shrink freely but, for now, lets no heat in or out.
+        expand and shrink freely but keeps its air from mixing with the air around it.
       </P>
       <P>
         Three numbers describe the parcel’s state. Its air is a crowd of molecules, mostly nitrogen and oxygen, flying about at an average of about 460 meters per
@@ -302,7 +301,10 @@ export default function Lesson() {
       <P>
         In the next demonstration, the cube holds one kilogram of air. Its size shows the volume that kilogram fills, the dashed square is one cubic meter for
         scale, and the dots stand for its molecules, moving faster as the air warms. The chart on the right plots the same state as a dot, pressure against volume.
-        The temperature slider heats or cools the air while holding its pressure fixed; the pressure slider squeezes or releases it:
+        The temperature slider heats or cools the air while holding its pressure fixed; the pressure slider squeezes or releases it. A switch sets what happens to
+        the temperature when the pressure changes — the air is either insulated, so no heat goes in or out, or held at a constant temperature — and the chart’s
+        two curves are the paths those choices would follow from the current state. The last readout, the potential temperature, is the temperature this air
+        would have if it were squeezed or released, insulated, to 1,000 hPa; we’ll see why it matters once the pressure starts changing:
       </P>
 
       <Figure name="Air Parcel Simulator" scenario={s} play={play}>
@@ -325,7 +327,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'density', value: `${fmt(rho, 3)} kg/m³`, tone: WX.density },
-            { label: 'volume of 1 kg', value: `${fmt(vol, 2)} m³`, tone: WX.density },
             { label: 'potential temperature', value: `${fmt(theta, 1)} K`, tone: WX.temperature },
           ]}
         />
@@ -348,7 +349,7 @@ export default function Lesson() {
         warm air is less dense than cold air. That single fact is why warm air rises, and it will drive most of what follows.
       </P>
       <P>
-        The differences are not small. A winter morning in Calder Bay at −10 °C and 1,020 hPa packs {fmt(winter, 2)} kg into every cubic meter; a summer afternoon at
+        The differences are not small. A winter morning in Fenwick Bay at −10 °C and 1,020 hPa packs {fmt(winter, 2)} kg into every cubic meter; a summer afternoon at
         32 °C and 1,010 hPa, only {fmt(summer, 2)} kg — the winter air is {fmt((winter / summer - 1) * 100)}% denser. A wind turbine’s power is proportional to the
         density of the air passing through it, so a cold wind carries more energy than a warm one blowing at the same speed. We’ll use that in{' '}
         <a href={lessonHref('weather/4.4')}>Lesson 4.4</a>, when we turn weather into electricity.
@@ -377,10 +378,15 @@ export default function Lesson() {
         </span>
       </Eq>
       <P>
-        The exponent is the gas constant divided by air’s specific heat, R/c<Sub>p</Sub>. With the insulated setting chosen in{' '}
+        The temperatures are in kelvins, and the exponent is the gas constant divided by air’s specific heat, R/c<Sub>p</Sub>. With the insulated setting chosen in{' '}
         <FigRef to="Air Parcel Simulator">the first demonstration</FigRef>, release air at 15 °C from 1,000 to 900 hPa and it cools to {fmt(released, 1)} °C,
         though no heat has left it. On the chart, the insulated path through the dot is steeper than the constant-temperature path: squeezed adiabatically, air
         resists more, because it heats up as it shrinks.
+      </P>
+      <P>
+        So ordinary temperature is a poor way to compare air at different heights: it changes whenever a parcel moves up or down. That is what the{' '}
+        <b>potential temperature</b> is for — the temperature after an insulated trip to 1,000 hPa. It stays the same however the parcel is squeezed or released,
+        and changes only when heat is actually added or removed, so it works like a label the air carries with it.
       </P>
       <P>
         Run it the other way and descending air warms. The chinook, the warm, dry wind that sweeps down the eastern slopes of the Rocky Mountains in winter, owes
@@ -402,11 +408,8 @@ export default function Lesson() {
       />
 
       <P>
-        The success message names the parcel’s <b>potential temperature</b>, also on the readouts: the temperature the parcel would have if it were brought
-        adiabatically to 1,000 hPa. Because ordinary temperature changes whenever a parcel moves up or down, comparing the temperatures of air at different heights
-        is misleading. Potential temperature fixes that. It stays the same however the parcel is squeezed or released, and changes only when heat is actually added
-        or removed, so it works like a label the air carries with it. By that measure, the −5 °C air at 700 hPa, at {fmt(CHINOOK_THETA, 1)} K, was always warmer
-        than 15 °C air at 1,000 hPa, at {fmt(potentialTemperature(15, 1000), 1)} K.
+        By the label it carries, the −5 °C air at 700 hPa, at a potential temperature of {fmt(CHINOOK_THETA, 1)} K, was always warmer than 15 °C air at
+        1,000 hPa, at {fmt(potentialTemperature(15, 1000), 1)} K.
       </P>
 
       <H2>Rising air cools</H2>
@@ -456,7 +459,7 @@ export default function Lesson() {
 
       <P>
         Lifted to 1 km, the parcel has cooled to {fmt(at(1).parcel, 1)} °C, while the air around it is at {fmt(at(1).env, 1)} °C. At 3 km it is{' '}
-        {fmt(-at(3).gap, 1)} °C colder than its surroundings. The gap grows by about 3 °C for every kilometer, because the parcel cools at nearly 10 °C per
+        {fmt(-at(3).gap, 1)} °C colder than its surroundings. The gap grows by a little over 3 °C for every kilometer, because the parcel cools at nearly 10 °C per
         kilometer and the surrounding air only 6.5. At the same pressure, colder means denser: at 3 km the parcel is {fmt((at(3).rhoParcel / at(3).rhoEnv - 1) * 100)}%
         denser than the air around it. Let go of it, and it sinks back toward where it started. Air that resists being lifted this way is called <b>stable</b>.
       </P>
@@ -467,16 +470,18 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Give the parcel a 3 °C head start. What’s the highest it can rise, to the nearest 100 meters, while still no colder than the air around it?"
+        question="Give the parcel a 3 °C head start. Predict first, from how fast the gap grows: what’s the highest it can rise, to the nearest 100 meters, while still no colder than the air around it? Then lift it and check."
         solved={solved2}
         status={
           head !== HEAD_START
             ? 'First set the head start to +3.0 °C.'
-            : lifted.gap < 0
-              ? `At ${fmt(height, 1)} km the parcel is already ${fmt(-lifted.gap, 1)} °C colder than its surroundings.`
-              : `At ${fmt(height, 1)} km it’s still ${fmt(lifted.gap, 1)} °C warmer. Can it go higher?`
+            : height === 0
+              ? 'Predict first, then lift the parcel.'
+              : lifted.gap < 0
+                ? `At ${fmt(height, 1)} km the parcel is already colder than its surroundings.`
+                : `At ${fmt(height, 1)} km it’s still warmer. Can it go higher?`
         }
-        success={`Solved. The parcel loses its 3 °C lead at about 3.3 °C per kilometer, so it runs out just above ${fmt(height * 1000)} m: at ${fmt(height, 1)} km it’s a hair warmer than the air around it, and 100 meters higher it’s colder. A sun-warmed bubble of dry air in a standard atmosphere can’t climb far.`}
+        success={`Solved. The parcel loses its 3 °C lead at a little over 3 °C per kilometer, so it runs out just above ${fmt(height * 1000)} m: at ${fmt(height, 1)} km it’s a hair warmer than the air around it, and 100 meters higher it’s colder. A sun-warmed bubble of dry air in a standard atmosphere can’t climb far.`}
       />
 
       <P>

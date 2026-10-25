@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
 import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, usd, useScenario } from '../../../framework';
-import { WELL, fractureArea, fractureSpacing, rockOf, transientEnd, wellCost, wellProfile, wellSummary, type WellDesign, type WellType } from '../../../engines/oil/wells';
+import { COST, WELL, fractureArea, fractureSpacing, rockOf, transientEnd, transientRate, wellCost, wellProfile, wellSummary, type WellDesign, type WellType } from '../../../engines/oil/wells';
 import { XYChart } from '../shared/charts';
 
-export type Target = 'ridgeback' | 'northfield';
+export type Target = 'pinyon' | 'northfield';
 
 const TYPE_LABEL: Record<WellType, string> = { vertical: 'Vertical', horizontal: 'Horizontal', fractured: 'Horizontal + fractures' };
-const TARGET_LABEL: Record<Target, string> = { ridgeback: 'Ridgeback shale', northfield: 'Northfield sandstone' };
+const TARGET_LABEL: Record<Target, string> = { pinyon: 'Pinyon shale', northfield: 'Northfield sandstone' };
 const TYPES: WellType[] = ['vertical', 'horizontal', 'fractured'];
 const ORANGE = '#d0702a';
 const ORANGE_TEXT = '#ad5310';
@@ -20,22 +20,22 @@ export const YEAR_ONE_TARGET = 150000;
 /** The first-month rate target of the second challenge, barrels per day. */
 export const IP_TARGET = 1000;
 
-const RB = rockOf('ridgeback');
+const RB = rockOf('pinyon');
 const NF = rockOf('northfield');
-const rockFor = (t: Target) => (t === 'ridgeback' ? RB : NF);
+const rockFor = (t: Target) => (t === 'pinyon' ? RB : NF);
 
 /** First-year production of a design, barrels (only twelve months are simulated). */
-export function firstYear(d: WellDesign, target: Target = 'ridgeback'): number {
+export function firstYear(d: WellDesign, target: Target = 'pinyon'): number {
   return wellProfile(d, rockFor(target), 12).cum[11];
 }
 
 /** First-month average rate, barrels per day. */
-export function firstMonthRate(d: WellDesign, target: Target = 'ridgeback'): number {
+export function firstMonthRate(d: WellDesign, target: Target = 'pinyon'): number {
   return wellProfile(d, rockFor(target), 1).rate[0];
 }
 
 let cheapest: { cost: number; design: WellDesign } | null = null;
-/** The cheapest fractured Ridgeback well on the slider grid producing at least 150,000 barrels in its first year. */
+/** The cheapest fractured Pinyon well on the slider grid producing at least 150,000 barrels in its first year. */
 export function cheapestYearOneWell(): { cost: number; design: WellDesign } {
   if (!cheapest) {
     for (let L = LATERAL.min; L <= LATERAL.max; L += LATERAL.step) {
@@ -49,17 +49,28 @@ export function cheapestYearOneWell(): { cost: number; design: WellDesign } {
   return cheapest!;
 }
 
-/** Challenge a: the cheapest Ridgeback well that produces 150,000 barrels in its first year. */
+/** How close to the cheapest design challenge a accepts: within 1% of its cost. */
+export const CHEAPEST_TOLERANCE = 0.01;
+
+/** Challenge a: a Pinyon well that produces 150,000 barrels in its first year for no more than 1% above the cheapest that does. */
 export function cheapestSolved(target: Target, d: WellDesign): boolean {
-  if (target !== 'ridgeback' || d.type !== 'fractured') return false;
-  return firstYear(d) >= YEAR_ONE_TARGET && wellCost(d, RB).total <= cheapestYearOneWell().cost + 1;
+  if (target !== 'pinyon' || d.type !== 'fractured') return false;
+  return firstYear(d) >= YEAR_ONE_TARGET && wellCost(d, RB).total <= cheapestYearOneWell().cost * (1 + CHEAPEST_TOLERANCE);
 }
 
-/** Challenge b: the fewest stages that give a Ridgeback well a first month of at least 1,000 b/d. */
+/** The lateral challenge b keeps: the standard well's, ft. */
+export const STANDARD_LATERAL = 10000;
+
+/** Challenge b: on the standard 10,000 ft lateral, the fewest stages that give a Pinyon well a first month of at least 1,000 b/d. */
 export function fewestStagesSolved(target: Target, d: WellDesign): boolean {
-  if (target !== 'ridgeback' || d.type !== 'fractured') return false;
+  if (target !== 'pinyon' || d.type !== 'fractured' || d.lateral !== STANDARD_LATERAL) return false;
   if (firstMonthRate(d) < IP_TARGET) return false;
   return d.stages <= STAGES.min || firstMonthRate({ ...d, stages: d.stages - STAGES.step }) < IP_TARGET;
+}
+
+/** A Pinyon design's first-month rate per fracture stage, b/d. */
+export function perStageRate(d: WellDesign): number {
+  return firstMonthRate(d) / Math.max(1, d.stages);
 }
 
 /** Rock in contact with the well, ft²: the wellbore wall, or the fracture faces. */
@@ -90,15 +101,19 @@ function areaText(a: number): string {
 }
 
 // Reference designs quoted in the prose.
-const STANDARD: WellDesign = { type: 'fractured', lateral: 10000, stages: 50 };
+const STANDARD: WellDesign = { type: 'fractured', lateral: STANDARD_LATERAL, stages: 50 };
+/** Challenge b's estimate: stages for 1,000 b/d if each did what the standard well's average stage does (about 31). */
+export const STAGES_ESTIMATE = IP_TARGET / perStageRate(STANDARD);
+/** Days the standard well is held at the surface equipment's limit: its linear-flow rate falls as 1/√t (about 3). */
+export const STANDARD_CAP_DAYS = (transientRate(STANDARD, RB, 1) / WELL.maxRate) ** 2;
+/** What 500 ft more lateral adds to a well's cost, $ (about $65,000). */
+export const LATERAL_500_COST = wellCost({ ...STANDARD, lateral: 9500 }, RB).total - wellCost({ ...STANDARD, lateral: 9000 }, RB).total;
 const V = wellSummary({ type: 'vertical', lateral: 0, stages: 0 }, RB);
 const H = wellSummary({ type: 'horizontal', lateral: 10000, stages: 0 }, RB);
 const F = wellSummary(STANDARD, RB);
 const HALF_STAGES = wellSummary({ ...STANDARD, stages: 25 }, RB);
 const SHORT = wellSummary({ ...STANDARD, lateral: 5000 }, RB);
 const NFV = wellSummary({ type: 'vertical', lateral: 0, stages: 0 }, NF);
-/** The runner-up in the first challenge: a little less lateral, one more stage. */
-const RUNNER_UP: WellDesign = { type: 'fractured', lateral: 8500, stages: 42 };
 
 // The cross-section: depths and distances on separate scales (layer thicknesses exaggerated).
 const DEPTH_MAX = 10500;
@@ -107,7 +122,7 @@ const xOf = (ft: number) => 72 + (ft / 16000) * 548;
 const CURVE_FT = 640;
 const BAND: Record<Target, { top: number; px: number; color: string; name: string }> = {
   northfield: { top: 7800, px: 14, color: '#ecc65a', name: 'Northfield sandstone' },
-  ridgeback: { top: 9500, px: 16, color: '#8d7b6a', name: 'Ridgeback shale' },
+  pinyon: { top: 9500, px: 16, color: '#8d7b6a', name: 'Pinyon shale' },
 };
 
 function WellSection({ d, target }: { d: WellDesign; target: Target }) {
@@ -231,7 +246,7 @@ function ContactBars({ lateral, stages, target, type }: { lateral: number; stage
 }
 
 export default function Lesson() {
-  const s = useScenario('well', { type: 'vertical' as WellType, target: 'ridgeback' as Target, lateral: 10000, stages: 50 });
+  const s = useScenario('well', { type: 'vertical' as WellType, target: 'pinyon' as Target, lateral: 10000, stages: 50 });
   const { type, target, lateral, stages } = s.state;
   const d: WellDesign = { type, lateral, stages };
   const rock = rockFor(target);
@@ -239,7 +254,7 @@ export default function Lesson() {
   const cost = sum.cost.total;
   const months = sum.profile.rate.slice(0, 36).map((q, i) => [i + 0.5, q] as [number, number]);
   const standardMonths = F.profile.rate.slice(0, 36).map((q, i) => [i + 0.5, q] as [number, number]);
-  const isStandard = target === 'ridgeback' && type === 'fractured' && lateral === STANDARD.lateral && stages === STANDARD.stages;
+  const isStandard = target === 'pinyon' && type === 'fractured' && lateral === STANDARD.lateral && stages === STANDARD.stages;
   const best = cheapestYearOneWell();
   const solvedA = cheapestSolved(target, d);
   const solvedB = fewestStagesSolved(target, d);
@@ -248,7 +263,7 @@ export default function Lesson() {
   const controls = (
     <>
       <Segmented label="Well type" value={type} onChange={(v) => s.set({ type: v })} options={TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }))} />
-      <Segmented label="Target" value={target} onChange={(v) => s.set({ target: v })} options={(['ridgeback', 'northfield'] as Target[]).map((t) => ({ value: t, label: TARGET_LABEL[t] }))} />
+      <Segmented label="Target" value={target} onChange={(v) => s.set({ target: v })} options={(['pinyon', 'northfield'] as Target[]).map((t) => ({ value: t, label: TARGET_LABEL[t] }))} />
       <Slider
         label="Lateral length"
         value={lateral}
@@ -278,15 +293,15 @@ export default function Lesson() {
   else if (type === 'horizontal') caption = `The lateral runs ${fmt(lateral)} ft along the layer, with no fractures.`;
   else
     caption = `${stages} stages put fractures every ${fmt(fractureSpacing(d))} ft; ${
-      target === 'ridgeback' ? `their pressure disturbances meet after ${fmt(transientEnd(d, rock))} days.` : 'in permeable rock they add cost, not oil.'
+      target === 'pinyon' ? `their pressure disturbances meet after ${fmt(transientEnd(d, rock))} days.` : 'in permeable rock they add cost, not oil.'
     }`;
   if (capped) caption += ` The well is held at the ${fmt(WELL.maxRate)} b/d its surface equipment can handle.`;
 
   return (
     <LessonPage id="oil/2.3">
       <P>
-        <a href={lessonHref('oil/2.2')}>The previous lesson</a> ended on a discouraging number. Ridgeback’s rock conducts oil so poorly that the pressure disturbance from
-        a well takes about three months to spread fifty feet. At Northfield, a well feels the rock a thousand feet away within a few days. At Ridgeback, the well has to go to the oil.
+        <a href={lessonHref('oil/2.2')}>The previous lesson</a> ended on a discouraging number. Pinyon’s rock conducts oil so poorly that the pressure disturbance from
+        a well takes about three months to spread fifty feet. At Northfield, a well feels the rock a thousand feet away within a few days. At Pinyon, the well has to go to the oil.
         This lesson is about how wells are built, and how a well’s shape decides what it can produce.
       </P>
       <P>
@@ -306,7 +321,8 @@ export default function Lesson() {
       <P>
         In the next demonstration, choose a type of well and a target layer, and set the length of the lateral and the number of fracture stages. The costs are
         illustrative model numbers in a realistic range: a rig and crew by the day, steel by the foot, and a price per fracture stage. The chart follows the well’s
-        monthly rate through its first three years, on a logarithmic scale:
+        monthly rate through its first three years, on a logarithmic scale, in barrels a day (b/d) — stock-tank barrels, as in{' '}
+        <a href={lessonHref('oil/2.1')}>Lesson 2.1</a>:
       </P>
 
       <Figure name="Well Designer" scenario={s}>
@@ -320,11 +336,11 @@ export default function Lesson() {
             { label: <K c="price">cost per first-year barrel</K>, value: perBarrel(cost / Math.max(1, sum.firstYear)), tone: 'green' },
           ]}
         />
-        {!isStandard && target === 'ridgeback' && (
+        {!isStandard && target === 'pinyon' && (
           <Legend
             items={[
               { label: 'This design', color: ORANGE, kind: 'line' },
-              { label: 'Standard Ridgeback well: 10,000 ft, 50 stages', color: '#9a9a9a', kind: 'line', dashed: true },
+              { label: 'Standard Pinyon well: 10,000 ft, 50 stages', color: '#9a9a9a', kind: 'line', dashed: true },
             ]}
           />
         )}
@@ -340,7 +356,7 @@ export default function Lesson() {
           xLabel="months on production"
           yLabel="Oil rate, barrels per day (log scale)"
           series={[
-            ...(!isStandard && target === 'ridgeback' ? [{ points: standardMonths, color: '#9a9a9a', width: 2, dash: '6 4' }] : []),
+            ...(!isStandard && target === 'pinyon' ? [{ points: standardMonths, color: '#9a9a9a', width: 2, dash: '6 4' }] : []),
             { points: months, color: ORANGE, width: 3 },
           ]}
         />
@@ -348,9 +364,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with the vertical well in Ridgeback shale. It costs {millions(V.cost.total)} and produces about {bpd(V.ip30)}: the rock simply can’t deliver more through
+        Start with the vertical well in Pinyon shale. It costs {millions(V.cost.total)} and produces about {bpd(V.ip30)}: the rock simply can’t deliver more through
         the {fmt(RB.h)} ft of wellbore wall it touches. Turn it into a horizontal well with a {fmt(10000)} ft lateral and the first month averages {bpd(H.ip30)}, for{' '}
-        {millions(H.cost.total)}. Now add {STANDARD.stages} fracture stages. This is the course’s standard Ridgeback well, and it costs {millions(F.cost.total)} — of which
+        {millions(H.cost.total)}. Now add {STANDARD.stages} fracture stages. This is the course’s standard Pinyon well, and it costs {millions(F.cost.total)} — of which
         the completion, the fracturing and everything that goes with it, is {millions(F.cost.completion)} — and averages {bpd(F.ip30)} in its first month. Fracturing
         nearly doubles the cost of the horizontal well and multiplies its first-month rate {fmt(F.ip30 / H.ip30)} times. Over the first year it produces{' '}
         {bbl(F.firstYear)}, which works out to {perBarrel(F.cost.total / F.firstYear)} of well for every barrel; the unfractured lateral needs{' '}
@@ -363,22 +379,6 @@ export default function Lesson() {
         it. That’s why fields like Northfield were developed decades before anyone could make money from shale.
       </P>
 
-      <Challenge
-        id="a"
-        question={`Design the cheapest Ridgeback well that produces at least ${fmt(YEAR_ONE_TARGET)} barrels in its first year.`}
-        solved={solvedA}
-        status={
-          target !== 'ridgeback'
-            ? 'Set the target to Ridgeback shale.'
-            : type !== 'fractured'
-              ? `This ${TYPE_LABEL[type].toLowerCase()} well produces ${bbl(sum.firstYear)} in its first year. It will need fractures.`
-              : sum.firstYear < YEAR_ONE_TARGET
-                ? `${fmt(lateral)} ft with ${stages} stages: ${bbl(sum.firstYear)} in the first year, short of the target, for ${millions(cost)}.`
-                : `${fmt(lateral)} ft with ${stages} stages makes ${bbl(sum.firstYear)} for ${millions(cost)}. That meets the target — is there a cheaper design that does?`
-        }
-        success={`Solved: ${fmt(best.design.lateral)} ft with ${best.design.stages} stages, for ${millions(best.cost)}. Each 500 ft of lateral costs about $65,000 and each stage $75,000, so the two trade off: ${fmt(RUNNER_UP.lateral)} ft with ${RUNNER_UP.stages} stages also makes the target but costs about ${usd(Math.round((wellCost(RUNNER_UP, RB).total - best.cost) / 1000) * 1000)} more. Fewer stages lose production, and squeezing more stages into less lateral packs the fractures so close that they soon compete for the same rock.`}
-      />
-
       <H2>It’s the fractures, not the pipe</H2>
       <P>
         Why do fractures matter so much more than the steel? Oil reaches a well through the rock surface the well exposes, and in tight rock it can only travel a short
@@ -389,44 +389,64 @@ export default function Lesson() {
       <Figure name="Well Designer · contact" scenario={s}>
         <ContactBars lateral={lateral} stages={stages} target={target} type={type} />
         {controls}
-        <Readouts
-          items={[
-            { label: 'contact of this design', value: areaText(contactArea(d, target)) },
-            { label: 'fracture spacing', value: type === 'fractured' ? `${fmt(fractureSpacing(d))} ft` : '—' },
-            { label: <K tone="orange">first-month rate</K>, value: bpd(sum.ip30), tone: 'orange' },
-          ]}
-        />
+        <Readouts items={[{ label: 'fracture spacing', value: type === 'fractured' ? `${fmt(fractureSpacing(d))} ft` : '—' }]} />
       </Figure>
 
       <P>
-        The wall of a vertical wellbore through Ridgeback shale is {areaText(contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'ridgeback'))}. A {fmt(10000)} ft
-        lateral exposes {areaText(contactArea({ type: 'horizontal', lateral: 10000, stages: 0 }, 'ridgeback'))}. The fracture faces of the standard well add up to{' '}
-        {areaText(fractureArea(STANDARD))}, about {fmt(Math.round(fractureArea(STANDARD) / contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'ridgeback') / 1000) * 1000)}{' '}
+        The wall of a vertical wellbore through Pinyon shale is {areaText(contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'pinyon'))}. A {fmt(10000)} ft
+        lateral exposes {areaText(contactArea({ type: 'horizontal', lateral: 10000, stages: 0 }, 'pinyon'))}. The fracture faces of the standard well add up to{' '}
+        {areaText(fractureArea(STANDARD))}, about {fmt(Math.round(fractureArea(STANDARD) / contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'pinyon') / 1000) * 1000)}{' '}
         times the vertical well’s wall. Early on, each fracture face feeds oil in proportion to its area, because the pressure disturbance moves straight out from it
-        into fresh rock. Halve the stages to 25 and the first-month rate falls to {bpd(HALF_STAGES.ip30)}, about half.
+        into fresh rock. Oil crossing the rock along parallel paths into a flat face like this is in <b>linear flow</b>, unlike the radial flow that converges on a
+        vertical well in <a href={lessonHref('oil/2.2')}>Lesson 2.2</a>. Halve the stages to 25 and the first-month rate falls to {bpd(HALF_STAGES.ip30)}, about half.
       </P>
+
+      <Challenge
+        id="b"
+        question={`The standard well’s ${STANDARD.stages} stages give it ${bpd(F.ip30)} in its first month. Estimate first: if every stage added the same, how many would a first month of ${fmt(IP_TARGET)} barrels a day take? Then, keeping the standard ${fmt(STANDARD_LATERAL)} ft lateral, find the fewest stages that really do it.`}
+        solved={solvedB}
+        status={
+          target !== 'pinyon' || type !== 'fractured'
+            ? 'Choose a horizontal well with fractures in Pinyon shale.'
+            : lateral !== STANDARD_LATERAL
+              ? `Keep the standard ${fmt(STANDARD_LATERAL)} ft lateral.`
+              : `${stages} stages: ${bpd(sum.ip30)} in the first month.`
+        }
+        success={`Solved: ${stages} stages give ${bpd(sum.ip30)}, and one fewer would fall short. The standard well’s average, ${fmt(perStageRate(STANDARD), 1)} b/d a stage, points to about ${fmt(STAGES_ESTIMATE)}; the real answer is a little lower because that well spends its first ${fmt(STANDARD_CAP_DAYS)} days held at the ${fmt(WELL.maxRate)} b/d its surface equipment can handle, which drags its average down. Unheld, with the fractures far enough apart not to interfere in the first month, each stage delivers about ${fmt(perStageRate(d))} b/d: the rate is set by the fracture area.`}
+      />
+
       <P>
         The lateral’s length matters differently. With the number of stages fixed, it sets how far apart the fractures are. Shorten the standard well to {fmt(5000)} ft
-        and its {STANDARD.stages} stages sit {fmt(fractureSpacing({ ...STANDARD, lateral: 5000 }))} ft apart. The first month is almost unchanged, at {bpd(SHORT.ip30)}, but
+        and the {fmt(STANDARD.stages * WELL.fracturesPerStage)} fractures of its {STANDARD.stages} stages sit {fmt(fractureSpacing({ ...STANDARD, lateral: 5000 }))} ft
+        apart instead of {fmt(fractureSpacing(STANDARD))}. The first month is almost unchanged, at {bpd(SHORT.ip30)}, but
         after only {fmt(transientEnd({ ...STANDARD, lateral: 5000 }, RB))} days the disturbances from neighboring fractures meet, the fractures start draining the same
         rock, and the first year yields {bbl(SHORT.firstYear)} instead of {bbl(F.firstYear)}. A longer lateral costs more to drill, but it gives each fracture rock of
         its own.
       </P>
 
       <Challenge
-        id="b"
-        question={`Find the fewest fracture stages that give a Ridgeback well a first month averaging at least ${fmt(IP_TARGET)} barrels a day.`}
-        solved={solvedB}
+        id="a"
+        figure="Well Designer"
+        question={`Stages buy early oil; lateral buys the room that keeps it coming. Design the cheapest Pinyon well that produces at least ${fmt(YEAR_ONE_TARGET)} barrels in its first year: get within 1% of the cheapest design the sliders allow.`}
+        solved={solvedA}
         status={
-          target !== 'ridgeback' || type !== 'fractured'
-            ? 'Choose a horizontal well with fractures in Ridgeback shale.'
-            : `${stages} stages: ${bpd(sum.ip30)} in the first month.`
+          target !== 'pinyon'
+            ? 'Set the target to Pinyon shale.'
+            : type !== 'fractured'
+              ? `This ${TYPE_LABEL[type].toLowerCase()} well produces ${bbl(sum.firstYear)} in its first year. It will need fractures.`
+              : sum.firstYear < YEAR_ONE_TARGET
+                ? `${fmt(lateral)} ft with ${stages} stages: ${bbl(sum.firstYear)} in the first year, short of the target, for ${millions(cost)}.`
+                : `${fmt(lateral)} ft with ${stages} stages makes ${bbl(sum.firstYear)} for ${millions(cost)}. That meets the target, but a design more than 1% cheaper does too.`
         }
-        success={`Solved: ${stages} stages give ${bpd(sum.ip30)}, and one fewer would fall short. With the fractures far enough apart not to interfere in the first month, the rate is set by the fracture area, about ${fmt(F.ip30 / STANDARD.stages)} b/d for each stage.`}
+        success={`Solved: ${fmt(lateral)} ft with ${stages} stages makes ${bbl(sum.firstYear)} for ${millions(cost)}${
+          cost <= best.cost + 1
+            ? ', the cheapest design the sliders allow.'
+            : `, within 1% of the cheapest design the sliders allow: ${fmt(best.design.lateral)} ft with ${best.design.stages} stages, for ${millions(best.cost)}.`
+        } Each 500 ft of lateral costs about ${usd(Math.round(LATERAL_500_COST / 1000) * 1000)} and each stage ${usd(COST.perStage)}, so near the cheapest design, swapping 500 ft of lateral for one more stage costs only about ${usd(Math.round((COST.perStage - LATERAL_500_COST) / 1000) * 1000)}. Fewer stages lose production, and squeezing more stages into less lateral packs the fractures so close that they soon compete for the same rock.`}
       />
 
       <P>
-        Look again at the chart in <FigRef to="Well Designer">the first demonstration</FigRef>. The standard Ridgeback well starts at {bpd(F.ip30)} but is down to{' '}
+        Look again at the chart in <FigRef to="Well Designer">the first demonstration</FigRef>. The standard Pinyon well starts at {bpd(F.ip30)} but is down to{' '}
         {bpd(F.profile.rate[11])} a year later, while the Northfield vertical well, after its first year, still makes {bpd(NFV.profile.rate[11])}. No well holds its
         first-month rate. How quickly each one falls, what that means for the oil a well will produce over its life, and how a whole field can be kept going, are the
         subjects of the <a href={lessonHref('oil/2.4')}>next lesson</a>.

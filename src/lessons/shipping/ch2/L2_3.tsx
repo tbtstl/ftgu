@@ -13,7 +13,6 @@ import {
   LessonPage,
   Op,
   P,
-  Readouts,
   Segmented,
   Slider,
   TEXT,
@@ -25,6 +24,7 @@ import {
   useScenario,
 } from '../../../framework';
 import { KESTREL } from '../../../model/shipping/vessels';
+import { powerAndFuel } from '../../../engines/shipping/propulsion';
 import { COMMISSION, annualCargo, ballastDraft, bestSpeed, ladenDraft, speedForDayValue, voyageEstimate, type VoyageSpec } from '../../../engines/shipping/voyage';
 import { XYChart } from '../shared/XYChart';
 
@@ -64,12 +64,19 @@ export const FREIGHT_STEP = 0.5;
 
 /**
  * The challenge: with bunkers at $900 a tonne, the lowest freight rate on the slider's half-dollar
- * grid at which some speed earns at least the old best TCE — and a speed that does.
+ * grid at which some speed earns at least the old best TCE, sailed at (within a tenth of a knot of)
+ * that rate's best speed — which the reader predicts first to be slower than the old 12.4 knots.
  */
 export function restoreSolved(speed: number, freight: number, bunkerPrice: number): boolean {
   if (Math.abs(bunkerPrice - CHALLENGE_BUNKER) > 1e-9) return false;
   const lower = Math.round((freight - FREIGHT_STEP) * 2) / 2;
-  return voyageAt(speed, freight, bunkerPrice).tce >= TARGET_TCE - 1e-6 && bestAt(lower, bunkerPrice).result.tce < TARGET_TCE;
+  const best = bestAt(freight, bunkerPrice);
+  return (
+    best.result.tce >= TARGET_TCE - 1e-6 &&
+    bestAt(lower, bunkerPrice).result.tce < TARGET_TCE &&
+    Math.abs(speed - best.speed) <= 0.1 + 1e-9 &&
+    voyageAt(speed, freight, bunkerPrice).tce >= TARGET_TCE - 1e-6
+  );
 }
 
 /** The lowest freight that restores the target, and its best speed (for the success text and tests). */
@@ -77,16 +84,29 @@ export const RESTORE_FREIGHT = (() => {
   for (let f = 8; f <= 25; f += FREIGHT_STEP) if (bestAt(f, CHALLENGE_BUNKER).result.tce >= TARGET_TCE) return f;
   return 25;
 })();
+export const RESTORE_BEST = bestAt(RESTORE_FREIGHT, CHALLENGE_BUNKER);
 
 // Demonstration 2: the slow-steaming rule across the value of a day.
 const BUNKERS = [400, 600, 800] as const;
 type Bunker = `${(typeof BUNKERS)[number]}`;
 const DAY_VALUES = Array.from({ length: 46 }, (_, i) => 5_000 + i * 1_000);
 
+/** The rule's search range, knots (speedForDayValue's defaults), cut to her MCR speed so the rule never asks for more than her engine can give (Lesson 1.3). */
+const RULE_MIN = 8;
+const RULE_MAX = 15.5;
+/** The fastest speed on the rule's 0.05-knot grid that Kestrel's engine can make at a draft. */
+export function mcrSpeed(draft: number): number {
+  let s = RULE_MIN;
+  while (s + 0.05 <= RULE_MAX + 1e-9 && powerAndFuel(K_, Math.round((s + 0.05) * 20) / 20, { draft }).load <= 1) s = Math.round((s + 0.05) * 20) / 20;
+  return s;
+}
+const LADEN_MCR = mcrSpeed(LADEN_DRAFT);
+const BALLAST_MCR = mcrSpeed(BALLAST_DRAFT);
+
 /** Kestrel's cargo per year when each leg sails at the rule's speed for a day value. */
 export function fleetPoint(dayValue: number, bunkerPrice: number) {
-  const laden = speedForDayValue(K_, LADEN_DRAFT, dayValue, bunkerPrice);
-  const ballast = speedForDayValue(K_, BALLAST_DRAFT, dayValue, bunkerPrice);
+  const laden = speedForDayValue(K_, LADEN_DRAFT, dayValue, bunkerPrice, RULE_MIN, LADEN_MCR);
+  const ballast = speedForDayValue(K_, BALLAST_DRAFT, dayValue, bunkerPrice, RULE_MIN, BALLAST_MCR);
   const r = voyageEstimate(K_, { ...spec(0, bunkerPrice), ladenSpeed: laden, ballastSpeed: ballast });
   const voyages = EARNING_DAYS / r.days;
   return { laden, ballast, voyages, cargo: voyages * VOYAGE.cargo };
@@ -139,10 +159,11 @@ export default function Lesson() {
   const sel = sweep[fl.state.bunker];
 
   let status: string;
-  if (Math.abs(bunker - CHALLENGE_BUNKER) > 1e-9) status = `Set bunkers to $${CHALLENGE_BUNKER} a tonne first; they’re at ${usd(bunker)}.`;
-  else if (best.result.tce < TARGET_TCE) status = `At ${usd(freight, 2)} a tonne even the best speed, ${kn(best.speed)}, earns only ${perDay(best.result.tce)}.`;
-  else if (r.tce < TARGET_TCE) status = `At ${usd(freight, 2)} a tonne Kestrel can earn ${perDay(TARGET_TCE)} or more, but not at ${kn(speed)}: she earns ${perDay(r.tce)}.`;
-  else status = `At ${usd(freight, 2)} a tonne and ${kn(speed)} she earns ${perDay(r.tce)}. Would a lower freight rate still do?`;
+  if (Math.abs(bunker - CHALLENGE_BUNKER) > 1e-9) status = `Make your prediction, then set bunkers to ${usd(CHALLENGE_BUNKER)} a tonne.`;
+  else if (best.result.tce < TARGET_TCE) status = `At ${usd(freight, 2)} a tonne even her best speed earns less than ${perDay(TARGET_TCE)}.`;
+  else if (bestAt(Math.round((freight - FREIGHT_STEP) * 2) / 2, bunker).result.tce >= TARGET_TCE)
+    status = `At ${usd(freight, 2)} a tonne she can earn ${perDay(TARGET_TCE)} or more. Would a lower freight rate still do?`;
+  else status = `At ${usd(freight, 2)} a tonne she can just earn it. Now sail her at this rate’s best speed: faster or slower than ${kn(BEST.speed)}, as you predicted?`;
 
   return (
     <LessonPage id="shipping/2.3">
@@ -164,16 +185,20 @@ export default function Lesson() {
       </P>
       <P>
         Our reference voyage is a common one for a ship of Kestrel’s size. She sails {fmt(VOYAGE.ballastNm)} nautical miles in ballast to a coal-loading port,
-        takes on {t(VOYAGE.cargo)} of coal and carries it {fmt(VOYAGE.ladenNm)} miles to China, spending {VOYAGE.portDays} days in port at the two ends and{' '}
-        {usd(VOYAGE.portCosts)} on port charges. She is paid a <K tone="green">freight rate</K> per tonne of coal delivered. In the next demonstration the curve is
-        the voyage’s TCE at every speed from {SPEED_MIN} to {SPEED_MAX} knots, sailing laden and in ballast at the same speed. Set her speed, the freight rate and
-        the price of bunkers:
+        takes on {t(VOYAGE.cargo)} of coal — a round figure, a little under the full load she took on in the previous lesson — and carries it{' '}
+        {fmt(VOYAGE.ladenNm)} miles to China, spending {VOYAGE.portDays} days in port at the two ends and {usd(VOYAGE.portCosts)} on port charges. She is paid
+        a <K tone="green">freight rate</K> per tonne of coal delivered. In the next demonstration the curve is the voyage’s TCE at every speed from {SPEED_MIN} to{' '}
+        {SPEED_MAX} knots, sailing laden and in ballast at the same speed, and the dashed line is the most she earns at the starting prices. Set her speed, the
+        freight rate and the price of bunkers:
       </P>
 
       <Figure name="Slow Steaming Optimizer" scenario={opt}>
         <XYChart
           ariaLabel={`Kestrel’s TCE on the reference voyage at every speed from ${SPEED_MIN} to ${SPEED_MAX} knots, with freight at ${usd(freight, 2)} a tonne and bunkers at ${usd(bunker)} a tonne. The best speed is ${kn(best.speed)}, earning ${perDay(best.result.tce)}; at ${kn(speed)} she earns ${perDay(r.tce)}.`}
-          series={[{ xs: curve.xs, ys: curve.ys, color: GRAPHIC.green, width: 2.5 }]}
+          series={[
+            { xs: [SPEED_MIN, SPEED_MAX], ys: [TARGET_TCE, TARGET_TCE], color: '#9a9a9a', width: 1.2, dash: '5 4', label: `starting best ${perDay(TARGET_TCE)}`, labelColor: TEXT.gray },
+            { xs: curve.xs, ys: curve.ys, color: GRAPHIC.green, width: 2.5 },
+          ]}
           xMin={SPEED_MIN}
           xMax={SPEED_MAX}
           xTicks={[9, 10, 11, 12, 13, 14, 15]}
@@ -188,15 +213,6 @@ export default function Lesson() {
             ...(atBest ? [] : [{ x: speed, y: r.tce, color: TEXT.teal, r: 4.5 }]),
           ]}
           height={230}
-        />
-        <Readouts
-          items={[
-            { label: 'voyage days', value: fmt(r.days, 1), tone: 'teal' },
-            { label: 'fuel burned', value: t(r.fuel), tone: 'gold' },
-            { label: 'bunker cost', value: usd(r.bunkers), tone: 'green' },
-            { label: 'net freight', value: usd(r.net), tone: 'green' },
-            { label: 'TCE', value: perDay(r.tce), tone: 'green' },
-          ]}
         />
         <Slider label="Speed" tone="teal" value={speed} min={SPEED_MIN} max={SPEED_MAX} step={0.1} onChange={(v) => opt.set({ speed: v })} display={kn(speed)} />
         <Slider label="Freight rate" tone="green" value={freight} min={8} max={25} step={FREIGHT_STEP} onChange={(v) => opt.set({ freight: v })} display={`${usd(freight, 2)}/t`} />
@@ -216,8 +232,9 @@ export default function Lesson() {
           <K tone="green">{perDay(r.tce)}</K>
         </Eq>
         <Caption>
+          At {kn(speed)} she burns {t(r.fuel)} of fuel on the voyage.{' '}
           {atBest
-            ? `${kn(speed)} is the best speed for this freight rate and bunker price.`
+            ? 'That is the best speed for this freight rate and bunker price.'
             : `Sailing at ${kn(best.speed)} instead would earn ${perDay(best.result.tce)}, ${usd(Math.abs(best.result.tce - r.tce))} a day more.`}
         </Caption>
       </Figure>
@@ -254,14 +271,16 @@ export default function Lesson() {
         figure="Slow Steaming Optimizer"
         question={
           <>
-            Bunkers jump from {usd(600)} to {usd(CHALLENGE_BUNKER)} a tonne. What is the lowest freight rate, to the half dollar, at which Kestrel can still earn the{' '}
-            {perDay(TARGET_TCE)} she made at her best speed with bunkers at {usd(600)} and freight at {usd(14)}? Set it in{' '}
-            <FigRef to="Slow Steaming Optimizer">the first demonstration</FigRef>, with a speed that earns it.
+            Bunkers jump from {usd(600)} to {usd(CHALLENGE_BUNKER)} a tonne, and Northwind wants the freight rate that lets Kestrel still earn the{' '}
+            {perDay(TARGET_TCE)} she made at {kn(BEST.speed)}. Predict first: at that rate, will her best speed be faster or slower than {kn(BEST.speed)}? Dearer
+            freight says faster, dearer fuel says slower; ask what a day of hers will be worth. Then check in{' '}
+            <FigRef to="Slow Steaming Optimizer">the first demonstration</FigRef>: find the lowest freight rate, to the half dollar, at which she earns{' '}
+            {perDay(TARGET_TCE)}, and sail her at its best speed.
           </>
         }
         solved={solved}
         status={status}
-        success={`Solved. At ${usd(RESTORE_FREIGHT, 2)} a tonne her best speed is ${kn(bestAt(RESTORE_FREIGHT, CHALLENGE_BUNKER).speed)}, earning ${perDay(bestAt(RESTORE_FREIGHT, CHALLENGE_BUNKER).result.tce)}; half a dollar less, and even her best speed falls short. Notice that she doesn’t go back to ${kn(BEST.speed)}: with fuel half again as dear, she makes up some of the cost by sailing slower, and the charterer pays the rest through the freight.`}
+        success={`Solved — slower. At ${usd(RESTORE_FREIGHT, 2)} a tonne her best speed is ${kn(RESTORE_BEST.speed)}, earning ${perDay(RESTORE_BEST.result.tce)}; half a dollar less and even her best speed falls short. A day of hers is worth about what it was, but every knot now burns fuel half again as dear, so the rule balances the same value of a day against the extra fuel at fewer knots. The higher freight pays for the fuel; it doesn’t buy speed.`}
       />
 
       <H2>Speed is supply</H2>
@@ -310,8 +329,8 @@ export default function Lesson() {
           yLabel="Best speed"
           cursor={fl.state.dayValue}
           markers={[
-            { x: fl.state.dayValue, y: now.laden, color: TEXT.teal, label: kn(now.laden), anchor: fl.state.dayValue > 40_000 ? 'end' : 'start', labelDy: 18 },
-            { x: fl.state.dayValue, y: now.ballast, color: TEXT.teal, r: 4 },
+            { x: fl.state.dayValue, y: now.laden, color: TEXT.teal, label: `${kn(now.laden)} laden`, anchor: fl.state.dayValue > 40_000 ? 'end' : 'start', labelDy: 18 },
+            { x: fl.state.dayValue, y: now.ballast, color: TEXT.teal, r: 4, label: `${kn(now.ballast)} in ballast`, anchor: fl.state.dayValue > 40_000 ? 'end' : 'start', labelDy: -8 },
           ]}
           height={190}
         />
@@ -331,14 +350,6 @@ export default function Lesson() {
           cursor={fl.state.dayValue}
           markers={[{ x: fl.state.dayValue, y: now.cargo / 1e6, color: TEXT.orange, label: `${fmt(now.cargo / 1e6, 2)} million t`, anchor: fl.state.dayValue > 35_000 ? 'end' : 'start', labelDy: 18 }]}
           height={170}
-        />
-        <Readouts
-          items={[
-            { label: 'best laden speed', value: kn(now.laden), tone: 'teal' },
-            { label: 'best ballast speed', value: kn(now.ballast), tone: 'teal' },
-            { label: 'voyages a year', value: fmt(now.voyages, 1) },
-            { label: 'coal carried a year', value: t(Math.round(now.cargo / 1000) * 1000), tone: 'orange' },
-          ]}
         />
         <Slider
           label="Value of a ship’s day"
@@ -364,9 +375,9 @@ export default function Lesson() {
         takes a phone call. When earnings rise, the whole fleet speeds up and carries more; when they fall, it slows and carries less.
       </P>
       <P>
-        That is exactly what happened after freight markets collapsed in 2008. With earnings low and fuel expensive for most of the years that followed, a day
-        saved was worth little and a tonne of fuel a lot, and slow steaming spread through every corner of shipping. In Chapter 4 we’ll see how this response
-        shapes freight rates themselves: a fleet that can speed up or slow down behaves very differently from one that can’t.
+        Shipping saw this after freight markets collapsed in 2008. In the lean years that followed — above all from 2011 to 2014, when earnings were poor and
+        fuel was dear — a day saved was worth little and a tonne of fuel a lot, and ships slowed down. Slow steaming went furthest in container shipping, whose
+        fast ships had the most speed to give up. In Chapter 4 we’ll see how this response shapes freight rates themselves: a fleet that can speed up or slow down behaves very differently from one that can’t.
       </P>
       <P>
         One question remains. We have valued Kestrel’s days by what she can earn, but her owner also has to pay for every one of them — crew, insurance, repairs,

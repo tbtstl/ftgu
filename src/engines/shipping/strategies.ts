@@ -47,11 +47,25 @@ export function whatIf(id: ClassId, m: CycleMonth, d: Drivers, event?: CycleEven
     demand: m.demand * (d.demand ?? 1),
     fleet: m.fleet * (d.fleet ?? 1),
     bunker: d.bunker ?? m.bunker,
-    congestion: { ...(event?.congestion ?? {}), ...(d.congestion ?? {}) },
+    // A dial acts on top of the month's own events: extra days add to its congestion, and a
+    // route's scale multiplies its event scale (so Brazil's ore at 70% during a disruption that
+    // already cut it to 60% leaves 42%, not 70%).
+    congestion: combine(event?.congestion, d.congestion, (a, b) => a + b, 0),
     closed: [...(event?.closed ?? []), ...(d.closed ?? [])],
-    routeScale: { ...(event?.routeScale ?? {}), ...(d.routeScale ?? {}) },
+    routeScale: combine(event?.routeScale, d.routeScale, (a, b) => a * b, 1),
   }).tce;
   return plain > 0 ? m.tce * (changed / plain) : changed;
+}
+
+function combine(
+  a: Record<string, number> | undefined,
+  b: Record<string, number> | undefined,
+  op: (x: number, y: number) => number,
+  unit: number,
+): Record<string, number> {
+  const out: Record<string, number> = { ...(a ?? {}) };
+  for (const [k, v] of Object.entries(b ?? {})) out[k] = op(out[k] ?? unit, v);
+  return out;
 }
 
 export interface PeriodResult {

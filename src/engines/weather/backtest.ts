@@ -24,11 +24,11 @@ const V = Array.from({ length: LEAD_MAX + 1 }, (_, k) => revealedShare(k));
 /**
  * Standard deviation of a winter degree-day index as known at the end of `valuationDay` with
  * forecasts issued `infoDelay` days earlier, index points. Assumes every remaining day is below
- * the 65 °F base (true of December–February at Calder Bay).
+ * the 65 °F base (true of December–February at Fenwick Bay).
  */
 export function indexSd(spec: ContractSpec, year: number, valuationDay: number, view: { infoDelay?: number; knobs?: WorldKnobs } = {}): number {
   const knobs = view.knobs ?? {};
-  const cl = climateFor('calder', knobs);
+  const cl = climateFor('fenwick', knobs);
   const H = LEAD_MAX;
   const rho = SAME_DAY_CORRELATION;
   const { start, end } = contractSpan(spec, year);
@@ -96,7 +96,7 @@ export function decisions(spec: ContractSpec, years: number[], daysBefore: numbe
     const forecast = expectedIndex(spec, y, t, view);
     const claimedSd = indexSd(spec, y, t, { knobs });
     let settled = 0;
-    for (let d = start; d <= end; d++) settled += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+    for (let d = start; d <= end; d++) settled += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
     const pit = claimedSd > 0 ? normCdf((settled - forecast) / claimedSd) : settled >= forecast ? 1 : 0;
     return { year: y, forecast, claimedSd, settled, pit };
   });
@@ -150,7 +150,7 @@ export function hedgeAgainstBudget(
     const { start, end } = contractSpan(spec, y);
     const q = quote(y, start - daysBefore);
     let hdd = 0;
-    for (let d = start; d <= end; d++) hdd += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+    for (let d = start; d <= end; d++) hdd += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
     const budget = fit.intercept + fit.slope * q.mid;
     const miss = margins[i] - budget;
     const hedge = contracts * spec.tick * (q.bid - hdd);

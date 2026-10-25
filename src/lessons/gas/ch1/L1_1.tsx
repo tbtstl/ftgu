@@ -1,6 +1,5 @@
 import { Fragment } from 'react';
 import {
-  Caption,
   Challenge,
   DataTable,
   Eq,
@@ -29,6 +28,7 @@ import {
   COMPONENTS,
   METHANE,
   PIPELINE_GAS,
+  PIPELINE_SPEC,
   checkSpec,
   combustionProducts,
   composition,
@@ -252,9 +252,25 @@ const PIPE = gasProperties(PIPELINE_GAS);
 const METH = gasProperties(METHANE);
 const PURE = { ethane: gasProperties(composition({ ethane: 1 })), propane: gasProperties(composition({ propane: 1 })), butane: gasProperties(composition({ butane: 1 })) };
 const RIDGE_NO_LIQUIDS = gasProperties(mixComposition({ ...PRESETS.ridgeback, propane: 0, butane: 0 }));
-const RIDGE_NO_ETHANE = gasProperties(mixComposition({ ...PRESETS.ridgeback, ethane: 0 }));
 /** Btu/scf added by each percentage point of ethane in place of methane. */
-const ETHANE_STEP = (COMPONENT.ethane.hhv - COMPONENT.methane.hhv) / 100;
+export const ETHANE_STEP = (COMPONENT.ethane.hhv - COMPONENT.methane.hhv) / 100;
+/** The pipeline's cap on heating value, Btu/scf. */
+const HHV_CAP = PIPELINE_SPEC.hhvMax;
+/**
+ * The challenge's estimate, from the rounded numbers the prose shows: (1,173 − 1,100) ÷ 7.6 points
+ * of ethane must go, leaving about 2.4% of Ridgeback's 12%.
+ */
+export const ETHANE_ESTIMATE = (() => {
+  const cut = (Math.round(RIDGE.hhv) - HHV_CAP) / round1(ETHANE_STEP);
+  return { cut, keep: PRESETS.ridgeback.ethane - cut };
+})();
+/** The challenge's answer on the slider's 0.1-point grid: the most ethane that meets every rule. */
+export const ETHANE_ANSWER = (() => {
+  for (let e = PRESETS.ridgeback.ethane * 10; e >= 0; e--) if (ethaneSolved({ ...PRESETS.ridgeback, ethane: e / 10 })) return e / 10;
+  return NaN;
+})();
+const AT_ANSWER = gasProperties(mixComposition({ ...PRESETS.ridgeback, ethane: ETHANE_ANSWER }));
+const PAST_ANSWER = gasProperties(mixComposition({ ...PRESETS.ridgeback, ethane: round1(ETHANE_ANSWER + 0.1) }));
 
 export default function Lesson() {
   const s = useScenario('mix', MIX_DEFAULTS);
@@ -265,17 +281,16 @@ export default function Lesson() {
   const preset = presetOf(m);
   const failing = spec.rules.filter((r) => !r.ok).map((r) => RULE_IN_TEXT[r.id]);
 
-  const ruleValue = (id: keyof typeof RULE_NAME, v: number) => (id === 'hhv' || id === 'wobbe' ? fmt(v) : pct(v, 1));
+  // The heating value to a tenth, so 1,099.6 and 1,100.3 don't both read "1,100" either side of the cap.
+  const ruleValue = (id: keyof typeof RULE_NAME, v: number) => (id === 'hhv' ? fmt(v, 1) : id === 'wobbe' ? fmt(v) : pct(v, 1));
   const ruleLimit = (r: (typeof spec.rules)[number]) =>
     r.min !== undefined ? `${fmt(r.min)}–${fmt(r.max)} Btu/scf` : `at most ${pct(r.max, 0)}`;
 
   const solved = ethaneSolved(m);
   const othersRidge = (['propane', 'butane', 'nitrogen', 'co2'] as Slid[]).every((k) => Math.abs(m[k] - PRESETS.ridgeback[k]) < 1e-9);
   const status = !othersRidge
-    ? 'Choose “Raw Ridgeback gas” first, then move only the ethane slider.'
-    : spec.ok
-      ? `At ${fmt(m.ethane, 1)}% ethane the gas meets every rule, at ${fmt(p.hhv, 1)} Btu/scf. Could it keep more?`
-      : `At ${fmt(m.ethane, 1)}% ethane the gas carries ${fmt(p.hhv, 1)} Btu/scf with a Wobbe index of ${fmt(p.wobbe)}; it fails on ${failing.join(' and ')}.`;
+    ? 'Estimate first, then choose “Raw Ridgeback gas” and move only the ethane slider.'
+    : `With ${fmt(m.ethane, 1)}% ethane the gas carries ${fmt(p.hhv, 1)} Btu/scf and ${spec.ok ? 'meets every rule' : `fails on ${failing.join(' and ')}`}.`;
 
   const hydrocarbons = (['methane', 'ethane', 'propane', 'butane'] as Component[]).filter((k) => c[k] > 0);
 
@@ -301,7 +316,7 @@ export default function Lesson() {
       </P>
       <P>
         What comes out of a gas well is a mixture. Most of it is methane, the simplest hydrocarbon: one carbon atom holding four hydrogen atoms. Mixed in are heavier
-        hydrocarbons — ethane, propane and butane, with two, three and four carbons — and gases that don’t burn at all, chiefly nitrogen and carbon dioxide. Nobody who buys
+        hydrocarbons — ethane, propane and butane, with two, three and four carbons — and <b>inert gases</b>, which don’t burn at all, chiefly nitrogen and carbon dioxide. Nobody who buys
         gas wants the molecules themselves. They want the heat the gas gives off when it burns, so gas is bought and sold by its <K c="energy">energy</K>, and the first
         question is how much energy a cubic foot of it holds.
       </P>
@@ -310,7 +325,7 @@ export default function Lesson() {
         and 14.73 pounds per square inch, a little above the air’s pressure at sea level. The heat one standard cubic foot gives off when it burns completely is its{' '}
         <K c="energy">heating value</K>, measured in British thermal units (Btu); one Btu warms a pound of water by one degree Fahrenheit. In the next demonstration, each of the
         100 molecules stands for one percent of a gas. Pick one of the starting gases, or set the share of each constituent yourself; methane makes up whatever the others
-        leave:
+        leave. The table lists the pipelines’ rules for the gas they accept, which we’ll come to in the next section:
       </P>
 
       <Figure name="Molecule Lab" scenario={s}>
@@ -321,9 +336,9 @@ export default function Lesson() {
           options={(Object.keys(PRESETS) as PresetId[]).map((id) => ({ value: id, label: PRESET_LABEL[id] }))}
         />
         <MoleculeBox c={c} />
-        <Legend items={COMPONENTS.map((k) => ({ label: `${COMPONENT[k].name} ${fmt(c[k] * 100, 1)}%`, color: SPECIES_COLOR[k] }))} />
+        <Legend items={COMPONENTS.map((k) => ({ label: COMPONENT[k].name, color: SPECIES_COLOR[k] }))} />
         <Eq label={`Heating value of the mixture: ${hydrocarbons.map((k) => `${fmt(c[k] * 100, 1)} percent times ${fmt(COMPONENT[k].hhv)}`).join(' plus ')} equals ${fmt(p.hhv)} Btu per standard cubic foot`}>
-          <K c="energy">HHV</K>
+          <K c="energy">Heating value</K>
           <Op>=</Op>
           {hydrocarbons.map((k, i) => (
             <Fragment key={k}>
@@ -363,12 +378,6 @@ export default function Lesson() {
             },
           ]}
         />
-        <Caption>
-          {`Specific gravity ${fmt(p.sg, 3)} (air = 1). `}
-          {spec.ok
-            ? `This gas meets every rule, so the region’s pipelines would accept it.`
-            : `The pipelines would turn this gas away: it fails on ${failing.join(' and ')}.`}
-        </Caption>
       </Figure>
 
       <P>
@@ -381,12 +390,14 @@ export default function Lesson() {
       <P>
         A mixture’s heating value is the average of its constituents’ heating values, weighted by their shares, and nitrogen and carbon dioxide count as zero. The region’s
         pipeline gas is 95% methane with a little ethane, propane and butane, and it carries {fmt(PIPE.hhv)} Btu per standard cubic foot. We’ll meet that number again
-        and again: it’s how the rest of the course turns cubic feet into energy.
+        and again: it’s how the rest of the course turns cubic feet into energy. The weighting also makes a swap easy to price. Trade one percentage point of methane
+        for ethane and the heating value rises by a hundredth of the difference between them: ({fmt(PURE.ethane.hhv)} − {fmt(METH.hhv)}) ÷ 100 ={' '}
+        {fmt(ETHANE_STEP, 1)} Btu per standard cubic foot.
       </P>
 
       <H2>What a pipeline will accept</H2>
       <P>
-        Neither of the region’s fields produces gas like that. Raw gas from the Ridgeback shale is rich in the heavier hydrocarbons, at {fmt(RIDGE.hhv)} Btu per cubic foot.
+        Neither of the region’s fields produces gas like that. Raw gas from the Ridgeback shale is rich in the heavier hydrocarbons, at {fmt(RIDGE.hhv)} Btu per standard cubic foot.
         Raw gas from the old Sandhill field is lean, at {fmt(SAND.hhv)}, and {pct(SAND_RAW.nitrogen + SAND_RAW.co2, 1)} of it is nitrogen and carbon dioxide. The pipelines
         won’t take either. Every pipeline publishes a quality rule for the gas it carries, and the table in{' '}
         <FigRef to="Molecule Lab">the first demonstration</FigRef> shows ours, which is in the usual North American range.
@@ -404,15 +415,24 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Molecule Lab"
-        question="Choose raw Ridgeback gas, then move only the ethane slider. How much of its ethane can stay in the gas if it has to meet every one of the pipeline’s rules?"
+        question={
+          <>
+            Raw Ridgeback gas carries {fmt(RIDGE.hhv)} Btu per standard cubic foot, {fmt(PRESETS.ridgeback.ethane)}% of it ethane, and the pipeline’s cap is{' '}
+            {fmt(HHV_CAP)}. Suppose the only fix were to take ethane out and let methane fill its place. Using the {fmt(ETHANE_STEP, 1)} Btu/scf each point of ethane
+            adds, estimate first: how much of the ethane could stay? Then check in <FigRef to="Molecule Lab">the first demonstration</FigRef>: choose raw Ridgeback gas
+            and move only the ethane slider to the most ethane that meets every rule.
+          </>
+        }
         solved={solved}
         status={status}
         success={
           <>
-            Solved: {fmt(m.ethane, 1)}% ethane, and not a tenth of a point more. The propane and butane alone lift the gas to {fmt(RIDGE_NO_ETHANE.hhv, 1)} Btu/scf with no
-            ethane at all, and each percentage point of ethane in place of methane adds {fmt(ETHANE_STEP, 1)} more, so the heating-value cap arrives first. Throwing away ten
-            points of ethane to keep the propane and butane would be backward, though: those are usually worth more sold as liquids than burned as gas. Take them out
-            instead and all 12% of the ethane fits, at {fmt(RIDGE_NO_LIQUIDS.hhv)} Btu/scf. That’s the job of a processing plant, in{' '}
+            Solved: {fmt(ETHANE_ANSWER, 1)}% ethane, and not a tenth of a point more. The estimate gets there: ({fmt(RIDGE.hhv)} − {fmt(HHV_CAP)}) ÷{' '}
+            {fmt(ETHANE_STEP, 1)} ≈ {fmt(ETHANE_ESTIMATE.cut, 1)} points must go, leaving about {fmt(ETHANE_ESTIMATE.keep, 1)}%, and at{' '}
+            {fmt(round1(ETHANE_ANSWER + 0.1), 1)}% the gas would carry {fmt(PAST_ANSWER.hhv, 1)} Btu/scf, just over the cap. The Wobbe index, at{' '}
+            {fmt(AT_ANSWER.wobbe)}, is inside its band by then, so the heating value is the rule that binds. Throwing away nearly ten points of ethane to
+            keep the propane and butane would be backward, though: those are usually worth more sold as liquids than burned as gas. Take them out instead and all{' '}
+            {fmt(PRESETS.ridgeback.ethane)}% of the ethane fits, at {fmt(RIDGE_NO_LIQUIDS.hhv)} Btu/scf. That’s the job of a processing plant, in{' '}
             <a href={lessonHref('gas/2.5')}>Lesson 2.5</a>.
           </>
         }
@@ -466,17 +486,15 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'gross heating value, Btu per scf', value: fmt(selProps.hhv), tone: 'gold' },
             { label: 'net heating value, Btu per scf', value: fmt(selProps.lhv), tone: 'gold' },
             { label: 'air needed per cubic foot', value: `${fmt(selAir, 2)} ft³` },
-            { label: 'CO₂ per MMBtu', value: `${fmt(fuel === 'mix' ? p.co2KgPerMMBtu : rows.find((r) => r.id === fuel)!.co2, 1)} kg` },
           ]}
         />
       </Figure>
 
       <P>
         Each bar of heat has two parts. Burning makes water, and the water leaves the flame as vapor. If the exhaust is cooled enough for that vapor to condense, it gives up
-        its latent heat as well; the <b>gross</b> or higher heating value counts that heat and the <b>net</b> or lower heating value doesn’t. For methane the net value is{' '}
+        its latent heat as well; the <b>gross</b> or higher heating value (HHV) counts that heat and the <b>net</b> or lower heating value (LHV) doesn’t. For methane the net value is{' '}
         {fmt(METH.lhv)} Btu, {pct(METH.lhv / METH.hhv)} of the gross. Most burners send the vapor up the flue, though condensing furnaces and boilers recover some of it.
         Gas in North America is bought and sold on its gross heating value, and every heating value and every MMBtu in this course is gross.
       </P>
@@ -485,7 +503,8 @@ export default function Lesson() {
         hydrogen to water, so it releases {fmt(METH.co2KgPerMMBtu, 1)} kilograms of carbon dioxide for each MMBtu — a million Btu — of heat, against{' '}
         {fmt(PURE.butane.co2KgPerMMBtu, 1)} for butane. The region’s pipeline gas releases {fmt(PIPE.co2KgPerMMBtu, 1)}, close to the 53.06 kilograms the US Environmental
         Protection Agency uses for typical pipeline gas. The coals burned in power plants release roughly 93 to 97. Carbon dioxide already in the gas passes through the
-        flame unchanged and goes up the stack with the rest, which is one more reason Sandhill’s raw gas, at {fmt(SAND.co2KgPerMMBtu, 1)}, has to be cleaned first.
+        flame unchanged and goes up the stack with the rest, so Sandhill’s raw gas releases {fmt(SAND.co2KgPerMMBtu, 1)}. Cleaning the gas doesn’t keep that carbon
+        dioxide out of the air, though: processing plants strip it out to meet the pipeline’s limit, and usually vent it.
       </P>
       <P>
         A heating value tells us the energy in a standard cubic foot: a cubic foot at one particular temperature and pressure. Inside a pipeline the gas is neither at 60 °F

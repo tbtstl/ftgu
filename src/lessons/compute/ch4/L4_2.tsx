@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
+  DataTable,
   Eq,
   Figure,
   Frac,
@@ -29,7 +30,7 @@ import { POWER_DEFAULTS, generatorPlan, powerChain, upsEfficiency, type PowerCha
 import { annualPue } from '../../../engines/compute/cooling';
 import { clusterLayout, rackConfig } from '../../../engines/compute/rack';
 import { ACCELERATORS } from '../../../model/compute/hardware';
-import { SITES, SITE_IDS, type SiteId } from '../../../model/compute/sites';
+import { SITES, SITE_IDS, outdoorTempC, type SiteId } from '../../../model/compute/sites';
 
 // ---------------------------------------------------------------------------
 // The model: the power chain of one data hall, from the grid to the chips.
@@ -106,9 +107,9 @@ export function largestItFor(site: SiteId, redundancy: Redundancy): number {
   return best;
 }
 
-/** Challenge b: the largest IT load Bayport's 20 MW connection carries through its hottest hour, with N+1. */
+/** Challenge b: the largest IT load Marston's 20 MW connection carries through its hottest hour, with N+1. */
 export function gridSolved(s: SiteState): boolean {
-  return s.site === 'bayport' && s.redundancy === 'N+1' && !siteRun(s).over && siteRun({ ...s, itMW: s.itMW + IT_STEP }).over;
+  return s.site === 'marston' && s.redundancy === 'N+1' && !siteRun(s).over && siteRun({ ...s, itMW: s.itMW + IT_STEP }).over;
 }
 
 /** A-class GPUs in air-cooled 40 kW racks (Lesson 4.1) whose IT load fits within `itMW`. */
@@ -134,9 +135,9 @@ const TWO_N = chainOf({ ...CHAIN_DEFAULTS, redundancy: '2N' });
 const N_ONLY = chainOf({ ...CHAIN_DEFAULTS, redundancy: 'N' });
 const AMPS_AT_CHIP = ACCELERATORS.A.tdpW / 0.8;
 const TP_HALL = siteRun(SITE_DEFAULTS);
-const BAY_MAX = largestItFor('bayport', 'N+1');
+const BAY_MAX = largestItFor('marston', 'N+1');
 const TP_MAX = largestItFor('techpark', 'N+1');
-const NF_MAX = largestItFor('northfield', 'N+1');
+const NF_MAX = largestItFor('fernhill', 'N+1');
 export const LESSON_NUMBERS = {
   hallGpus: HALL_GPUS,
   hallRacks: HALL_RACKS,
@@ -166,6 +167,11 @@ function mwText(x: number, digits?: number): string {
   return `${fmt(x, d)} MW`;
 }
 
+/** A hall's draw at the hottest hour: two decimals, so a draw just under a connection never reads as equal to it. */
+function peakText(x: number): string {
+  return `${fmt(x, 2)} MW`;
+}
+
 export function roundTo(x: number, unit: number): number {
   return Math.round(x / unit) * unit;
 }
@@ -188,6 +194,16 @@ const MODE_OPTIONS: Array<{ value: UpsMode; label: string }> = [
   { value: 'eco', label: 'Eco mode' },
 ];
 const SITE_OPTIONS: Array<{ value: SiteId; label: string }> = SITE_IDS.map((id) => ({ value: id, label: SITES[id].name }));
+
+/** A word for a site's humidity in the table of sites. */
+export function humidityWord(h: number): string {
+  return h >= 0.7 ? 'high' : h >= 0.4 ? 'moderate' : 'low';
+}
+
+/** Each site's hottest outdoor temperature of the year, °C. */
+export const HOTTEST_C: Record<SiteId, number> = Object.fromEntries(
+  SITE_IDS.map((id) => [id, Math.max(...Array.from({ length: 8760 }, (_, h) => outdoorTempC(SITES[id], h)))]),
+) as Record<SiteId, number>;
 
 // ---------------------------------------------------------------------------
 // Figure 1: the chain as a band of power that narrows at every stage.
@@ -212,7 +228,7 @@ function ChainFigure({ c, s }: { c: PowerChain; s: ChainState }) {
   const h = (mw: number) => (BAND * mw) / grid;
   const xs = [X0, ...STAGE_X];
   const xe = [...STAGE_X, X1];
-  const label = `Power chain for a ${mwText(s.itMW)} IT load with ${s.redundancy} redundancy and ${s.upsMode === 'eco' ? 'eco-mode' : 'double-conversion'} UPS: ${mwText(grid)} drawn from the grid, ${mwText(c.facilityLossMW)} lost before the racks, ${mwText(c.serverLossMW)} lost inside the servers, ${mwText(c.chipMW)} reaching the chips.`;
+  const label = `Power chain for a ${mwText(s.itMW)} IT load with ${s.redundancy} redundancy and ${s.upsMode === 'eco' ? 'eco-mode' : 'double-conversion'} UPS: ${mwText(grid)} drawn from the grid, ${mwText(c.facilityLossMW)} lost before the racks, ${mwText(c.serverLossMW)} lost inside the servers, ${mwText(c.chipMW)} reaching the servers’ components.`;
   return (
     <svg className="diagram" viewBox="0 0 640 238" role="img" aria-label={label}>
       {STAGE_LABEL.map(([a, b], i) => (
@@ -255,10 +271,10 @@ function ChainFigure({ c, s }: { c: PowerChain; s: ChainState }) {
       <text x={8} y={TOP + 32} style={{ fontSize: 12, fontWeight: 500, fill: TEXT.red }}>
         {mwText(grid)}
       </text>
-      <text x={568} y={TOP + 16} style={{ fontSize: 12, fontWeight: 500, fill: '#333' }}>
-        Chips
+      <text x={566} y={TOP + 16} style={{ fontSize: 12, fontWeight: 500, fill: '#333' }}>
+        Components
       </text>
-      <text x={568} y={TOP + 32} style={{ fontSize: 12, fontWeight: 500, fill: TEXT.red }}>
+      <text x={566} y={TOP + 32} style={{ fontSize: 12, fontWeight: 500, fill: TEXT.red }}>
         {mwText(c.chipMW)}
       </text>
       <text className="ax ax-m" x={(X0 + IT_X) / 2} y={234}>
@@ -278,7 +294,7 @@ function chainCaption(c: PowerChain, s: ChainState): string {
     s.upsMode === 'eco'
       ? 'In eco mode the UPS lets the grid’s power pass straight through, so it loses far less.'
       : 'Double conversion runs every watt through the UPS’s rectifier and inverter.';
-  return `${ups.modules} UPS modules of 2.5 MW, ${spare}, each at ${pctText(ups.loadFraction, 0)} of its rating and ${pctText(c.stages[1].efficiency)} efficient. ${mode} Of every megawatt drawn from the grid, ${pctText(c.chipMW / c.gridMW, 0)} reaches the chips.`;
+  return `${ups.modules} UPS modules of 2.5 MW, ${spare}, each at ${pctText(ups.loadFraction, 0)} of its rating and ${pctText(c.stages[1].efficiency)} efficient. ${mode} Of every megawatt drawn from the grid, ${pctText(c.chipMW / c.gridMW, 0)} reaches the servers’ components.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +320,7 @@ function SiteFigure({ r, s }: { r: SiteRun; s: SiteState }) {
   const x = scale(0, maxMW, BX0, BX1);
   const site = SITES[s.site];
   const eff = r.chain.stages[1].efficiency;
-  const label = `${site.name}, ${mwText(s.itMW)} IT load with ${s.redundancy}: at the hottest hour the hall draws ${mwText(r.peakMW)} from a ${mwText(site.gridMW, 0)} grid connection${r.over ? ', more than it can supply' : ''}. ${ups.modules} UPS modules (${mwText(ups.installedMW)}) each run at ${pctText(ups.loadFraction, 0)} of rating, ${pctText(eff)} efficient; ${r.generators.units} generators (${mwText(r.generators.installedMW)}).`;
+  const label = `${site.name}, ${mwText(s.itMW)} IT load with ${s.redundancy}: at the hottest hour the hall draws ${peakText(r.peakMW)} from a ${mwText(site.gridMW, 0)} grid connection${r.over ? ', more than it can supply' : ''}. ${ups.modules} UPS modules (${mwText(ups.installedMW)}) each run at ${pctText(ups.loadFraction, 0)} of rating, ${pctText(eff)} efficient; ${r.generators.units} generators (${mwText(r.generators.installedMW)}).`;
   const dividers = (count: number, unit: number, y: number) =>
     count <= 64
       ? Array.from({ length: Math.max(0, count - 1) }, (_, i) => <line key={i} x1={x((i + 1) * unit)} x2={x((i + 1) * unit)} y1={y} y2={y + 22} stroke="#fcfcfb" strokeWidth={1.5} />)
@@ -347,7 +363,7 @@ function SiteFigure({ r, s }: { r: SiteRun; s: SiteState }) {
       <rect x={x(0)} y={116} width={x(r.peakMW) - x(0)} height={22} fill={tint(GRAPHIC.gold, 0.55)} />
       {dividers(r.generators.units, 3, 116)}
       <text className="ax" x={x(0)} y={153}>
-        {r.generators.units} generators of 3 MW: {mwText(r.generators.installedMW)} for the hottest hour’s {mwText(r.peakMW)}
+        {r.generators.units} generators of 3 MW: {mwText(r.generators.installedMW)} for the hottest hour’s {peakText(r.peakMW)}
       </text>
 
       {/* The UPS efficiency curve. */}
@@ -378,15 +394,16 @@ function siteCaption(r: SiteRun, s: SiteState): string {
   const site = SITES[s.site];
   const parts = `${mwText(r.chain.gridMW)} for the IT load and its electrical losses, and ${mwText(r.coolingMW)} for cooling and the rest of the building`;
   if (r.over)
-    return `At ${site.name}’s hottest hour the hall would draw ${mwText(r.peakMW)} — ${parts} — but the grid connection supplies only ${mwText(site.gridMW, 0)}.`;
-  return `At ${site.name}’s hottest hour the hall draws ${mwText(r.peakMW)} of its ${mwText(site.gridMW, 0)} connection: ${parts}.`;
+    return `At ${site.name}’s hottest hour the hall would draw ${peakText(r.peakMW)} — ${parts} — but the grid connection supplies only ${mwText(site.gridMW, 0)}.`;
+  return `At ${site.name}’s hottest hour the hall draws ${peakText(r.peakMW)} of its ${mwText(site.gridMW, 0)} connection: ${parts}.`;
 }
 
 // ---------------------------------------------------------------------------
 
 export default function Lesson() {
   const a = useScenario('chain', CHAIN_DEFAULTS);
-  const s = a.state;
+  // The first demonstration is always the 20 MW hall: it has no IT-load control.
+  const s = useMemo(() => ({ ...a.state, itMW: HALL_MW }), [a.state]);
   const c = useMemo(() => chainOf(s), [s]);
   const solvedA = lossSolved(s);
   const lossCost = c.facilityLossMW * 8760 * LOSS_PRICE;
@@ -398,20 +415,20 @@ export default function Lesson() {
   const solvedB = gridSolved(t);
 
   const statusA =
-    s.itMW !== HALL_MW
-      ? `Set the IT load back to ${HALL_MW} MW: the challenge is about the hall we started with.`
-      : s.redundancy === 'N'
-        ? `With no spare, losing one UPS module would drop part of the hall. Keep at least one spare.`
+    s.redundancy === 'N'
+      ? `With no spare, losing one UPS module would drop part of the hall. Keep at least one spare.`
+      : s.upsMode !== 'eco'
+        ? 'Make your prediction, then switch the UPS to eco mode.'
         : `Right now ${mwText(c.facilityLossMW)} is lost before the racks, ${mwText(c.stages[1].lossMW)} of it in the UPS.`;
 
   const statusB =
-    t.site !== 'bayport'
-      ? 'Choose Bayport first.'
+    t.site !== 'marston'
+      ? 'Choose Marston first.'
       : t.redundancy !== 'N+1'
         ? 'Keep one spare: choose N+1.'
         : r.over
-          ? `At ${mwText(t.itMW)} the hall would draw ${mwText(r.peakMW)} at the hottest hour, more than the 20 MW connection.`
-          : `At ${mwText(t.itMW)} the hall draws ${mwText(r.peakMW)} at the hottest hour. Is there room for more?`;
+          ? `At ${mwText(t.itMW)} the hall would draw ${peakText(r.peakMW)} at the hottest hour, more than the 20 MW connection.`
+          : `At ${mwText(t.itMW)} the hall draws ${peakText(r.peakMW)} at the hottest hour. Is there room for more?`;
 
   return (
     <LessonPage id="compute/4.2">
@@ -436,9 +453,11 @@ export default function Lesson() {
         in any length of wire, so this last step happens within millimeters of the chip.
       </P>
       <P>
-        In the next demonstration, the band is the <K c="power">power</K> flowing from the grid on the left to the chips on the right, its height in proportion to the
-        megawatts. Each dark bar is a stage of equipment, and each red strip the power it loses as heat, with its efficiency beneath. The dashed line is where the{' '}
-        <b>IT load</b> is measured. Set the IT load, the redundancy of the UPS, its mode, and the efficiency of the servers’ power supplies:
+        In the next demonstration, the band is the <K c="power">power</K> flowing from the grid on the left to the servers’ components on the right — their chips,
+        and the memory, network cards and fans beside them — its height in proportion to the megawatts. Each dark bar is a stage of equipment, and each red strip the
+        power it loses as heat, with its efficiency beneath. The dashed line is where the <b>IT load</b> is measured. A UPS is built from modules, 2.5 MW each in our
+        model, and how many spares stand behind the load is its <b>redundancy</b>: N is just enough modules, N+1 adds one spare, and 2N builds two complete systems.
+        Set the redundancy of the UPS, its mode — double conversion, or the eco mode we come to shortly — and the efficiency of the servers’ power supplies:
       </P>
 
       <Figure name="Data Center Power Model" scenario={a}>
@@ -453,13 +472,10 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'drawn from the grid', value: mwText(c.gridMW), tone: 'red' },
             { label: 'lost before the racks', value: mwText(c.facilityLossMW), tone: 'red' },
-            { label: 'reaching the chips', value: `${mwText(c.chipMW)} · ${pctText(c.chipMW / c.gridMW, 0)}` },
             { label: `losses before the racks a year, at a simulated $${LOSS_PRICE}/MWh`, value: usd(lossCost, 0), tone: 'green' },
           ]}
         />
-        <Slider label="IT load" tone="red" value={s.itMW} min={1} max={60} step={IT_STEP} onChange={(v) => a.set({ itMW: v })} display={mwText(s.itMW, 1)} />
         <Slider label="Server power supplies" value={s.psu} min={90} max={97} step={0.5} onChange={(v) => a.set({ psu: v })} display={`${fmt(s.psu, 1)}% efficient`} />
         <Eq label={`Electrical part of PUE equals grid draw divided by IT load: ${fmt(c.electricalPue, 3)}`}>
           <span>PUE, electrical part</span>
@@ -475,48 +491,81 @@ export default function Lesson() {
         At the start, the {HALL_MW} MW hall draws {mwText(HALL.gridMW)} from the grid. The facility loses {mwText(HALL.facilityLossMW)} before the racks, almost all of it,{' '}
         {mwText(HALL.stages[1].lossMW)}, in the UPS, which converts every watt twice at {pctText(HALL.stages[1].efficiency)} efficiency; the two transformers lose less than a
         tenth of a megawatt each. More is lost inside the servers: {mwText(HALL.stages[3].lossMW)} in their power supplies and {mwText(HALL.stages[4].lossMW)} in the voltage
-        regulators. Only {mwText(HALL.chipMW)} reaches the silicon, {pctText(HALL.chipMW / HALL.gridMW, 0)} of what the grid supplies — and that is before the building has
-        spent anything on cooling. At a simulated {usd(LOSS_PRICE)} per megawatt-hour, Tech Park’s price, the losses before the racks alone cost about{' '}
-        {usd(roundTo(HALL.facilityLossMW * 8760 * LOSS_PRICE, 1000))} a year.
+        regulators. Only {mwText(HALL.chipMW)} reaches the servers’ components, {pctText(HALL.chipMW / HALL.gridMW, 0)} of what the grid supplies — and that is before the
+        building has spent anything on cooling. At a simulated {usd(LOSS_PRICE)} per megawatt-hour, the price at Tech Park, one of three sites we meet later in this
+        lesson, the losses before the racks alone cost about {usd(roundTo(HALL.facilityLossMW * 8760 * LOSS_PRICE, 1000))} a year.
       </P>
       <P>
         The industry’s yardstick for this overhead is <b>power usage effectiveness</b>, or PUE: everything the facility draws divided by what its IT equipment draws. A
         perfect building would score 1. The electrical chain contributes {fmt(HALL.electricalPue, 3)}; cooling, the subject of the next lesson, adds much more. But notice
-        where PUE draws its line. Raise the servers’ power supplies from 94% to 97% efficient, and {mwText(PSU97.chipMW)} reaches the chips instead of{' '}
+        where PUE draws its line. Raise the servers’ power supplies from 94% to 97% efficient, and {mwText(PSU97.chipMW)} reaches the components instead of{' '}
         {mwText(HALL.chipMW)}: {mwText(PSU97.chipMW - HALL.chipMW)} more computing from the same grid draw. PUE doesn’t move, because the power supplies sit inside the IT
         load. It measures the building, not what the servers do with the power they’re given.
+      </P>
+      <P>
+        The UPS has a second setting, <b>eco mode</b>, which saves by doing less. Instead of rebuilding every watt, the UPS lets the grid’s power pass straight through to
+        the load and keeps its inverter ready, switching over within milliseconds when the grid misbehaves. The load is no longer isolated from small disturbances on the
+        grid, and its protection depends on that switch-over happening in time. Some operators accept that for the savings; others, especially where a dropped training
+        run would cost far more than the electricity, don’t.
       </P>
 
       <Challenge
         id="a"
-        question={`Keep at least one spare UPS module, and bring the ${HALL_MW} MW hall’s losses before the racks under ${LOSS_TARGET_MW} MW.`}
+        question={`Predict first: which stage’s red strip will eco mode shrink, and will that alone bring the ${HALL_MW} MW hall’s losses before the racks under ${LOSS_TARGET_MW} MW? Then check: keep at least one spare UPS module and switch to eco mode.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved: eco mode. With N+1 the hall now loses ${mwText(ECO.facilityLossMW)} before its racks instead of ${mwText(HALL.facilityLossMW)}, saving about ${usd(roundTo((HALL.facilityLossMW - ECO.facilityLossMW) * 8760 * LOSS_PRICE, 1000))} a year at Tech Park’s simulated price. No mix of redundancy does it in double conversion, because its losses are set by converting every watt twice.`}
+        success={`Solved. Eco mode removes most of the UPS’s loss, ${mwText(HALL.stages[1].lossMW)} falling to ${mwText(ECO.stages[1].lossMW)}, while the transformers lose about what they did. With N+1 the hall now loses ${mwText(ECO.facilityLossMW)} before its racks instead of ${mwText(HALL.facilityLossMW)}, saving about ${usd(roundTo((HALL.facilityLossMW - ECO.facilityLossMW) * 8760 * LOSS_PRICE, 1000))} a year at Tech Park’s simulated price. No choice of spares does it in double conversion: converting every watt twice is where the loss is.`}
       />
-
-      <P>
-        Eco mode earns its savings by doing less. Instead of rebuilding every watt, the UPS lets the grid’s power pass straight through to the load and keeps its inverter
-        ready, switching over within milliseconds when the grid misbehaves. The load is no longer isolated from small disturbances on the grid, and its protection depends on
-        that switch-over happening in time. Some operators accept that for the savings; others, especially where a dropped training run would cost far more than the
-        electricity, don’t.
-      </P>
 
       <H2>Spares at part load</H2>
       <P>
-        Redundancy is described by how much spare equipment stands behind the load. With N, there is just enough: the {HALL_MW} MW hall needs {N_ONLY.ups.modules} UPS modules of
-        2.5 MW, each running flat out, and losing one drops part of the hall. N+1 adds one spare module, so all {HALL.ups.modules} share the load at{' '}
-        {pctText(HALL.ups.loadFraction, 0)} of their rating. 2N builds two complete systems, each able to carry the whole hall alone, so {TWO_N.ups.modules} modules each run at{' '}
-        {pctText(TWO_N.ups.loadFraction, 0)}. The generators follow the same logic, and they must carry the whole site, cooling included.
+        Look at what the spares do. With N, the {HALL_MW} MW hall needs {N_ONLY.ups.modules} UPS modules of 2.5 MW, each running flat out, and losing
+        one drops part of the hall. With N+1, all {HALL.ups.modules} share the load at {pctText(HALL.ups.loadFraction, 0)} of their rating. With 2N, each of the two systems
+        can carry the whole hall alone, so {TWO_N.ups.modules} modules each run at {pctText(TWO_N.ups.loadFraction, 0)}. The diesel generators are planned separately: in our
+        model always N+1, one 3 MW set more than the site’s peak needs, and they must carry the whole site, cooling included.
       </P>
       <P>
-        Spares cost twice: once to buy, and again in efficiency, because power equipment loses proportionally more at part load. Some of its losses are fixed — they are paid
-        whenever the equipment is switched on — so they weigh more as the load falls. A double-conversion UPS is {pctText(upsEfficiency(1, 'double conversion'))} efficient at
-        full load, {pctText(upsEfficiency(0.5, 'double conversion'))} at half, {pctText(upsEfficiency(0.25, 'double conversion'))} at a quarter and{' '}
-        {pctText(upsEfficiency(0.1, 'double conversion'))} at a tenth. With 2N, the {HALL_MW} MW hall loses {mwText(TWO_N.facilityLossMW)} before its racks instead of{' '}
-        {mwText(HALL.facilityLossMW)}. In the next demonstration, choose a site, the IT load and the redundancy, in double conversion. The bars compare what the hall draws at
-        the hottest hour of the year with the site’s grid connection, and show the UPS modules and diesel generators installed behind it; the curve is the UPS’s efficiency
-        at each share of its rating, with the hall’s operating point:
+        Spares cost money to buy, and at light load they cost efficiency too. Some of power equipment’s losses are fixed — they are paid whenever it is switched on — so
+        they weigh more as the load falls. A double-conversion UPS is {pctText(upsEfficiency(1, 'double conversion'))} efficient at full load,{' '}
+        {pctText(upsEfficiency(0.5, 'double conversion'))} at half, {pctText(upsEfficiency(0.25, 'double conversion'))} at a quarter and{' '}
+        {pctText(upsEfficiency(0.1, 'double conversion'))} at a tenth. One spare costs almost nothing: at {pctText(HALL.ups.loadFraction, 0)} of their rating the modules are
+        almost exactly as efficient as at full load, and the transformers, more lightly loaded, lose a little less, so with N+1 the hall loses{' '}
+        {mwText(HALL.facilityLossMW)} before its racks against {mwText(N_ONLY.facilityLossMW)} with N. The penalty comes with 2N: each module at half load, the hall loses{' '}
+        {mwText(TWO_N.facilityLossMW)}.
+      </P>
+
+      <H2>Three sites</H2>
+      <P>
+        This course’s GPUs live at three sites. <b>Marston</b> is a warm, humid coastal city beside most of
+        the region’s users. <b>Tech Park</b> is a campus beside Metro, in the electricity course’s region — the empty site that course’s{' '}
+        <a href={lessonHref('8.1')}>Lesson 8.1</a> connects a data-center campus to — a short hop from the users. <b>Fernhill</b> is a cold, remote valley with cheap
+        hydro power. Their numbers, all simulated, come back throughout the course:
+      </P>
+      <DataTable
+        caption="The course’s three data-center sites"
+        rows={SITE_IDS.map((id) => SITES[id])}
+        rowKey={(x) => x.id}
+        columns={[
+          { label: 'Site', cell: (x) => x.name },
+          { label: 'Grid connection', cell: (x) => `${fmt(x.gridMW)} MW`, align: 'right' },
+          { label: 'Power price', cell: (x) => `${usd(x.powerPrice)}/MWh`, align: 'right' },
+          { label: 'Mean temperature', cell: (x) => `${fmt(x.meanTempC)} °C`, align: 'right' },
+          { label: 'Humidity', cell: (x) => humidityWord(x.humidity), align: 'right' },
+          { label: 'Building cost', cell: (x) => `${fmt(x.buildCostIndex, 1)} ×`, align: 'right' },
+          { label: 'Round trip', cell: (x) => `${fmt(x.rttMs)} ms`, align: 'right' },
+        ]}
+      />
+      <P>
+        The temperature is the average over the year; at the hottest hour of the year it reaches about {fmt(HOTTEST_C.marston)} °C at Marston,{' '}
+        {fmt(HOTTEST_C.techpark)} °C at Tech Park and {fmt(HOTTEST_C.fernhill)} °C at Fernhill, and the humidity, as the next lesson shows, matters to cooling
+        too. The building cost is what construction costs there — land, labor,
+        permits — as a multiple of Tech Park’s. The round trip is the time a message takes to reach the users and come back. Marston has the users; Fernhill has cheap
+        power, cold air and room; Tech Park sits between.
+      </P>
+      <P>
+        In the next demonstration, choose a site, the IT load and the redundancy, in double conversion. The bars compare what the hall draws at the hottest hour of the
+        year with the site’s grid connection, and show the UPS modules and diesel generators installed behind it; the curve is the UPS’s efficiency at each share of its
+        rating, with the hall’s operating point:
       </P>
 
       <Figure name="Data Center Power Model · redundancy and the grid" scenario={b}>
@@ -530,15 +579,7 @@ export default function Lesson() {
             { label: 'generators’ load', color: tint(GRAPHIC.gold, 0.55) },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'drawn at the hottest hour', value: mwText(r.peakMW), tone: r.over ? 'red' : undefined },
-            { label: 'grid connection', value: mwText(r.gridMW, 0) },
-            { label: 'UPS installed', value: mwText(r.chain.ups.installedMW) },
-            { label: 'generators', value: `${r.generators.units} × 3 MW` },
-            { label: 'A-class GPUs in this IT load', value: fmt(supported) },
-          ]}
-        />
+        <Readouts items={[{ label: 'A-class GPUs in this IT load, air-cooled racks', value: fmt(supported) }]} />
         <Slider label="IT load" tone="red" value={t.itMW} min={1} max={SITE_IT_MAX} step={IT_STEP} onChange={(v) => b.set({ itMW: v })} display={mwText(t.itMW, 1)} />
         <Caption>{siteCaption(r, t)}</Caption>
       </Figure>
@@ -546,35 +587,35 @@ export default function Lesson() {
       <P>
         It starts with the same {HALL_MW} MW hall at Tech Park. On the hottest afternoon of the year, an air-cooled hall there needs about a third of a megawatt of cooling
         for every megawatt of IT, as the next lesson will work out, so the site draws {mwText(TP_HALL.peakMW)} at its peak, comfortably within Tech Park’s 60 MW connection.
-        Backing that up with N+1 takes {TP_HALL.generators.units} generators of 3 MW. Switch to 2N and watch the UPS bar double while the load inside it stays put, and the
+        Backing that up takes {TP_HALL.generators.units} generators of 3 MW. Switch to 2N and watch the UPS bar double while the load inside it stays put, and the
         operating point slide down the curve.
       </P>
 
       <H2>The connection is the limit</H2>
       <P>
-        Now move the hall to Bayport, the coastal city beside most of the users. Its grid can offer a new data center only {SITES.bayport.gridMW} MW, and on its hottest hour,
-        with the cooling an air-cooled hall needs there, the {HALL_MW} MW hall would draw {mwText(siteRun({ ...SITE_DEFAULTS, site: 'bayport' }).peakMW)}. It doesn’t fit.
+        Now move the hall to Marston, beside the users. Its grid can offer a new data center only {SITES.marston.gridMW} MW, and on its hottest hour,
+        with the cooling an air-cooled hall needs there, the {HALL_MW} MW hall would draw {mwText(siteRun({ ...SITE_DEFAULTS, site: 'marston' }).peakMW)}. It doesn’t fit.
       </P>
 
       <Challenge
         id="b"
         figure="Data Center Power Model · redundancy and the grid"
-        question="Find the largest IT load, to the nearest half megawatt, that Bayport’s 20 MW connection can carry through the hottest hour of the year, keeping one spare UPS module (N+1)."
+        question="Find the largest IT load, to the nearest half megawatt, that Marston’s 20 MW connection can carry through the hottest hour of the year, keeping one spare UPS module (N+1)."
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${mwText(BAY_MAX, 1)}. At the hottest hour that draws ${mwText(siteRun({ site: 'bayport', itMW: BAY_MAX, redundancy: 'N+1' }).peakMW)}; another half megawatt would need ${mwText(siteRun({ site: 'bayport', itMW: BAY_MAX + IT_STEP, redundancy: 'N+1' }).peakMW)}. That is room for about ${fmt(roundTo(LESSON_NUMBERS.bayGpus, 100))} A-class GPUs in air-cooled racks.`}
+        success={`Solved: ${mwText(BAY_MAX, 1)}. At the hottest hour that draws ${peakText(siteRun({ site: 'marston', itMW: BAY_MAX, redundancy: 'N+1' }).peakMW)}; another half megawatt would need ${peakText(siteRun({ site: 'marston', itMW: BAY_MAX + IT_STEP, redundancy: 'N+1' }).peakMW)}. That is room for about ${fmt(roundTo(LESSON_NUMBERS.bayGpus, 100))} A-class GPUs in air-cooled racks.`}
       />
 
       <P>
-        Bayport’s {SITES.bayport.gridMW} MW supports an IT load of {mwText(BAY_MAX, 1)}, about {fmt(roundTo(LESSON_NUMBERS.bayGpus, 100))} A-class GPUs. Tech Park’s 60 MW
-        supports {mwText(TP_MAX, 1)}, about {fmt(roundTo(LESSON_NUMBERS.tpGpus, 100))}; Northfield’s 200 MW, {mwText(NF_MAX, 0)}, about{' '}
+        Marston’s {SITES.marston.gridMW} MW supports an IT load of {mwText(BAY_MAX, 1)}, about {fmt(roundTo(LESSON_NUMBERS.bayGpus, 100))} A-class GPUs. Tech Park’s 60 MW
+        supports {mwText(TP_MAX, 1)}, about {fmt(roundTo(LESSON_NUMBERS.tpGpus, 100))}; Fernhill’s 200 MW, {mwText(NF_MAX, 0)}, about{' '}
         {fmt(roundTo(LESSON_NUMBERS.nfGpus, 100))}. Those connections, not the
         price of electricity, decide how much computing each site can ever hold. And in the real world they are slow to get. A connection of tens or hundreds of megawatts
         often needs a new substation, and sometimes new transmission lines — lines that, as the electricity course showed in <a href={lessonHref('2.5')}>Lesson 2.5</a>, may
         already be full — and in many places the wait for power, rather than for chips, decides when a new data center can open.
       </P>
       <P>
-        So a GPU-hour in Bayport is scarce for reasons that have nothing to do with the GPU. The same A-class chip, in a hall with spare megawatts, an efficient power chain
+        So a GPU-hour in Marston is scarce for reasons that have nothing to do with the GPU. The same A-class chip, in a hall with spare megawatts, an efficient power chain
         and generators behind it, is a different product from one that can’t be switched on at all, and Chapter 5 will show the difference turning into prices. First,
         though, every one of those megawatts ends up as heat. The cooling that removes it was the slice of the hottest hour we borrowed from the next lesson, and in{' '}
         <a href={lessonHref('compute/4.3')}>Lesson 4.3</a> we work it out from the chips outward.

@@ -44,6 +44,7 @@ import {
 } from '../../../engines/oil/trading';
 import type { PnlSummary } from '../../../engines/strategy/risk';
 import { XYChart, type XYMarker } from '../shared/charts';
+import { RISK_TONE, YEAR_TICKS, money, pnlTone, seasonDisplay, yearTick } from './style';
 
 // ---------------------------------------------------------------------------
 // The laboratory: the chapter's four rules, run together on one history.
@@ -57,6 +58,7 @@ export const STRATEGY_LABEL: Record<SpreadId, string> = {
   quality: 'Heavy–light quality',
 };
 const SHORT_LABEL: Record<SpreadId, string> = { calendar: 'Cal.', basis: 'Basis', crack: 'Crack', quality: 'Qual.' };
+const SHORT_NAME: Record<SpreadId, string> = { calendar: 'Calendar', basis: 'Basis', crack: 'Crack', quality: 'Quality' };
 const TONE: Record<SpreadId, 'orange' | 'blue' | 'teal' | 'gold'> = { calendar: 'orange', basis: 'blue', crack: 'teal', quality: 'gold' };
 const color = (id: SpreadId) => GRAPHIC[TONE[id]];
 const INK = '#333333';
@@ -71,9 +73,9 @@ export interface LabState {
   quality: number;
   /** Kessler's working storage, million barrels. */
   kessler: number;
-  /** Ridgeback Basin growth, kb/d a year. */
+  /** Pinyon Basin growth, kb/d a year. */
   growth: number;
-  /** Whether the Kessler–Calder expansion opens after three years. */
+  /** Whether the Kessler–Corran expansion opens after three years. */
   expansion: ExpansionChoice;
   /** Rail capacity from Kessler to the coast, kb/d. */
   rail: number;
@@ -97,6 +99,21 @@ export const LAB_DEFAULTS: LabState = {
   seasonality: HISTORY_DEFAULTS.seasonality,
   fuelOil: 0,
   history: 0,
+};
+
+/** The first demonstration's settings: the book's sizes and the history it trades. */
+export type BookState = Pick<LabState, SpreadId | 'history'>;
+export const BOOK_DEFAULTS: BookState = { calendar: 10, basis: 10, crack: 10, quality: 10, history: 0 };
+
+/** The second demonstration's settings: the physical drivers, traded at 10 units each on the course's history. */
+export type DriverState = Pick<LabState, 'kessler' | 'growth' | 'expansion' | 'rail' | 'seasonality' | 'fuelOil'>;
+export const DRIVER_DEFAULTS: DriverState = {
+  kessler: HISTORY_DEFAULTS.kesslerCapacity,
+  growth: HISTORY_DEFAULTS.basinGrowth,
+  expansion: 'built',
+  rail: HISTORY_DEFAULTS.rail,
+  seasonality: HISTORY_DEFAULTS.seasonality,
+  fuelOil: 0,
 };
 
 /** The other simulated histories: the same physics with different random draws. */
@@ -172,6 +189,8 @@ export interface LabResult {
   sharpes: Record<SpreadId, number>;
   /** Each strategy's weekly value at risk at its chosen size, $. */
   vars: Record<SpreadId, number>;
+  /** Each strategy's weekly standard deviation of P&L at its chosen size, $. */
+  sds: Record<SpreadId, number>;
   /** Correlations of the strategies' weekly P&L, in STRATEGIES order. */
   corr: number[][];
   /** The most initial margin tied up at once, $. */
@@ -186,18 +205,20 @@ export function runLab(st: LabState): LabResult {
   const totals = {} as Record<SpreadId, number>;
   const sharpes = {} as Record<SpreadId, number>;
   const vars = {} as Record<SpreadId, number>;
+  const sds = {} as Record<SpreadId, number>;
   for (const id of STRATEGIES) {
     parts[id] = u.pnl[id].map((v) => v * st[id]);
     totals[id] = sum(parts[id]);
     const one = summarize(u.pnl[id], 52);
     sharpes[id] = one.sharpe;
     vars[id] = one.var95 * st[id];
+    sds[id] = one.stdev * st[id];
   }
   const pnl = Array.from({ length: n }, (_, i) => STRATEGIES.reduce((s, id) => s + parts[id][i], 0));
   let peakMargin = 0;
   for (let i = 0; i < n; i++) peakMargin = Math.max(peakMargin, STRATEGIES.reduce((s, id) => s + Math.abs(u.positions[id][i]) * st[id] * SPREADS[id].margin, 0));
   const corr = STRATEGIES.map((a) => STRATEGIES.map((b) => (a === b ? 1 : correlation(u.pnl[a], u.pnl[b]))));
-  return { pnl, parts, stats: summarize(pnl, 52), totals, sharpes, vars, corr, peakMargin, drawdown: maxDrawdown(pnl) };
+  return { pnl, parts, stats: summarize(pnl, 52), totals, sharpes, vars, sds, corr, peakMargin, drawdown: maxDrawdown(pnl) };
 }
 
 /** Sharpe ratios are shown, and judged, to two decimals. */
@@ -223,6 +244,17 @@ export function sizingSolved(st: LabState): boolean {
   if (!physicalAtDefaults(st)) return false;
   const r = runLab(st);
   return round2(r.stats.sharpe) >= SIZING_TARGET.sharpe && r.stats.total >= SIZING_TARGET.total;
+}
+
+const SIZE_NAME: Record<SpreadId, string> = { calendar: 'the calendar spread', basis: 'the basis trade', crack: 'the crack', quality: 'the quality trade' };
+const listOf = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/** How a book's sizes differ from 10 units each, in words: what it cut and what it leaned on. */
+export function sizingStory(st: LabState): string {
+  const cut = STRATEGIES.filter((id) => st[id] < LAB_DEFAULTS[id]).map((id) => SIZE_NAME[id]);
+  const raised = STRATEGIES.filter((id) => st[id] > LAB_DEFAULTS[id]).map((id) => SIZE_NAME[id]);
+  const parts = [cut.length ? `shrinking ${listOf(cut)}` : '', raised.length ? `leaning on ${listOf(raised)}` : ''].filter(Boolean);
+  return parts.length ? `${parts.join(', and ')} — sizing by risk rather than by units` : 'sizing by risk rather than by units';
 }
 
 /** The same book and drivers on the eight other histories: the average Sharpe ratio. */
@@ -416,10 +448,10 @@ export function overfitStudy(id: SpreadId): Study {
 // ---------------------------------------------------------------------------
 // Formatting and module-level reference runs for the prose.
 
-/** Money to the nearest $100, or in millions with two decimals. */
-function money(v: number): string {
-  if (Math.abs(v) >= 1e6) return `${v < 0 ? '−' : ''}$${fmt(Math.abs(v) / 1e6, 2)} million`;
-  return usd(Math.round(v / 100) * 100);
+/** Compact money for the table's narrow cells: "$1.44M" from $1 million, otherwise to the nearest $100. */
+function cellMoney(v: number): string {
+  if (Math.abs(v) >= 1e6) return `${v < 0 ? '−' : ''}$${fmt(Math.abs(v) / 1e6, 2)}M`;
+  return money(v);
 }
 
 function axisMoney(v: number): string {
@@ -441,6 +473,7 @@ const SHIFTED = runLab({ ...LAB_DEFAULTS, fuelOil: FUEL_SHIFT });
 const NO_SEASONS = runLab({ ...LAB_DEFAULTS, seasonality: 0 });
 const WORST = worstWeek(LAB_DEFAULTS);
 const SEPARATE_VAR = sum(STRATEGIES.map((id) => BASE.vars[id]));
+const SEPARATE_SD = sum(STRATEGIES.map((id) => BASE.sds[id]));
 const CRACK_BASIS = crackBasisCorrelation();
 /** An example of a book sized on our history, for the overfitting section. */
 export const TUNED_BOOK: LabState = { ...LAB_DEFAULTS, calendar: 20, basis: 4, crack: 1, quality: 20 };
@@ -468,28 +501,28 @@ function LabChart({ r }: { r: LabResult }) {
   return (
     <XYChart
       ariaLabel={`Cumulative P&L over five simulated years. The book ends at ${money(r.stats.total)}: calendar spread ${money(r.totals.calendar)}, basis ${money(r.totals.basis)}, crack ${money(r.totals.crack)}, quality ${money(r.totals.quality)}. Largest drawdown ${money(dd.drawdown)}.`}
-      height={240}
+      height={200}
       x={[0, 5]}
       y={[y0, y1]}
-      xTicks={[0, 1, 2, 3, 4, 5]}
+      xTicks={YEAR_TICKS}
       yTicks={niceTicks(y0, y1, 4)}
-      xFormat={(v) => (v === 0 ? 'start' : `year ${v}`)}
+      xFormat={yearTick}
       yFormat={axisMoney}
       yLabel="Cumulative P&L"
       series={[...series.map((s) => ({ points: s.points, color: color(s.id), width: 1.75 })), { points: book, color: INK, width: 3 }]}
-      bands={dd.drawdown > 0 && tx - px > 0.03 ? [{ from: px, to: tx, color: 'rgba(231, 91, 85, .12)' }] : []}
+      bands={dd.drawdown > 0 && tx - px > 0.03 ? [{ from: px, to: tx, color: 'rgba(171, 112, 182, .14)' }] : []}
     >
       {(sx, sy) =>
         dd.drawdown > 0 ? (
           <g>
-            <line x1={sx(tx)} x2={sx(tx)} y1={sy(peakEq)} y2={sy(troughEq)} stroke={GRAPHIC.red} strokeWidth={3} />
-            <circle cx={sx(px)} cy={sy(peakEq)} r={3.5} fill={GRAPHIC.red} />
-            <circle cx={sx(tx)} cy={sy(troughEq)} r={3.5} fill={GRAPHIC.red} />
+            <line x1={sx(tx)} x2={sx(tx)} y1={sy(peakEq)} y2={sy(troughEq)} stroke={GRAPHIC.violet} strokeWidth={3} />
+            <circle cx={sx(px)} cy={sy(peakEq)} r={3.5} fill={GRAPHIC.violet} />
+            <circle cx={sx(tx)} cy={sy(troughEq)} r={3.5} fill={GRAPHIC.violet} />
             <text
               x={sx(tx) + (tx > 3.6 ? -8 : 8)}
               y={sy(troughEq) + 16}
               textAnchor={tx > 3.6 ? 'end' : 'start'}
-              style={{ fontSize: 12, fontWeight: 500, fill: TEXT.red }}
+              style={{ fontSize: 12, fontWeight: 500, fill: TEXT.violet }}
             >
               largest drawdown
             </text>
@@ -499,6 +532,11 @@ function LabChart({ r }: { r: LabResult }) {
     </XYChart>
   );
 }
+
+const LAB_LEGEND = [
+  { label: 'Book', color: INK, kind: 'line' as const },
+  ...STRATEGIES.map((id) => ({ label: STRATEGY_LABEL[id], color: color(id), kind: 'line' as const })),
+];
 
 function CorrCell({ x, self }: { x: number; self: boolean }) {
   if (self) return <span style={{ color: TEXT.gray }}>1</span>;
@@ -544,15 +582,20 @@ function ScatterChart({ id, study, sel }: { id: SpreadId; study: Study; sel: Stu
 // ---------------------------------------------------------------------------
 
 export default function Lesson() {
-  const s1 = useScenario<LabState>('oil-strategy-lab', LAB_DEFAULTS);
-  const st = s1.state;
-  const r = useMemo(() => runLab(st), [st]);
-  const atDefaults = physicalAtDefaults(st);
-  const sizedOk = sizingSolved(st);
-  const elsewhere = useMemo(() => (sizedOk ? elsewhereSharpe(st) : 0), [sizedOk, st]);
-  const cs = crackShift(st);
-  const crackOk = crackSolved(st);
-  const tone = (v: number) => (v < 0 ? ('red' as const) : ('green' as const));
+  // The book: sizes and the history it trades.
+  const s1 = useScenario<BookState>('oil-strategy-book', BOOK_DEFAULTS);
+  const book: LabState = { ...LAB_DEFAULTS, ...s1.state };
+  const r = useMemo(() => runLab({ ...LAB_DEFAULTS, ...s1.state }), [s1.state]);
+  const sizedOk = sizingSolved(book);
+  const elsewhere = useMemo(() => (sizedOk ? elsewhereSharpe({ ...LAB_DEFAULTS, ...s1.state }) : 0), [sizedOk, s1.state]);
+
+  // The physical drivers, at 10 units each.
+  const s3 = useScenario<DriverState>('oil-strategy-drivers', DRIVER_DEFAULTS);
+  const world: LabState = { ...LAB_DEFAULTS, ...s3.state };
+  const rw = useMemo(() => runLab({ ...LAB_DEFAULTS, ...s3.state }), [s3.state]);
+  const cs = crackShift(world);
+  const crackOk = crackSolved(world);
+  const dv = s3.state;
 
   const s2 = useScenario('oil-strategy-lab-walk', { strategy: 'calendar' as SpreadId, ...defaultIndices('calendar') });
   const { strategy } = s2.state;
@@ -586,46 +629,44 @@ export default function Lesson() {
   }, [studies]);
 
   const units = (n: number) => `${n} unit${n === 1 ? '' : 's'}`;
+  const sizingStatus =
+    s1.state.history !== 0
+      ? 'Set the simulated history back to the course’s.'
+      : r.stats.total < SIZING_TARGET.total
+        ? `The book earns ${money(r.stats.total)}, short of ${money(SIZING_TARGET.total)}.`
+        : `A Sharpe ratio of ${sharpeText(r.stats.sharpe)} on ${money(r.stats.total)}. Which strategy swings most for what it earns?`;
 
   return (
     <LessonPage id="oil/6.5">
       <P>
-        In <a href={lessonHref('oil/6.4')}>Lesson 6.4</a>, the Calder refinery sold crack spreads to steady its margin: a hedge, which removes risk a business
+        In <a href={lessonHref('oil/6.4')}>Lesson 6.4</a>, the Corran refinery sold crack spreads to steady its margin: a hedge, which removes risk a business
         already carries. The rest of this chapter went the other way, toward trades that take on risk because something physical pays for it. The calendar spread of{' '}
         <a href={lessonHref('oil/6.1')}>Lesson 6.1</a> bets on Kessler’s tanks; the basis trade of <a href={lessonHref('oil/6.2')}>Lesson 6.2</a> on the
-        Kessler–Calder pipeline, and its quality trade on the price of high-sulfur fuel oil; the crack strategy of <a href={lessonHref('oil/6.3')}>Lesson 6.3</a> on
+        Kessler–Corran pipeline, and its quality trade on the price of high-sulfur fuel oil; the crack strategy of <a href={lessonHref('oil/6.3')}>Lesson 6.3</a> on
         product stocks and refinery outages. A trading desk would run several at once, and ask two questions of the result: how much risk is the whole book carrying,
         and how far should anyone believe a backtest?
       </P>
       <P>
         The laboratory runs the four rules at their lessons’ settings on the same weekly history. A unit of each is one spread: 1,000 barrels a leg, or for the
         crack, 3,000 barrels of crude against 2,000 of gasoline and 1,000 of diesel. The <K c="price">P&amp;L</K>, <K tone="violet">Sharpe ratio</K> and{' '}
-        <K tone="violet">maximum drawdown</K> are as before. The weekly <K tone="violet">value at risk</K> is the loss exceeded in only one week in twenty, and the
-        peak margin is the most cash an exchange would have held against the positions at once, at our illustrative rates. Next to the results sit the physical
-        drivers behind each strategy and a choice of history: the course’s, or one of eight others drawn from the same physics with different luck. Every price is
-        simulated for teaching. In the next demonstration, size each strategy and change the world it trades in:
+        <K tone="violet">maximum drawdown</K> are as before, and the table adds the standard deviation of each strategy’s weekly P&amp;L at its size. The weekly{' '}
+        <K tone="violet">value at risk</K> is the loss exceeded in only one week in twenty, and the peak margin is the most cash an exchange would have held against
+        the positions at once, at our illustrative rates. In the next demonstration, size each strategy, and choose the history it trades: the course’s, or one of
+        eight others drawn from the same simulated physics with different luck.
       </P>
 
       <Figure name="Oil Strategy Laboratory" scenario={s1}>
-        <Legend
-          items={[
-            { label: 'Book', color: INK, kind: 'line' },
-            ...STRATEGIES.map((id) => ({ label: STRATEGY_LABEL[id], color: color(id), kind: 'line' as const })),
-            { label: 'Largest drawdown', color: GRAPHIC.red, kind: 'line' as const },
-          ]}
-        />
+        <Legend items={LAB_LEGEND} />
         <LabChart r={r} />
         <Readouts
           items={[
-            { label: <K c="price">five-year P&amp;L</K>, value: money(r.stats.total), tone: tone(r.stats.total) },
-            { label: <K tone="violet">Sharpe ratio</K>, value: sharpeText(r.stats.sharpe), tone: 'violet' },
-            { label: <K tone="violet">maximum drawdown</K>, value: money(r.stats.maxDrawdown), tone: 'red' },
-            { label: <K tone="violet">weekly value at risk</K>, value: money(r.stats.var95), tone: 'red' },
+            { label: <K tone="violet">maximum drawdown</K>, value: money(r.stats.maxDrawdown), tone: RISK_TONE },
+            { label: <K tone="violet">weekly value at risk</K>, value: money(r.stats.var95), tone: RISK_TONE },
             { label: 'peak margin', value: money(r.peakMargin) },
           ]}
         />
         <DataTable
-          caption="Each strategy’s five-year P&L at its chosen size, its Sharpe ratio, and the correlations of the strategies’ weekly P&L"
+          caption="Each strategy’s five-year P&L at its chosen size, its Sharpe ratio, the standard deviation of its weekly P&L at that size, and the correlations of the strategies’ weekly P&L"
           rowKey={(row) => row}
           rows={STRATEGIES}
           columns={[
@@ -634,49 +675,87 @@ export default function Lesson() {
               cell: (id) => (
                 <span>
                   <Swatch color={color(id)} />
-                  {STRATEGY_LABEL[id]}
+                  {SHORT_NAME[id]}
                 </span>
               ),
             },
-            { label: 'P&L', cell: (id) => <span style={{ color: TEXT[tone(r.totals[id])] }}>{money(r.totals[id])}</span> },
+            { label: 'P&L', cell: (id) => <span style={{ color: TEXT[pnlTone(r.totals[id])] }}>{cellMoney(r.totals[id])}</span> },
             { label: 'Sharpe', cell: (id) => sharpeText(r.sharpes[id]) },
+            { label: 'Weekly SD', cell: (id) => usd(r.sds[id]) },
             ...STRATEGIES.map((other, j) => ({ label: SHORT_LABEL[other], cell: (id: SpreadId) => <CorrCell x={r.corr[STRATEGIES.indexOf(id)][j]} self={id === other} /> })),
           ]}
-          footer={['Book', money(r.stats.total), sharpeText(r.stats.sharpe), '', '', '', '']}
+          footer={['Book', cellMoney(r.stats.total), sharpeText(r.stats.sharpe), usd(r.stats.stdev), '', '', '', '']}
         />
         <Controls columns={2}>
           {STRATEGIES.map((id) => (
-            <Slider key={id} label={STRATEGY_LABEL[id]} tone={TONE[id]} value={st[id]} min={0} max={20} onChange={(v) => s1.set({ [id]: v } as Partial<LabState>)} display={units(st[id])} />
+            <Slider key={id} label={STRATEGY_LABEL[id]} tone={TONE[id]} value={s1.state[id]} min={0} max={20} onChange={(v) => s1.set({ [id]: v } as Partial<BookState>)} display={units(s1.state[id])} />
           ))}
         </Controls>
+        <Slider
+          label="Simulated history"
+          value={s1.state.history}
+          min={0}
+          max={OTHER_SEEDS.length}
+          onChange={(v) => s1.set({ history: v })}
+          display={s1.state.history === 0 ? 'the course’s' : `no. ${s1.state.history} of ${OTHER_SEEDS.length} others`}
+        />
+      </Figure>
+
+      <P>
+        Start with 10 units of each. The book earns {money(BASE.stats.total)} with a Sharpe ratio of {sharpeText(BASE.stats.sharpe)}, worse than the calendar
+        spread’s {sharpeText(BASE.sharpes.calendar)}, the basis trade’s {sharpeText(BASE.sharpes.basis)} or the quality trade’s {sharpeText(BASE.sharpes.quality)}{' '}
+        alone; only the crack, at {sharpeText(BASE.sharpes.crack)}, is lower — and the crack is most of the book. Units aren’t risk, as the table’s weekly SD
+        column shows. In a typical week a unit of the calendar spread gains or loses about {usd(BASE_SD.calendar)}, and a unit of the crack about{' '}
+        {usd(BASE_SD.crack)}, {fmt(BASE_SD.crack / BASE_SD.calendar)} times as much: three times the barrels, on a spread that moves far more. The book’s maximum
+        drawdown, {money(BASE.stats.maxDrawdown)}, came in a single week of year {WORST.year}, and oddly for a refining trade, nothing happened at any refinery that
+        week. We’ll come back to it.
+      </P>
+      <P>
+        The table’s correlations are the other half of the story. A <K tone="violet">correlation</K> near zero means two strategies’ good and bad weeks have nothing
+        to do with each other, and most of these are near zero. When bad weeks rarely coincide, the book’s risk is less than the sum of its parts: at 10 units each,
+        the four strategies’ weekly standard deviations add up to {usd(SEPARATE_SD)} but the book’s is {usd(BASE.stats.stdev)}, and their values at risk add up
+        to {money(SEPARATE_VAR)} against the book’s {money(BASE.stats.var95)}. So a desk can shrink its riskiest strategy, lean on the others, and earn more for
+        each unit of risk it carries.
+      </P>
+
+      <Challenge
+        id="a"
+        question={`Predict first from the table: which strategy swings most for what it earns, and which could carry more? Then, on the course’s history, size the four strategies so the book’s Sharpe ratio is at least ${fmt(SIZING_TARGET.sharpe, 2)} while it still earns at least ${money(SIZING_TARGET.total)} over the five years.`}
+        solved={sizedOk}
+        status={sizingStatus}
+        success={`Solved: a Sharpe ratio of ${sharpeText(r.stats.sharpe)} on ${money(r.stats.total)}, with a maximum drawdown of ${money(r.stats.maxDrawdown)} against ${money(BASE.stats.maxDrawdown)} for equal sizes. The book got there by ${sizingStory(book)}. On the eight other simulated histories, this same book’s Sharpe ratio averages ${sharpeText(elsewhere)} — a number to keep in mind for the second half of this lesson.`}
+      />
+
+      <H2>One driver each</H2>
+      <P>
+        Why are most correlations so low? Because each strategy bets on a different physical fact. In the next demonstration the four strategies trade 10 units
+        each on the course’s history, and the controls are the physical drivers behind them: Kessler’s storage, the basin’s growth, the rail out of Kessler, the
+        seasons, fuel oil’s discount and the pipeline expansion:
+      </P>
+
+      <Figure name="Oil Strategy Laboratory · physical drivers" scenario={s3}>
+        <Legend items={LAB_LEGEND} />
+        <LabChart r={rw} />
+        <Readouts items={STRATEGIES.map((id) => ({ label: STRATEGY_LABEL[id], value: money(rw.totals[id]), tone: TONE[id] }))} />
         <Controls columns={2}>
-          <Slider label="Kessler storage" tone="orange" value={st.kessler} min={4} max={60} step={4} onChange={(v) => s1.set({ kessler: v })} display={`${st.kessler} million bbl`} />
-          <Slider label="Basin growth" tone="orange" value={st.growth} min={0} max={140} step={10} onChange={(v) => s1.set({ growth: v })} display={`${st.growth} kb/d a year`} />
-          <Slider label="Rail to the coast" tone="orange" value={st.rail} min={0} max={300} step={25} onChange={(v) => s1.set({ rail: v })} display={`${st.rail} kb/d`} />
-          <Slider
-            label="Seasonal swings"
-            value={st.seasonality}
-            min={0}
-            max={2}
-            step={0.25}
-            onChange={(v) => s1.set({ seasonality: v })}
-            display={st.seasonality === 0 ? 'none' : st.seasonality === 1 ? 'normal' : `×${fmt(st.seasonality, 2)}`}
-          />
+          <Slider label="Kessler storage" tone="orange" value={dv.kessler} min={4} max={60} step={4} onChange={(v) => s3.set({ kessler: v })} display={`${dv.kessler} million bbl`} />
+          <Slider label="Basin growth" tone="orange" value={dv.growth} min={0} max={140} step={10} onChange={(v) => s3.set({ growth: v })} display={`${dv.growth} kb/d a year`} />
+          <Slider label="Rail to the coast" tone="orange" value={dv.rail} min={0} max={300} step={25} onChange={(v) => s3.set({ rail: v })} display={`${dv.rail} kb/d`} />
+          <Slider label="Seasonal swing" tone="red" value={dv.seasonality} min={0} max={2} step={0.25} onChange={(v) => s3.set({ seasonality: v })} display={seasonDisplay(dv.seasonality)} />
           <Slider
             label="Fuel-oil discount"
             tone="gold"
-            value={st.fuelOil}
+            value={dv.fuelOil}
             min={0}
             max={20}
-            onChange={(v) => s1.set({ fuelOil: v })}
-            display={st.fuelOil === 0 ? 'no shift' : `+$${st.fuelOil} after year 2`}
+            onChange={(v) => s3.set({ fuelOil: v })}
+            display={dv.fuelOil === 0 ? 'no shift' : `+$${dv.fuelOil} after year 2`}
           />
-          <Slider label="Simulated history" value={st.history} min={0} max={OTHER_SEEDS.length} onChange={(v) => s1.set({ history: v })} display={st.history === 0 ? 'the course’s' : `no. ${st.history} of ${OTHER_SEEDS.length} others`} />
         </Controls>
         <Segmented
-          label="Kessler–Calder expansion"
-          value={st.expansion}
-          onChange={(v) => s1.set({ expansion: v })}
+          label="Kessler–Corran expansion"
+          value={dv.expansion}
+          onChange={(v) => s3.set({ expansion: v })}
           options={[
             { value: 'built', label: 'Expansion opens after year 3' },
             { value: 'none', label: 'No expansion' },
@@ -685,43 +764,14 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with 10 units of each. The book earns {money(BASE.stats.total)} with a Sharpe ratio of {sharpeText(BASE.stats.sharpe)}, worse than the calendar
-        spread’s {sharpeText(BASE.sharpes.calendar)}, the basis trade’s {sharpeText(BASE.sharpes.basis)} or the quality trade’s {sharpeText(BASE.sharpes.quality)}{' '}
-        alone; only the crack, at {sharpeText(BASE.sharpes.crack)}, is lower — and the crack is most of the book. Units aren’t risk. In a typical week a unit of the
-        calendar spread gains or loses about {usd(BASE_SD.calendar)}, and a unit of the crack about {usd(BASE_SD.crack)}, {fmt(BASE_SD.crack / BASE_SD.calendar)}{' '}
-        times as much: three times the barrels, on a spread that moves far more. The book’s maximum drawdown, {money(BASE.stats.maxDrawdown)}, came in a single week of
-        year {WORST.year}, and oddly for a refining trade, nothing happened at any refinery that week. We’ll come back to it.
-      </P>
-      <P>
-        The table’s correlations are the other half of the story. A <K tone="violet">correlation</K> near zero means two strategies’ good and bad weeks have nothing
-        to do with each other, and most of these are near zero. When bad weeks rarely coincide, risk grows more slowly than size: at 10 units each, the four
-        strategies’ weekly values at risk add up to {money(SEPARATE_VAR)}, but the book’s is {money(BASE.stats.var95)}. So a desk can shrink its riskiest strategy,
-        lean on the others, and earn more for each unit of risk it carries.
-      </P>
-
-      <Challenge
-        id="a"
-        question="With the physical drivers and the history at their starting values, size the four strategies so the book’s Sharpe ratio is at least 1.40 while it still earns at least $400,000 over the five years."
-        solved={sizedOk}
-        status={
-          !atDefaults
-            ? 'Set the physical drivers, the expansion and the history back to their starting values.'
-            : `A Sharpe ratio of ${sharpeText(r.stats.sharpe)} on ${money(r.stats.total)}.`
-        }
-        success={`Solved: a Sharpe ratio of ${sharpeText(r.stats.sharpe)} on ${money(r.stats.total)}, with a maximum drawdown of ${money(r.stats.maxDrawdown)} against ${money(BASE.stats.maxDrawdown)} for equal sizes. The book got there by shrinking the crack and leaning on the calendar and quality trades, whose units carry little risk. On the eight other simulated histories, this same book’s Sharpe ratio averages ${sharpeText(elsewhere)} — a number to keep in mind for the second half of this lesson.`}
-      />
-
-      <H2>One driver each</H2>
-      <P>
-        Why are most correlations so low? Because each strategy bets on a different physical fact. In <FigRef to="Oil Strategy Laboratory">the laboratory</FigRef>,
-        shrink Kessler’s storage to 4 million barrels: the calendar spread goes from making {money(BASE.totals.calendar)} to losing{' '}
+        Shrink Kessler’s storage to 4 million barrels: the calendar spread goes from making {money(BASE.totals.calendar)} to losing{' '}
         {money(-SMALL_TANKS.totals.calendar)}, for the reasons <a href={lessonHref('oil/6.1')}>Lesson 6.1</a> traced, and none of the other three changes by a
         dollar. Add ${FUEL_SHIFT} to fuel oil’s discount after year 2 — a lasting shift like the one the 2020 limit on sulfur in ships’ fuel threatened — and the
         quality trade’s {money(BASE.totals.quality)} falls to {money(SHIFTED.totals.quality)}, again alone. Take the seasons out of demand and the crack’s{' '}
         {money(BASE.totals.crack)} becomes {money(NO_SEASONS.totals.crack)}. Removing one physical cause removes one strategy, not the book.
       </P>
       <P>
-        The exception is the basis and the crack, with a correlation of {corrText(BASE.corr[1][2])}. Go back to the book’s worst week. The Kessler–Calder line dipped
+        The exception is the basis and the crack, with a correlation of {corrText(BASE.corr[1][2])}. Go back to the book’s worst week. The Kessler–Corran line dipped
         just short of full, to {pct(WORST.useTo, 1)}, so Kessler’s crude no longer had to be priced to pay for rail (<a href={lessonHref('oil/5.2')}>Lesson 5.2</a>),
         and the Brent–WTI spread fell from {dollars(WORST.basisFrom)} to {dollars(WORST.basisTo)}. The crack fell with it, from {dollars(WORST.crackFrom)} to{' '}
         {dollars(WORST.crackTo)}. Our 3:2:1 crack, like the one usually quoted on US futures, prices crude at WTI, while gasoline and diesel sell at the coast at
@@ -732,14 +782,15 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Without touching the seasonal swings, find a physical change outside refining that moves the crack strategy’s five-year P&L by more than a quarter."
+        figure="Oil Strategy Laboratory · physical drivers"
+        question="Without touching the seasonal swing, find a physical change outside refining that moves the crack strategy’s five-year P&L by more than a quarter."
         solved={crackOk}
         status={
-          st.seasonality !== LAB_DEFAULTS.seasonality
-            ? 'Set the seasonal swings back to normal: demand for gasoline and diesel is the refining side of the crack.'
+          dv.seasonality !== DRIVER_DEFAULTS.seasonality
+            ? 'Set the seasonal swing back to normal: demand for gasoline and diesel is the refining side of the crack.'
             : `The crack strategy’s P&L is ${cs.shift >= 0 ? '+' : '−'}${pct(Math.abs(cs.shift))} from its value with the starting physical settings.`
         }
-        success={`Solved: at 10 units the crack strategy now makes ${money(10 * cs.here)}, ${pct(Math.abs(cs.shift))} ${cs.shift >= 0 ? 'more' : 'less'} than its ${money(10 * cs.base)} with the starting settings. Nothing about refining changed — only the pipeline, reaching the crack through its WTI leg. A trader who wants a cleaner bet on refining, or a coastal refiner hedging its margin, prices the crack against Brent instead, as Lesson 6.4 found for Calder.`}
+        success={`Solved: at 10 units the crack strategy now makes ${money(10 * cs.here)}, ${pct(Math.abs(cs.shift))} ${cs.shift >= 0 ? 'more' : 'less'} than its ${money(10 * cs.base)} with the starting settings. Nothing about refining changed — only the pipeline, reaching the crack through its WTI leg. A trader who wants a cleaner bet on refining, or a coastal refiner hedging its margin, prices the crack against Brent instead, as Lesson 6.4 found for Corran.`}
       />
 
       <H2>Overfitting</H2>
@@ -748,7 +799,8 @@ export default function Lesson() {
         history in view. Try enough variations of a rule on one history and the best will look good partly because it fits that history’s accidents, which won’t come
         again. This is <K tone="violet">overfitting</K>, and the remedy is to judge a rule on data it wasn’t chosen on. We have plenty: the same physics can generate
         any number of histories. In the next demonstration, each dot is one setting of a rule at 10 units, placed by what it makes on our history (across) and on
-        average over the eight others (up):
+        average over the eight others (up). Its readouts add a <K tone="violet">walk-forward</K> test, which needs no other histories: it replays ours as a trader
+        would have lived it, every 13 weeks picking the setting that made the most over the previous 52 and trading it for the next 13:
       </P>
 
       <Figure name="Oil Strategy Laboratory · out of sample" scenario={s2}>
@@ -761,10 +813,10 @@ export default function Lesson() {
         <ScatterChart id={strategy} study={study} sel={sel} />
         <Readouts
           items={[
-            { label: 'this setting, our history', value: money(sel.ours), tone: tone(sel.ours) },
-            { label: 'this setting, other histories', value: money(sel.others), tone: tone(sel.others) },
-            { label: <K tone="violet">walk-forward, year 2 on</K>, value: money(study.walkForward), tone: tone(study.walkForward) },
-            { label: 'best in hindsight, same weeks', value: money(study.hindsightSameWeeks), tone: tone(study.hindsightSameWeeks) },
+            { label: 'this setting, our history', value: money(sel.ours), tone: pnlTone(sel.ours) },
+            { label: 'this setting, other histories', value: money(sel.others), tone: pnlTone(sel.others) },
+            { label: <K tone="violet">walk-forward, year 2 on</K>, value: money(study.walkForward), tone: pnlTone(study.walkForward) },
+            { label: 'best in hindsight, same weeks', value: money(study.hindsightSameWeeks), tone: pnlTone(study.hindsightSameWeeks) },
           ]}
         />
         <Slider label={g.a.label} value={ai} min={0} max={g.a.values.length - 1} onChange={(v) => s2.set({ a: v })} display={g.a.format(g.a.values[ai])} />
@@ -794,13 +846,13 @@ export default function Lesson() {
         {money(studies.quality.bestElsewhere.ours)} here{ref.qualityRank > 1 ? ', so nobody choosing on this history would have picked it' : ''}.
       </P>
       <P>
-        A <K tone="violet">walk-forward</K> test needs no other histories. It replays ours as a trader would have lived it: every 13 weeks, it picks the setting that
-        made the most over the previous 52 and trades it for the next 13. For the calendar spread it makes {money(studies.calendar.walkForward)} from the second year
-        on, against {money(studies.calendar.hindsightSameWeeks)} for the setting that was best over those weeks in hindsight; for the crack,{' '}
+        Now the walk-forward test. For the calendar spread it makes {money(studies.calendar.walkForward)} from the second year on, against{' '}
+        {money(studies.calendar.hindsightSameWeeks)} over the same weeks for the setting that, in hindsight, was best over all five years; for the crack,{' '}
         {money(studies.crack.walkForward)} against {money(studies.crack.hindsightSameWeeks)}. The gap is the price of not knowing the future. Sizing is a setting
         too. One book that meets the first challenge — {units(TUNED_BOOK.calendar)} of calendar, {TUNED_BOOK.basis} of basis, {TUNED_BOOK.crack} of crack and{' '}
         {TUNED_BOOK.quality} of quality — has a Sharpe ratio of {sharpeText(ref.tuned)} here but averages {sharpeText(ref.tunedElsewhere)} on the other histories,
-        where plain 10 units of each averages {sharpeText(ref.equalElsewhere)}.
+        where plain 10 units of each averages {sharpeText(ref.equalElsewhere)}. Move the simulated history in{' '}
+        <FigRef to="Oil Strategy Laboratory">the first demonstration</FigRef> to watch your own book do the same.
       </P>
 
       <H2>What the backtests leave out</H2>

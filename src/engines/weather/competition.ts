@@ -42,21 +42,21 @@ export interface DayForecasts {
 
 /** Every forecaster's forecast for day d, issued `lead` days earlier. */
 export function dayForecasts(d: number, lead: number, knobs: WorldKnobs, yours: YourForecaster): DayForecasts {
-  const cl = climateFor('calder', knobs);
+  const cl = climateFor('fenwick', knobs);
   const info = dayInfo(d);
   const climSd = anomalySd(cl, info.doy) * (knobs.variability ?? 1);
-  const normal = expectedTemp('calder', d, knobs);
+  const normal = expectedTemp('fenwick', d, knobs);
   const issue = d - lead;
-  const today = tempF('calder', issue, knobs) - expectedTemp('calder', issue, knobs);
+  const today = tempF('fenwick', issue, knobs) - expectedTemp('fenwick', issue, knobs);
   const decay = PERSISTENCE ** lead;
-  const m = forecastTemp('calder', d, lead, knobs);
+  const m = forecastTemp('fenwick', d, lead, knobs);
   const climate = { mean: normal, sd: climSd };
   // Error of a blend b·M + (1 − b)·C: the model's own error plus (1 − b) of the forecast anomaly it
   // throws away, whose variance is the known share of the climate's.
   const blendSd = Math.sqrt(m.sd ** 2 + (1 - yours.blend) ** 2 * climSd * climSd * knownShare(lead));
   return {
     d,
-    outcome: tempF('calder', d, knobs),
+    outcome: tempF('fenwick', d, knobs),
     forecasts: {
       climate,
       persistence: { mean: normal + today * decay, sd: climSd * Math.sqrt(1 - decay * decay) },

@@ -1,5 +1,5 @@
 // Moving work to where GPU-hours are cheap. Lesson 5.5 found an A-class hour near the users selling
-// for far more than the same hour in remote Northfield. Work that doesn't need to be near users can
+// for far more than the same hour in remote Fernhill. Work that doesn't need to be near users can
 // chase the cheaper hours — but its data must travel there over a wide-area link, which takes time and,
 // at most clouds, costs a fee per gigabyte leaving a region (egress). Interactive work can't go at all
 // if the round trip is too long. Prices and fees here are simulated.

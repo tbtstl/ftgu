@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import {
-  Button,
   Caption,
   Challenge,
   Checkbox,
@@ -49,7 +48,7 @@ export const RAMP_STEP = 25;
 export const START_STEP = 5;
 
 export interface PackSettings {
-  /** Metro's average demand over the day, without the power plants' ramp, MMcf/d. */
+  /** What Metro takes from Northline on average over the day, without the power plants' ramp, MMcf/d. */
   avg: number;
   /** Extra gas the power plants burn from 17:00 to 21:00, MMcf/d. */
   ramp: number;
@@ -90,16 +89,16 @@ export function clean(run: PackHour[]): boolean {
 
 /**
  * The window of starting linepack (MMcf) that keeps the line inside its pressure limits in every
- * hour of two days, if deliveries and receipts are all made: in each hour the pack must sit
+ * hour of two days (or `hours`), if deliveries and receipts are all made: in each hour the pack must sit
  * between its least (delivery pressure at the minimum) and its most (stations at MAOP) for that
  * hour's flow. Empty when lo > hi.
  */
-export function startRange(avg: number, ramp: number, receipts: number): { lo: number; hi: number } {
+export function startRange(avg: number, ramp: number, receipts: number, hours = HOURS): { lo: number; hi: number } {
   const dem = demandDay(avg, ramp);
   let c = 0;
   let lo = -Infinity;
   let hi = Infinity;
-  for (let h = 0; h < HOURS; h++) {
+  for (let h = 0; h < hours; h++) {
     const d = dem[h % 24];
     c += (receipts - d) / 24;
     const w = packWindow(NL, (receipts + d) / 2);
@@ -120,23 +119,27 @@ export function largestRamp(avg: number, step = RAMP_STEP, max = 1000): number {
   return best;
 }
 
-/** The middle of the workable starting window, rounded to the slider's step (or the closest compromise if there is none). */
-export function bestStart(s: PackSettings): number {
-  const r = startRange(s.avg, s.ramp, receiptsOf(s));
-  const mid = (r.lo + r.hi) / 2;
-  if (!Number.isFinite(mid)) return s.start;
-  return clamp(Math.round(mid / START_STEP) * START_STEP, START_MIN, START_MAX);
-}
-
 export const START_MIN = 650;
 export const START_MAX = 950;
 
+/** Northline's average deliveries to Metro in the lesson's ramp and in the challenge, MMcf/d. */
 export const CHALLENGE_AVG = 1300;
+/** The largest evening ramp the line can carry at that average, with ratable receipts. */
 export const ANSWER_RAMP = largestRamp(CHALLENGE_AVG);
 
-/** The challenge: Metro at 1,300 MMcf/d, ratable receipts, the largest ramp the line can carry, and a run with nothing cut. */
-export function rampSolved(s: PackSettings): boolean {
-  return s.avg === CHALLENGE_AVG && s.ratable && s.ramp === ANSWER_RAMP && clean(simulate(s));
+/** The challenge: shippers bring 1,250 MMcf/d to Calder while Metro takes 1,300 on average, with no evening ramp. */
+export const IMBALANCE = { avg: CHALLENGE_AVG, ramp: 0, receipts: 1250 };
+/** The starting linepacks that carry the imbalance through both days (about 816–850 MMcf). */
+export const IMBALANCE_WINDOW = startRange(IMBALANCE.avg, IMBALANCE.ramp, IMBALANCE.receipts);
+
+/** True when the settings are the challenge's, whatever the starting linepack. */
+export function atImbalance(s: PackSettings): boolean {
+  return s.avg === IMBALANCE.avg && s.ramp === IMBALANCE.ramp && !s.ratable && s.receipts === IMBALANCE.receipts;
+}
+
+/** Solved when, with receipts 50 MMcf/d short of Metro's demand, the starting linepack carries the line through both days with nothing cut. */
+export function imbalanceSolved(s: PackSettings): boolean {
+  return atImbalance(s) && clean(simulate(s));
 }
 
 /** MW of combined-cycle plants at Lakeside's heat rate that a gas burn of q MMcf/d would fuel. */
@@ -168,6 +171,9 @@ const OVER_SHORT = OVER.reduce((a, h) => a + h.shortfall, 0) / 24;
 const OVER_FIRST = OVER.find((h) => h.shortfall > 1e-6)?.hour ?? 0;
 const ANSWER_WINDOW = startRange(CHALLENGE_AVG, ANSWER_RAMP, dayMean(CHALLENGE_AVG, ANSWER_RAMP));
 // Receipts below the day's demand.
+/** The challenge's shortfall over the two days, MMcf, and a third day: no starting linepack survives it. */
+const IMBALANCE_DRAIN = ((IMBALANCE.avg - IMBALANCE.receipts) * HOURS) / 24;
+export const IMBALANCE_THREE_DAYS = startRange(IMBALANCE.avg, IMBALANCE.ramp, IMBALANCE.receipts, 72);
 const SHORT_RECEIPTS = 1200;
 const DRAIN = simulate({ ...PACK_DEFAULTS, ratable: false, receipts: SHORT_RECEIPTS });
 const DRAIN_FIRST = DRAIN.find((h) => h.shortfall > 1e-6)?.hour ?? NaN;
@@ -203,6 +209,8 @@ const WINDOWS = FLOWS.map((q) => packWindow(NL, q));
 
 const clock = (h: number) => (h % 24 === 0 ? (h === 0 ? 'day 1' : h === 24 ? 'day 2' : '48 h') : hour(h % 24));
 const mmcf = (x: number) => `${fmt(x)} MMcf`;
+/** MMcf with a decimal for small amounts, so a sliver of a cut doesn't read as zero. */
+const mmcf1 = (x: number) => `${fmt(x, x > 0 && x < 9.95 ? 1 : 0)} MMcf`;
 
 // ---------------------------------------------------------------------------
 // The pipe, drawn at one hour: shaded by pressure, with the stations' sawtooth.
@@ -308,7 +316,10 @@ export default function Lesson() {
   const heldTotal = run.reduce((a, x) => a + x.refused, 0) / 24;
   const packs = run.map((x) => x.pack);
   const minDelivery = Math.min(...run.map((x) => x.delivery)) - 14.696;
-  const solved = useMemo(() => rampSolved(st), [st]);
+  const solved = useMemo(() => imbalanceSolved(st), [st]);
+  const firstCut = run.find((x) => x.shortfall > 1e-6);
+  const firstHeld = run.find((x) => x.refused > 1e-6);
+  const when = (x: PackHour) => `${hour((x.hour + 1) % 24)} on day ${x.hour < 24 ? 1 : 2}`;
 
   // Chart series.
   const hx = Array.from({ length: HOURS + 1 }, (_, i) => i);
@@ -322,11 +333,18 @@ export default function Lesson() {
   const packBottom = 600;
 
   const status = (() => {
-    if (st.avg !== CHALLENGE_AVG || !st.ratable) return `Set Metro’s average to ${fmt(CHALLENGE_AVG)} MMcf/d with receipts following the day’s average demand.`;
-    if (!clean(run))
-      return `At ${fmt(st.ramp)} MMcf/d of evening ramp, ${shortTotal > 0 ? `Metro is short ${mmcf(shortTotal)}` : ''}${shortTotal > 0 && heldTotal > 0 ? ' and ' : ''}${heldTotal > 0 ? `${mmcf(heldTotal)} is held back at Calder` : ''} over the two days.${workable ? ' A different starting linepack would help.' : ' No starting linepack can make this work.'}`;
-    return `At ${fmt(st.ramp)} MMcf/d of evening ramp, nothing is cut. Can the line carry a bigger ramp?`;
+    if (st.avg !== IMBALANCE.avg) return `Set Northline’s deliveries to Metro back to ${fmt(IMBALANCE.avg)} MMcf/d.`;
+    if (st.ramp !== IMBALANCE.ramp) return 'Set the power plants’ evening ramp back to none.';
+    if (!atImbalance(st)) return `Uncheck the box and set the receipts at Calder to ${fmt(IMBALANCE.receipts)} MMcf/d.`;
+    if (firstCut) return `Starting from ${mmcf(st.start)}, the line hits the bottom of the band at ${when(firstCut)}: Metro is short ${mmcf1(shortTotal)} over the two days.`;
+    if (firstHeld) return `Starting from ${mmcf(st.start)}, the line hits the top of the band at ${when(firstHeld)}, and ${mmcf1(heldTotal)} of receipts are held back at Calder.`;
+    return '';
   })();
+  const caption = !workable
+    ? 'No starting linepack keeps every hour of the two days inside the band.'
+    : atImbalance(st) && !solved
+      ? 'Changing the starting linepack moves the whole trace up or down by the same amount, until it meets the band.'
+      : `Any starting linepack from ${fmt(Math.ceil(range.lo))} to ${fmt(Math.floor(range.hi))} MMcf keeps every hour inside the band.`;
 
   // Figure 2.
   const flowNow = clamp(st.avg, 0, CAPACITY);
@@ -351,20 +369,12 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, gas flows through Northline for two winter days. The upper chart compares the <K tone="orange">receipts</K> at Calder with Metro’s
-        hourly demand; the lower one traces the linepack, hour by hour, inside the band of what the pipe can hold. Press play or drag across a chart to read any hour,
-        and change Metro’s demand, the evening burn of its power plants, and how full the pipe is at midnight:
+        hourly demand on Northline; the lower one traces the linepack, hour by hour, inside the band of what the pipe can hold. Flows are in MMcf/d, millions of cubic feet
+        a day: 1,000 MMcf/d is 1 Bcf/d. Press play or drag across a chart to read any hour, and change how much gas Metro takes from Northline, the evening burn of
+        its power plants, and how full the pipe is at midnight:
       </P>
 
-      <Figure
-        name="Linepack Simulator"
-        scenario={s}
-        play={play}
-        actions={
-          <Button onClick={() => s.set({ start: bestStart(st) })} label="Set the starting linepack to the middle of the workable range">
-            Best start
-          </Button>
-        }
-      >
+      <Figure name="Linepack Simulator" scenario={s} play={play}>
         <PipeDiagram h={h} run={run} asked={askedNow} />
         <XYChart
           xDomain={[0, HOURS]}
@@ -373,7 +383,7 @@ export default function Lesson() {
           xFormat={clock}
           yFormat={(v) => fmt(v)}
           yLabel="MMcf/d"
-          height={150}
+          height={132}
           series={[
             { xs: hx, ys: askedSeries, color: tint(GRAPHIC.orange, 0.45), kind: 'area', opacity: 1 },
             { xs: hx, ys: madeSeries, color: GRAPHIC.orange, kind: 'step', width: 2 },
@@ -384,13 +394,6 @@ export default function Lesson() {
           scrubLabel="Hour of the two days"
           ariaLabel={`Receipts at Calder, ${fmt(rin)} MMcf/d, against Metro's hourly demand, from ${fmt(Math.min(...dem))} to ${fmt(Math.max(...dem))} MMcf/d.${shortTotal > 0 ? ` ${mmcf(shortTotal)} of deliveries are cut over the two days.` : ''}`}
         />
-        <Legend
-          items={[
-            { label: 'Metro asks for', color: tint(GRAPHIC.orange, 0.45) },
-            { label: 'Metro gets', color: GRAPHIC.orange, kind: 'line' },
-            { label: 'Receipts at Calder', color: '#333', kind: 'line', dashed: true },
-          ]}
-        />
         <XYChart
           xDomain={[0, HOURS]}
           yDomain={[packBottom, packTop]}
@@ -399,7 +402,7 @@ export default function Lesson() {
           xFormat={clock}
           yFormat={(v) => fmt(v)}
           yLabel="Linepack, MMcf"
-          height={170}
+          height={152}
           series={[
             { xs: bandX, ys: windows.map((w) => w.max), lows: windows.map((w) => w.min), kind: 'band', color: tint(GRAPHIC.blue, 0.35), opacity: 1 },
             { xs: bandX, ys: windows.map((w) => w.max), color: GRAPHIC.blue, width: 1, dash: '3 3' },
@@ -414,20 +417,21 @@ export default function Lesson() {
         />
         <Legend
           items={[
+            { label: 'Metro asks for', color: tint(GRAPHIC.orange, 0.45) },
+            { label: 'Metro gets', color: GRAPHIC.orange, kind: 'line' },
+            { label: 'Receipts at Calder', color: '#333', kind: 'line', dashed: true },
             { label: 'Linepack', color: TEXT.gold, kind: 'line' },
-            { label: 'Most it can hold (stations at 1,440 psig)', color: GRAPHIC.blue, kind: 'line', dashed: true },
-            { label: 'Least it can hold (Metro at 765 psig)', color: GRAPHIC.red, kind: 'line', dashed: true },
+            { label: 'Most it can hold', color: GRAPHIC.blue, kind: 'line', dashed: true },
+            { label: 'Least it can hold', color: GRAPHIC.red, kind: 'line', dashed: true },
           ]}
         />
         <Readouts
           items={[
-            { label: 'linepack swing over two days', value: mmcf(Math.max(...packs) - Math.min(...packs)), tone: 'gold' },
             { label: 'lowest pressure at Metro', value: `${fmt(minDelivery)} psig`, tone: minDelivery < NORTHLINE.minDeliveryPsig + 1 ? 'red' : 'blue' },
-            { label: 'deliveries cut', value: mmcf(shortTotal), tone: shortTotal > 0 ? 'red' : 'ink' },
-            { label: 'gas held back at Calder', value: mmcf(heldTotal), tone: heldTotal > 0 ? 'red' : 'ink' },
+            { label: 'deliveries cut over two days', value: mmcf1(shortTotal), tone: shortTotal > 0 ? 'red' : 'ink' },
           ]}
         />
-        <Slider label="Metro’s average demand" value={st.avg} min={600} max={1600} step={50} onChange={(v) => s.set({ avg: v, receipts: v })} display={`${fmt(st.avg)} MMcf/d`} />
+        <Slider label="Northline’s deliveries to Metro" value={st.avg} min={600} max={1600} step={50} onChange={(v) => s.set({ avg: v, receipts: v })} display={`${fmt(st.avg)} MMcf/d`} />
         <Slider
           label="Power plants’ evening ramp"
           tone="red"
@@ -460,15 +464,12 @@ export default function Lesson() {
           onChange={(v) => s.set({ start: v })}
           display={`${fmt(st.start)} MMcf`}
         />
-        <Caption>
-          {workable
-            ? `Any starting linepack from ${fmt(Math.ceil(range.lo))} to ${fmt(Math.floor(range.hi))} MMcf keeps every hour inside the band.`
-            : `No starting linepack keeps every hour inside the band: the day’s swing is bigger than the pipe can absorb.`}
-        </Caption>
+        <Caption>{caption}</Caption>
       </Figure>
 
       <P>
-        At the starting settings Metro averages {fmt(PACK_DEFAULTS.avg)} MMcf/d, and shippers deliver exactly that to Calder, spread evenly over the day. Overnight,
+        At the starting settings Metro takes an average of {fmt(PACK_DEFAULTS.avg)} MMcf/d ({fmt(PACK_DEFAULTS.avg / 1000, 1)} Bcf/d) from Northline, and shippers
+        deliver exactly that to Calder, spread evenly over the day. Overnight,
         when the city takes as little as {fmt(LOW_RATE)} MMcf/d, the surplus packs the line: by {hour((BASE_HIGH_HOUR + 1) % 24)} it holds {mmcf(BASE_HIGH)}. The
         morning peak drafts it, the afternoon barely refills it, and the evening peak of {fmt(PEAK_RATE)} MMcf/d takes it down to {mmcf(BASE_LOW)} by{' '}
         {hour((BASE_LOW_HOUR + 1) % 24)}. Over the day {mmcf(BASE_HIGH - BASE_LOW)} goes into the pipe and comes back out, and the next day repeats the first. Nothing
@@ -511,29 +512,37 @@ export default function Lesson() {
       <P>
         Now add the power plants. Many of Metro’s electricity plants burn gas, and they ramp up for the evening peak in electricity demand — the climb we followed in{' '}
         <a href={lessonHref('3.3')}>Lesson 3.3</a> of the electricity course. An extra {fmt(OVER_RAMP)} MMcf/d from 17:00 to 21:00 would fuel about{' '}
-        {fmt(Math.round(ccgtMW(OVER_RAMP) / 100) * 100)} MW of combined-cycle plants as efficient as Lakeside, and it’s too much: even with receipts raised to cover the
+        {fmt(Math.round(ccgtMW(OVER_RAMP) / 100) * 100)} MW of combined-cycle plants as efficient as Lakeside, whose heat rate we met in{' '}
+        <a href={lessonHref('gas/1.5')}>Lesson 1.5</a>, and it’s too much: even with receipts raised to cover the
         extra gas, the linepack hits the bottom of the band at {clock(OVER_FIRST + 1)} on the first day. Metro’s pressure would fall below 765 psig, so deliveries are
         cut — {mmcf(OVER_SHORT)} over the two days. Raising the starting linepack doesn’t rescue it for long: overnight the line hits the top of the band, and receipts
         it can’t take are held back at Calder.
+      </P>
+      <P>
+        Step the ramp down and watch the caption, which finds the starting linepacks that keep every hour inside the band. It finds none until the ramp is down to{' '}
+        {fmt(ANSWER_RAMP)} MMcf/d — about {fmt(Math.round(ccgtMW(ANSWER_RAMP) / 100) * 100)} MW of plants — and even then only {fmt(Math.ceil(ANSWER_WINDOW.lo))} to{' '}
+        {fmt(Math.floor(ANSWER_WINDOW.hi))} MMcf: the line must be full enough at midnight to survive the evening and empty enough not to overflow before dawn. A step
+        more and the day’s swing no longer fits between the band’s top overnight and its pinched bottom at the evening peak, whatever the start.
+      </P>
+
+      <H2>Linepack is not a supply</H2>
+      <P>
+        Set the ramp back to none, uncheck the box and set the receipts to {fmt(SHORT_RECEIPTS)} MMcf/d, a hundred less than Metro takes. For a while nothing seems
+        wrong; the pipe makes up the difference. But the pipe ends every hour a little emptier than the same hour a day earlier, and starting from{' '}
+        {mmcf(PACK_DEFAULTS.start)} at midnight it hits the bottom of the band in the hour to {clock(DRAIN_FIRST + 1)} on the {DRAIN_FIRST < 24 ? 'first' : 'second'} day’s
+        evening peak: {mmcf(DRAIN_SHORT)} of deliveries are cut before the two days end. No starting linepack avoids it; the best one only puts it off until{' '}
+        {clock(DRAIN_LATEST + 1)} on the second day. Linepack shifts gas between the hours of a day. Over a whole day, what goes in at one end has to come out at the
+        other.
       </P>
 
       <Challenge
         id="a"
         figure="Linepack Simulator"
-        question={`With Metro averaging ${fmt(CHALLENGE_AVG)} MMcf/d and receipts following the day’s average demand, what’s the largest evening ramp Northline can carry for two days with nothing cut — no deliveries short and no receipts held back? You may set the starting linepack however you like.`}
+        question={`A smaller imbalance can be carried for a while. Shippers bring ${fmt(IMBALANCE.receipts)} MMcf/d to Calder, ${fmt(IMBALANCE.avg - IMBALANCE.receipts)} less than Metro takes. With balanced receipts any start from ${fmt(Math.ceil(BASE_WINDOW.lo))} to ${fmt(Math.floor(BASE_WINDOW.hi))} MMcf worked. Predict first: how much emptier will the line be by the second evening’s peak, and so roughly what starting linepack carries it through both days with nothing cut? Then set the receipts and the start, and check.`}
         solved={solved}
         status={status}
-        success={`Solved: ${fmt(ANSWER_RAMP)} MMcf/d, enough for about ${fmt(Math.round(ccgtMW(ANSWER_RAMP) / 100) * 100)} MW of combined-cycle plants. Only starting linepacks from ${fmt(Math.ceil(ANSWER_WINDOW.lo))} to ${fmt(Math.floor(ANSWER_WINDOW.hi))} MMcf work: the line must be full enough at midnight to survive the evening and empty enough not to overflow before dawn. A step more and the day’s swing no longer fits between the band’s top overnight and its pinched bottom at the evening peak, whatever the start.`}
+        success={`Solved: any start from ${fmt(Math.ceil(IMBALANCE_WINDOW.lo))} to ${fmt(Math.floor(IMBALANCE_WINDOW.hi))} MMcf works. Over the two days the line gives up ${mmcf(IMBALANCE_DRAIN)}, so the lowest workable start rises from ${fmt(Math.ceil(BASE_WINDOW.lo))} to ${fmt(Math.ceil(IMBALANCE_WINDOW.lo))}; the highest rises only from ${fmt(Math.floor(BASE_WINDOW.hi))} to ${fmt(Math.floor(IMBALANCE_WINDOW.hi))}, because the line still packs on the first night before the shortfall catches up.${IMBALANCE_THREE_DAYS.lo > IMBALANCE_THREE_DAYS.hi ? ` But that is about the limit: a third day would need the line fuller at midnight than it can be without overflowing before dawn, so no starting linepack lasts three days.` : ''}`}
       />
-
-      <H2>Linepack is not a supply</H2>
-      <P>
-        Uncheck the box and set the receipts to {fmt(SHORT_RECEIPTS)} MMcf/d, a hundred less than Metro takes. For a while nothing seems wrong; the pipe makes up the
-        difference. But the pipe ends every hour a little emptier than the same hour a day earlier, and with the starting linepack it runs out of room in the hour
-        to {clock(DRAIN_FIRST + 1)} on the {DRAIN_FIRST < 24 ? 'first' : 'second'} day’s evening peak: {mmcf(DRAIN_SHORT)} of deliveries are cut before the two days
-        end. No starting linepack avoids it; the best one only puts it off until {clock(DRAIN_LATEST + 1)} on the second day. Linepack shifts gas between the hours of a day. Over a whole day, what goes in at one end
-        has to come out at the other.
-      </P>
       <P>
         That’s why pipelines are strict about balance. Shippers schedule their receipts and deliveries a day ahead, pipelines write balancing rules into their
         tariffs, and when linepack runs dangerously high or low they can order shippers to bring their gas back into line. Gas and electricity keep different clocks,
@@ -544,8 +553,8 @@ export default function Lesson() {
       <H2>A full pipe has no flexibility</H2>
       <P>
         The band’s width depends on how hard the pipe is working. In the next demonstration, the upper chart plots the most and the least Northline can hold at steady
-        flows from zero to its {fmt(CAPACITY)} MMcf/d capacity, and the lower one the largest evening ramp the line can carry for each average demand at Metro, found
-        the way you found it in the challenge. Change Metro’s demand:
+        flows from zero to its {fmt(CAPACITY)} MMcf/d capacity, and the lower one the largest evening ramp the line can carry for each average delivery to Metro,
+        found the way we found {fmt(ANSWER_RAMP)} MMcf/d at {fmt(CHALLENGE_AVG)}. Change Northline’s deliveries to Metro:
       </P>
 
       <Figure name="Linepack Simulator · flexibility" scenario={s}>
@@ -557,6 +566,7 @@ export default function Lesson() {
           xFormat={(v) => fmt(v)}
           yFormat={(v) => fmt(v)}
           yLabel="Linepack the pipe can hold, MMcf"
+          xLabel="steady flow through Northline, MMcf/d"
           height={190}
           series={[
             { xs: FLOWS, ys: WINDOWS.map((w) => w.max), lows: WINDOWS.map((w) => w.min), kind: 'band', color: tint(GRAPHIC.blue, 0.35), opacity: 1 },
@@ -578,7 +588,7 @@ export default function Lesson() {
           xFormat={(v) => fmt(v)}
           yFormat={(v) => fmt(v)}
           yLabel="Largest evening ramp, MMcf/d"
-          xLabel="Metro’s average demand, MMcf/d"
+          xLabel="Northline’s average deliveries to Metro, MMcf/d"
           height={170}
           series={[
             { xs: SWEEP_AVGS, ys: SWEEP_RAMPS.map((r) => Math.max(0, r)), color: GRAPHIC.red, kind: 'area', opacity: 0.18 },
@@ -586,7 +596,7 @@ export default function Lesson() {
           ]}
           vLines={[{ at: LIMIT_AVG, color: '#777', dash: '3 4', width: 1, label: `${fmt(LIMIT_AVG)}: none at all`, labelAt: 'start' }]}
           markers={st.avg >= 600 && st.avg <= 1500 ? [{ x: st.avg, y: Math.max(0, rampNow), color: GRAPHIC.red, r: 5, label: rampNow >= 0 ? `${fmt(rampNow)} MMcf/d` : 'not even the city’s own swing', labelPos: st.avg > 1250 ? 'left' : 'right' }] : []}
-          ariaLabel={`The largest evening power-plant ramp Northline can carry, falling from ${fmt(SWEEP_RAMPS[0])} MMcf/d when Metro averages 600 MMcf/d to none above ${fmt(LIMIT_AVG)}. At ${fmt(st.avg)} MMcf/d it is ${rampNow >= 0 ? `${fmt(rampNow)} MMcf/d` : 'none: the line can’t even follow the city’s own daily swing'}.`}
+          ariaLabel={`The largest evening power-plant ramp Northline can carry, falling from ${fmt(SWEEP_RAMPS[0])} MMcf/d when it delivers an average of 600 MMcf/d to Metro to none above ${fmt(LIMIT_AVG)}. At ${fmt(st.avg)} MMcf/d it is ${rampNow >= 0 ? `${fmt(rampNow)} MMcf/d` : 'none: the line can’t even follow the city’s own daily swing'}.`}
         />
         <Readouts
           items={[
@@ -594,16 +604,18 @@ export default function Lesson() {
             { label: 'largest evening ramp', value: rampNow >= 0 ? `${fmt(rampNow)} MMcf/d` : 'none', tone: 'red' },
           ]}
         />
-        <Slider label="Metro’s average demand" value={st.avg} min={600} max={1600} step={50} onChange={(v) => s.set({ avg: v, receipts: v })} display={`${fmt(st.avg)} MMcf/d`} />
+        <Slider label="Northline’s deliveries to Metro" value={st.avg} min={600} max={1600} step={50} onChange={(v) => s.set({ avg: v, receipts: v })} display={`${fmt(st.avg)} MMcf/d`} />
       </Figure>
 
       <P>
         With no gas flowing, Northline can hold anything from {mmcf(W0.min)} to {mmcf(W0.max)}: {mmcf(W0.swing)} of room. At 1,000 MMcf/d the room is down to{' '}
         {mmcf(W1000.swing)}, at 1,400 to {mmcf(W1400.swing)}, and at the line’s capacity it is gone — a pipeline running flat out has every psi of its pressure spent
         on moving gas, and nothing left to store it. The ramp it can carry falls even faster, because the evening peak arrives exactly when the band is narrowest:{' '}
-        {fmt(RAMP_AT_1000)} MMcf/d when Metro averages 1,000, and nothing at all once Metro averages more than about {fmt(LIMIT_AVG)} MMcf/d, still well short of
-        Northline’s capacity. Beyond that the line can’t even follow the city’s own daily swing without help (<FigRef to="Linepack Simulator">the first
-        demonstration</FigRef> shows what happens).
+        {fmt(RAMP_AT_1000)} MMcf/d when Northline delivers an average of 1,000 to Metro, and nothing at all above about {fmt(LIMIT_AVG)} MMcf/d, still well short of
+        its capacity. Beyond that the line can’t even follow the city’s own daily swing without help (<FigRef to="Linepack Simulator">the first
+        demonstration</FigRef> shows what happens). On the cold winter day of <a href={lessonHref('gas/3.2')}>Lesson 3.2</a>, Northline runs full at{' '}
+        {fmt(NORTHLINE.capacityBcfd * 1000)} MMcf/d ({fmt(NORTHLINE.capacityBcfd, 1)} Bcf/d), far past that point, so it has no linepack to lend at all: Metro’s hourly
+        swings have to come from somewhere else — in our region, from Hollow Creek beside the city, along with the rest of its shortfall.
       </P>
       <P>
         So the coldest days, when a pipeline runs closest to full, are exactly the days its linepack helps least. A city that wants to ride through its winter peaks

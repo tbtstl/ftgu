@@ -27,7 +27,7 @@ import {
   standardPressure,
 } from '../src/engines/weather/thermo';
 import { angularMomentumWind, circulation, coriolis, cycloneWind, geostrophicSpeed, hadleyEdgeDeg, inertialPeriodHours, steadyWind, windTrack } from '../src/engines/weather/dynamics';
-import { CALDER, MARLOW, RIDGE, anomalySd, normalTemp } from '../src/model/weather/region';
+import { FENWICK, MARLOW, RIDGE, anomalySd, normalTemp } from '../src/model/weather/region';
 import { DAYS, LEAD_MAX, YEARS, archive, dayIndex, dayInfo, expectedTemp, forecastTemp, knownShare, monthDays, ninoMonth, revealedShare, tempF } from '../src/model/weather/archive';
 import { ENSO_DEFAULTS, ensoHistory, ensoPeriod } from '../src/engines/weather/enso';
 import { frontPassage, frontWeather } from '../src/engines/weather/fronts';
@@ -47,21 +47,21 @@ import { MARKET, expectedIndex, replay, tradeStats } from '../src/engines/weathe
 import { DRIVER_DEFAULTS, crossMarketIdeas } from '../src/engines/weather/crossMarket';
 import { scoreSeason } from '../src/engines/weather/competition';
 import { replayBook } from '../src/engines/weather/portfolio';
-import { DESK_DEFAULTS, REGION_DEFAULTS, isCalder, regionKnobs, sanitize } from '../src/lessons/weather/shared/capstone';
-import { ensoShareSolved, riskierSolved } from '../src/lessons/weather/ch6/L6_1';
+import { DESK_DEFAULTS, REGION_DEFAULTS, isFenwick, regionKnobs, sanitize } from '../src/lessons/weather/shared/capstone';
+import { doubledSolved, ensoShareSolved, quietedSolved } from '../src/lessons/weather/ch6/L6_1';
 import { CHALLENGE_MONTH, beatModelSolved, skillLeadSolved } from '../src/lessons/weather/ch6/L6_2';
 import { stripsSolved } from '../src/lessons/weather/ch6/L6_3';
 import { hedgeSolved as deskHedgeSolved, vanishSolved as deskVanishSolved, viewDefaults } from '../src/lessons/weather/ch6/L6_4';
-import { REF_BUSINESS, REF_DESK, WORLD_DEFAULTS, physicsGoneSolved, steadyBookSolved } from '../src/lessons/weather/ch6/L6_5';
+import { REF_BUSINESS, REF_DESK, WORLD_DEFAULTS, marketCatchesUpSolved, noPullEdgeSolved } from '../src/lessons/weather/ch6/L6_5';
 import { exposureSeries } from '../src/engines/weather/exposureFit';
 import { greenhouseSolved, transportSolved } from '../src/lessons/weather/ch1/L1_1';
 import { descentSolved, thermalTopSolved } from '../src/lessons/weather/ch1/L1_2';
 import { airState, cloudBaseSolved, dewPointSolved } from '../src/lessons/weather/ch1/L1_3';
 import { CONVECTION_DEFAULTS, capSolved, convectionAscent, periodSolved } from '../src/lessons/weather/ch1/L1_4';
-import { STORM_DEFAULTS, geostrophicSolved, noreasterSolved, windAtCalder } from '../src/lessons/weather/ch1/L1_5';
+import { STORM_DEFAULTS, geostrophicSolved, noreasterSolved, windAtFenwick } from '../src/lessons/weather/ch1/L1_5';
 import { jetSolved, tradesSolved } from '../src/lessons/weather/ch2/L2_1';
 import { FRONT_DEFAULTS, lagSolved, rainSolved } from '../src/lessons/weather/ch2/L2_2';
-import { INGREDIENT_DEFAULTS, floodSolved, leastLiftSolved } from '../src/lessons/weather/ch2/L2_3';
+import { INGREDIENT_DEFAULTS, floodSolved, leastDewSolved } from '../src/lessons/weather/ch2/L2_3';
 import { PACIFIC_DEFAULTS, laNinaSolved, thresholdSolved } from '../src/lessons/weather/ch2/L2_4';
 import { STATION_DEFAULTS as CLIMATE_STATION_DEFAULTS, steadiestSolved, steadyColdSolved } from '../src/lessons/weather/ch2/L2_5';
 import { STATION_DEFAULTS, correctionSolved, gapSolved } from '../src/lessons/weather/ch3/L3_1';
@@ -69,7 +69,7 @@ import { RADAR_DEFAULTS, SAT_DEFAULTS, opaqueSolved, rainBeamSolved } from '../s
 import { FORECAST_DEFAULTS, stepSolved, windSolved } from '../src/lessons/weather/ch3/L3_3';
 import { steadySolved, togetherSolved } from '../src/lessons/weather/ch3/L3_4';
 import { CAL_DEFAULTS, calibrationSolved, climateLeadSolved } from '../src/lessons/weather/ch3/L3_5';
-import { COLDEST_JANUARY, MONTH_DEFAULTS, coldestJanuarySolved, swingSolved } from '../src/lessons/weather/ch4/L4_1';
+import { MONTH_DEFAULTS, normalShiftSolved, swingSolved } from '../src/lessons/weather/ch4/L4_1';
 import { COLDEST_WINTER, DAY_DEFAULTS, oilSolved, pipelineSolved } from '../src/lessons/weather/ch4/L4_2';
 import { breakevenRainSolved, steadiestSolved as cropSteadiestSolved } from '../src/lessons/weather/ch4/L4_3';
 import { SITE_DEFAULTS, cfSolved, uncertaintySolved } from '../src/lessons/weather/ch4/L4_4';
@@ -78,19 +78,19 @@ import { BUILDER_DEFAULTS, SETTLE_DEFAULTS, droughtSolved, settlementSolved } fr
 import { atTheMoneySolved, windowSolved } from '../src/lessons/weather/ch5/L5_2';
 import { EDGE_DEFAULTS, REPLAY_DEFAULTS, gapSolved as edgeGapSolved, vanishSolved } from '../src/lessons/weather/ch5/L5_3';
 import { BOOK_DEFAULTS, LAB_DEFAULTS, bookSolved, pipelineSolved as labPipelineSolved } from '../src/lessons/weather/ch5/L5_4';
-import { BACKTEST_DEFAULTS, ensoGoneSolved, hedgeSolved, lookAheadSolved } from '../src/lessons/weather/ch5/L5_5';
+import { BACKTEST_DEFAULTS, hedgeSolved, lookAheadSolved } from '../src/lessons/weather/ch5/L5_5';
 
-describe('the Calder region', () => {
-  it('gives Calder Bay a New York–like year', () => {
-    expect(normalTemp(CALDER, 21)).toBeCloseTo(32, 0);
-    expect(normalTemp(CALDER, 21 + 182.5)).toBeCloseTo(75.7, 0);
-    expect(anomalySd(CALDER, 21)).toBeCloseTo(8.04, 2);
-    expect(anomalySd(CALDER, 204)).toBeCloseTo(4.42, 1);
+describe('the Fenwick region', () => {
+  it('gives Fenwick Bay a New York–like year', () => {
+    expect(normalTemp(FENWICK, 21)).toBeCloseTo(32, 0);
+    expect(normalTemp(FENWICK, 21 + 182.5)).toBeCloseTo(75.7, 0);
+    expect(anomalySd(FENWICK, 21)).toBeCloseTo(8.04, 2);
+    expect(anomalySd(FENWICK, 204)).toBeCloseTo(4.42, 1);
   });
   it('makes Marlow more continental and the ridge colder', () => {
-    expect(MARLOW.amplitude).toBeGreaterThan(CALDER.amplitude);
-    expect(MARLOW.winterSd).toBeGreaterThan(CALDER.winterSd);
-    expect(RIDGE.annualMean).toBeLessThan(CALDER.annualMean - 8);
+    expect(MARLOW.amplitude).toBeGreaterThan(FENWICK.amplitude);
+    expect(MARLOW.winterSd).toBeGreaterThan(FENWICK.winterSd);
+    expect(RIDGE.annualMean).toBeLessThan(FENWICK.annualMean - 8);
   });
 });
 
@@ -218,7 +218,8 @@ describe('chapter 1 challenges', () => {
   it('1.3: the dew point and the cloud base', () => {
     expect(airState({ tC: 30, w: 14, p: 1000 }).dew).toBeCloseTo(19.0, 1);
     expect(dewPointSolved({ tC: 19.5, w: 14, p: 1000 })).toBe(true);
-    expect(dewPointSolved({ tC: 19, w: 14, p: 1000 })).toBe(false);
+    expect(dewPointSolved({ tC: 19, w: 14, p: 1000 })).toBe(true);
+    expect(dewPointSolved({ tC: 18.5, w: 14, p: 1000 })).toBe(false);
     expect(dewPointSolved({ tC: 20, w: 14, p: 1000 })).toBe(false);
     expect(cloudBaseSolved(28, 19.5)).toBe(true);
     expect(cloudBaseSolved(28, 19)).toBe(false);
@@ -238,7 +239,7 @@ describe('chapter 1 challenges', () => {
     expect(geostrophicSolved(2.3, 40)).toBe(false);
     expect(noreasterSolved({ ...STORM_DEFAULTS, east: 100, north: -300 })).toBe(true);
     expect(noreasterSolved(STORM_DEFAULTS)).toBe(false);
-    expect(windAtCalder(STORM_DEFAULTS).speed).toBeCloseTo(20, 0);
+    expect(windAtFenwick(STORM_DEFAULTS).speed).toBeCloseTo(20, 0);
   });
 });
 
@@ -262,8 +263,8 @@ describe('the archive', () => {
       let inside = 0;
       let n = 0;
       for (let d = 400; d < DAYS; d += 3) {
-        const f = forecastTemp('calder', d, k);
-        if (Math.abs(tempF('calder', d) - f.mean) <= f.sd) inside++;
+        const f = forecastTemp('fenwick', d, k);
+        if (Math.abs(tempF('fenwick', d) - f.mean) <= f.sd) inside++;
         n++;
       }
       expect(inside / n).toBeGreaterThan(0.64);
@@ -281,12 +282,12 @@ describe('the archive', () => {
       expect(a.known[d * (LEAD_MAX + 2) + k]).toBeCloseTo(s, 12);
     }
   });
-  it('gives Calder Bay realistic degree days', () => {
+  it('gives Fenwick Bay realistic degree days', () => {
     const jan: number[] = [];
     for (let y = 1; y <= YEARS; y++) {
       const { start, days } = monthDays(y, 0);
       let h = 0;
-      for (let i = 0; i < days; i++) h += Math.max(0, 65 - tempF('calder', start + i));
+      for (let i = 0; i < days; i++) h += Math.max(0, 65 - tempF('fenwick', start + i));
       jan.push(h);
     }
     const mean = jan.reduce((s, x) => s + x, 0) / jan.length;
@@ -294,7 +295,7 @@ describe('the archive', () => {
     expect(mean).toBeLessThan(1080);
     expect(dayInfo(dayIndex(3, 1, 14))).toMatchObject({ year: 3, month: 1, dom: 14 });
   });
-  it('makes El Niño winters mild at Calder Bay', () => {
+  it('makes El Niño winters mild at Fenwick Bay', () => {
     let warm = 0;
     let cold = 0;
     let nw = 0;
@@ -303,7 +304,7 @@ describe('the archive', () => {
       const nino = (ninoMonth(y, 11) + ninoMonth(y + 1, 0) + ninoMonth(y + 1, 1)) / 3;
       const { start } = monthDays(y + 1, 0);
       let t = 0;
-      for (let i = 0; i < 31; i++) t += tempF('calder', start + i) - expectedTemp('calder', start + i);
+      for (let i = 0; i < 31; i++) t += tempF('fenwick', start + i) - expectedTemp('fenwick', start + i);
       if (nino >= 0.5) {
         warm += t / 31;
         nw++;
@@ -366,8 +367,8 @@ describe('fronts and storms', () => {
     expect(rainSolved({ ...FRONT_DEFAULTS, speed: 20 })).toBe(false);
     expect(lagSolved(8)).toBe(true);
     expect(lagSolved(10)).toBe(false);
-    expect(leastLiftSolved({ ...INGREDIENT_DEFAULTS, liftKm: 2.7 })).toBe(true);
-    expect(leastLiftSolved({ ...INGREDIENT_DEFAULTS, liftKm: 2.8 })).toBe(false);
+    expect(leastDewSolved({ ...INGREDIENT_DEFAULTS, liftKm: 1.8, dewC: 23 })).toBe(true);
+    expect(leastDewSolved({ ...INGREDIENT_DEFAULTS, liftKm: 1.8, dewC: 23.5 })).toBe(false);
     expect(floodSolved({ rate: 48, width: 10, cells: 3, speed: 4 })).toBe(true);
     expect(floodSolved({ rate: 48, width: 10, cells: 3, speed: 4.5 })).toBe(false);
     expect(thresholdSolved({ ...PACIFIC_DEFAULTS, coupling: 0.025 })).toBe(true);
@@ -404,21 +405,22 @@ describe('fronts and storms', () => {
     expect(brierScore([1, 0], [true, false])).toBe(0);
   });
   it('chapter 3 challenges', () => {
-    expect(gapSolved({ year: 20, month: 0, dom: 2 })).toBe(true);
+    expect(gapSolved({ year: 10, month: 0, dom: 23 })).toBe(true);
     expect(gapSolved(STATION_DEFAULTS)).toBe(false);
     expect(correctionSolved({ unshielded: 3, heatIsland: 0, drift: -0.2 })).toBe(true);
     expect(correctionSolved({ unshielded: 3, heatIsland: 0, drift: -0.25 })).toBe(false);
-    expect(rainBeamSolved({ ...RADAR_DEFAULTS, rangeKm: 105 })).toBe(true);
-    expect(rainBeamSolved({ ...RADAR_DEFAULTS, rangeKm: 110 })).toBe(false);
+    expect(rainBeamSolved({ ...RADAR_DEFAULTS, freezingKm: 2, rangeKm: 70 })).toBe(true);
+    expect(rainBeamSolved({ ...RADAR_DEFAULTS, freezingKm: 2, rangeKm: 75 })).toBe(false);
     expect(opaqueSolved({ ...SAT_DEFAULTS, tau: 2.7 })).toBe(true);
     expect(opaqueSolved({ ...SAT_DEFAULTS, tau: 2.6 })).toBe(false);
-    expect(stepSolved(1, 20)).toBe(true);
-    expect(stepSolved(1.25, 20)).toBe(false);
+    expect(stepSolved(1.5, 15)).toBe(true);
+    expect(stepSolved(1.75, 15)).toBe(false);
     expect(windSolved({ ...FORECAST_DEFAULTS, windMs: 10 })).toBe(true);
     expect(windSolved(FORECAST_DEFAULTS)).toBe(false);
     expect(togetherSolved(-6)).toBe(true);
     expect(togetherSolved(-4)).toBe(false);
-    expect(steadySolved(13.25, 0.2)).toBe(true);
+    expect(steadySolved(3.25, 0.2)).toBe(true);
+    expect(steadySolved(13.25, 0.2)).toBe(false);
     expect(steadySolved(13, 0.2)).toBe(false);
     expect(climateLeadSolved(9)).toBe(true);
     expect(climateLeadSolved(8)).toBe(false);
@@ -465,8 +467,8 @@ describe('fronts and storms', () => {
     expect(windYear(10).cf).toBeGreaterThan(0.28);
   });
   it('chapter 4 challenges', () => {
-    expect(coldestJanuarySolved({ year: COLDEST_JANUARY, month: 0, shift: 0 })).toBe(true);
-    expect(coldestJanuarySolved(MONTH_DEFAULTS)).toBe(false);
+    expect(normalShiftSolved({ ...MONTH_DEFAULTS, shift: -3 })).toBe(true);
+    expect(normalShiftSolved(MONTH_DEFAULTS)).toBe(false);
     expect(swingSolved({ mean: 65, swing: 7.5 })).toBe(true);
     expect(swingSolved({ mean: 65, swing: 7 })).toBe(false);
     expect(oilSolved({ ...DAY_DEFAULTS, meanF: 12 })).toBe(true);
@@ -530,7 +532,7 @@ describe('fronts and storms', () => {
     expect(bigPipe.netPerContract).toBeLessThan(0);
     // Rain and frost indices settle from the archive.
     expect(indexValue('rain', 'marlow', [[0, 5], [0, 6], [0, 7]], 10)).toBeGreaterThan(3);
-    expect(indexValue('frost', 'calder', [[0, 0]], 10)).toBeGreaterThan(5);
+    expect(indexValue('frost', 'fenwick', [[0, 0]], 10)).toBeGreaterThan(5);
   });
   it('chapter 5 challenges', () => {
     expect(droughtSolved({ ...BUILDER_DEFAULTS, index: 'rain', station: 'marlow', start: 5, length: 3, type: 'put', strike: 9.5, tickI: 11, capI: 5 })).toBe(true);
@@ -549,18 +551,16 @@ describe('fronts and storms', () => {
     expect(labPipelineSolved({ ...LAB_DEFAULTS, pipeline: 2.0 })).toBe(false);
     expect(bookSolved(LAB_DEFAULTS, { hdd: 50, gas: 1, power: 0 })).toBe(true);
     expect(bookSolved(LAB_DEFAULTS, BOOK_DEFAULTS)).toBe(false);
-    expect(ensoGoneSolved({ ...BACKTEST_DEFAULTS, ensoF: 0.1 })).toBe(true);
-    expect(ensoGoneSolved(BACKTEST_DEFAULTS)).toBe(false);
-    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 0, lookAhead: 2 })).toBe(true);
-    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 0, lookAhead: 1 })).toBe(false);
+    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 30, lookAhead: 15 })).toBe(true);
+    expect(lookAheadSolved({ ...BACKTEST_DEFAULTS, lead: 30, lookAhead: 14 })).toBe(false);
     expect(hedgeSolved({ contracts: 2800, variability: 1, ensoF: 1 })).toBe(true);
     expect(hedgeSolved({ contracts: 2700, variability: 1, ensoF: 1 })).toBe(false);
   });
   it('runs the capstone in any region (chapter 6 engines)', () => {
     const knobs = regionKnobs(REGION_DEFAULTS);
     const d = monthDays(20, 0).start + 5;
-    expect(tempF('calder', d, knobs)).toBeCloseTo(tempF('calder', d), 9);
-    expect(isCalder(REGION_DEFAULTS)).toBe(true);
+    expect(tempF('fenwick', d, knobs)).toBeCloseTo(tempF('fenwick', d), 9);
+    expect(isFenwick(REGION_DEFAULTS)).toBe(true);
     expect(sanitize({ region: { latitude: 99 } }).region.latitude).toBe(60);
     // The calibrated model beats climate and persistence, and an overconfident one does worse.
     const yrs = Array.from({ length: 20 }, (_, i) => i + 2);
@@ -580,25 +580,27 @@ describe('fronts and storms', () => {
   });
   it('chapter 6 challenges', () => {
     const R = REGION_DEFAULTS;
-    expect(riskierSolved({ ...R, variability: 1.7 })).toBe(true);
-    expect(riskierSolved(R)).toBe(false);
+    expect(doubledSolved({ ...R, variability: 2 })).toBe(true);
+    expect(doubledSolved(R)).toBe(false);
+    expect(quietedSolved({ ...R, variability: 0.5 })).toBe(true);
+    expect(quietedSolved(R)).toBe(false);
     expect(ensoShareSolved({ ...R, ensoF: 2.1 })).toBe(true);
     expect(ensoShareSolved(R)).toBe(false);
     expect(beatModelSolved(CHALLENGE_MONTH, { blend: 1, spread: 1, bias: 2 })).toBe(true);
     expect(beatModelSolved(CHALLENGE_MONTH, { blend: 1, spread: 1, bias: 0 })).toBe(false);
     expect(skillLeadSolved('jan', 6)).toBe(true);
     expect(skillLeadSolved('jan', 7)).toBe(false);
-    const series = exposureSeries('utility', 1, regionKnobs(R), 'calder');
+    const series = exposureSeries('utility', 1, regionKnobs(R), 'fenwick');
     expect(stripsSolved('utility', 2800, series)).toBe(true);
     expect(stripsSolved('utility', 2700, series)).toBe(false);
     expect(deskVanishSolved(R, { ...viewDefaults(R), ensoF: 0, lag: 0 })).toBe(true);
     expect(deskVanishSolved(R, viewDefaults(R))).toBe(false);
     expect(deskHedgeSolved(R, viewDefaults(R), { ...DESK_DEFAULTS, hedgeStrips: 2700 }, 'utility', 1)).toBe(true);
     expect(deskHedgeSolved(R, viewDefaults(R), { ...DESK_DEFAULTS, hedgeStrips: 2800 }, 'utility', 1)).toBe(false);
-    expect(steadyBookSolved(R, REF_BUSINESS, REF_DESK, WORLD_DEFAULTS)).toBe(true);
-    expect(steadyBookSolved(R, REF_BUSINESS, { ...REF_DESK, hedgeStrips: 2700 }, WORLD_DEFAULTS)).toBe(false);
-    expect(physicsGoneSolved(R, REF_BUSINESS, REF_DESK, { ...WORLD_DEFAULTS, pull: 0 })).toBe(true);
-    expect(physicsGoneSolved(R, REF_BUSINESS, REF_DESK, WORLD_DEFAULTS)).toBe(false);
+    expect(marketCatchesUpSolved(R, REF_BUSINESS, REF_DESK, { ...WORLD_DEFAULTS, usesEnso: true, lag: 0 })).toBe(true);
+    expect(marketCatchesUpSolved(R, REF_BUSINESS, REF_DESK, WORLD_DEFAULTS)).toBe(false);
+    expect(noPullEdgeSolved(R, REF_BUSINESS, { ...REF_DESK, lead: 5 })).toBe(true);
+    expect(noPullEdgeSolved(R, REF_BUSINESS, REF_DESK)).toBe(false);
   });
   it('places the Hadley cell’s edge with the rotation rate', () => {
     expect(circulation(1, 1 / 3).cells.length).toBe(3);

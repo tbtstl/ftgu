@@ -26,6 +26,7 @@ import {
 import { unitCost, type UnitCost } from '../../../engines/compute/units';
 import { workloadFit } from '../../../engines/compute/compatibility';
 import { productivity } from '../../../engines/compute/marketplace';
+import { PHYSICS_DEFAULTS, productivityUnder } from '../../../engines/compute/yieldManager';
 import { ACCELERATORS, GPU_COLOR, GPU_IDS, type GpuId } from '../../../model/compute/hardware';
 import { PRICES } from '../../../model/compute/prices';
 import { WORKLOADS, WORKLOAD_IDS, type WorkloadId } from '../../../model/compute/workloads';
@@ -39,18 +40,16 @@ export type UnitChoice = 'gpuHour' | 'peakPflop' | 'usefulPflop' | 'work';
 export interface ExplorerState {
   work: WorkloadId;
   unit: UnitChoice;
-  /** Hourly prices, $ per GPU-hour (simulated). */
+  /** The L-class's hourly price, $ per GPU-hour (simulated); the A- and B-class stay at their list prices. */
   pL: number;
-  pA: number;
-  pB: number;
 }
 
-export const EXPLORER_DEFAULTS: ExplorerState = { work: 'chat70', unit: 'gpuHour', pL: PRICES.L.onDemand, pA: PRICES.A.onDemand, pB: PRICES.B.onDemand };
+export const EXPLORER_DEFAULTS: ExplorerState = { work: 'chat70', unit: 'gpuHour', pL: PRICES.L.onDemand };
 
 const SHORT: Record<WorkloadId, string> = { chat70: 'Chat', code8: 'Code', batch8: 'Batch', frontier400: 'Frontier', train70: 'Training', tune8: 'Fine-tuning' };
 
-export function pricesOf(s: Pick<ExplorerState, 'pL' | 'pA' | 'pB'>): Record<GpuId, number> {
-  return { L: s.pL, A: s.pA, B: s.pB };
+export function pricesOf(s: Pick<ExplorerState, 'pL'>): Record<GpuId, number> {
+  return { L: s.pL, A: PRICES.A.onDemand, B: PRICES.B.onDemand };
 }
 
 /** Each accelerator's costs for a workload at the given hourly prices. */
@@ -98,13 +97,20 @@ export function inUnit(x: number, unit: UnitChoice): string {
 /** 2 → "2", 2.571 → "2.57". */
 const trim = (x: number) => String(Number(x.toFixed(2)));
 
-/** The challenge's workload and the prices of the other two accelerators. */
+/** The first challenge's workload. */
 export const CHALLENGE_WORK: WorkloadId = 'batch8';
+/** The L-class price slider's step, $. */
+export const L_STEP = 0.05;
 
-/** Challenge a: with the A- and B-class at their simulated prices, the L-class is the cheapest per million batch tokens. */
-export function cheapLSolved(s: Pick<ExplorerState, 'pL' | 'pA' | 'pB'>): boolean {
-  const atList = Math.abs(s.pA - PRICES.A.onDemand) < 1e-6 && Math.abs(s.pB - PRICES.B.onDemand) < 1e-6;
-  return atList && cheapestIn(CHALLENGE_WORK, 'work', pricesOf(s)) === 'L';
+/** At this L-class price, with the others at list, the L-class writes a million batch tokens most cheaply. */
+export function lCheapestForBatch(pL: number): boolean {
+  return cheapestIn(CHALLENGE_WORK, 'work', pricesOf({ pL })) === 'L';
+}
+
+/** Challenge a: batch work in million tokens, and the highest L-class price on the slider's steps that is still the cheapest. */
+export function cheapLSolved(s: Pick<ExplorerState, 'work' | 'unit' | 'pL'>): boolean {
+  const p = Math.round(s.pL * 100) / 100;
+  return s.work === CHALLENGE_WORK && s.unit === 'work' && lCheapestForBatch(p) && !lCheapestForBatch(p + L_STEP);
 }
 
 /** The L-class price at which it exactly matches the B-class per million batch tokens. */
@@ -147,6 +153,8 @@ const runHours = (g: GpuId) => {
   return f.kind === 'train' && f.run ? f.run.gpuHours : Infinity;
 };
 const L_PARITY = lParityForBatch();
+/** The answer to challenge a: the parity price, rounded down to the slider's 5-cent steps. */
+export const CHEAP_L_ANSWER = Math.round(Math.floor(L_PARITY / L_STEP + 1e-9) * L_STEP * 100) / 100;
 function tokPerHour(w: WorkloadId, g: GpuId): number {
   const f = workloadFit(w, g);
   return f.kind === 'serve' && f.feasible ? f.tokensPerGpuS * 3600 : 0;
@@ -179,6 +187,12 @@ export const LESSON_NUMBERS = {
   })(),
   batchTokPerHour: { L: tokPerHour('batch8', 'L'), A: tokPerHour('batch8', 'A'), B: tokPerHour('batch8', 'B') },
   lParity: L_PARITY,
+  cheapLAnswer: CHEAP_L_ANSWER,
+  /** A-class equivalents in a B-class hour, counted by the rate each GPU works (Lesson 6.1 on). */
+  rateChatB: productivityUnder(PHYSICS_DEFAULTS).chat70.B,
+  rateFrontierB: productivityUnder(PHYSICS_DEFAULTS).frontier400.B,
+  /** The same for the frontier assistant, counted by the GPUs it needs. */
+  countFrontierB: productivity('frontier400', 'B'),
   value: {
     chatB: VALUE('chat70', 'B'),
     frontierB: VALUE('frontier400', 'B'),
@@ -189,6 +203,8 @@ export const LESSON_NUMBERS = {
   },
   bLow: B_LOW,
   bHigh: B_HIGH,
+  /** A-class equivalents in a B-class hour of fine-tuning, the job where it counts least. */
+  tuneBEq: productivity('tune8', 'B'),
   worthAnswer: WORTH_ANSWER,
 };
 
@@ -351,33 +367,29 @@ export default function Lesson() {
   const s1 = useScenario('explorer', EXPLORER_DEFAULTS);
   const st = s1.state;
   const prices = pricesOf(st);
-  const costs = useMemo(() => costsAt(st.work, { L: st.pL, A: st.pA, B: st.pB }), [st.work, st.pL, st.pA, st.pB]);
+  const costs = useMemo(() => costsAt(st.work, pricesOf({ pL: st.pL })), [st.work, st.pL]);
   const cheapest = cheapestIn(st.work, st.unit, prices);
   const byHour = cheapestIn(st.work, 'gpuHour', prices);
-  const byWork = cheapestIn(st.work, 'work', prices);
   const serve = WORKLOADS[st.work].kind === 'serve';
-  const workLabel = unitLabel('work', st.work);
-  const workVal = (g: GpuId) => valueIn(costs[g], 'work', st.work);
-  const ratioOut = (() => {
-    const worst = GPU_IDS.filter((g) => Number.isFinite(workVal(g))).reduce((a, b) => (workVal(b) > workVal(a) ? b : a));
-    return workVal(worst) / workVal(byWork);
-  })();
+  // The caption speaks only of the chosen unit, so the reversal shows up when the reader switches units.
+  const shown = (g: GpuId) => valueIn(costs[g], st.unit, st.work);
+  const where = unitLabel(st.unit, st.work);
   const caption =
-    byHour === byWork
-      ? `For the ${WORKLOADS[st.work].name.toLowerCase()}, the ${ACCELERATORS[byHour].short} is cheapest both per GPU-hour and ${workLabel}.`
-      : `For the ${WORKLOADS[st.work].name.toLowerCase()}, the ${ACCELERATORS[byHour].short} is the cheapest hour, ${m2(costs[byHour].gpuHour)}, but the ${ACCELERATORS[byWork].short} does the work for least, ${money(workVal(byWork))} ${workLabel}; the dearest costs ${fmt(ratioOut, 1)} times as much.`;
+    cheapest === byHour
+      ? `For the ${WORKLOADS[st.work].name.toLowerCase()}, the ${ACCELERATORS[cheapest].short} is the cheapest ${where}${st.unit === 'gpuHour' ? '' : ', as well as per GPU-hour'}: ${inUnit(shown(cheapest), st.unit)}.`
+      : `For the ${WORKLOADS[st.work].name.toLowerCase()}, the ${ACCELERATORS[cheapest].short} is the cheapest ${where}, at ${inUnit(shown(cheapest), st.unit)}; the ${ACCELERATORS[byHour].short}, the cheapest hour, costs ${fmt(shown(byHour) / shown(cheapest), 1)} times as much.`;
 
   const solvedA = cheapLSolved(st);
-  const atList = Math.abs(st.pA - PRICES.A.onDemand) < 1e-6 && Math.abs(st.pB - PRICES.B.onDemand) < 1e-6;
   const batchNow = costsAt(CHALLENGE_WORK, prices);
-  const statusA = !atList
-    ? `Set the A-class back to ${m2(PRICES.A.onDemand)} and the B-class to ${m2(PRICES.B.onDemand)} first.`
-    : `At ${m2(st.pL)} an hour, the L-class writes a million summary tokens for ${m3(batchNow.L.mTokens)}, against the B-class’s ${m3(batchNow.B.mTokens)} and the A-class’s ${m3(batchNow.A.mTokens)}.`;
+  const statusA =
+    st.work !== CHALLENGE_WORK || st.unit !== 'work'
+      ? 'Choose Batch and Million tokens first.'
+      : !lCheapestForBatch(st.pL)
+        ? `At ${m2(st.pL)} an hour, the L-class writes a million summary tokens for ${m3(batchNow.L.mTokens)}, against the B-class’s ${m3(batchNow.B.mTokens)}: not the cheapest.`
+        : `At ${m2(st.pL)} an hour, the L-class is the cheapest, at ${m3(batchNow.L.mTokens)} a million tokens. Could it charge five cents more and still be?`;
 
   const s2 = useScenario('worth', { pA: PRICES.A.onDemand });
   const pA = s2.state.pA;
-  const bVals = WORKLOAD_IDS.map((w) => parityPrice(w, 'B', pA));
-  const lVals = WORKLOAD_IDS.map((w) => parityPrice(w, 'L', pA)).filter((v) => v > 0);
   const lBeats = WORKLOAD_IDS.filter((w) => parityPrice(w, 'L', pA) >= PRICES.L.onDemand - 1e-9);
   const solvedB = lWorthSolved(pA);
   const bestL = WORKLOAD_IDS.reduce((a, b) => (parityPrice(b, 'L', pA) > parityPrice(a, 'L', pA) ? b : a));
@@ -385,11 +397,10 @@ export default function Lesson() {
     ? `At ${m2(pA)}, an L-class hour at ${m2(PRICES.L.onDemand)} beats A-class hours for the ${lBeats.map((w) => WORKLOADS[w].name.toLowerCase()).join(' and the ')}. Would a lower A-class price still do it?`
     : `At ${m2(pA)}, an L-class hour is worth at most ${m2(parityPrice(bestL, 'L', pA))} to any job (the ${WORKLOADS[bestL].name.toLowerCase()}), short of its ${m2(PRICES.L.onDemand)} price.`;
 
+  // Only the chosen unit, so switching units is what reveals the reversal; plus the share of peak the work uses.
+  const unitText = unitLabel(st.unit, st.work);
   const tableRows: Array<{ id: string; label: string; v: (g: GpuId) => number; fmt: (x: number) => string }> = [
-    { id: 'gpuHour', label: 'Per GPU-hour', v: (g) => valueIn(costs[g], 'gpuHour', st.work), fmt: (x) => inUnit(x, 'gpuHour') },
-    { id: 'peakPflop', label: 'Per peak PFLOP-hour', v: (g) => valueIn(costs[g], 'peakPflop', st.work), fmt: (x) => inUnit(x, 'peakPflop') },
-    { id: 'usefulPflop', label: 'Per useful PFLOP-hour', v: (g) => valueIn(costs[g], 'usefulPflop', st.work), fmt: (x) => inUnit(x, 'usefulPflop') },
-    { id: 'work', label: serve ? 'Per million tokens' : 'Per training run', v: workVal, fmt: money },
+    { id: st.unit, label: unitText[0].toUpperCase() + unitText.slice(1), v: (g) => valueIn(costs[g], st.unit, st.work), fmt: (x) => inUnit(x, st.unit) },
     { id: 'util', label: 'Share of peak used', v: (g) => (costs[g].feasible ? costs[g].utilization : NaN), fmt: (x) => (Number.isFinite(x) ? pct(x, 1) : '—') },
   ];
   const rowBest = (r: (typeof tableRows)[number]) => (r.id === 'util' ? null : GPU_IDS.reduce((a, b) => (r.v(b) < r.v(a) ? b : a)));
@@ -403,9 +414,9 @@ export default function Lesson() {
       </P>
       <P>
         GPU clouds mostly sell the <K c="price">GPU-hour</K>: one accelerator, in a server, for an hour. In this course an hour on demand costs {m2(PRICES.L.onDemand)} for an
-        L-class 48 GB, {m2(PRICES.A.onDemand)} for an A-class and {m2(PRICES.B.onDemand)} for a B-class 192 GB. Those prices are simulated, set a little above the costs of
+        L-class 48 GB, {m2(PRICES.A.onDemand)} for an A-class and {m2(PRICES.B.onDemand)} for a B-class 192 GB. Those prices are simulated, set above the costs of
         Lesson 4.5 and in the range clouds have charged for comparable parts. They also aren’t the price of anything traded in one place. Electricity, in the companion
-        course, clears in an auction with a public price every hour; there is no such exchange for GPU-hours. Capacity is sold through providers’ price lists, reserved
+        course, clears in an auction with a public price every hour; there is no single exchange for GPU-hours. Capacity is sold through providers’ price lists, reserved
         contracts and private deals, with a few marketplaces and price indexes starting to appear.
       </P>
       <P>
@@ -413,7 +424,7 @@ export default function Lesson() {
         yields depends on both the hardware and the work. So the same three prices can be restated in other units. One is arithmetic at the chip’s peak: a{' '}
         <K tone="orange">PFLOP-hour</K> is a thousand trillion operations a second, kept up for an hour. Another is the arithmetic the work actually uses, the peak times the
         share of it the work reaches. The last is the work itself: a million tokens written, or one whole training run. In the next demonstration, choose a workload and a
-        unit, and set each accelerator’s hourly price; the table lists every unit at once:
+        unit; the table adds how much of each chip’s peak the work uses. The A- and B-class stay at their list prices, and the slider sets the L-class’s:
       </P>
 
       <Figure name="Compute Economics Explorer" scenario={s1}>
@@ -431,7 +442,7 @@ export default function Lesson() {
         />
         <UnitBars work={st.work} unit={st.unit} costs={costs} cheapest={cheapest} />
         <DataTable
-          caption={`${WORKLOADS[st.work].name}: cost in every unit on each accelerator`}
+          caption={`${WORKLOADS[st.work].name}: cost ${unitText} on each accelerator, and the share of its peak arithmetic the work uses`}
           rows={tableRows}
           rowKey={(r) => r.id}
           columns={[
@@ -447,9 +458,7 @@ export default function Lesson() {
             })),
           ]}
         />
-        <Slider label="L-class price" tone="green" value={st.pL} min={0.2} max={2} step={0.05} onChange={(v) => s1.set({ pL: v })} display={`${m2(st.pL)} an hour`} />
-        <Slider label="A-class price" tone="green" value={st.pA} min={1} max={4} step={0.1} onChange={(v) => s1.set({ pA: v })} display={`${m2(st.pA)} an hour`} />
-        <Slider label="B-class price" tone="green" value={st.pB} min={2} max={8} step={0.1} onChange={(v) => s1.set({ pB: v })} display={`${m2(st.pB)} an hour`} />
+        <Slider label="L-class price" tone="green" value={st.pL} min={0.2} max={2} step={L_STEP} onChange={(v) => s1.set({ pL: Math.round(v * 100) / 100 })} display={`${m2(st.pL)} an hour`} />
         <Caption>{caption}</Caption>
       </Figure>
 
@@ -472,18 +481,24 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Keeping the A-class at $2.40 and the B-class at $4.80 an hour, lower the L-class’s price until it is the cheapest way to run batch summarization, per million tokens."
+        question={`On batch summarization, an L-class hour writes ${fmt(N.batchTokPerHour.L / 1e6, 2)} million tokens, and a B-class hour, the cheapest of the other two, writes ${fmt(N.batchTokPerHour.B / 1e6, 1)} million for ${m2(PRICES.B.onDemand)}. Predict first: what is the most an L-class hour can cost and still write those tokens most cheaply? Then choose Batch and Million tokens, and set the L-class to the highest price, on the slider’s 5-cent steps, at which it is the cheapest.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved. Below about ${m2(N.lParity)} an hour the L-class wins: it writes ${fmt(N.batchTokPerHour.L / 1e6, 2)} million summary tokens an hour against the B-class’s ${fmt(N.batchTokPerHour.B / 1e6, 1)} million, so its hour yields ${pct(N.batchTokPerHour.L / N.batchTokPerHour.B)} of a B-class hour’s tokens — worth ${m2(N.lParity)} at the B-class’s ${m2(PRICES.B.onDemand)}, little more than half the L-class’s own list price.`}
+        success={`Solved: ${m2(N.cheapLAnswer)}. An L-class hour writes ${pct(N.batchTokPerHour.L / N.batchTokPerHour.B, 1)} of a B-class hour’s tokens, so it is worth ${pct(N.batchTokPerHour.L / N.batchTokPerHour.B, 1)} of ${m2(PRICES.B.onDemand)}, about ${m2(N.lParity)}; five cents more and the B-class writes them for less. That is little more than half the L-class’s own ${m2(PRICES.L.onDemand)} list price: its hour is worth what the work it does is worth on the competing hardware.`}
       />
 
       <H2>What an hour is worth</H2>
       <P>
         The challenge turned the question around: not what an hour costs, but what price would make it a fair trade. We can ask that for every job at once. Lesson 3.5 counted
         the GPUs each job needs on each accelerator: the chat assistant needs {fmt(N.chatGpus.A)} A-class GPUs or {fmt(N.chatGpus.B)} B-class, so a B-class hour does the work
-        of {fmt(N.chatGpus.A / N.chatGpus.B, 2)} A-class hours there. Multiply by the A-class’s price and you have the most a buyer running that job should pay for an hour of the
-        other accelerator: above it, A-class hours would do the job for less. In the next demonstration, each row is a job and each dot the hourly price at which the L- or
+        of {fmt(N.chatGpus.A / N.chatGpus.B, 2)} A-class hours there. That ratio gives this chapter its unit of work, the <K tone="blue">A-class equivalent</K>: for a given job, the
+        work an hour of an A-class GPU does on it. A B-class hour is {fmt(N.chatGpus.A / N.chatGpus.B, 2)} A-class equivalents of chat work, but only{' '}
+        {trim(N.tuneBEq)} of fine-tuning: the count belongs to the job, not the chip. The course counts it two ways: by the GPUs a job needs, as here and in Lessons{' '}
+        <a href={lessonHref('compute/3.5')}>3.5</a> and <a href={lessonHref('compute/5.5')}>5.5</a>, and, from <a href={lessonHref('compute/6.1')}>Lesson 6.1</a> on, where fleets serve work hour by hour, by the
+        rate at which each GPU works, in tokens a second, which skips the rounding to whole copies of a model and so gives slightly different ratios —{' '}
+        {fmt(N.rateChatB, 2)} rather than {fmt(N.chatGpus.A / N.chatGpus.B, 2)} for chat, {fmt(N.rateFrontierB, 2)} rather than {fmt(N.countFrontierB, 2)} for the
+        frontier assistant. Multiply by the A-class’s price and you have the most a buyer running that job should pay
+        for an hour of the other accelerator: above it, A-class hours would do the job for less. In the next demonstration, each row is a job and each dot the hourly price at which the L- or
         B-class matches the A-class on it; a filled dot means the accelerator’s list price is at or below that value, so it does the job at least as cheaply. Set the A-class’s
         price:
       </P>
@@ -497,13 +512,7 @@ export default function Lesson() {
             { label: 'A-class price (the yardstick)', color: GPU_COLOR.A, kind: 'line' },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'a B-class hour is worth', value: `${m2(Math.min(...bVals))}–${m2(Math.max(...bVals))}`, tone: 'green' },
-            { label: 'an L-class hour is worth', value: lVals.length ? `${m2(Math.min(...lVals))}–${m2(Math.max(...lVals))}` : '—', tone: 'green' },
-            { label: 'jobs where a $0.90 L-class hour beats A-class hours', value: fmt(lBeats.length) },
-          ]}
-        />
+        <Readouts items={[{ label: 'jobs where a $0.90 L-class hour beats A-class hours', value: fmt(lBeats.length) }]} />
         <Slider label="A-class price" tone="green" value={pA} min={1} max={4} step={WORTH_STEP} onChange={(v) => s2.set({ pA: Math.round(v * 100) / 100 })} display={`${m2(pA)} an hour`} />
       </Figure>
 
@@ -534,7 +543,7 @@ export default function Lesson() {
         made it, which is what lets the electricity course’s auctions clear on one price per place and hour (Lessons <a href={lessonHref('4.4')}>4.4</a> and{' '}
         <a href={lessonHref('5.3')}>5.3</a> of that course). A
         GPU-hour isn’t like that. Its value depends on the hardware and on the job: across the six jobs here a B-class hour is worth between {trim(N.bLow)} and {trim(N.bHigh)}{' '}
-        A-class hours, and an L-class hour anything from nothing at all to about a third of one. It also depends on things this lesson held fixed — where
+        A-class equivalents, and an L-class hour anything from nothing at all to about a third of one. It also depends on things this lesson held fixed — where
         the GPU sits, and so how far its users are (<a href={lessonHref('compute/4.3')}>Lesson 4.3</a>), and whether its cluster’s network can carry a training run (
         <a href={lessonHref('compute/4.4')}>Lesson 4.4</a>).
       </P>

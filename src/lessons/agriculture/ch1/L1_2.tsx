@@ -25,13 +25,18 @@ import { STAGES, gdd, simulateSeason, stageAt, type SeasonResult } from '../../.
 import { REFERENCE_YEAR, applyShift, firstColdSpell, frostDates, simulatedYear } from '../../../model/agriculture/climate';
 import { DISTRICT, DISTRICTS, MONTHS, MONTH_START, dateLabel, dayOf, type DistrictId } from '../../../model/agriculture/region';
 import { DayChart } from '../shared/DayChart';
+import { buAc } from '../shared/format';
 import { CornPlant, WheatPlant } from '../shared/Plant';
 import { CROP_LINE } from '../shared/tones';
 
 const PRAIRIE = DISTRICT.prairie;
 const WEATHER = simulatedYear(REFERENCE_YEAR, 'prairie');
-const KILL = frostDates(WEATHER, -2).firstFall;
-const COLD = firstColdSpell(WEATHER);
+
+/** The first cold spell and killing frost of the reference season, shifted warmer or cooler. */
+export function autumnMarks(shift: number): { cold: number; kill: number } {
+  const w = applyShift(WEATHER, { temp: shift });
+  return { cold: firstColdSpell(w), kill: frostDates(w, -2).firstFall };
+}
 
 /** Did cold weather end the season before the hybrid reached black layer on its own? */
 function cutShort(r: SeasonResult): boolean {
@@ -56,6 +61,17 @@ function grow(plant: number, hybrid: number, shift: number): SeasonResult {
     startWater: PRAIRIE.springWater,
   });
 }
+
+/** The reference season's winter wheat at Cedar Bend. */
+const PRAIRIE_WHEAT = simulateSeason(WEATHER, { crop: 'wheat', pawIn: PRAIRIE.pawIn, startWater: PRAIRIE.springWater });
+
+/** Seasons the prose quotes: May 1 with the standard hybrid, in a normal year, 2 °C warmer, 1 °C and 2 °C cooler. */
+const REF_SEASON = grow(dayOf(5, 1), PRAIRIE.hybridGdd, 0);
+const WARM_SEASON = grow(dayOf(5, 1), PRAIRIE.hybridGdd, 2);
+const COOL_SEASON = grow(dayOf(5, 1), PRAIRIE.hybridGdd, -1);
+const COLD_SEASON = grow(dayOf(5, 1), PRAIRIE.hybridGdd, -2);
+/** Days from the wheat's ripening to the corn's silking. */
+const PRAIRIE_GAP = REF_SEASON.stageDays[4] - PRAIRIE_WHEAT.stageDays[STAGES.wheat.length - 1];
 
 /** The challenge: planted June 5, the longest hybrid (in 25-GDD steps) that reaches black layer before the killing frost. */
 export function lateHybridSolved(plant: number, hybrid: number, shift: number): boolean {
@@ -104,6 +120,10 @@ export default function Lesson() {
   const play = usePlay(true);
   const [t, setT] = useState(30);
   const season = useMemo(() => grow(plant, hybrid, shift), [plant, hybrid, shift]);
+  const solved = lateHybridSolved(plant, hybrid, shift);
+  const marks = useMemo(() => autumnMarks(shift), [shift]);
+  const longer = useMemo(() => (solved ? grow(plant, hybrid + 25, shift) : null), [solved, plant, hybrid, shift]);
+  const earlier = useMemo(() => (solved ? grow(dayOf(5, 1), hybrid, 0) : null), [solved, hybrid]);
   const span = season.days.length + 20;
   const idx = Math.min(season.days.length - 1, Math.floor(t));
   const today = season.days[Math.max(0, idx)];
@@ -112,7 +132,6 @@ export default function Lesson() {
   const g = gdd('corn', w.tmax, w.tmin);
   const r1 = season.stageDays[4];
   const r6 = season.stageDays[9];
-  const solved = lateHybridSolved(plant, hybrid, shift);
   const cut = cutShort(season);
   const end = ending(season);
   const killDev = cut ? season.days[season.days.length - 1].dev : 1;
@@ -148,10 +167,11 @@ export default function Lesson() {
         of autumn. How fast it moves through those steps decides when it flowers, how long it has to fill grain, and whether it finishes at all.
       </P>
       <P>
-        Farmers and agronomists separate two things a crop does. <b>Growth</b> is gaining mass, and the previous lesson showed it’s mostly a matter of light.{' '}
+        Farmers and agronomists separate two things a crop does. <b>Growth</b> is gaining dry matter, and the previous lesson showed it’s mostly a matter of light.{' '}
         <b>Development</b> is progress through the plant’s stages, and it’s mostly a matter of temperature. A corn plant develops faster on a warm day than a cool one,
         and hardly at all below about 10 °C. The standard way to count development is in <K tone="teal">growing degree days</K> (GDD): each day adds its mean
-        temperature above that 10 °C base. Corn develops no faster above 30 °C, so first the day’s high is held to 30 and its low raised to 10:
+        temperature above that 10 °C base. Corn develops no faster above 30 °C, so first the day’s high is held to 30 and its low raised to 10, and no day counts
+        for less than zero:
       </P>
       <Eq label="Growing degree days for one day">
         <span>GDD</span>
@@ -211,8 +231,8 @@ export default function Lesson() {
             { y: hybrid, label: 'black layer', color: '#333' },
           ]}
           marks={[
-            { day: COLD, label: 'first cold spell', color: GRAPHIC.blue, dash: '4 3' },
-            { day: KILL, label: 'killing frost', color: GRAPHIC.red, dash: '4 3', row: 1 },
+            { day: marks.cold, label: 'first cold spell', color: GRAPHIC.blue, dash: '4 3' },
+            { day: marks.kill, label: 'killing frost', color: GRAPHIC.red, dash: '4 3', row: 1 },
           ]}
           cursor={Math.min(day, dayOf(11, 30))}
           onScrub={(d) => {
@@ -226,6 +246,7 @@ export default function Lesson() {
             { label: 'silking', value: r1 >= 0 ? dateLabel(r1) : '—', tone: 'gold' },
             { label: end.label, value: dateLabel(end.day), tone: cut ? 'red' : 'ink' },
             { label: 'days, planting to the end', value: fmt(season.maturityDay - plant) },
+            { label: 'corn yield', value: buAc(season.yield), tone: 'gold' },
           ]}
         />
         <Slider label="Planting date" value={plant} min={dayOf(4, 10)} max={dayOf(6, 15)} onChange={(v) => s.set({ plant: v })} display={dateLabel(plant)} />
@@ -242,12 +263,14 @@ export default function Lesson() {
         <b>black layer</b>, R6, is physiological maturity: the kernels hold all the dry matter they ever will.
       </P>
       <P>
-        Slide the year warmer. At +2 °C the crop silks on July 7 and reaches black layer on August 26, three weeks early. That isn’t good news: the same number of
-        degree days now passes in fewer days, so the canopy has less time to catch light while the kernels fill. A cooler year stretches the season instead, and
-        brings the opposite risk. Autumn ends a corn season in two steps. First comes a run of cold days — in our model, four in a row averaging under 12 °C, which
-        in the reference season is complete on October 9. A crop still filling its kernels then simply stops, short of its own black layer: a{' '}
+        Slide the year warmer. At +2 °C the crop silks on {dateLabel(WARM_SEASON.stageDays[4], true)} and reaches black layer on {dateLabel(WARM_SEASON.maturityDay, true)},
+        three weeks early, and yields {fmt(WARM_SEASON.yield)} bushels an acre instead of {fmt(REF_SEASON.yield)}. That isn’t good news: the same number of degree
+        days now passes in fewer days, so the canopy has less time to catch light while the kernels fill. A cooler year stretches the season instead — a degree
+        cooler, the kernels have longer to fill and the crop yields {fmt(COOL_SEASON.yield)} — but it brings the opposite risk. Autumn ends a corn season in two
+        steps. First comes a run of cold days — in our model, four in a row averaging under 12 °C, which in the reference season is complete on October 9. A crop still filling its kernels then simply stops, short of its own black layer: a{' '}
         <b>premature black layer</b>, with lighter kernels than it would have had. Weeks later a <b>killing frost</b>, a low of −2 °C or colder, kills whatever
-        leaves are left; in the reference season it comes on November 16. At −2 °C the crop is still filling on October 3 when a cold spell stops it.
+        leaves are left; in the reference season it comes on November 16. In a year 2 °C cooler, the first cold spell comes earlier too, and the crop is still
+        filling on {dateLabel(COLD_SEASON.maturityDay, true)} when it arrives.
       </P>
 
       <Challenge
@@ -263,16 +286,16 @@ export default function Lesson() {
                 ? `A ${fmt(hybrid)}-GDD hybrid is stopped short by the cold on ${dateLabel(season.maturityDay)}, before black layer.`
                 : `A ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'}. Could a longer one make it?`
         }
-        success={`Solved. Planted June 5, a ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'}; one 25 GDD longer would still be filling when the cold arrives. Longer-season hybrids usually yield more, because they spend more days catching light, but only if they finish. Late planting forces a real trade: switch to a shorter hybrid and give up some yield, or keep the long one and gamble on a warm autumn.`}
+        success={`Solved. Planted June 5, a ${fmt(hybrid)}-GDD hybrid reaches black layer on ${r6 >= 0 ? dateLabel(r6) : '—'} and yields ${buAc(season.yield, 1)}; one 25 GDD longer would still be filling when the cold arrives, and, stopped short, it yields ${buAc(longer?.yield ?? 0, 1)} — nothing gained for the risk. Longer-season hybrids yield more when they finish, because they spend more days catching light: planted May 1, this ${fmt(hybrid)}-GDD hybrid would yield ${buAc(earlier?.yield ?? 0)} and the standard ${fmt(PRAIRIE.hybridGdd)}-GDD one ${buAc(REF_SEASON.yield)}. Late planting forces a real trade: switch to a shorter hybrid and give up some yield, or keep the long one and gamble on a warm autumn.`}
       />
 
       <H2>Winter wheat keeps a different calendar</H2>
       <P>
-        Wheat counts degree days from a base of 0 °C, not 10, and that one difference puts it on the other side of the year. The valley’s wheat is <b>winter
+        Wheat counts degree days from a base of 0 °C, not 10, so it keeps developing in weather far too cool for corn. The valley’s wheat is <b>winter
         wheat</b>: sown in late September or October, it sprouts and grows a few leaves before winter, then sits dormant under the cold. Winter varieties actually
         need that cold. Until they have spent several weeks near freezing — <b>vernalization</b> — they won’t flower at all, which is why they’re sown in autumn rather
         than spring. When the soil warms in March the crop greens up, the stems lengthen (jointing), the heads emerge in May, and the grain ripens in June or July,
-        when corn planted the same spring is barely knee-high.
+        when corn planted the same spring is still weeks from flowering.
       </P>
       <P>
         In the next demonstration, the bars are the two crops’ calendars in each district in the reference season, from the same weather; the line underneath is the
@@ -380,15 +403,19 @@ export default function Lesson() {
             { label: 'wheat ripe', value: dateLabel(wheatEnd), tone: 'orange' },
             { label: `corn: ${calEnd.label}`, value: dateLabel(calEnd.day), tone: 'gold' },
             { label: 'first killing frost', value: dateLabel(cal.kill), tone: 'red' },
+            { label: 'wheat yield', value: buAc(cal.wheat.yield), tone: 'orange' },
+            { label: 'corn yield', value: buAc(cal.corn.yield), tone: 'gold' },
           ]}
         />
       </Figure>
 
       <P>
-        On the Black Prairie the reference season’s wheat greens up on March 22, heads on May 24 and is ripe on June 30 — two weeks before the corn even silks. In the
-        warmer High Plains the wheat is ripe on June 15; in the North Tier not until July 22. The North’s corn, an earlier hybrid of 1,250 GDD, silks on July 23 and
-        is still short of black layer when cold weather stops it on September 30, three days before the North’s first killing frost. For a short-season district,
-        the end of the season is a yearly worry.
+        On the Black Prairie the reference season’s wheat greens up on March 22, heads on May 24 and is ripe on June 30 — {fmt(PRAIRIE_GAP)} days before the corn even
+        silks. It yields {fmt(PRAIRIE_WHEAT.yield)} bushels an acre, against the corn’s {fmt(REF_SEASON.yield)}, and a bushel of wheat is a little heavier: 60
+        pounds, where corn’s is 56. Wheat makes fewer bushels because its C3 canopy is a less efficient factory, as the first lesson showed, and it fills its grain
+        in a few weeks of June. In the warmer High Plains the wheat is ripe on June 15; in the North Tier not until July 22. The North’s corn, an earlier hybrid of
+        1,250 GDD, silks on July 23 and is still short of black layer when cold weather stops it on September 30, three days before the North’s first killing
+        frost. For a short-season district, the end of the season is a yearly worry.
       </P>
       <P>
         These calendars matter far beyond the farm. Wheat comes off the fields in early summer and corn in the fall, so the two crops flood into elevators and onto

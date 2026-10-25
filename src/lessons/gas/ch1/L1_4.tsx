@@ -224,11 +224,17 @@ function lineProfile(stations: number, flow: number) {
 const BASE_LINE = stationLine(NL_LINE, 1800);
 const CAPS = Array.from({ length: MAX_STATIONS }, (_, i) => capacityWith(i + 1));
 const FUEL_4 = stationLine(lineAt(4), 1800);
+/** The square-root estimate for the challenge: (2,000 ÷ one station's capacity)² stations. */
+export const SQRT_STATIONS = (TARGET_FLOW / CAPS[0]) ** 2;
+/** The largest gap between the capacity ladder and one station's capacity × √n, as a share. */
+export const SQRT_LADDER_ERROR = Math.max(...CAPS.map((v, i) => Math.abs(v / (CAPS[0] * Math.sqrt(i + 1)) - 1)));
 const FUEL_6 = stationLine(lineAt(6), 1800);
 const RATIO_A = compress(1800, psia(300), psia(615));
 const RATIO_B = compress(1800, psia(700), psia(1415));
 const STATION0 = compressAt(STATION_DEFAULTS);
 const STATION0_DOUBLE = compress(3600, psia(765), psia(1440));
+/** The hard squeeze: 300 to 1,440 psig in one go. */
+const HARD = compress(1800, psia(300), psia(1440));
 
 export default function Lesson() {
   const s1 = useScenario('station', STATION_DEFAULTS);
@@ -244,7 +250,6 @@ export default function Lesson() {
   const prof = useMemo(() => lineProfile(ln.stations, ln.flow), [ln.stations, ln.flow]);
   const res = prof.res;
   const ok = res.feasible && res.deliveryPsia >= MIN_DELIVERY - 1e-9;
-  const cap = CAPS[ln.stations - 1];
   const solved = expansionSolved(ln);
   const deliveryPsig = psig(res.deliveryPsia);
 
@@ -252,13 +257,12 @@ export default function Lesson() {
   if (!res.feasible && prof.gone)
     lineCaption = `At ${fmt(ln.flow)} MMcf/d, friction would use up all the pressure about ${fmt(Math.round((prof.gone.at - prof.gone.from) / 5) * 5)} miles past the station at mile ${fmt(prof.gone.from)}: with ${ln.stations} station${ln.stations > 1 ? 's' : ''}, Northline can’t carry that much.`;
   else if (!ok)
-    lineCaption = `${fmt(ln.flow)} MMcf/d reaches Metro at ${psigFmt(deliveryPsig)}, below the ${fmt(NL.minDeliveryPsig)} psig Northline promises. With ${ln.stations} station${ln.stations > 1 ? 's' : ''}, the most it can deliver at that pressure is ${mmcfd(cap)}.`;
-  else
-    lineCaption = `${fmt(ln.flow)} MMcf/d reaches Metro at ${psigFmt(deliveryPsig)}. The ${ln.stations} station${ln.stations > 1 ? 's' : ''} need ${fmt(res.totalHp)} horsepower and burn ${pct(res.fuelShare, 2)} of the gas.`;
+    lineCaption = `${fmt(ln.flow)} MMcf/d reaches Metro at ${psigFmt(deliveryPsig)}, below the ${fmt(NL.minDeliveryPsig)} psig Northline promises.`;
+  else lineCaption = `${fmt(ln.flow)} MMcf/d reaches Metro with ${fmt(deliveryPsig - NL.minDeliveryPsig)} psi to spare above the ${fmt(NL.minDeliveryPsig)} psig Northline promises.`;
 
   const status =
     ln.flow < TARGET_FLOW
-      ? `Northline is carrying ${mmcfd(ln.flow)}. Metro wants ${mmcfd(TARGET_FLOW)}.`
+      ? `Estimate first. Then set the throughput to ${mmcfd(TARGET_FLOW)}; Northline is carrying ${mmcfd(ln.flow)}.`
       : !ok
         ? `With ${ln.stations} station${ln.stations > 1 ? 's' : ''}, ${mmcfd(ln.flow)} ${res.feasible ? `arrives at only ${psigFmt(deliveryPsig)}` : 'can’t get through at all'}.`
         : `With ${ln.stations} stations, ${mmcfd(ln.flow)} arrives at ${psigFmt(deliveryPsig)}. Could fewer stations do it?`;
@@ -269,7 +273,7 @@ export default function Lesson() {
     <LessonPage id="gas/1.4">
       <P>
         The previous lesson ended with Northline’s gas losing <K tone="blue">pressure</K> every mile of the way to Metro. One push from 1,440 psig at Calder Hub, falling to
-        the 765 psig Northline promises Metro, carries about {mmcfd(CAPS[0])} through its 240 miles. The pipeline sells {fmt(NL.capacityBcfd, 1)} Bcf/d, about{' '}
+        the 765 psig Northline promises Metro, carries about {mmcfd(CAPS[0])} through its 240 miles. Northline is rated to carry {fmt(NL.capacityBcfd, 1)} Bcf/d, about{' '}
         {fmt((NL.capacityBcfd * 1000) / CAPS[0], 1)} times that, because it doesn’t ask one push to last the whole way. Three compressor stations along it take the gas in at low pressure, squeeze it, and send it on at
         high pressure again.
       </P>
@@ -288,9 +292,6 @@ export default function Lesson() {
         <StationDiagram s={st} c={c} />
         <Readouts
           items={[
-            { label: 'compression ratio', value: r.toFixed(2), tone: 'blue' },
-            { label: 'compression power', value: `${fmt(c.hp)} hp`, tone: 'red' },
-            { label: 'discharge temperature', value: degF(c.dischargeF), tone: 'teal' },
             { label: 'fuel burned', value: `${fmt(c.fuelMMcfd, 1)} MMcf/d · ${pct(c.fuelShare, 2)}`, tone: 'red' },
             { label: `fuel bill a day at $${FUEL_PRICE.toFixed(2)}/MMBtu`, value: usd(fuelCost), tone: 'green' },
           ]}
@@ -341,10 +342,6 @@ export default function Lesson() {
           <Op>=</Op>
           <K c="power">{fmt(c.hp)}</K>
         </Eq>
-        <Caption>
-          Squeezing {mmcfd(st.flow)} from {psigFmt(st.suction)} to {psigFmt(st.discharge)}, a ratio of {r.toFixed(2)}, takes {fmt(c.hp)} horsepower and heats the gas
-          from {degF(SUCTION_F)} to {degF(c.dischargeF)}.
-        </Caption>
       </Figure>
 
       <P>
@@ -359,13 +356,14 @@ export default function Lesson() {
         squeeze. What changes that share is the <K tone="blue">compression ratio</K>, r: the discharge pressure divided by the suction pressure, both measured from
         vacuum, in psia. Try two squeezes that each double the absolute pressure: from 300 to 615 psig, and from 700 to 1,415 psig. The second raises the pressure by more
         than twice as many psi, yet it takes about the same power — {fmt(RATIO_A.hp)} horsepower for the first, {fmt(RATIO_B.hp)} for the second, which is a little
-        cheaper because the gas is less ideal at high pressure. Each halving of a gas’s volume costs about the same work whatever pressure it starts from, so it’s the ratio
+        cheaper because the gas is less ideal at high pressure. Each doubling of the pressure costs about the same work whatever pressure it starts from, so it’s the ratio
         that sets the bill.
       </P>
       <P>
         The equation in the demonstration adds up that work. Its {HP_COEF.toFixed(4)} only converts units, turning million cubic feet a day and foot-pounds of work into
         horsepower. The rest is the flow, the gas’s compressibility Z from <a href={lessonHref('gas/1.2')}>Lesson 1.2</a>, its absolute temperature T<Sub>1</Sub> in
-        degrees Rankine (degrees Fahrenheit plus 459.67), and the ratio raised to the power (k − 1)/k, where k = {K_GAS} is the ratio of natural gas’s specific heats at constant pressure and at constant volume.
+        degrees Rankine (degrees Fahrenheit plus 459.67), and the ratio raised to the power (k − 1)/k, where k = {K_GAS} is a property of the gas that sets how much it heats up when squeezed (engineers call it the
+        ratio of specific heats).
         The compressor is {pct(COMPRESSOR_EFFICIENCY)} efficient, so the work is divided by {COMPRESSOR_EFFICIENCY.toFixed(2)}.
       </P>
 
@@ -408,8 +406,8 @@ export default function Lesson() {
       </Eq>
       <P>
         so the {pct(COMPRESSOR_EFFICIENCY)}-efficient compressor in <FigRef to="Compressor Simulator">the first demonstration</FigRef> starts by sending the gas out at{' '}
-        {degF(STATION0.dischargeF)}. Squeeze harder and it climbs quickly: from 300 to 1,440 psig, the gas leaves at about {degF(compress(1800, psia(300), psia(1440)).dischargeF)}.
-        Many stations cool the gas in banks of fan-blown heat exchangers before it goes back into the pipe. Hot gas takes up more room, so it flows less easily — temperature
+        {degF(STATION0.dischargeF)}. Squeeze harder and it climbs quickly: from 300 to 1,440 psig, a ratio of {fmt(HARD.ratio, 1)}, the gas would leave at about {degF(HARD.dischargeF)}.
+        Mainline stations rarely work at ratios much above 2; a bigger squeeze is split into stages, with the gas cooled in between. Many stations cool the gas in banks of fan-blown heat exchangers before it goes back into the pipe. Hot gas takes up more room, so it flows less easily — temperature
         sits in the denominator of the flow equation of <a href={lessonHref('gas/1.3')}>Lesson 1.3</a> — and a pipe’s protective coating is rated only up to a certain
         temperature.
       </P>
@@ -422,7 +420,8 @@ export default function Lesson() {
 
       <H2>Stations along a line</H2>
       <P>
-        A long pipeline is a chain of these. Friction lowers the pressure between stations, as in Lesson 1.3, and each station raises it again. In the next demonstration,
+        A long pipeline is a chain of these. Friction lowers the pressure between stations, as in <a href={lessonHref('gas/1.3')}>Lesson 1.3</a>, and each station
+        raises it again. In the next demonstration,
         Northline’s 240 miles have evenly spaced stations, the first at Calder Hub, where gas arrives at 765 psig. Each station discharges at the 1,440 psig MAOP, and the
         line must deliver at least 765 psig to Metro. Change the number of stations and the throughput:
       </P>
@@ -439,7 +438,7 @@ export default function Lesson() {
           height={250}
           ariaLabel={`Pressure along Northline with ${ln.stations} station${ln.stations > 1 ? 's' : ''} carrying ${fmt(ln.flow)} MMcf/d. ${
             res.feasible ? `It reaches Metro at ${fmt(deliveryPsig)} psig.` : 'The gas runs out of pressure before Metro.'
-          } Capacity at 765 psig delivery: ${fmt(cap)} MMcf/d.`}
+          }`}
           series={[
             { xs: prof.xs, ys: prof.ys, color: GRAPHIC.blue, kind: 'area', opacity: 0.12 },
             { xs: prof.xs, ys: prof.ys, color: GRAPHIC.blue, width: 2.5 },
@@ -467,8 +466,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `capacity with ${ln.stations} station${ln.stations > 1 ? 's' : ''}`, value: mmcfd(cap), tone: 'orange' },
-            { label: 'delivered at Metro', value: res.feasible ? psigFmt(deliveryPsig) : 'nothing', tone: ok ? 'blue' : 'red' },
             { label: 'compression power', value: res.feasible ? `${fmt(res.totalHp)} hp` : '—', tone: 'red' },
             { label: 'fuel burned', value: res.feasible ? `${fmt(res.fuelMMcfd, 1)} MMcf/d · ${pct(res.fuelShare, 2)}` : '—', tone: 'red' },
           ]}
@@ -494,16 +491,17 @@ export default function Lesson() {
 
       <P>
         Each station draws a tooth of the saw: a jump at the station, then the curved fall of the previous lesson. With three stations every 80 miles, Northline carries
-        1,800 MMcf/d and reaches Metro at {psigFmt(psig(BASE_LINE.deliveryPsia))}, just above its promise. The stations need {fmt(BASE_LINE.totalHp)} horsepower between
+        1,800 MMcf/d and reaches Metro at {psigFmt(psig(BASE_LINE.deliveryPsia))}, with {fmt(psig(BASE_LINE.deliveryPsia) - NL.minDeliveryPsig)} psi to spare. The stations need {fmt(BASE_LINE.totalHp)} horsepower between
         them, about {fmt(BASE_LINE.totalHp * 0.0007457)} megawatts, and burn {fmt(BASE_LINE.fuelMMcfd, 1)} MMcf/d, or {pct(BASE_LINE.fuelShare, 2)} of the gas. At an
         illustrative ${FUEL_PRICE.toFixed(2)} per MMBtu, that fuel adds about {fmt(BASE_LINE.fuelShare * FUEL_PRICE * 100, 1)} cents to the cost of every MMBtu Northline
         carries. Pipelines usually collect it in kind: a shipper hands over a little more gas than it takes out at the far end, and the pipeline keeps the
         difference as fuel.
       </P>
       <P>
-        Add stations and the capacity grows: {CAPS.map((v) => fmt(v)).join(', ')} MMcf/d for one to six of them. Each segment gets shorter, and Lesson 1.3 showed that
-        throughput grows as one over the square root of length, so the capacity grows about as the square root of the number of stations. The {fmt(CAPS[2])} MMcf/d of
-        three stations is where Northline’s {fmt(NL.capacityBcfd, 1)} Bcf/d comes from: a pipeline sells a little less than its hydraulic limit.
+        Add stations and the capacity grows. With n stations evenly spaced, each one pushes the gas only 1/n of the way, and{' '}
+        <a href={lessonHref('gas/1.3')}>Lesson 1.3</a> showed that a pipe’s throughput grows as one over the square root of its length: a segment n times shorter
+        carries about √n times as much. So the capacity grows about as the square root of the number of stations. Three stations carry {fmt(CAPS[2])} MMcf/d, and
+        that is where Northline’s {fmt(NL.capacityBcfd, 1)} Bcf/d comes from: its rating is what the stations can deliver at the promised pressure, rounded down.
       </P>
       <P>
         More stations also burn less fuel for the same flow: carrying 1,800 MMcf/d, four stations burn {pct(FUEL_4.fuelShare, 2)} of it and six{' '}
@@ -517,10 +515,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Metro’s utility asks Northline to deliver 2.0 Bcf/d, still at no less than 765 psig. What’s the fewest compressor stations that can do it?"
+        question={`Metro’s utility asks Northline to deliver ${fmt(TARGET_FLOW / 1000, 1)} Bcf/d, still at no less than ${fmt(NL.minDeliveryPsig)} psig. One station carries ${mmcfd(CAPS[0])}. Estimate first from the square root: how many stations would ${mmcfd(TARGET_FLOW)} take? Then set the throughput to ${mmcfd(TARGET_FLOW)} and find the fewest stations that deliver it.`}
         solved={solved}
         status={status}
-        success={`Solved. ${FEWEST_FOR_TARGET} stations, every ${fmt(NL.lengthMi / FEWEST_FOR_TARGET)} miles. Three top out at ${mmcfd(CAPS[2])}; with ${FEWEST_FOR_TARGET}, capacity rises to ${mmcfd(
+        success={`Solved: ${FEWEST_FOR_TARGET} stations, every ${fmt(NL.lengthMi / FEWEST_FOR_TARGET)} miles. The square root predicts it: ${fmt(TARGET_FLOW)} ÷ ${fmt(CAPS[0])} = ${fmt(TARGET_FLOW / CAPS[0], 2)}, and ${fmt(TARGET_FLOW / CAPS[0], 2)}² ≈ ${fmt(SQRT_STATIONS, 1)}, so three stations fall short and four should do. Three top out at ${mmcfd(CAPS[2])}; four reach ${mmcfd(
           CAPS[FEWEST_FOR_TARGET - 1],
         )}. Carrying 2,000 MMcf/d, they need ${fmt(stationLine(lineAt(FEWEST_FOR_TARGET), TARGET_FLOW).totalHp)} horsepower and burn ${pct(
           stationLine(lineAt(FEWEST_FOR_TARGET), TARGET_FLOW).fuelShare,
@@ -529,8 +527,11 @@ export default function Lesson() {
       />
 
       <P>
-        Adding compression is a common way to expand an existing pipeline, because the steel is already in the ground. It runs out, though: as <FigRef to="Compressor Simulator · along a pipeline">the second demonstration</FigRef> shows, each extra
-        station adds less capacity than the one before, and beyond a point the cheaper path is a second pipe laid beside the first.
+        Here is the whole ladder: {CAPS.map((v) => fmt(v)).join(', ')} MMcf/d for one to six stations, each within {fmt(Math.ceil(SQRT_LADDER_ERROR * 100))}% of
+        the square root’s {fmt(CAPS[0])} × √n. Adding compression is a common way to expand an existing pipeline, because the steel is already in the ground. It runs out,
+        though: as <FigRef to="Compressor Simulator · along a pipeline">the second demonstration</FigRef> shows, each extra station adds less capacity than the one
+        before — the fourth adds {fmt(CAPS[3] - CAPS[2])} MMcf/d, the sixth only {fmt(CAPS[5] - CAPS[4])} — and beyond a point the cheaper path is a second pipe laid
+        beside the first.
       </P>
       <P>
         Everything in this lesson was counted in cubic feet: the gas carried, the gas burned. But Metro’s buyers don’t want cubic feet. They want the heat the gas gives

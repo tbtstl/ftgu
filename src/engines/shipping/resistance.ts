@@ -36,7 +36,7 @@ export function reynolds(h: Hull, speedKn: number): number {
   return (speedKn * KNOT * h.lbp) / NU_SEA;
 }
 
-/** Froude number: speed relative to the speed of a wave as long as the ship. */
+/** Froude number: speed relative to √(gL), a speed set by the ship's length. At Fn ≈ 0.4 (1/√(2π)) her waves are as long as she is. */
 export function froude(h: Hull, speedKn: number): number {
   return (speedKn * KNOT) / Math.sqrt(G * h.lbp);
 }

@@ -82,6 +82,8 @@ const R_ONE_PASS = loadingRun(1, 1, 4000, 3000);
 const R_TWO_LOADERS = loadingRun(2, 2, 4000, 3000);
 const R_SLOW_PUMPS = loadingRun(2, 2, 4000, 1500);
 const R_FAST_PUMPS = loadingRun(2, 2, 4000, 4500);
+/** The laytime figure's loading time: the starting plan's, hours. */
+export const LAYTIME_LOADING_HOURS = R_DEFAULT.hours;
 const ARRIVAL = hullStrength(V, PLAN, Array(HOLDS).fill(0), ARRIVAL_BALLAST);
 const KEPT_BALLAST_CARGO = maxCargo(V, V.consumables, ARRIVAL_BALLAST);
 const pctOf = (m: number) => `${fmt((100 * m) / ALLOWABLE_MOMENT)}%`;
@@ -176,21 +178,24 @@ export default function Lesson() {
   const bend = st.signedMax >= 0 ? 'hogging' : 'sagging';
 
   const doing =
-    pouring.length > 0
-      ? pouring.map((p) => `loader ${p.j + 1} is pouring into No. ${holdNo(p.h)} hold`).join(' and ')
-      : frame.waiting
-        ? 'the loaders are waiting for the pumps'
-        : frameIdx === 0
-          ? 'loading is about to start'
-          : aboard >= CARGO - 0.5
-            ? frame.ballast > 0.5
-              ? 'the cargo is in and the last ballast is going out'
-              : 'loading is finished'
-            : 'the loaders are moving between holds';
+    frameIdx === run.frames.length - 1 && aboard >= CARGO - 0.5 && frame.ballast <= 0.5
+      ? 'loading is finished'
+      : pouring.length > 0
+        ? pouring.map((p) => `loader ${p.j + 1} is pouring into No. ${holdNo(p.h)} hold`).join(' and ')
+        : frame.waiting
+          ? 'the loaders are waiting for the pumps'
+          : frameIdx === 0
+            ? 'loading is about to start'
+            : aboard >= CARGO - 0.5
+              ? frame.ballast > 0.5
+                ? 'the cargo is in and the last ballast is going out'
+                : 'loading is finished'
+              : 'the loaders are moving between holds';
 
   // ---- Demonstration 2: laytime.
   const lt = useScenario('laytime', { waitDays: 0, weatherHours: 0, ratePerDay: 25_000, notice: '6' as '6' | '12', weather: 'excluded' as 'excluded' | 'counts' });
-  const call = { waitingHours: lt.state.waitDays * 24, formalitiesHours: FORMALITIES_HOURS, loadingHours: run.hours, rainHours: lt.state.weatherHours };
+  // The laytime figure keeps its own loading time — the starting plan's — so its prose holds whatever the first figure shows.
+  const call = { waitingHours: lt.state.waitDays * 24, formalitiesHours: FORMALITIES_HOURS, loadingHours: LAYTIME_LOADING_HOURS, rainHours: lt.state.weatherHours };
   const terms = { ratePerDay: lt.state.ratePerDay, noticeHours: Number(lt.state.notice), excludeWeather: lt.state.weather === 'excluded', demurrage: DEMURRAGE, despatch: DESPATCH };
   const lay = laytime(CARGO, call, terms);
   const callDays = portHours(call) / 24;
@@ -212,8 +217,8 @@ export default function Lesson() {
   const startDay = terms.noticeHours / 24;
   const demurrage = lay.balance > 0;
 
-  const LT_DEFAULT = (wait: number, weatherHours = 0, excludeWeather = true) =>
-    laytime(CARGO, { waitingHours: wait * 24, formalitiesHours: FORMALITIES_HOURS, loadingHours: R_DEFAULT.hours, rainHours: weatherHours }, { ...terms, ratePerDay: 25_000, noticeHours: 6, excludeWeather });
+  const LT_DEFAULT = (wait: number, weatherHours = 0, excludeWeather = true, ratePerDay = 25_000, noticeHours = 6) =>
+    laytime(CARGO, { waitingHours: wait * 24, formalitiesHours: FORMALITIES_HOURS, loadingHours: LAYTIME_LOADING_HOURS, rainHours: weatherHours }, { ...terms, ratePerDay, noticeHours, excludeWeather });
 
   return (
     <LessonPage id="shipping/2.2">
@@ -369,6 +374,11 @@ export default function Lesson() {
           <text className="ax ax-e" x={TL_X1} y={498}>
             {h1(run.hours)}
           </text>
+          {run.waitHours > 0.01 && (
+            <text x={(TL_X0 + TL_X1) / 2} y={498} textAnchor="middle" style={{ fontSize: 12, fontWeight: 600, fill: TEXT.red }}>
+              loaders idle {h1(run.waitHours)}, waiting for the pumps
+            </text>
+          )}
         </svg>
         <Legend
           items={[
@@ -376,14 +386,6 @@ export default function Lesson() {
             { label: 'Moving between holds', color: SEG_COLOR.shift },
             { label: 'Waiting for the pumps', color: SEG_COLOR.wait },
             { label: 'Bending moment', color: GRAPHIC.violet, kind: 'line' },
-          ]}
-        />
-        <Readouts
-          items={[
-            { label: 'loading time, cargo in and ballast out', value: h1(run.hours), tone: 'teal' },
-            { label: 'peak bending moment', value: `${pctOf(run.peakMoment)} of allowable`, tone: over ? 'red' : 'violet' },
-            { label: 'waiting for the pumps', value: h1(run.waitHours), tone: run.waitHours > 0.01 ? 'red' : undefined },
-            { label: 'trim at the end', value: `${fmt(Math.abs(run.final.trim), 2)} m by the ${run.final.trim >= 0 ? 'stern' : 'head'}`, tone: 'blue' },
           ]}
         />
         <Segmented
@@ -400,9 +402,8 @@ export default function Lesson() {
         <Slider label="Ballast pumps" tone="blue" value={pump} min={1500} max={4500} step={500} onChange={(v) => lp.set({ pump: v, time: 1 })} display={`${fmt(pump)} t/h`} />
         <Slider label="Replay" tone="teal" value={time} min={0} max={1} step={0.002} onChange={(v) => lp.set({ time: v })} display={`${h1(frame.t)} of ${h1(run.hours)}`} />
         <Caption>
-          At {h1(frame.t)}, {doing}. {t(aboard)} of coal is aboard and {t(frame.ballast)} of ballast is left; she floats at {fmt(meanDraft, 2)} m,{' '}
-          {Math.abs(st.trim) < 0.05 ? 'on an even keel' : `${fmt(Math.abs(st.trim), 2)} m by the ${st.trim > 0 ? 'stern' : 'head'}`}, and her hull is{' '}
-          {bend} at {fmt(nowPct)}% of the allowable.
+          At {h1(frame.t)}, {doing}; she is {Math.abs(st.trim) < 0.05 ? 'on an even keel' : `${fmt(Math.abs(st.trim), 2)} m by the ${st.trim > 0 ? 'stern' : 'head'}`} and{' '}
+          {bend}.
         </Caption>
       </Figure>
 
@@ -439,7 +440,8 @@ export default function Lesson() {
         meters by the stern once the coal is spread evenly — so that she sails at her marks. Real chief officers tune the last pours of each hold to bring her to the
         trim they want. None of this is improvised at the berth. IMO’s Code of Practice for the Safe Loading and Unloading of Bulk Carriers, the BLU Code, requires
         the ship and the terminal to agree a loading plan, ballasting included, before the first tonne goes in, and the plan is checked against the ship’s own
-        limits for bending and shear. The rates and the allowable moment in this demonstration are our model’s, and real terminals vary widely, but the race
+        limits for bending and for <b>shear</b>, the force that tries to slide one slice of the hull past the next, strongest at a bulkhead between a
+        full hold and an empty one. The rates and the allowable moment in this demonstration are our model’s, and real terminals vary widely, but the race
         between the loaders, the pumps and the hull is the same everywhere.
       </P>
 
@@ -465,9 +467,10 @@ export default function Lesson() {
         over, the charterer pays the owner <K tone="green">demurrage</K> for every extra day: compensation for a ship kept from her next voyage.
       </P>
       <P>
-        In the next demonstration, the loading takes whatever time the plan in <FigRef to="Cargo Loading Planner">the first demonstration</FigRef> needs. Add days
-        waiting for a berth and hours lost to weather, change the agreed rate, the notice time and whether weather stoppages count against laytime. The upper bar
-        is the call as it happened; the lower one is laytime used against laytime allowed. Demurrage is an illustrative {usd(DEMURRAGE)} a day:
+        In the next demonstration, Kestrel loads with the starting plan from <FigRef to="Cargo Loading Planner">the first demonstration</FigRef>, taking{' '}
+        {h1(LAYTIME_LOADING_HOURS)}. Add days waiting for a berth and hours lost to weather, change the agreed rate, the notice time and whether weather
+        stoppages count against laytime. The upper bar is the call as it happened; the lower one is laytime used against laytime allowed. Demurrage is an
+        illustrative {usd(DEMURRAGE)} a day:
       </P>
 
       <Figure name="Cargo Loading Planner · laytime" scenario={lt}>
@@ -475,7 +478,7 @@ export default function Lesson() {
           className="diagram"
           viewBox="0 0 640 150"
           role="img"
-          aria-label={`The port call lasts ${fmt(callDays, 2)} days: ${fmt(lt.state.waitDays, 2)} days waiting, ${h1(run.hours)} loading and ${lt.state.weatherHours} hours of weather. Laytime allowed is ${fmt(lay.allowedDays, 2)} days and ${fmt(lay.usedDays, 2)} days count; ${demurrage ? `the charterer owes ${usd(lay.balance)} in demurrage` : `the owner owes ${usd(-lay.balance)} in despatch`}.`}
+          aria-label={`The port call lasts ${fmt(callDays, 2)} days: ${fmt(lt.state.waitDays, 2)} days waiting, ${h1(LAYTIME_LOADING_HOURS)} loading and ${lt.state.weatherHours} hours of weather. Laytime allowed is ${fmt(lay.allowedDays, 2)} days and ${fmt(lay.usedDays, 2)} days count; ${demurrage ? `the charterer owes ${usd(lay.balance)} in demurrage` : `the owner owes ${usd(-lay.balance)} in despatch`}.`}
         >
           <text className="ax" x={16} y={36}>
             The call
@@ -529,8 +532,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'laytime allowed', value: `${fmt(lay.allowedDays, 2)} days`, tone: 'teal' },
-            { label: 'laytime used', value: `${fmt(lay.usedDays, 2)} days`, tone: 'teal' },
             {
               label: demurrage ? 'demurrage, charterer pays owner' : 'despatch, owner pays charterer',
               value: usd(Math.abs(lay.balance)),
@@ -560,8 +561,9 @@ export default function Lesson() {
         <Slider label="Weather stoppages" tone="teal" value={lt.state.weatherHours} min={0} max={48} step={2} onChange={(v) => lt.set({ weatherHours: v })} display={`${lt.state.weatherHours} h`} />
         <Slider label="Agreed loading rate" tone="orange" value={lt.state.ratePerDay} min={15_000} max={40_000} step={1000} onChange={(v) => lt.set({ ratePerDay: v })} display={`${fmt(lt.state.ratePerDay)} t/day`} />
         <Caption>
-          Loading takes {h1(run.hours)}, from the plan in the first demonstration; berthing, hatches, the two draft surveys and the paperwork add{' '}
-          {FORMALITIES_HOURS} hours. Waiting counts as laytime, as it does under a “whether in berth or not” clause.
+          Loading takes {h1(LAYTIME_LOADING_HOURS)}, the starting plan’s time; berthing, hatches, the two draft surveys and the paperwork add{' '}
+          {FORMALITIES_HOURS} hours. Waiting counts as laytime, as it does under a “whether in berth or not” clause. For simplicity the weather is drawn as one
+          block after loading, and our clock runs until the papers are done; many charters stop it when the last tonne is in.
         </Caption>
       </Figure>
 
@@ -571,6 +573,14 @@ export default function Lesson() {
         call runs just past laytime: {usd(LT_DEFAULT(2).balance)} of demurrage. Three days and it is {usd(LT_DEFAULT(3).balance)}, a day’s demurrage for every
         extra day. Add a day of weather on top of that: with stoppages excluded, as on “weather working days” terms, the bill is unchanged; if weather counts, it
         rises to {usd(LT_DEFAULT(3, 24, false).balance)}.
+      </P>
+      <P>
+        The agreed rate and the notice time are where the two sides bargain. Agree {fmt(30_000)} tonnes a day instead of {fmt(25_000)} and laytime shrinks to{' '}
+        {fmt(LT_DEFAULT(2, 0, true, 30_000).allowedDays, 2)} days, so the same two days at anchor cost the charterer {usd(LT_DEFAULT(2, 0, true, 30_000).balance)}{' '}
+        of demurrage rather than {usd(LT_DEFAULT(2).balance)}; agree {fmt(20_000)} and it stretches to {fmt(LT_DEFAULT(2, 0, true, 20_000).allowedDays, 2)} days,
+        and the owner pays {usd(-LT_DEFAULT(2, 0, true, 20_000).balance)} of despatch instead. Twelve hours’ notice rather than six holds the clock back six more
+        hours, worth {usd(LT_DEFAULT(0).balance - LT_DEFAULT(0, 0, true, 25_000, 12).balance)}{' '}
+        of extra despatch to the charterer when the berth is free on arrival.
       </P>
       <P>
         These clauses decide who carries the risk of a slow port. Under the terms here, the charterer pays for the berth queue, and the owner is compensated for a

@@ -93,9 +93,12 @@ export function lowestEightSolved(family: Family, n: number): boolean {
   return clampCarbons(family, n) === 8 && family === 'branched';
 }
 
-/** The second challenge: a molecule that boils in the naphtha range and resists knock well. */
+/**
+ * The second challenge: a ring (a naphthene, not an aromatic) that boils in the naphtha range and
+ * resists knock well. Only cyclopentane qualifies, so the first challenge's iso-octane doesn't.
+ */
 export function gasolineSolved(m: Molecule): boolean {
-  return m.bp >= 30 && m.bp < 160 && m.knock === 'high';
+  return m.family === 'ring' && m.bp >= 30 && m.bp < 160 && m.knock === 'high';
 }
 
 export default function Lesson() {
@@ -123,8 +126,8 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/1.1">
       <P>
-        Almost no one burns crude oil as it is. What comes out of the ground is a mixture of many thousands of different molecules, and before any of it can fuel a car, a truck or an
-        aircraft, a refinery has to sort those molecules, break some of them apart and rebuild others. Every market in this course — for crude, for gasoline and diesel,
+        What comes out of an oil well is a mixture of many thousands of different molecules, and before any of it can fuel a car, a truck or an aircraft, a refinery has
+        to sort those molecules, break some of them apart and rebuild others. Every market in this course — for crude, for gasoline and diesel,
         for the spreads between them — rests on what those molecules are and how they behave. So we’ll start with the molecules.
       </P>
       <P>
@@ -144,9 +147,10 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'molecule', value: <>{m.name}, <Formula m={m} /></> },
-            { label: 'molar mass', value: `${fmt(m.molarMass, 1)} g/mol` },
             { label: <K tone="red">boiling point</K>, value: degC(m.bp), tone: 'red' },
             { label: 'at room temperature (25 °C)', value: m.state },
+            { label: 'as gasoline', value: RATING_TEXT[m.knock] },
+            { label: 'as diesel', value: RATING_TEXT[m.ignition] },
           ]}
         />
         <Caption>
@@ -170,19 +174,20 @@ export default function Lesson() {
       <H2>Branches, rings and aromatics</H2>
       <P>
         The same atoms can be arranged in other ways. A <b>branched</b> paraffin has side chains: iso-octane has the same formula as octane, {iso.formula}, but its eight
-        carbons are bunched into a compact shape. Carbon chains can also close into <b>rings</b>, which refiners call naphthenes; a ring has no loose ends, so it carries
+        carbons are bunched into a compact shape. Each size has many branched forms, and the builder shows one common one: most of its branched molecules have a single
+        short side chain, but iso-octane has three, which makes it far more compact than the rest. Carbon chains can also close into <b>rings</b>, which refiners call naphthenes; a ring has no loose ends, so it carries
         exactly two hydrogens per carbon. And six carbons can form a flat ring in which some of the bonding electrons are shared around the whole ring, drawn here as a
         circle: an <b>aromatic</b> ring, as in benzene and toluene. Aromatics are short of hydrogen — benzene has just one per carbon — and they are dense. A liter of
         toluene weighs 867 grams; a liter of heptane, with the same seven carbons in a chain, weighs 684.
       </P>
       <P>
-        Shape changes the boiling point too. A compact molecule touches its neighbors less than a long one, so it escapes the liquid more easily. Switch between the
-        shapes with the slider at eight carbons and compare.
+        Shape changes the boiling point too. A compact molecule touches its neighbors less than a long one, so it escapes the liquid more easily. With eight carbons,
+        the builder can make one molecule of each shape.
       </P>
 
       <Challenge
         id="a"
-        question="Build the eight-carbon molecule with the lowest boiling point."
+        question="Predict which of the four eight-carbon molecules boils lowest, then build it to check."
         solved={solvedA}
         status={`Right now: ${m.name}, ${m.formula}, which boils at ${degC(m.bp)}.`}
         success={`Solved. Iso-octane boils at ${degC(iso.bp)}, against ${degC(nOct.bp)} for straight-chain octane, 132 °C for ethylcyclohexane and 136 °C for ethylbenzene. Its branches make it compact, so it has the least contact with its neighbors to overcome.`}
@@ -190,7 +195,8 @@ export default function Lesson() {
 
       <H2>Size sorts molecules by boiling point</H2>
       <P>
-        Crude oil contains all four kinds of molecule, in every size from methane to molecules with fifty or more carbons. Refiners don’t sort them by shape, which
+        Crude oil contains molecules of all four shapes, in every size from methane to molecules with fifty or more carbons, and at its heavy end still larger ones
+        built from many rings fused together, which the builder doesn’t make. Refiners don’t sort them by shape, which
         would be impractical, but by boiling point, which is easy: heat the oil, and the light molecules boil off first. The next chart plots the boiling point of
         every molecule the builder can make, with the temperature ranges refiners use to divide crude oil into <b>cuts</b>. The dot is the molecule in the builder:
       </P>
@@ -228,14 +234,13 @@ export default function Lesson() {
       <P>
         If refineries sort by boiling point, why does shape matter? Because engines care. In a gasoline engine, a spark lights the fuel–air mixture and a flame should
         sweep smoothly across the cylinder. Straight chains tend to ignite on their own ahead of the flame as the mixture is squeezed — the engine <b>knocks</b>, losing
-        power and, eventually, damaging itself. Branched chains, small rings and aromatics resist. The <K tone="violet">octane number</K> measures that resistance on a
+        power and, eventually, damaging itself. Highly branched chains, small rings and aromatics resist; a single short branch helps much less. The <b>octane number</b> measures that resistance on a
         scale fixed by two pure compounds: straight-chain heptane is 0 and iso-octane is 100.
       </P>
       <P>
         A diesel engine works the other way round. There’s no spark: fuel is sprayed into air that compression has made hot, and it must ignite by itself, quickly.
         Here long straight chains are best and aromatics worst, and the <b>cetane number</b> measures ignition quality on a scale where hexadecane, a sixteen-carbon chain
-        also called cetane, is 100. The builder rates each molecule for both kinds of engine. In the first demonstration, {m.name.toLowerCase()} would be{' '}
-        {RATING_TEXT[m.knock]} gasoline and {RATING_TEXT[m.ignition]} diesel.
+        also called cetane, is 100. The builder rates each molecule for both kinds of engine, in its readouts “as gasoline” and “as diesel”.
       </P>
 
       <Challenge
@@ -243,13 +248,17 @@ export default function Lesson() {
         figure="Molecule Builder"
         question={
           <>
-            In <FigRef to="Molecule Builder">the first demonstration</FigRef>, find a molecule that would make good gasoline: one that boils in the naphtha range, 30–160
-            °C, and resists knock well.
+            In <FigRef to="Molecule Builder">the first demonstration</FigRef>, find a ring — a naphthene, not an aromatic — that would make good gasoline: one that boils
+            in the naphtha range, 30–160 °C, and resists knock well.
           </>
         }
         solved={solvedB}
-        status={`${m.name} boils at ${degC(m.bp)} and would be ${RATING_TEXT[m.knock]} gasoline.`}
-        success={`Solved: ${m.name}, which boils at ${degC(m.bp)}. Several molecules qualify — iso-octane, cyclopentane, and the aromatics from benzene to propylbenzene — and none of them is a straight chain.`}
+        status={
+          family === 'ring'
+            ? `${m.name} boils at ${degC(m.bp)} and would be ${RATING_TEXT[m.knock]} gasoline.`
+            : `${m.name} is ${family === 'aromatic' ? 'an aromatic' : 'a chain'}, not a ring. Choose Ring with the Shape buttons.`
+        }
+        success={`Solved: ${m.name}, which boils at ${degC(m.bp)}. Only the smallest ring qualifies; the larger rings knock more easily. Iso-octane and the aromatics from benzene to propylbenzene make good gasoline too, but no straight chain does. Benzene itself is toxic, though, so US gasoline may average no more than 0.62% of it by volume.`}
       />
 
       <P>

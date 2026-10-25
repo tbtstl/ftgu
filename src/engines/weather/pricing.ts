@@ -84,7 +84,7 @@ export function contractYearValid(spec: ContractSpec, year: number): boolean {
 export function settledIndex(spec: ContractSpec, year: number, knobs: WorldKnobs = {}): number {
   const { start, end } = contractSpan(spec, year);
   let s = 0;
-  for (let d = start; d <= end; d++) s += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+  for (let d = start; d <= end; d++) s += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
   return s;
 }
 
@@ -156,7 +156,7 @@ export function indexDistribution(spec: ContractSpec, year: number, valuationDay
   const issue = t - delay;
   const H = LEAD_MAX;
   const rho = SAME_DAY_CORRELATION;
-  const cl = climateFor('calder', knobs);
+  const cl = climateFor('fenwick', knobs);
   const variability = knobs.variability ?? 1;
   const ensoF = knobs.ensoF ?? cl.ensoF;
   const base = spec.base;
@@ -165,7 +165,7 @@ export function indexDistribution(spec: ContractSpec, year: number, valuationDay
   let realized = 0;
   let daysRealized = 0;
   for (let d = start; d <= Math.min(end, t); d++) {
-    realized += degreeDays(spec.kind, tempF('calder', d, knobs), base);
+    realized += degreeDays(spec.kind, tempF('fenwick', d, knobs), base);
     daysRealized++;
   }
   const first = Math.max(start, t + 1);
@@ -192,7 +192,7 @@ export function indexDistribution(spec: ContractSpec, year: number, valuationDay
     if (opts.ignoreEnso) nino = 0;
     else nino = monthsAhead <= 0 ? ninoAt(Math.max(0, issue)) : ninoForecast(issueInfo.year, issueInfo.month, monthsAhead);
     ensoW[i] = ensoF * ENSO_MONTH_WEIGHT[info.month];
-    mu[i] = expectedTemp('calder', d, knobs) + ensoW[i] * nino;
+    mu[i] = expectedTemp('fenwick', d, knobs) + ensoW[i] * nino;
     monthKey[i] = Math.max(0, monthsAhead);
   }
   const daysClimate = n - daysForecast;
@@ -274,7 +274,7 @@ export function burnIndex(spec: ContractSpec, y: number, toYear: number, detrend
   const { start, end } = contractSpan(spec, y);
   const shift = detrend ? (knobs.trend ?? TREND_F_PER_YEAR) * (toYear - y) : 0;
   let s = 0;
-  for (let d = start; d <= end; d++) s += degreeDays(spec.kind, tempF('calder', d, knobs) + shift, spec.base);
+  for (let d = start; d <= end; d++) s += degreeDays(spec.kind, tempF('fenwick', d, knobs) + shift, spec.base);
   return s;
 }
 
@@ -321,7 +321,7 @@ export const INDEX_LABEL: Record<AnyIndex, string> = {
 
 /**
  * Any of the course's indices at a station over the given months of year y: degree days (base
- * `base`), total rain in inches (Calder Bay and Marlow keep rain gauges; Hollin Ridge doesn't), or
+ * `base`), total rain in inches (Fenwick Bay and Marlow keep rain gauges; Hollin Ridge doesn't), or
  * the count of days whose mean is below freezing.
  */
 export function indexValue(kind: AnyIndex, station: StationId, months: Array<[number, number]>, year: number, base = BASE_F, knobs: WorldKnobs = {}): number {

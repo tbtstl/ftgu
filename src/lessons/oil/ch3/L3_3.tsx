@@ -1,10 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, Sub, fmt, lessonHref, mix, pct, usd, useScenario } from '../../../framework';
 import { crude } from '../../../engines/oil/assay';
 import { HDS, ULSD_LIMIT, distill, hdsHydrogen, hdsSulfurOut, type HdsFeed } from '../../../engines/oil/refining';
-import { marginPerBarrel, planRefinery, type RefineryPlan } from '../../../engines/oil/refinery';
+import { FUEL_OIL_SULFUR, JET_SULFUR, marginPerBarrel, planRefinery, type RefineryPlan } from '../../../engines/oil/refinery';
 import { CRUDE_IDS, CRUDE_SPECS, type CrudeId } from '../../../model/oil/crudes';
-import { CALDER, CRUDE_PRICE, HYDROGEN_COST } from '../../../model/oil/refinery';
+import { CORRAN, CRUDE_PRICE, HYDROGEN_COST } from '../../../model/oil/refinery';
 import { XYChart } from '../shared/charts';
 
 const NAME: Record<CrudeId, string> = Object.fromEntries(CRUDE_SPECS.map((s) => [s.id, s.name])) as Record<CrudeId, string>;
@@ -48,7 +48,7 @@ export function throughputSolved(id: CrudeId, tempC: number, lhsv: number): bool
 }
 
 /** The diesel hydrotreater's feed, m³ per hour, at its full 55 kb/d. */
-export const DHT_M3_PER_HOUR = (CALDER.capacity.dht * 1000 * 0.158987) / 24;
+export const DHT_M3_PER_HOUR = (CORRAN.capacity.dht * 1000 * 0.158987) / 24;
 
 /**
  * An illustrative catalyst-and-reactor charge, $ per barrel: $0.40 at a space velocity of 1 and
@@ -157,7 +157,7 @@ function Reactor({ tempC, lhsv, feedPpm, outPpm, catalystM3 }: { tempC: number; 
 }
 
 // ---------------------------------------------------------------------------
-// Figure 2: the whole refinery on a Ridgeback–Northfield slate.
+// Figure 2: the whole refinery on a Pinyon–Northfield slate.
 
 export const SHARE_STEP = 5;
 
@@ -174,7 +174,7 @@ export function getSlates(): Slate[] {
     slates = Array.from({ length: 100 / SHARE_STEP + 1 }, (_, i) => {
       const share = i * SHARE_STEP;
       const s = share / 100;
-      const plan = planRefinery({ crudeAvailable: { ridgeback: (1 - s) * CALDER.capacity.cdu, northfield: s * CALDER.capacity.cdu, seaboard: 0, coldwater: 0 } });
+      const plan = planRefinery({ crudeAvailable: { pinyon: (1 - s) * CORRAN.capacity.cdu, northfield: s * CORRAN.capacity.cdu, seaboard: 0, coldwater: 0 } });
       return { share, plan, marginPerBbl: marginPerBarrel(plan) };
     });
   }
@@ -198,10 +198,10 @@ export function hydrogenPlantSolved(share: number): boolean {
 /** One row per limit: how much of it the slate uses. */
 function LimitRows({ plan }: { plan: RefineryPlan }) {
   const rows = [
-    { label: 'Diesel hydrotreater', used: plan.unitFeed.dht, cap: CALDER.capacity.dht, unit: 'kb/d', color: '#d0702a', digits: 1 },
-    { label: 'Hydrogen plant', used: plan.hydrogen.plant, cap: CALDER.hydrogenPlant, unit: 'MMscf/d', color: HYDROGEN, digits: 1 },
-    { label: 'Sulfur plant', used: plan.sulfurPlant, cap: CALDER.sulfurPlant, unit: 't/d', color: SULFUR, digits: 0 },
-    { label: 'Fuel oil sulfur', used: plan.fuelOilSulfur, cap: 3.5, unit: '%', color: '#5d4637', digits: 2 },
+    { label: 'Diesel hydrotreater', used: plan.unitFeed.dht, cap: CORRAN.capacity.dht, unit: 'kb/d', color: '#d0702a', digits: 1 },
+    { label: 'Hydrogen plant', used: plan.hydrogen.plant, cap: CORRAN.hydrogenPlant, unit: 'MMscf/d', color: HYDROGEN, digits: 1 },
+    { label: 'Sulfur plant', used: plan.sulfurPlant, cap: CORRAN.sulfurPlant, unit: 't/d', color: SULFUR, digits: 0 },
+    { label: 'Fuel oil sulfur', used: plan.fuelOilSulfur, cap: FUEL_OIL_SULFUR, unit: '%', color: '#5d4637', digits: 2 },
   ];
   const X0 = 170;
   const W = 300;
@@ -270,22 +270,36 @@ export default function Lesson() {
   const cur = slateAt(share);
   const all = getSlates();
   const solvedB = hydrogenPlantSolved(share);
+  // The shaded "plant runs" band would give challenge b away: it appears once the challenge is solved.
+  const [bandShown, setBandShown] = useState(false);
+  useEffect(() => {
+    if (solvedB) setBandShown(true);
+  }, [solvedB]);
   const first = all[0];
   const last = all[all.length - 1];
-  const dhtFull = all.find((s) => s.plan.unitFeed.dht >= CALDER.capacity.dht - 1e-6)!;
+  const dhtFull = all.find((s) => s.plan.unitFeed.dht >= CORRAN.capacity.dht - 1e-6)!;
   const beforeFull = all[all.indexOf(dhtFull) - 1];
-  const foCapped = all.find((s) => s.plan.fuelOilSulfur >= 3.5 - 1e-6)!;
+  const foCapped = all.find((s) => s.plan.fuelOilSulfur >= FUEL_OIL_SULFUR - 1e-6)!;
   const plantOn = all.find((s) => s.plan.hydrogen.plant > PLANT_ON)!;
   const best = all.reduce((a, s) => (s.marginPerBbl > a.marginPerBbl ? s : a), all[0]);
+  // The squeeze: what gives once the hydrotreater is full.
+  const nfCuts = distill(crude('northfield'));
+  const cgoPeak = beforeFull.plan.flows.cgoD;
+  const cgoGone = all.find((s) => s.share > dhtFull.share && s.plan.flows.cgoD < 0.05)!;
+  const iFull = all.indexOf(dhtFull);
+  const stepRoom = all[1].marginPerBbl - all[0].marginPerBbl;
+  const stepFull = all[iFull + 2].marginPerBbl - all[iFull + 1].marginPerBbl;
+  const plantMax = Math.max(...all.map((s) => s.plan.hydrogen.plant));
+  const belowPeak = best.plan.margin - last.plan.margin;
   const plantArea = all.filter((s) => s.plan.hydrogen.plant > PLANT_ON).map((s) => s.share);
 
   return (
     <LessonPage id="oil/3.3">
       <P>
         <a href={lessonHref('oil/3.2')}>Lesson 3.2</a> broke heavy molecules into lighter ones, and found two ways to balance the hydrogen: reject carbon as coke, or add
-        hydrogen. Either way, the streams a refinery makes still carry the crude’s <K tone="gold">sulfur</K>, and so do the straight-run cuts from its crude unit. Northfield
-        Sour’s diesel cut, from <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>, holds about {fmt(Math.round(nfPpm / 100) * 100)} parts per million of sulfur. Road diesel
-        in the United States may hold 15. Closing a gap of more than {fmt(Math.floor(nfPpm / 15 / 50) * 50)} times is the job of the hydrotreater, and this lesson is
+        hydrogen. Either way, the streams a refinery makes still carry the crude’s <K tone="orange">sulfur</K>, and so do the straight-run cuts from its crude unit. Northfield
+        Sour’s diesel cut, from <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>, is {fmt(nf.sulfur, 2)}% sulfur: about {fmt(Math.round(nfPpm / 100) * 100)} parts per
+        million (ppm), since 1% is 10,000 ppm. Road diesel in the United States may hold 15 ppm. Closing a gap of more than {fmt(Math.floor(nfPpm / 15 / 50) * 50)} times is the job of the hydrotreater, and this lesson is
         about what that job takes.
       </P>
       <P>
@@ -334,9 +348,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: <K tone="gold">sulfur out</K>, value: ppm(out), tone: out <= 15 ? 'green' : 'red' },
+            { label: <K tone="orange">sulfur out</K>, value: ppm(out), tone: out <= 15 ? 'green' : 'red' },
             { label: <K tone="teal">hydrogen used</K>, value: `${fmt(cost.scf)} scf/bbl`, tone: 'teal' },
-            { label: 'catalyst for 55 kb/d', value: `${fmt(catalystM3)} m³` },
             { label: <K c="price">treating cost</K>, value: `${usd(cost.hydrogen + cost.catalyst, 2)}/bbl`, tone: 'green' },
           ]}
         />
@@ -379,7 +392,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Bring Northfield’s diesel to 15 ppm or less at ${CHALLENGE_TEMP} °C with the highest throughput you can: the largest space velocity, to the nearest 0.05, that still meets the limit.`}
+        question={`Bring Northfield’s diesel to 15 ppm or less at ${CHALLENGE_TEMP} °C with the highest throughput you can. Estimate first: at 350 °C it took a space velocity of ${fmt(l15, 2)}, and at ${CHALLENGE_TEMP} °C the reactions run about ${fmt(SPEEDUP_370, 1)} times as fast. Then find the largest space velocity, to the nearest 0.05, that still meets the limit.`}
         solved={solvedA}
         status={
           feed !== 'northfield' || temp !== CHALLENGE_TEMP
@@ -392,17 +405,17 @@ export default function Lesson() {
       <H2>Where the hydrogen comes from</H2>
       <P>
         Each sulfur atom removed takes about three molecules of hydrogen in our model, on top of a base of {BASE_H2} standard cubic feet per barrel for the double bonds and
-        aromatic rings the catalyst saturates along the way. So hydrogen demand follows sulfur: treating Ridgeback Light’s diesel to 15 ppm takes {fmt(h2('ridgeback'))}{' '}
+        aromatic rings the catalyst saturates along the way. So hydrogen demand follows sulfur: treating Pinyon Light’s diesel to 15 ppm takes {fmt(h2('pinyon'))}{' '}
         scf per barrel, Northfield’s {fmt(h2('northfield'))}, Coldwater Heavy’s {fmt(h2('coldwater'))}. Some hydrogen comes free. The catalytic reformer, which turns
-        heavy naphtha into high-octane gasoline, strips hydrogen from the naphtha as it turns rings into aromatics: in our model, a thousand cubic feet for every barrel it
-        processes. The rest must
-        come from a hydrogen plant, which makes it from natural gas and steam at a cost — {usd(HYDROGEN_COST)} per thousand cubic feet in our model.
+        heavy naphtha into high-octane gasoline, strips hydrogen from the naphtha as it turns rings into aromatics: in our model, a thousand standard cubic feet for every barrel
+        it processes. The rest must come from a hydrogen plant, which makes it from natural gas and steam at a cost — {usd(HYDROGEN_COST)} per thousand standard cubic
+        feet in our model.
       </P>
       <P>
-        A refinery feels this across the whole plant, not in one reactor. In the next demonstration, the Calder refinery runs a slate of Ridgeback Light and Northfield
+        A refinery feels this across the whole plant, not in one reactor. In the next demonstration, the Corran refinery runs a slate of Pinyon Light and Northfield
         Sour, and chooses its own routing — which streams go to which unit — to earn the most, using the planning model that{' '}
         <a href={lessonHref('oil/3.5')}>Lesson 3.5</a> opens up. Its prices are the course’s simulated reference prices, with Northfield delivered at{' '}
-        {usd(CRUDE_PRICE.ridgeback - CRUDE_PRICE.northfield, 2)} less than Ridgeback. Make the slate sourer:
+        {usd(CRUDE_PRICE.pinyon - CRUDE_PRICE.northfield, 2)} less than Pinyon. Make the slate sourer:
       </P>
 
       <Figure name="Refinery Upgrading Lab · hydrogen balance" scenario={s2}>
@@ -410,11 +423,11 @@ export default function Lesson() {
           items={[
             { label: 'Hydrogen the hydrotreater uses', color: HYDROGEN, kind: 'line' },
             { label: 'Hydrogen the reformer makes', color: HYDROGEN, kind: 'line', dashed: true },
-            { label: 'Hydrogen plant running', color: 'rgba(42, 157, 144, 0.14)' },
+            ...(bandShown ? [{ label: 'Hydrogen plant running', color: 'rgba(42, 157, 144, 0.14)' }] : []),
           ]}
         />
         <XYChart
-          ariaLabel={`Hydrogen across slates from all Ridgeback Light to all Northfield Sour. At ${share}% Northfield, the hydrotreater uses ${fmt(cur.plan.hydrogen.used, 1)} MMscf/d, the reformer makes ${fmt(cur.plan.hydrogen.reformer, 1)} and the hydrogen plant ${fmt(cur.plan.hydrogen.plant, 1)}.`}
+          ariaLabel={`Hydrogen across slates from all Pinyon Light to all Northfield Sour. At ${share}% Northfield, the hydrotreater uses ${fmt(cur.plan.hydrogen.used, 1)} MMscf/d, the reformer makes ${fmt(cur.plan.hydrogen.reformer, 1)} and the hydrogen plant ${fmt(cur.plan.hydrogen.plant, 1)}.`}
           height={210}
           x={[0, 100]}
           y={[0, 30]}
@@ -423,7 +436,7 @@ export default function Lesson() {
           yTicks={[0, 10, 20, 30]}
           xLabel="Northfield Sour’s share of the 150 kb/d slate"
           yLabel="Hydrogen, million standard cubic feet a day"
-          bands={plantArea.length ? [{ from: plantArea[0] - SHARE_STEP / 2, to: 100, color: 'rgba(42, 157, 144, 0.14)', label: 'plant runs' }] : []}
+          bands={bandShown && plantArea.length ? [{ from: plantArea[0] - SHARE_STEP / 2, to: 100, color: 'rgba(42, 157, 144, 0.14)', label: 'plant runs' }] : []}
           series={[
             { points: all.map((s) => [s.share, s.plan.hydrogen.reformer] as [number, number]), color: HYDROGEN, width: 2, dash: '6 4' },
             { points: all.map((s) => [s.share, s.plan.hydrogen.used] as [number, number]), color: HYDROGEN, width: 3 },
@@ -450,38 +463,54 @@ export default function Lesson() {
           max={100}
           step={SHARE_STEP}
           onChange={(v) => s2.set({ share: v })}
-          display={`${share}% · ${fmt((share / 100) * CALDER.capacity.cdu, 1)} kb/d`}
+          display={`${share}% · ${fmt((share / 100) * CORRAN.capacity.cdu, 1)} kb/d`}
         />
       </Figure>
 
       <P>
-        On Ridgeback Light alone, the hydrotreater uses {fmt(first.plan.hydrogen.used, 1)} million cubic feet a day and the reformer makes{' '}
+        On Pinyon Light alone, the hydrotreater uses {fmt(first.plan.hydrogen.used, 1)} million standard cubic feet a day (MMscf/d) and the reformer makes{' '}
         {fmt(first.plan.hydrogen.reformer, 1)}: hydrogen to spare. As Northfield’s share grows, demand climbs while supply falls, because Northfield has less heavy naphtha
-        for the reformer. The first limit to bind isn’t hydrogen at all. At {dhtFull.share}% Northfield the hydrotreater’s {CALDER.capacity.dht} kb/d is full (at{' '}
-        {beforeFull.share}% it takes {fmt(beforeFull.plan.unitFeed.dht, 1)}), and from there the sour diesel it can’t take goes into fuel oil, worth far less. Fuel oil
-        rises from {fmt(first.plan.products.hsfo, 1)} kb/d on Ridgeback alone to {fmt(last.plan.products.hsfo, 1)} on Northfield alone; diesel falls from{' '}
-        {fmt(first.plan.products.diesel, 1)} to {fmt(last.plan.products.diesel, 1)}. By {foCapped.share}% the fuel oil itself has reached its {pct(0.035, 1)} sulfur
-        limit. The sulfur plant never comes close to its limit: even on Northfield alone it handles {fmt(last.plan.sulfurPlant)} of its {fmt(CALDER.sulfurPlant)} tonnes a
-        day.
+        for the reformer. The first limit to bind isn’t hydrogen at all. It’s room in the hydrotreater, and Northfield sends it more than diesel: its kerosene carries{' '}
+        {fmt(nfCuts.kerosene.sulfur, 2)}% sulfur, more than the {fmt(JET_SULFUR, 1)}% jet fuel may hold, so where Pinyon’s kerosene goes straight into jet fuel,
+        Northfield’s has to be hydrotreated first. At {dhtFull.share}% Northfield the hydrotreater’s {CORRAN.capacity.dht} kb/d is full (at {beforeFull.share}% it takes{' '}
+        {fmt(beforeFull.plan.unitFeed.dht, 1)}).
+      </P>
+      <P>
+        Something has to give, and it isn’t the sour diesel: on every slate all of it is still hydrotreated, because without the hydrotreater it could only be fuel
+        oil. What gives is the coker’s gas oil, which loses its place in the hydrotreater: {fmt(cgoPeak, 1)} kb/d at {beforeFull.share}% Northfield, none by{' '}
+        {cgoGone.share}%. Coking residue pays only when its gas oil can be made into diesel; sent to the cracker instead, the gas oil earns too little to beat selling the
+        residue as fuel oil. So the coker runs less, and residue goes into fuel oil uncoked. On Northfield alone the crude unit makes{' '}
+        {fmt(nfCuts.residue.volume * CORRAN.capacity.cdu, 1)} kb/d of residue, and the coker, with room for {CORRAN.capacity.coker}, takes only{' '}
+        {fmt(last.plan.unitFeed.coker, 1)}; {fmt(last.plan.flows.ro_northfield, 1)} goes into fuel oil. Fuel oil rises from {fmt(first.plan.products.hsfo, 1)} kb/d on
+        Pinyon alone to {fmt(last.plan.products.hsfo, 1)} on Northfield alone, and by {foCapped.share}% it has reached its {fmt(FUEL_OIL_SULFUR, 1)}% sulfur limit.
+        That is the limit for high-sulfur fuel oil, which is burned in power plants and industrial boilers, and by ships fitted with scrubbers that clean their exhaust;
+        other ships must burn the 0.5% fuel of <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>. The sulfur plant never comes close to its limit: even on Northfield alone it handles {fmt(last.plan.sulfurPlant)} of its{' '}
+        {fmt(CORRAN.sulfurPlant)} tonnes a day.
       </P>
 
       <Challenge
         id="b"
-        question="Find the smallest share of Northfield Sour, to the nearest 5%, at which the reformer’s hydrogen no longer covers the hydrotreater and the hydrogen plant has to run."
+        question="Estimate first, from where the two hydrogen lines cross: at what share of Northfield Sour does the reformer’s hydrogen stop covering the hydrotreater, so that the hydrogen plant has to run? Then set the slider to the smallest such share, to the nearest 5%."
         solved={solvedB}
-        status={`At ${share}% Northfield, the hydrogen plant makes ${fmt(cur.plan.hydrogen.plant, 2)} MMscf/d.`}
-        success={`Solved: ${share}%. Below it, the reformer’s by-product hydrogen is enough; from here on every extra barrel of sourness is paid for with natural gas. On Northfield alone the plant makes ${fmt(last.plan.hydrogen.plant, 1)} MMscf/d — a small share of its ${fmt(CALDER.hydrogenPlant)} MMscf/d capacity, because the full hydrotreater caps how much sulfur the refinery can remove.`}
+        status={`At ${share}% Northfield, the hydrotreater uses ${fmt(cur.plan.hydrogen.used, 1)} MMscf/d and the reformer makes ${fmt(cur.plan.hydrogen.reformer, 1)}.`}
+        success={`Solved: ${share}%, the first step past the crossing; the shading now marks where the plant runs. Below it, the reformer’s by-product hydrogen is enough; from here on every extra barrel of sourness is paid for with natural gas. On Northfield alone the plant makes ${fmt(last.plan.hydrogen.plant, 1)} MMscf/d — a small share of its ${fmt(CORRAN.hydrogenPlant)} MMscf/d capacity, because the full hydrotreater caps how much sulfur the refinery can remove.`}
       />
 
       <P>
-        Watch the margin as you go. Each barrel of Northfield costs {usd(CRUDE_PRICE.ridgeback - CRUDE_PRICE.northfield, 2)} less than a barrel of Ridgeback, so the margin
-        per barrel climbs from {usd(first.marginPerBbl, 2)} to a peak of {usd(best.marginPerBbl, 2)} at {best.share}% Northfield. Past that, the discount no longer
-        pays for the diesel lost to fuel oil, and from {plantOn.share}% for the hydrogen made from gas as well, and the margin falls to {usd(last.marginPerBbl, 2)}. That is the economics of a sour crude in miniature: its discount has to pay for hydrotreating capacity, hydrogen and sulfur handling,
-        and a refinery with spare hydrotreating can afford to buy sourer crude than one without. We’ll put a number on what each crude is worth to Calder in{' '}
+        Watch the margin as you go. Each barrel of Northfield costs {usd(CRUDE_PRICE.pinyon - CRUDE_PRICE.northfield, 2)} less than a barrel of Pinyon. While the
+        hydrotreater has room, each 5% step toward Northfield adds about {fmt(stepRoom * 100)}¢ to the margin per barrel. Once it is full, a step adds only about{' '}
+        {fmt(stepFull * 100)}¢, because each one pushes coker gas oil out of the hydrotreater and residue into fuel oil. The margin per barrel climbs from{' '}
+        {usd(first.marginPerBbl, 2)} to a peak of {usd(best.marginPerBbl, 2)} at {best.share}% Northfield. Past that, there is little coker gas oil left to push out and
+        the fuel oil is already at its sulfur limit, so the sourest slates are handled in costlier ways: some of Northfield’s kerosene goes into fuel oil, and more of its
+        residue has to be coked even though the coker’s gas oil can only go to the cracker. The margin falls to {usd(last.marginPerBbl, 2)}. Hydrogen is a small part of
+        that. The hydrogen plant runs from {plantOn.share}% and makes at most {fmt(plantMax, 1)} MMscf/d, about {usd(Math.round((plantMax * 1000 * HYDROGEN_COST) / 100) * 100)}{' '}
+        of hydrogen a day, while the margin on Northfield alone is {usd(Math.round(belowPeak / 1000) * 1000)} a day below the peak. That is the economics of a sour crude in
+        miniature: its discount has to pay for hydrotreating capacity, hydrogen and sulfur handling, and a refinery with spare hydrotreating can afford to buy sourer crude
+        than one without. We’ll put a number on what each crude is worth to Corran in{' '}
         <a href={lessonHref('oil/3.5')}>Lesson 3.5</a>.
       </P>
       <P>
-        The hydrotreated diesel, the sweetened kerosene, the reformate and the cracked gasoline are still only components. None of them is sold as it leaves its unit;
+        The hydrotreated diesel and kerosene, the reformate and the cracked gasoline are still only components. None of them is sold as it leaves its unit;
         each is blended with others into a finished fuel that has to meet a list of specifications at once. That is the subject of the{' '}
         <a href={lessonHref('oil/3.4')}>next lesson</a>. You can return to <FigRef to="Refinery Upgrading Lab">the first demonstration</FigRef> to compare how hard each
         crude’s diesel is to treat.

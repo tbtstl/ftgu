@@ -3,7 +3,6 @@ import {
   Caption,
   Challenge,
   Eq,
-  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -64,7 +63,7 @@ export interface BuilderState {
   capI: number;
 }
 
-export const BUILDER_DEFAULTS: BuilderState = { index: 'HDD', station: 'calder', start: 0, length: 1, type: 'future', strike: 1015, tickI: 0, capI: 0 };
+export const BUILDER_DEFAULTS: BuilderState = { index: 'HDD', station: 'fenwick', start: 0, length: 1, type: 'future', strike: 1015, tickI: 0, capI: 0 };
 
 /** The months a contract starting in `start` for `length` months covers, as [year offset, month]. */
 export function periodMonths(start: number, length: number): Array<[number, number]> {
@@ -176,9 +175,9 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
   const grid = Array.from({ length: 121 }, (_, i) => range.min + ((range.max - range.min) * i) / 120);
   const curve = grid.map((g) => payoff(spec, g));
   const [p0, p1] = niceDomain(Math.min(0, ...curve), Math.max(1, ...curve), 4);
-  const y = scale(p0, p1, 168, 28);
+  const y = scale(p0, p1, 148, 28);
   const [b0, b1] = niceDomain(Math.min(0, ...r.payouts), Math.max(1, ...r.payouts), 3);
-  const yb = scale(b0, b1, 320, 222);
+  const yb = scale(b0, b1, 296, 202);
   const n = r.years.length;
   const bx = scale(0, n, 72, 616);
   const bw = Math.max(2, (bx(1) - bx(0)) * 0.7);
@@ -187,7 +186,7 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 352"
+      viewBox="0 0 640 326"
       role="img"
       aria-label={`A ${st.type} on ${STATIONS[st.station].name}’s ${INDEX_LABEL[st.index]} over ${periodText(st.start, st.length)}, strike ${indexText(st.index, st.strike)}, ${usd(TICKS[st.tickI])} per ${UNIT[st.index]}${Number.isFinite(cap) ? `, capped at ${money(cap)}` : ''}. Over ${n} simulated years it would have paid on average ${money(r.mean)} a year, paying in ${r.paid} of them, at most ${money(r.largest)}.`}
     >
@@ -195,7 +194,7 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
         Payout, by the index at settlement
       </text>
       <GridY y={y} ticks={niceTicks(p0, p1, 4)} x0={72} x1={616} format={(v) => money(v)} baseline={0} />
-      <line className="cur" x1={x(st.strike)} x2={x(st.strike)} y1={28} y2={168} />
+      <line className="cur" x1={x(st.strike)} x2={x(st.strike)} y1={28} y2={148} />
       <text className="ax" x={x(st.strike) + 5} y={40}>
         strike
       </text>
@@ -206,15 +205,15 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
         <circle key={i} cx={x(v)} cy={y(r.payouts[i])} r={3.6} fill={IDX} stroke="#fcfcfb" strokeWidth={1} opacity={0.9} />
       ))}
       {niceTicks(range.min, range.max, 6).map((v) => (
-        <text key={v} className="ax ax-m" x={x(v)} y={186}>
+        <text key={v} className="ax ax-m" x={x(v)} y={166}>
           {st.index === 'rain' ? fmt(v, v % 1 ? 1 : 0) : fmt(v)}
         </text>
       ))}
-      <text className="ax ax-e" x={616} y={200}>
+      <text className="ax ax-e" x={616} y={180}>
         index at settlement, {unit}
       </text>
 
-      <text className="ax" x={72} y={214}>
+      <text className="ax" x={72} y={194}>
         What it would have paid, year by year
       </text>
       <GridY y={yb} ticks={niceTicks(b0, b1, 3)} x0={72} x1={616} format={(v) => money(v)} baseline={0} />
@@ -222,7 +221,7 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
         <rect key={i} x={bx(i + 0.5) - bw / 2} y={Math.min(yb(0), yb(p))} width={bw} height={Math.max(0.5, Math.abs(yb(p) - yb(0)))} fill={p >= 0 ? PAY : LOSS} opacity={0.85} />
       ))}
       {[1, 10, 20, 30, 40].filter((yr) => yr <= n).map((yr) => (
-        <text key={yr} className="ax ax-m" x={bx(yr - 0.5)} y={338}>
+        <text key={yr} className="ax ax-m" x={bx(yr - 0.5)} y={314}>
           {yr === 1 ? 'year 1' : yr}
         </text>
       ))}
@@ -236,7 +235,7 @@ function BuilderChart({ st, r }: { st: BuilderState; r: BuilderResult }) {
 export type FillRule = 'normal' | 'ridge' | 'ridgeAdj' | 'marlow' | 'marlowAdj';
 
 export const FILL_LABEL: Record<FillRule, string> = {
-  normal: 'Calder Bay’s normal',
+  normal: 'Fenwick Bay’s normal',
   ridge: 'Hollin Ridge',
   ridgeAdj: 'Hollin Ridge, adjusted',
   marlow: 'Marlow',
@@ -262,15 +261,15 @@ export const POSITION = { contracts: 1000, tick: 20 };
 export function fillValue(rule: FillRule, d: number): number {
   switch (rule) {
     case 'normal':
-      return expectedTemp('calder', d);
+      return expectedTemp('fenwick', d);
     case 'ridge':
       return tempF('ridge', d);
     case 'ridgeAdj':
-      return tempF('ridge', d) + expectedTemp('calder', d) - expectedTemp('ridge', d);
+      return tempF('ridge', d) + expectedTemp('fenwick', d) - expectedTemp('ridge', d);
     case 'marlow':
       return tempF('marlow', d);
     case 'marlowAdj':
-      return tempF('marlow', d) + expectedTemp('calder', d) - expectedTemp('marlow', d);
+      return tempF('marlow', d) + expectedTemp('fenwick', d) - expectedTemp('marlow', d);
   }
 }
 
@@ -293,7 +292,7 @@ export function settle(st: SettleState): Settlement {
   const missing: boolean[] = [];
   for (let i = 0; i < days; i++) {
     const d = start + i;
-    const t = tempF('calder', d);
+    const t = tempF('fenwick', d);
     const out = st.outLength > 0 && i + 1 >= st.outStart && i + 1 < st.outStart + st.outLength;
     trueT.push(t);
     missing.push(out);
@@ -302,6 +301,21 @@ export function settle(st: SettleState): Settlement {
   const trueIndex = trueT.reduce((s, t) => s + degreeDays('HDD', t), 0);
   const reportedIndex = reported.reduce((s, t) => s + degreeDays('HDD', t), 0);
   return { trueT, reported, missing, trueIndex, reportedIndex, moved: (reportedIndex - trueIndex) * POSITION.tick * POSITION.contracts };
+}
+
+/** A January whose 17th–21st were mild, where the normal fill errs toward the long side. */
+export const MILD_YEAR = 15;
+
+/** Over every five-day outage in the settlement January, the one a fallback rule misses most. */
+export function worstOutage(fill: FillRule, base: SettleState = SETTLE_DEFAULTS): { start: number; err: number } {
+  let worst = { start: 1, err: 0 };
+  const days = monthDays(base.year, 0).days;
+  for (let start = 1; start + base.outLength - 1 <= days; start++) {
+    const s = settle({ ...base, outStart: start, fill });
+    const err = Math.abs(s.reportedIndex - s.trueIndex);
+    if (err > worst.err) worst = { start, err };
+  }
+  return worst;
 }
 
 /** The challenge: with the station out for January 17–21 of year 23 and no drift, a fallback within 2 HDD of the truth. */
@@ -337,7 +351,7 @@ function SettleChart({ s, st }: { s: Settlement; st: SettleState }) {
       className="chart"
       viewBox="0 0 640 336"
       role="img"
-      aria-label={`January of year ${st.year} at Calder Bay. ${st.outLength > 0 ? `The station is out from January ${outA} to ${outB}, filled from ${FILL_LABEL[st.fill]}.` : 'The station reports every day.'}${st.drift ? ` Its sensor reads ${signed(st.drift, 1)} °F off.` : ''} The true index is ${fmt(s.trueIndex, 1)} HDD; the settlement uses ${fmt(s.reportedIndex, 1)}.`}
+      aria-label={`January of year ${st.year} at Fenwick Bay. ${st.outLength > 0 ? `The station is out from January ${outA} to ${outB}, filled from ${FILL_LABEL[st.fill]}.` : 'The station reports every day.'}${st.drift ? ` Its sensor reads ${signed(st.drift, 1)} °F off.` : ''} The true index is ${fmt(s.trueIndex, 1)} HDD; the settlement uses ${fmt(s.reportedIndex, 1)}.`}
     >
       <text className="ax" x={64} y={14}>
         Daily mean temperature, °F
@@ -397,7 +411,7 @@ export default function Lesson() {
     const jan = builderResult(BUILDER_DEFAULTS);
     const janMean = jan.indices.reduce((x, v) => x + v, 0) / jan.indices.length;
     const rainM = indexHistory('rain', 'marlow', 5, 3);
-    const rainC = indexHistory('rain', 'calder', 5, 3);
+    const rainC = indexHistory('rain', 'fenwick', 5, 3);
     const profits = farmYears(0.02).map((f) => f.profit);
     const yh = yieldHistory();
     const dryYears = rainM.map((v, i) => ({ v, year: i + 1 })).filter((x) => x.v < DROUGHT.below);
@@ -434,6 +448,8 @@ export default function Lesson() {
       rainCorr: corr(rainM, rainC),
       fills: Object.fromEntries(fills.map((x) => [x.f, x.s])) as Record<FillRule, Settlement>,
       drift: settle({ ...SETTLE_DEFAULTS, outLength: 0, drift: 0.5 }),
+      mild: settle({ ...SETTLE_DEFAULTS, year: MILD_YEAR }),
+      ridgeWorst: worstOutage('ridgeAdj'),
     };
   }, []);
 
@@ -452,9 +468,13 @@ export default function Lesson() {
       <P>
         A <K tone={WX.index}>weather derivative</K> is a contract whose payout is a formula applied to an index: a number measured at a named weather station over a
         named period. Nobody delivers any weather, and nobody has to prove a loss. When the period ends, the index is computed from the station’s records, and money
-        changes hands according to the formula. For a future or a swap the formula is linear: one side pays the other a fixed <K tone={WX.money}>tick</K>, so many
-        dollars per index point, times the difference between the index and an agreed level, the <b>strike</b>. A call pays only when the index finishes above its
-        strike, a put only when it finishes below, and either can be capped, so the seller knows the most it can lose.
+        changes hands according to the formula.
+      </P>
+      <P>
+        The simplest formula is linear. A <K tone={WX.index}>future</K>, or a swap — the same bargain written privately between two firms — pays a fixed{' '}
+        <K tone={WX.money}>tick</K>, so many dollars per index point, times the difference between the index and an agreed level, the <b>strike</b>. Whoever buys
+        the contract is <K tone={WX.money}>long</K>: they receive what the formula pays, or pay it when it comes out negative. Whoever sells it is <b>short</b>,
+        on the other side of every payment. An option pays on one side only: a call when the index finishes above its strike, a put when it finishes below.
       </P>
       <P>
         The best-known contracts are the CME’s degree-day futures, which began trading in 1999. They are written on the heating and cooling degree days of{' '}
@@ -466,7 +486,7 @@ export default function Lesson() {
       <P>
         In the next demonstration, write a contract on any of the course’s indices — degree days, rain, or days with a mean below freezing — at any of the region’s
         stations, and settle it against every year of the simulated archive. The upper chart is the payout formula, with each archive year marked where its index
-        settled; the lower one is what the contract would have paid, year by year. It starts as a CME-style January HDD future at Calder Bay, struck at the
+        settled; the lower one is what the contract would have paid, year by year. It starts as a CME-style January HDD future at Fenwick Bay, struck at the
         archive’s average January:
       </P>
 
@@ -486,7 +506,7 @@ export default function Lesson() {
           label="Station"
           value={st.station}
           onChange={(v) => reshape({ station: v })}
-          options={(st.index === 'rain' ? (['calder', 'marlow'] as StationId[]) : (['calder', 'marlow', 'ridge'] as StationId[])).map((id) => ({ value: id, label: STATIONS[id].name }))}
+          options={(st.index === 'rain' ? (['fenwick', 'marlow'] as StationId[]) : (['fenwick', 'marlow', 'ridge'] as StationId[])).map((id) => ({ value: id, label: STATIONS[id].name }))}
         />
         <Segmented
           label="Payoff"
@@ -503,13 +523,13 @@ export default function Lesson() {
           items={[
             { label: 'Payout formula', color: PAY, kind: 'line' },
             { label: 'A simulated year', color: IDX },
-            { label: 'Paid to the holder', color: PAY },
-            { label: 'Paid by the holder', color: LOSS },
+            { label: 'Paid to the long side', color: PAY },
+            { label: 'Paid by the long side', color: LOSS },
           ]}
         />
         <Readouts
           items={[
-            { label: 'average payout a year', value: money(r.mean), tone: WX.money },
+            { label: 'mean payout a year', value: money(r.mean), tone: WX.money },
             { label: 'years it paid', value: `${r.paid} of ${r.years.length}`, tone: WX.money },
             { label: 'largest payout', value: money(r.largest), tone: WX.money },
             { label: 'years the cap bound', value: Number.isFinite(cap) ? String(r.capped) : 'no cap' },
@@ -552,16 +572,16 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Across the archive’s Januaries, Calder Bay collected {fmt(q.janMean)} heating degree days on average, so a future struck at 1,015 pays out about nothing
-        on average — {money(q.janAvg)} a year — but a great deal in any one year: from {money(q.janMin)} to {money(q.janMax)} per contract. Whoever holds it gains{' '}
-        $20 for every degree day of extra cold and loses $20 for every degree day of warmth; whoever sold it, the reverse. That is the trade a gas utility worried
-        about a mild winter makes, on the selling side. Switch to a call and the losses disappear for the holder, and so do the payouts in mild years: the holder
-        gets paid only for cold beyond the strike. A buyer would pay for that right up front; what it is worth is the question of the next lesson.
+        Across the archive’s Januaries, Fenwick Bay collected {fmt(q.janMean)} heating degree days on average, so a future struck at 1,015 pays out about nothing
+        on average — {money(q.janAvg)} a year — but a great deal in any one year: from {money(q.janMin)} to {money(q.janMax)} per contract. The long side gains{' '}
+        $20 for every degree day of extra cold and loses $20 for every degree day of warmth; the short side, the reverse. That is the trade a gas utility worried
+        about a mild winter makes, on the short side. Switch to a call and the losses disappear for the long side, and so do the payouts in mild years: it gets
+        paid only for cold beyond the strike. A buyer would pay for that right up front; what it is worth is the question of the next lesson.
       </P>
       <P>
         The tick sets the size. The CME’s $20 makes one contract small, so a business hedges with many; private contracts are often written with ticks of thousands
-        of dollars per point. Caps matter most for the seller of an option, whose losses are otherwise open-ended, and for anyone writing on rain, where a single
-        extreme season can swamp years of premium.
+        of dollars per point. A <b>cap</b> limits any one payout, so the seller knows the most it can lose. Caps matter most for the seller of an option, whose
+        losses are otherwise open-ended, and for anyone writing on rain, where a single extreme season can swamp years of premium.
       </P>
 
       <Challenge
@@ -579,13 +599,13 @@ export default function Lesson() {
                   ? 'The seller insists on a cap of $250,000 or less.'
                   : `Right now it pays in ${r.paid} summers; in the driest of them, ${q.dryYears.map((x) => money(payoff(specOf(st), x.v))).join(', ')}.`
         }
-        success={`Solved. The four summers under 8 inches — ${dryList} — each pay at least $100,000, and the contract pays in ${r.paid} summers in all. Now look at what it does in the farm’s actual years. Year ${q.worstYear}, the farm’s worst, had ${fmt(q.worstRain, 1)} inches of rain and ${fmt(q.worstHeat)} heat degree days: the heat did the damage, and this put pays ${money(payWorst)}. Year 8 had ${fmt(q.year8.rain, 1)} inches but a cool summer and ${fmt(q.year8.bushels)} bushels an acre; the farm made ${money(q.year8.profit)}, and the put pays ${money(pay8)}.`}
+        success={`Solved. The four summers under 8 inches — ${dryList} — each pay at least $100,000, and the contract pays in ${r.paid} summers in all. Now look at what it does in the farm’s actual years. Year ${q.worstYear}, the farm’s worst, had ${fmt(q.worstRain, 1)} inches of rain and ${fmt(q.worstHeat)} extreme-heat degree days: the heat did the damage, and this put pays ${money(payWorst)}. Year 8 had ${fmt(q.year8.rain, 1)} inches but a cool summer and ${fmt(q.year8.bushels)} bushels an acre; the farm made ${money(q.year8.profit)}, and the put pays ${money(pay8)}.`}
       />
 
       <P>
         That last point is the one <a href={lessonHref('weather/4.5')}>Lesson 4.5</a> warned about. A contract pays what its index says, not what the farm lost. Marlow’s
         rain gauge measures one cause of a bad season, and in this archive most of the farm’s worst seasons were hot rather than dry. And the gauge has to be the right
-        one: switch the station to Calder Bay and the same put pays in a different set of years. In this simulated archive the two gauges’ summer totals are
+        one: switch the station to Fenwick Bay and the same put pays in a different set of years. In this simulated archive the two gauges’ summer totals are
         unrelated — a correlation of {fmt(q.rainCorr, 2)}, because the archive draws each gauge’s rain separately, which overstates the point — but summer rain is
         patchy, as <a href={lessonHref('weather/2.3')}>Lesson 2.3</a> showed, and a gauge far from a farm can miss its drought entirely.
       </P>
@@ -598,10 +618,10 @@ export default function Lesson() {
         some estimate — because once the money is at stake, every possible rule favors one side.
       </P>
       <P>
-        In the next demonstration it is January of year 23, the coldest January in the archive, and Calder Bay’s station fails for five days during its coldest spell.
+        In the next demonstration it is January of year 23, the coldest January in the archive, and Fenwick Bay’s station fails for five days during its coldest spell.
         The gray dashed lines are what the air did; the orange marks and line are what the settlement used, open circles for the filled days. The position is 1,000
-        January contracts, $20,000 a degree day — the size of a partial hedge for a utility like Calder Gas & Light. Choose the fallback, move the outage, and give
-        the sensor a calibration drift:
+        January contracts, $20,000 a degree day — the size of a partial hedge for a utility like Fenwick Gas & Light. Choose the fallback, the year and the outage,
+        and give the sensor a calibration drift:
       </P>
 
       <Figure name="Weather Contract Builder · settlement" scenario={g}>
@@ -633,36 +653,46 @@ export default function Lesson() {
         <Slider label="Sensor drift" tone={WX.temperature} value={sst.drift} min={-2} max={2} step={0.1} onChange={(v) => g.set({ drift: Math.round(v * 10) / 10 })} display={`${signed(sst.drift, 1)} °F`} />
         <Caption>
           {sst.outLength > 0
-            ? `The ${sst.outLength} missing days ${s.reportedIndex >= s.trueIndex ? 'add' : 'remove'} ${fmt(Math.abs(s.reportedIndex - s.trueIndex), 1)} degree days, moving ${money(Math.abs(s.moved))} ${s.moved >= 0 ? 'to' : 'from'} whoever is long.`
+            ? `The ${sst.outLength} missing days${sst.drift ? ' and the sensor’s drift' : ''} ${s.reportedIndex >= s.trueIndex ? 'add' : 'remove'} ${fmt(Math.abs(s.reportedIndex - s.trueIndex), 1)} degree days, moving ${money(Math.abs(s.moved))} ${s.moved >= 0 ? 'to' : 'from'} whoever is long.`
             : `With every day reported, the settlement ${Math.abs(s.reportedIndex - s.trueIndex) < 0.05 ? 'matches the air exactly' : `is off by ${fmt(Math.abs(s.reportedIndex - s.trueIndex), 1)} degree days, all from the sensor’s drift`}.`}
         </Caption>
       </Figure>
 
       <P>
-        Filling the gap with Calder Bay’s normal for the date is simple and impartial, but it erases the cold snap: the settlement counts{' '}
+        Filling the gap with Fenwick Bay’s normal for the date is simple and impartial, but it erases the cold snap: the settlement counts{' '}
         {fmt(-(q.fills.normal.reportedIndex - q.fills.normal.trueIndex), 1)} fewer degree days than the air delivered, and {money(-q.fills.normal.moved)} moves from
-        the long side to the short. Filling from Hollin Ridge as recorded goes wrong the other way: the ridge is 690 m higher and colder, and it adds{' '}
-        {fmt(q.fills.ridge.reportedIndex - q.fills.ridge.trueIndex, 1)} degree days. Marlow, inland, adds {fmt(q.fills.marlow.reportedIndex - q.fills.marlow.trueIndex, 1)}.
-        A backup station is useful only if its readings are adjusted for the normal difference between the two places.
+        the long side to the short. Move the year and the same rule errs the other way: in year {MILD_YEAR}, whose January 17–21 was mild, the normal adds{' '}
+        {fmt(q.mild.reportedIndex - q.mild.trueIndex, 1)} degree days and {money(q.mild.moved)} moves to the long side. A normal pulls every missing day toward
+        the average, whoever that favors.
       </P>
       <P>
         A sensor drift is quieter and no less real. With every day reported but the thermometer reading half a degree warm, the January index comes out{' '}
         {fmt(-(q.drift.reportedIndex - q.drift.trueIndex), 1)} degree days short — {money(-q.drift.moved)} on this position — and nothing in the record would show
-        it. That is why the quality control of <FigRef to="Weather Contract Builder · settlement">this demonstration</FigRef>’s kind matters to anyone who trades on a
-        station, and why a contract settles only after its period has ended and the data have been checked.
+        it. That is why the stations that settle contracts are calibrated and checked with such care, and why a contract settles only after its period has ended
+        and the data have been checked.
       </P>
 
       <Challenge
         id="b"
-        question="Keep the outage on January 17–21 of year 23 and the sensor true. Which fallback rule settles the index within 2 degree days of what the air delivered?"
+        question="Keep the outage on January 17–21 of year 23 and the sensor true. The contract can fall back on Hollin Ridge, 690 m higher in the hills to the north-west, or on Marlow, 350 km inland — either as recorded, or shifted by that station’s normal difference from Fenwick Bay. Predict first, from what you know of height and distance, which fallback settles the index within 2 degree days of what the air delivered. Then check it."
         solved={solved2}
         status={
           sst.year !== 23 || sst.outStart !== 17 || sst.outLength !== 5 || sst.drift !== 0
             ? 'Put the outage back on January 17–21 of year 23, with no drift.'
-            : `Filled from ${FILL_LABEL[sst.fill]}, the settlement is off by ${signed(s.reportedIndex - s.trueIndex, 1)} degree days, ${money(Math.abs(s.moved))}.`
+            : sst.fill === 'normal'
+              ? 'The normal erases the cold snap. Which backup station, as recorded or adjusted, would you trust instead?'
+              : `Filled from ${FILL_LABEL[sst.fill]}, the settlement is off by ${signed(s.reportedIndex - s.trueIndex, 1)} degree days. Was that your prediction?`
         }
-        success={`Solved. Hollin Ridge’s readings, shifted by the normal difference between the ridge and the city, put the index ${signed(s.reportedIndex - s.trueIndex, 1)} degree days from the truth. The ridge saw the same cold spell — it was the same air mass — and the adjustment takes out the part that is only height. Marlow’s readings, adjusted the same way, are still ${fmt(Math.abs(q.fills.marlowAdj.reportedIndex - q.fills.marlowAdj.trueIndex), 1)} degree days off: 350 km away, the cold arrived and left on a different schedule.`}
+        success={`Solved. Hollin Ridge’s readings, shifted by the normal difference between the ridge and the city, put the index ${signed(s.reportedIndex - s.trueIndex, 1)} degree days from the truth: the adjustment takes out the part of the difference that is only height and place, and the ridge shared this cold spell. Marlow’s readings, adjusted the same way, are still ${fmt(Math.abs(q.fills.marlowAdj.reportedIndex - q.fills.marlowAdj.trueIndex), 1)} degree days off: 350 km away, only part of its weather is Fenwick Bay’s.`}
       />
+
+      <P>
+        As recorded, both backups go wrong. The ridge is higher and colder, and it adds {fmt(q.fills.ridge.reportedIndex - q.fills.ridge.trueIndex, 1)} degree
+        days; Marlow, inland, adds {fmt(q.fills.marlow.reportedIndex - q.fills.marlow.trueIndex, 1)}. A backup station is useful only if its readings are adjusted
+        for the normal difference between the two places — and even then only as far as it shares the weather being settled. Move the outage through this January
+        and the adjusted ridge misses by as much as {fmt(q.ridgeWorst.err, 1)} degree days, for an outage starting on January {q.ridgeWorst.start}: a spell its
+        hills didn’t share with the coast.
+      </P>
 
       <P>
         A contract, then, is a precise promise about a measurement. Its payout is fixed by the formula once the index is known, and the index is known only after the

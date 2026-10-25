@@ -105,14 +105,46 @@ export function allReduce(gpu: GpuId, servers: number, bytes: number, algo: Algo
   };
 }
 
+/**
+ * Data each server sends over the network in one all-reduce, as a multiple of the data summed. A flat
+ * ring crosses between servers through one card per server, carrying 2(p − 1)/p of the data; a
+ * two-level all-reduce sends 2(n − 1)/n of an eighth through each of the server's eight cards, so
+ * 2(n − 1)/n in all for n servers.
+ */
+export function networkShare(servers: number, algo: Algo): number {
+  if (servers <= 1) return 0;
+  const p = servers * PER_SERVER;
+  return algo === 'flat' ? (2 * (p - 1)) / p : (2 * (servers - 1)) / servers;
+}
+
 export const CLUSTER_DEFAULTS = { gpu: 'A' as GpuId, servers: 1, logBytes: Math.log10(GRAD_8B), algo: 'flat' as Algo };
 export const TARGET_S = 0.2;
 export const CHALLENGE_SERVERS = 8;
+/** The data slider: log10 of the bytes summed. */
+export const DATA_LOG = { min: 6, max: 11.3, step: 0.05 };
 
-/** The challenge: the 8B model's gradients (or more) summed across 64 A-class GPUs in under 0.2 s. */
+/** The data positions on the slider, log10 bytes. */
+function dataSteps(): number[] {
+  const n = Math.round((DATA_LOG.max - DATA_LOG.min) / DATA_LOG.step);
+  return Array.from({ length: n + 1 }, (_, k) => Math.round((DATA_LOG.min + k * DATA_LOG.step) * 100) / 100);
+}
+
+/** The most data on the slider (log10 bytes) that 64 A-class GPUs sum in under 0.2 s with the given algorithm. */
+export function largestUnderTarget(algo: Algo = 'two-level'): number {
+  let best = -Infinity;
+  for (const lb of dataSteps()) if (allReduce('A', CHALLENGE_SERVERS, 10 ** lb, algo).seconds < TARGET_S) best = lb;
+  return best;
+}
+
+const LARGEST_LOG = largestUnderTarget('two-level');
+
+/** The reader's prediction: the time grows in proportion to the data, so 0.2 s holds 0.2 ÷ (the 8B model's time) of its gradients. */
+export const PREDICTED_BYTES = (GRAD_8B * TARGET_S) / allReduce('A', CHALLENGE_SERVERS, GRAD_8B, 'two-level').seconds;
+
+/** The challenge: the most data on the slider that 64 A-class GPUs can sum in under 0.2 s — which takes two levels. */
 export function clusterSolved(s: typeof CLUSTER_DEFAULTS): boolean {
   const bytes = 10 ** s.logBytes;
-  return s.gpu === 'A' && s.servers === CHALLENGE_SERVERS && bytes >= GRAD_8B * 0.99 && allReduce(s.gpu, s.servers, bytes, s.algo).seconds < TARGET_S;
+  return s.gpu === 'A' && s.servers === CHALLENGE_SERVERS && bytes >= 10 ** LARGEST_LOG * (1 - 1e-9) && allReduce(s.gpu, s.servers, bytes, s.algo).seconds < TARGET_S;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,16 +396,25 @@ export default function Lesson() {
   const big8 = allReduce('A', 8, GRAD_70B, 'two-level');
   const tiny = allReduce('A', 128, 1e6, 'flat');
   const tinyTwo = allReduce('A', 128, 1e6, 'two-level');
+  const hugeFlat = allReduce('A', 128, 1e11, 'flat');
+  const hugeTwo = allReduce('A', 128, 1e11, 'two-level');
+  const perServerFlat = networkShare(CHALLENGE_SERVERS, 'flat');
+  const perServerTwo = networkShare(CHALLENGE_SERVERS, 'two-level');
   const A = ACCELERATORS.A;
 
+  const flatMaxLog = largestUnderTarget('flat');
   const status =
     gpu !== 'A'
       ? `The servers hold ${ACCELERATORS[gpu].name} GPUs. Choose the A-class.`
       : servers !== CHALLENGE_SERVERS
         ? `There ${servers === 1 ? 'is 1 server' : `are ${servers} servers`}, ${p} GPUs. The challenge needs eight: 64 GPUs.`
-        : bytes < GRAD_8B * 0.99
-          ? `Only ${bytesText(bytes)} is being summed. Set the data to the 8B model’s gradients.`
-          : `Right now the all-reduce takes ${dur(r.seconds)}: over the 0.2-second target.`;
+        : r.seconds >= TARGET_S
+          ? `Summing ${bytesText(bytes)} takes ${dur(r.seconds)}: over the 0.2-second target.`
+          : algo === 'flat' && logBytes >= flatMaxLog - 1e-9
+            ? `A flat ring sums ${bytesText(bytes)} in ${dur(r.seconds)}, and no more than that in under 0.2 seconds. Is a flat ring the fastest way to sum?`
+            : `Summing ${bytesText(bytes)} takes ${dur(r.seconds)}, under 0.2 seconds. Could the 64 GPUs sum more?`;
+  const largest = allReduce('A', CHALLENGE_SERVERS, 10 ** LARGEST_LOG, 'two-level');
+  const nextUp = allReduce('A', CHALLENGE_SERVERS, 10 ** (LARGEST_LOG + DATA_LOG.step), 'two-level');
 
   let caption: string;
   if (servers === 1)
@@ -451,19 +492,22 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Servers" tone="blue" value={servers} min={1} max={16} onChange={(v) => c.set({ servers: v })} display={`${servers} × 8 = ${servers * 8} GPUs`} />
-        <Slider label="Data to sum" tone="violet" value={logBytes} min={6} max={11.3} step={0.05} onChange={(v) => c.set({ logBytes: v })} display={bytesText(bytes)} />
+        <Slider
+          label="Data to sum"
+          tone="violet"
+          value={logBytes}
+          min={DATA_LOG.min}
+          max={DATA_LOG.max}
+          step={DATA_LOG.step}
+          onChange={(v) => c.set({ logBytes: Math.round(v * 100) / 100 })}
+          display={bytesText(bytes)}
+        />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', alignItems: 'center', fontSize: 14, color: '#6f6f6f' }}>
           <span>Gradients of the</span>
           <Button onClick={() => c.set({ logBytes: Math.log10(GRAD_8B) })}>8B model, {bytesText(GRAD_8B)}</Button>
           <Button onClick={() => c.set({ logBytes: Math.log10(GRAD_70B) })}>70B model, {bytesText(GRAD_70B)}</Button>
         </div>
-        <Readouts
-          items={[
-            { label: 'time to sum', value: dur(r.seconds), tone: 'teal' },
-            { label: 'paced by', value: r.limitedBy === 'network' ? `network, ${fmt(r.inter.gbs, r.inter.gbs < 20 ? 1 : 0)} GB/s` : `${linkName(gpu)}, ${fmt(r.intra.gbs)} GB/s`, tone: 'blue' },
-            { label: 'bus bandwidth', value: `${fmt(r.busGBs)} GB/s`, tone: 'blue' },
-          ]}
-        />
+        <Readouts items={[{ label: 'bus bandwidth', value: `${fmt(r.busGBs)} GB/s`, tone: 'blue' }]} />
         {algo === 'flat' || servers === 1 ? (
           <Eq label="The ring's time for the current settings">
             <span>T</span>
@@ -494,11 +538,14 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With one server of A-class GPUs, the ring runs entirely over the GPU links and sums {bytesText(GRAD_8B)} in {dur(oneA.seconds)}. Add a second server and,
-        with a flat ring threading through all 16 GPUs, the same sum takes {dur(twoFlat.seconds)}: nearly ten times as long, for only twice the GPUs. Every step of a
-        ring waits for its slowest hop, and the hops between servers run at {fmt(A.nicGbps / 8)} GB/s against {fmt(A.scaleUpGBs)} inside. Watch the dots inside the
-        servers slow to the network’s pace. Adding more servers changes little after that: at eight servers the flat ring takes {dur(eightFlat.seconds)}, since each
-        GPU still sends just under twice the data over the same slowest link.
+        With one server of A-class GPUs, the ring runs entirely over the GPU links and sums {bytesText(GRAD_8B)} in {dur(oneA.seconds)}. The{' '}
+        <b>bus bandwidth</b> in the readout is a yardstick for comparing all-reduces of any size: the data each GPU would send in one ring through all p GPUs,
+        2(p − 1)/p × S, divided by the time the sum actually took — the link speed such a ring would need to finish as fast. Here it is {fmt(oneA.busGBs)} GB/s, the GPU links’ own speed. Add a second server and,
+        with a flat ring threading through all 16 GPUs, the same sum takes {dur(twoFlat.seconds)}: nearly ten times as long, for only twice the GPUs, and the bus
+        bandwidth falls to {fmt(twoFlat.busGBs)} GB/s. Every step of a ring waits for its slowest hop, and the hops between servers run at{' '}
+        {fmt(A.nicGbps / 8)} GB/s against {fmt(A.scaleUpGBs)} inside. Watch the dots inside the servers slow to the network’s pace. Adding more servers changes
+        little after that: at eight servers the flat ring takes {dur(eightFlat.seconds)}, since each hop between servers still carries just under twice the data at{' '}
+        {fmt(A.nicGbps / 8)} GB/s, and a ring’s time hardly depends on how many hops it has.
       </P>
       <P>
         The accelerator matters as much as the arrangement. On one server, the L-class needs {dur(oneL.seconds)} to sum the same gradients through PCIe, and the
@@ -508,11 +555,14 @@ export default function Lesson() {
 
       <H2>Two levels</H2>
       <P>
-        The fix is to send as little as possible over the slow links. A <b>two-level</b> all-reduce works in three phases. First, inside each server, the eight GPUs
-        sum their data over their fast links so that each ends up holding one eighth of the server’s total. Next, across servers, the GPUs holding the same eighth
-        all-reduce it with their counterparts in the other servers: eight separate rings, one per GPU and its network card, all running at once, each carrying only an
-        eighth of the data. Last, inside each server again, the GPUs share their finished eighths. Every network card is busy, and each moves an eighth of what it
-        would in a flat ring.
+        The flat ring’s trouble is less how much it sends across the network than how. Each server joins the ring through a single network card, which carries
+        just under twice the data while the server’s other seven cards sit idle. A <b>two-level</b> all-reduce puts all eight to work, in three phases. First,
+        inside each server, the eight GPUs sum their data over their fast links so that each ends up holding one eighth of the server’s total. Next, across servers,
+        the GPUs holding the same eighth all-reduce it with their counterparts in the other servers: eight separate rings, one per GPU and its network card, all
+        running at once, each carrying an eighth of the data. Last, inside each server again, the GPUs share their finished eighths. Each server still sends about as
+        much over the network as before — at eight servers, {fmt(perServerTwo, 2)} times the data against the flat ring’s {fmt(perServerFlat, 2)} — but through
+        eight cards instead of one. (Real communication libraries win back much of this even with flat rings, by running several at once, each crossing between
+        servers through a different card.)
       </P>
       <P>
         Choose the two-level algorithm in <FigRef to="GPU Cluster Topology">the first demonstration</FigRef>. With two servers the sum now takes{' '}
@@ -523,10 +573,10 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="GPU Cluster Topology"
-        question="Sum the 8B model’s gradients, about 16 GB, across 64 A-class GPUs — eight servers — in under 0.2 seconds."
+        question={`Predict first: 64 A-class GPUs sum the 8B model’s ${bytesText(GRAD_8B)} in two levels in ${dur(eightTwo.seconds)}, and at this size the per-step delays hardly count, so the time grows in proportion to the data. How much could they sum in 0.2 seconds? Then find the most data on the slider that 64 A-class GPUs — eight servers — can sum in under 0.2 seconds.`}
         solved={solved}
         status={status}
-        success={`Solved. Summed in two levels, the 64 GPUs take ${dur(eightTwo.seconds)}: ${dur(eightTwo.insideS / 2)} to sum inside each server, ${dur(eightTwo.betweenS)} across the network, where each card carries only an eighth of the data, and ${dur(eightTwo.insideS / 2)} to share the result inside again. A flat ring would take ${dur(eightFlat.seconds)}, because every one of its steps waits on the network.`}
+        success={`Solved: ${bytesText(10 ** LARGEST_LOG)} in ${dur(largest.seconds)}, summed in two levels; the next setting, ${bytesText(10 ** (LARGEST_LOG + DATA_LOG.step))}, takes ${dur(nextUp.seconds)}. The prediction, ${bytesText(GRAD_8B)} × 0.2 ÷ ${fmt(eightTwo.seconds, 3)} ≈ ${bytesText(PREDICTED_BYTES)}, falls between the two. A flat ring could sum only about ${fmt((GRAD_8B * TARGET_S) / eightFlat.seconds / 1e9)} GB in the same time, because its traffic between servers squeezes through one network card per server while the two-level all-reduce spreads it over all eight.`}
       />
 
       <H2>The cost of every step</H2>
@@ -561,9 +611,11 @@ export default function Lesson() {
       <P>
         At the starting settings, a single megabyte summed across 1,024 GPUs, the flat ring takes {dur(tiny.seconds)}, and {fmt((100 * tiny.delayS) / tiny.seconds, 1)}%
         of that is delay: its 2,046 steps cost {fmt(scaleOutLink('A').latencyUs)} µs apiece while the data itself would cross in {dur(tiny.dataS)}. The two-level
-        version has far fewer steps on the slow network — each of its rings links only the 128 servers — and takes {dur(tinyTwo.seconds)}. Raise the data toward
-        gigabytes and the curves flatten and draw together with the dashed line: bandwidth takes over. Real communication libraries choose among several patterns,
-        rings and trees among them, by message size for exactly this reason.
+        version has far fewer steps on the slow network — each of its rings links only the 128 servers — and takes {dur(tinyTwo.seconds)}. Raise the data toward{' '}
+        {bytesText(1e11)} and the flat ring’s curve settles onto its dashed line — at {fmt(128 * PER_SERVER)} GPUs, {dur(hugeFlat.seconds)} against{' '}
+        {dur(hugeFlat.dataS)} — as bandwidth takes over from the delays. The two-level curve flattens too, but stays far below, at {dur(hugeTwo.seconds)},
+        because its network phase spreads the data over every card. Real communication libraries choose among several patterns, rings and trees among them, by
+        message size for exactly this reason.
       </P>
       <P>
         Small messages matter most when a single model is split across GPUs within each layer, as the largest often are. Those GPUs exchange partial results after
@@ -573,8 +625,8 @@ export default function Lesson() {
 
       <H2>Why GPUs come in eights</H2>
       <P>
-        All of this explains the shape of the hardware. Accelerators for training are typically sold in servers of eight joined by dedicated links, with a network card for every
-        GPU, and the network that joins the servers is designed as carefully as the GPUs themselves (<a href={lessonHref('compute/4.4')}>Lesson 4.4</a>). It also
+        All of this explains the shape of the hardware. Accelerators for training are typically sold in servers of eight joined by dedicated links, with a network
+        card for every GPU — the newest systems stretch those dedicated links across a whole rack of several dozen GPUs — and the network that joins the servers is designed as carefully as the GPUs themselves (<a href={lessonHref('compute/4.4')}>Lesson 4.4</a>). It also
         explains why a GPU-hour isn’t a single product. Even two GPUs with identical arithmetic would not be worth the same hour if one reached its neighbors only
         over PCIe and a slower network card: while gradients are being summed the arithmetic waits, and summing {bytesText(GRAD_8B)} takes{' '}
         {fmt(oneL.seconds / oneA.seconds)} times as long on a server of L-class cards as on a server of A-class GPUs. And even 64 A-class GPUs, summing the 70B

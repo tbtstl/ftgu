@@ -127,11 +127,23 @@ export function clearMarket(buyers: Buyer[], supply: Supply, step = 10): Clearin
   return { allocation, served, prices, idle, welfare: base.welfare };
 }
 
+/**
+ * The prices of only some kinds of GPU at some sites: the same shadow price plus running cost that clearMarket
+ * reports for them, without solving for the rest (one linear program per price, plus one, instead of ten).
+ */
+export function pricesAt(buyers: Buyer[], supply: Supply, which: Array<{ site: SiteId; gpu: GpuId }>, step = 10): number[] {
+  const base = solve(buyers, supply).welfare;
+  return which.map(({ site, gpu }) => {
+    const more = { ...supply, [site]: { ...supply[site], [gpu]: supply[site][gpu] + step } } as Supply;
+    return Math.max(0, (solve(buyers, more).welfare - base) / step) + variableCost(site, gpu);
+  });
+}
+
 /** The course's reference regional market (simulated). */
 export const MARKET_SUPPLY: Supply = {
-  bayport: { L: 1500, A: 3000, B: 1000 },
+  marston: { L: 1500, A: 3000, B: 1000 },
   techpark: { L: 2000, A: 8000, B: 3000 },
-  northfield: { L: 0, A: 6000, B: 6000 },
+  fernhill: { L: 0, A: 6000, B: 6000 },
 };
 
 export const MARKET_BUYERS: Buyer[] = [

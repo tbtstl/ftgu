@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import {
   Challenge,
   Eq,
-  FigRef,
   Figure,
   Frac,
   GRAPHIC,
@@ -42,7 +41,7 @@ import {
   weibullPdf,
   weibullScaleFor,
 } from '../../../engines/weather/renewables';
-import { WIND_PPA, windYears, type WindYear } from '../../../engines/weather/exposure';
+import { WIND_PPA } from '../../../engines/weather/exposure';
 import { energyDay } from '../../../engines/weather/energyMarket';
 import { DAYS, archive, knownShare } from '../../../model/weather/archive';
 import { MONTH_NAMES, MONTH_START, monthOf } from '../../../model/weather/region';
@@ -165,13 +164,6 @@ export function outputHistogram(mean: number, sd: number, bins = 20): number[] {
     w += pdf;
   }
   return out.map((v) => v / w);
-}
-
-let yearsCache: WindYear[] | null = null;
-/** Hollin Ridge's output in each of the archive's 41 years, computed once. */
-export function ridgeYears(): WindYear[] {
-  if (!yearsCache) yearsCache = windYears();
-  return yearsCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,40 +373,6 @@ function TransferChart({ s, sd }: { s: ForecastState; sd: number }) {
   );
 }
 
-const YX = scale(0.5, 41.5, 60, 616);
-
-function YearsChart({ years }: { years: WindYear[] }) {
-  const lo = 800_000;
-  const hi = 1_200_000;
-  const y = scale(lo, hi, 106, 20);
-  const mean = years.reduce((s, v) => s + v.mwh, 0) / years.length;
-  const w = (YX(2) - YX(1)) * 0.7;
-  const min = years.reduce((a, b) => (b.mwh < a.mwh ? b : a));
-  const max = years.reduce((a, b) => (b.mwh > a.mwh ? b : a));
-  return (
-    <svg
-      className="chart"
-      viewBox="0 0 640 138"
-      role="img"
-      aria-label={`Hollin Ridge's output in each of the simulated archive's 41 years: an average of ${fmt(mean / 1e6, 2)} million MWh, from ${fmt(min.mwh / 1e6, 2)} million in year ${min.year} to ${fmt(max.mwh / 1e6, 2)} million in year ${max.year}.`}
-    >
-      <text className="ax" x={60} y={10}>
-        Hollin Ridge’s output in each of the archive’s years, MWh
-      </text>
-      <GridY y={y} ticks={[800_000, 1_000_000, 1_200_000]} x0={60} x1={616} format={(v) => `${fmt(v / 1e6, 1)}M`} />
-      {years.map((yr) => (
-        <rect key={yr.year} x={YX(yr.year) - w / 2} y={y(yr.mwh)} width={w} height={y(lo) - y(yr.mwh)} fill={yr === min || yr === max ? OUT : tint(OUT, 0.55)} />
-      ))}
-      <line x1={60} x2={616} y1={y(mean)} y2={y(mean)} stroke={TEXT.gold} strokeDasharray="5 4" />
-      {[1, 10, 20, 30, 41].map((yr) => (
-        <text key={yr} className="ax ax-m" x={YX(yr)} y={122}>
-          {yr === 1 ? 'year 1' : yr}
-        </text>
-      ))}
-    </svg>
-  );
-}
-
 export default function Lesson() {
   const s = useScenario('site', SITE_DEFAULTS);
   const st = s.state;
@@ -433,18 +391,12 @@ export default function Lesson() {
   const sd = forecastSd(fs.lead);
   const o = outputUnderUncertainty(fs.speed, sd);
   const solved2 = uncertaintySolved(fs);
-  const years = useMemo(() => ridgeYears(), []);
 
   // Numbers the prose quotes, from the same models the figures run.
   const nums = useMemo(() => {
     const ref = SITE_DEFAULTS;
     const cfRef = siteCf(ref);
     const c = weibullScaleFor(ref.mean, ref.k);
-    const mwh = years.map((y) => y.mwh);
-    const mean = mwh.reduce((a, b) => a + b, 0) / mwh.length;
-    const sdYears = Math.sqrt(mwh.reduce((a, b) => a + (b - mean) ** 2, 0) / mwh.length);
-    const min = years.reduce((a, b) => (b.mwh < a.mwh ? b : a));
-    const max = years.reduce((a, b) => (b.mwh > a.mwh ? b : a));
     const calm = energyDay({ doy: 20, meanF: 25, windMs: 3, cloud: 0.4 });
     const windy = energyDay({ doy: 20, meanF: 25, windMs: 13, cloud: 0.4 });
     return {
@@ -475,14 +427,10 @@ export default function Lesson() {
       junOvercast: solarDayMWh(171, 1, 25),
       junCold: solarDayMWh(171, 0, 0),
       junHot: solarDayMWh(171, 0, 35),
-      yearsMean: mean,
-      yearsSd: sdYears,
-      min,
-      max,
       calmPrice: calm.avgPrice,
       windyPrice: windy.avgPrice,
     };
-  }, [years]);
+  }, []);
 
   return (
     <LessonPage id="weather/4.4">
@@ -501,7 +449,7 @@ export default function Lesson() {
         m/s the turbine shuts down to protect itself.
       </P>
       <P>
-        The wind farm on Hollin Ridge has {fmt(RIDGE_MW)} MW of turbines — the Ridge wind farm of the electricity course, set in the Calder region. In the next
+        The wind farm on Hollin Ridge has {fmt(RIDGE_MW)} MW of turbines — the Ridge wind farm of the electricity course, set in the Fenwick region. In the next
         demonstration, the gold line is the farm’s power curve, and the violet area shows how often the wind blows at each speed at the height of the turbines’
         hubs over a year, an hour at a time. Wind speeds are well described by a <b>Weibull distribution</b>, set by its mean and a shape: a low shape means a wide
         spread of calms and gales, a high one a steadier wind. The darker gold area, the curve times the violet one, shows where the year’s energy comes from.
@@ -601,8 +549,8 @@ export default function Lesson() {
         A clear June day at 25 °C gives {fmt(nums.junDay)} MWh, a clear day in late December only {fmt(nums.decDay)}: the winter sun is low and up for barely nine
         hours. Cloud works unevenly. In the model, which uses an empirical relation fitted to measurements by Kasten and Czeplak, a sky half covered in cloud costs
         a June day only {pct(1 - nums.junHalf / nums.junDay)}, because scattered cloud lets direct sun through between its gaps, while a fully overcast sky cuts it
-        to {fmt(nums.junOvercast)} MWh, less than that clear December day. Heat costs less than either: the same clear June sky gives {fmt(nums.junCold)} MWh in
-        0 °C air and {fmt(nums.junHot)} at 35 °C.
+        to {fmt(nums.junOvercast)} MWh, less than that clear December day. Heat costs far less than overcast, but over a wide enough range more than scattered cloud: the
+        same clear June sky gives {fmt(nums.junCold)} MWh in 0 °C air and {fmt(nums.junHot)} at 35 °C, {pct(1 - nums.junHot / nums.junCold)} less.
       </P>
 
       <H2>Forecasting tomorrow’s output</H2>
@@ -611,7 +559,8 @@ export default function Lesson() {
         just next year’s. The forecast of the wind has an error, like the temperature forecasts of <a href={lessonHref('weather/3.5')}>Lesson 3.5</a>. The course’s
         simulated archive doesn’t forecast the wind, so this demonstration assumes its forecasts lose skill at the same rate as those temperature forecasts: the
         error is the day-to-day spread of the ridge’s wind, {fmt(nums.clim, 1)} m/s, times the square root of the share not yet known — about{' '}
-        {fmt(nums.sd1, 1)} m/s a day ahead, {fmt(nums.sd3, 1)} at three days and {fmt(nums.sd5, 1)} at five.
+        {fmt(nums.sd1, 1)} m/s a day ahead, {fmt(nums.sd3, 1)} at three days and {fmt(nums.sd5, 1)} at five. Those are errors in a day’s average wind; a single
+        hour’s wind varies more, so for an hour they are on the small side.
       </P>
       <P>
         In the next demonstration, the blue bell is the <K tone={WX.probability}>forecast</K> of an hour’s wind speed, and the bars on the right show what it
@@ -637,7 +586,6 @@ export default function Lesson() {
         />
         <Slider label="Forecast wind speed" tone={WX.wind} value={fs.speed} min={0} max={V_MAX} step={SPEED_STEP} onChange={(v) => f.set({ speed: v })} display={`${fmt(fs.speed, 1)} m/s`} />
         <Slider label="Days ahead" tone={WX.probability} value={fs.lead} min={1} max={10} onChange={(v) => f.set({ lead: v })} display={`${fs.lead} · ±${fmt(sd, 1)} m/s`} />
-        <YearsChart years={years} />
       </Figure>
 
       <P>
@@ -645,13 +593,14 @@ export default function Lesson() {
         the windier outcomes gain more than the calmer ones lose and the expected output is higher, {pct(nums.at8.mean)}. The range is wide: a 10% chance of less
         than {pct(nums.at8.p10)} and a 10% chance of more than {pct(nums.at8.p90)}, or {fmt(nums.at8.p10 * RIDGE_MW)} to {fmt(nums.at8.p90 * RIDGE_MW)} MW. Move the
         forecast to 14 m/s and the output is nearly certain, {pct(nums.at14.mean)} expected with a 90% chance of at least {pct(nums.at14.p10)}, because the curve
-        is flat past rated and a miss in the wind barely shows. At 4 m/s it is small and certain to stay small. The output is most uncertain where the curve is
-        steepest. And at the cut-out speed it is all or nothing: a forecast of 25 m/s means the farm either runs flat out or shuts down.
+        is flat past rated and a miss in the wind barely shows. At 4 m/s it is small and likely to stay small, with a 90% chance of less than{' '}
+        {pct(nums.at4.p90)}. The uncertainty lives on the curve’s steep climb between cut-in and rated, where every miss in the wind shows in the output. And at
+        the cut-out speed it is all or nothing: a forecast of 25 m/s means the farm either runs flat out or shuts down.
       </P>
 
       <Challenge
         id="b"
-        question={`Keep the forecast ${CHALLENGE_LEAD} days ahead. At what forecast speed, up to the rated ${TURBINE.rated} m/s, is the farm’s output most uncertain — the widest spread of outcomes?`}
+        question={`Keep the forecast ${CHALLENGE_LEAD} days ahead, where its error is ±${fmt(forecastSd(CHALLENGE_LEAD), 1)} m/s. The curve climbs most steeply just below the rated ${TURBINE.rated} m/s, but a forecast there spills half its likely winds onto the flat top. Predict first: at what forecast speed, up to rated and to the slider’s half meter per second, is the farm’s output most uncertain — the widest spread of outcomes? Then check.`}
         solved={solved2}
         status={
           fs.lead !== CHALLENGE_LEAD
@@ -660,23 +609,15 @@ export default function Lesson() {
               ? `Stay at or below the rated ${TURBINE.rated} m/s.`
               : `At ${fmt(fs.speed, 1)} m/s the output’s standard deviation is ${fmt(o.sd * RIDGE_MW)} MW.`
         }
-        success={`Solved. At ${fmt(fs.speed, 1)} m/s the standard deviation is ${fmt(o.sd * RIDGE_MW)} MW, the most of any speed up to rated. It sits a little below rated, where the curve is steepest, so that a forecast miss in either direction swings the output by the most. A grid operator facing a forecast like this keeps the most reserve; a trader who sold the output ahead faces the widest range of shortfalls to buy back.`}
+        success={`Solved. At ${fmt(fs.speed, 1)} m/s the standard deviation is ${fmt(o.sd * RIDGE_MW)} MW, the most of any speed up to rated. It sits ${fmt(TURBINE.rated - fs.speed, 1)} m/s below rated — about one forecast error of ±${fmt(sd, 1)} m/s — so most of the bell of likely winds falls on the curve’s steep climb, where every miss shows in the output, and only a little spills onto the flat top past rated. A grid operator facing a forecast like this keeps the most reserve; a trader who sold the output ahead faces the widest range of shortfalls to buy back.`}
       />
 
       <P>
-        The bars in <FigRef to="Wind and Solar Output Lab · forecast uncertainty">this demonstration</FigRef> are the same risk over a longer span. No forecast can
-        see next year’s wind (<a href={lessonHref('weather/3.4')}>Lesson 3.4</a>), so the farm’s output from one year to the next is simply weather. In the
-        simulated archive, Hollin Ridge averaged {fmt(nums.yearsMean / 1e6, 2)} million MWh a year — close to the {fmt(nums.mwhRef / 1e6, 2)} million of the first
-        demonstration’s starting wind — with a standard deviation of {fmt(nums.yearsSd)} MWh, about {pct(nums.yearsSd / nums.yearsMean)}. Its worst year, year{' '}
-        {nums.min.year}, made {fmt(nums.min.mwh / 1e6, 2)} million MWh, a capacity factor of {pct(nums.min.cf, 1)}; its best, year {nums.max.year},{' '}
-        {fmt(nums.max.mwh / 1e6, 2)} million at {pct(nums.max.cf, 1)}. The farm sells under a long-term contract at {usd(WIND_PPA)} per MWh, so its price is fixed and
-        its risk is all in the volume: revenue of {usd(nums.min.revenue / 1e6, 1)} million in the worst year and {usd(nums.max.revenue / 1e6, 1)} million in the
-        best, from the same turbines and the same costs.
-      </P>
-      <P>
-        That is weather exposure in its plainest form: a business whose income depends on a physical quantity no one can control or, beyond two weeks, predict.
-        The wind farm is not alone in the region. The gas utility sells more in a cold winter, the Marlow farm harvests less in a hot, dry summer, and each has
-        bills to pay whatever the weather does. The next lesson puts all three in dollars, side by side.
+        No forecast can see next year’s wind (<a href={lessonHref('weather/3.4')}>Lesson 3.4</a>), so the farm’s output from one year to the next is simply
+        weather. It sells under a long-term contract at {usd(WIND_PPA)} per MWh, so its price is fixed and its risk is all in the volume: weather exposure in its
+        plainest form, a business whose income depends on a physical quantity no one can control or, beyond two weeks, predict. The wind farm is not alone in the
+        region. The gas utility sells more in a cold winter, the Marlow farm harvests less in a hot, dry summer, and each has bills to pay whatever the weather
+        does. The next lesson puts all three in dollars, side by side, through the archive’s 41 years.
       </P>
     </LessonPage>
   );

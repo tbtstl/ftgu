@@ -38,7 +38,7 @@ export const N = 8192;
 const SHAPE = { m: N, n: N, k: N };
 /** Largest group: 11 × 11 = 121 tiles, as many as the 132 SMs can run at once. */
 export const MAX_GROUP = 11;
-/** The A-class's ridge point, FLOP per byte (≈ 295). */
+/** The A-class's ridge point, FLOPs per byte (≈ 295). */
 export const RIDGE = ridgePoint(GPU);
 export const FLOPS = matmulFlops(SHAPE);
 export const MIN_BYTES = compulsoryBytes(SHAPE);
@@ -134,7 +134,7 @@ export function ns(seconds: number): string {
   return `${fmt(seconds * 1e9)} ns`;
 }
 
-/** FLOP per byte: one decimal below 100. */
+/** FLOPs per byte: one decimal below 100. */
 export function inten(i: number): string {
   return fmt(i, i >= 100 ? 0 : 1);
 }
@@ -207,7 +207,7 @@ function TilingFigure({ r, playing }: { r: MatmulRun; playing: boolean }) {
       className="diagram"
       viewBox="0 0 640 300"
       role="img"
-      aria-label={`Multiplying two ${fmt(N)} × ${fmt(N)} matrices with ${r.tile} × ${r.tile} tiles in groups of ${r.group} × ${r.group}${fits ? '' : ' (a tile too big to fit on an SM)'}: each strip of A and B is read from memory ${fmt(r.reads)} times, ${gb(r.bytes)} in all, an intensity of ${inten(r.intensity)} FLOP per byte. The multiply takes ${ms(r.totalS)}, limited by ${r.bound === 'memory' ? 'memory' : 'arithmetic'}.`}
+      aria-label={`Multiplying two ${fmt(N)} × ${fmt(N)} matrices with ${r.tile} × ${r.tile} tiles in groups of ${r.group} × ${r.group}${fits ? '' : ' (a tile too big to fit on an SM)'}: each strip of A and B is read from memory ${fmt(r.reads)} times, ${gb(r.bytes)} in all, an intensity of ${inten(r.intensity)} FLOPs per byte. The multiply takes ${ms(r.totalS)}, limited by ${r.bound === 'memory' ? 'memory' : 'arithmetic'}.`}
     >
       {/* The matrices: B above C, A to its left, so A's rows line up with C's rows and B's columns with C's columns. */}
       <rect x={AX} y={CY} width={S} height={S} fill="#f6f6f3" stroke="#bbb" />
@@ -271,7 +271,7 @@ function TilingFigure({ r, playing }: { r: MatmulRun; playing: boolean }) {
       ))}
 
       <text x={LX0} y={116} className="ax">
-        Arithmetic intensity, FLOP per byte
+        Arithmetic intensity, FLOPs per byte
       </text>
       <rect x={LX0} y={122} width={IX_LOG(RIDGE) - LX0} height={32} fill={tint(MEMORY, 0.25)} />
       <rect x={IX_LOG(RIDGE)} y={122} width={LX1 - IX_LOG(RIDGE)} height={32} fill={tint(COMPUTE, 0.25)} />
@@ -283,6 +283,16 @@ function TilingFigure({ r, playing }: { r: MatmulRun; playing: boolean }) {
       </text>
       <line x1={IX_LOG(RIDGE)} x2={IX_LOG(RIDGE)} y1={118} y2={158} stroke="#333" strokeWidth={1.5} />
       <circle cx={IX_LOG(r.intensity)} cy={146} r={5} fill={COMPUTE} stroke="#fcfcfb" strokeWidth={2} />
+      {fits && (
+        <text
+          x={IX_LOG(r.intensity) + (IX_LOG(r.intensity) > 560 ? -9 : 9)}
+          y={150}
+          className={IX_LOG(r.intensity) > 560 ? 'ax ax-e' : 'ax'}
+          style={{ fill: TEXT.ink, fontWeight: 500, paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 3 }}
+        >
+          {inten(r.intensity)}
+        </text>
+      )}
       {DECADES.map((d) => (
         <text key={d} x={IX_LOG(d)} y={170} className={d === 10000 ? 'ax ax-e' : d === 0.1 ? 'ax' : 'ax ax-m'}>
           {fmt(d, d < 1 ? 1 : 0)}
@@ -309,10 +319,10 @@ function tilingCaption(r: MatmulRun): string {
     return `A ${r.tile} × ${r.tile} tile needs ${fmt(r.fit.accumulatorKB)} KB of running totals, more than the ${fmt(r.fit.registerBudgetKB)} KB of registers they may use, so no SM can hold one. If it could, the multiply would move ${gb(r.bytes)}.`;
   const share = r.tflops / GPU.bf16Tflops;
   if (r.tile === 1 && r.group === 1)
-    return `With no tiling, both numbers are fetched for every multiply-add: ${gb(r.bytes)} of traffic, and the matrix units reach ${tf(r.tflops)} TFLOPS, ${fmt(share * 100, 1)}% of their peak.`;
+    return `With no tiling, both numbers are fetched for every multiply-add: ${gb(r.bytes)} of traffic, and the arithmetic reaches only ${fmt(share * 100, 1)}% of the matrix units’ peak.`;
   if (r.bound === 'memory')
-    return `The multiply moves ${gb(r.bytes)} and waits on memory: ${tf(r.tflops)} TFLOPS, ${fmt(share * 100)}% of the A-class’s ${fmt(GPU.bf16Tflops)} TFLOPS.`;
-  return `The multiply moves ${gb(r.bytes)}, little enough that the matrix units, not memory, set the pace: the full ${fmt(GPU.bf16Tflops)} TFLOPS.`;
+    return `The multiply moves ${gb(r.bytes)} and waits on memory, reaching ${fmt(share * 100)}% of the A-class’s ${fmt(GPU.bf16Tflops)} TFLOPS.`;
+  return `The multiply moves ${gb(r.bytes)}, little enough that the matrix units, not memory, set the pace, at their full rate.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,12 +418,12 @@ export default function Lesson() {
   const statusA = !run.fit.fits
     ? `A ${run.tile} × ${run.tile} tile doesn’t fit on an SM.`
     : run.bound === 'memory'
-      ? `Right now the multiply reaches ${tf(run.tflops)} TFLOPS at an intensity of ${inten(run.intensity)} FLOP per byte, short of the ${fmt(RIDGE)} it needs.`
+      ? `Right now the multiply reaches ${tf(run.tflops)} TFLOPS at an intensity of ${inten(run.intensity)} FLOPs per byte, short of the ${fmt(RIDGE)} it needs.`
       : 'Compute-bound.';
   const statusB =
     br.totalS > ALLOWANCE * ONE_VECTOR_S
       ? `A batch of ${fmt(batch)} takes ${us(br.totalS)}, more than 10% longer than one vector’s ${us(ONE_VECTOR_S)}.`
-      : `A batch of ${fmt(batch)} takes ${us(br.totalS)}, within 10% of one vector’s ${us(ONE_VECTOR_S)}. Can it be larger?`;
+      : `A batch of ${fmt(batch)} takes ${us(br.totalS)}, within 10% of one vector’s ${us(ONE_VECTOR_S)}. Can it be larger? The arrow keys move the slider one vector at a time.`;
 
   return (
     <LessonPage id="compute/2.3">
@@ -453,9 +463,6 @@ export default function Lesson() {
         <TilingFigure r={run} playing={play.playing} />
         <Readouts
           items={[
-            { label: 'bytes moved', value: run.fit.fits ? gb(run.bytes) : '—', tone: 'violet' },
-            { label: 'FLOP per byte', value: run.fit.fits ? inten(run.intensity) : '—' },
-            { label: 'time', value: run.fit.fits ? ms(run.totalS) : '—', tone: 'teal' },
             { label: !run.fit.fits ? 'TFLOPS' : run.bound === 'memory' ? 'TFLOPS, memory-bound' : 'TFLOPS, compute-bound', value: run.fit.fits ? tf(run.tflops) : '—', tone: 'orange' },
           ]}
         />
@@ -529,7 +536,7 @@ export default function Lesson() {
         question={`Make the ${fmt(N)} × ${fmt(N)} multiply run at the A-class’s full ${fmt(GPU.bf16Tflops)} TFLOPS, using a tile that fits on an SM.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved. Any fitting tile works once the intensity passes the ridge of ${fmt(RIDGE)} FLOP per byte. With 128 × 128 tiles the smallest group that does it is ${g128} × ${g128}: each strip is read ${fmt(atG128.reads)} times, the intensity is ${inten(atG128.intensity)}, and the multiply takes ${ms(atG128.totalS)}, as long as its arithmetic. With 64 × 64 tiles it takes a group of ${g64} × ${g64}; smaller tiles can’t get there at all.`}
+        success={`Solved. Any fitting tile works once the intensity passes the ridge of ${fmt(RIDGE)} FLOPs per byte. With 128 × 128 tiles the smallest group that does it is ${g128} × ${g128}: each strip is read ${fmt(atG128.reads)} times, the intensity is ${inten(atG128.intensity)}, and the multiply takes ${ms(atG128.totalS)}, as long as its arithmetic. With 64 × 64 tiles it takes a group of ${g64} × ${g64}; smaller tiles can’t get there at all.`}
       />
 
       <H2>Batches of vectors</H2>
@@ -545,8 +552,7 @@ export default function Lesson() {
         <BatchFigure batch={batch} />
         <Readouts
           items={[
-            { label: 'FLOP per byte', value: inten(br.intensity) },
-            { label: 'time for the layer', value: us(br.totalS), tone: 'teal' },
+            { label: 'FLOPs per byte', value: inten(br.intensity) },
             { label: 'time per vector', value: br.totalS / batch >= 1e-6 ? us(br.totalS / batch) : ns(br.totalS / batch), tone: 'teal' },
             { label: 'TFLOPS achieved', value: tf(br.tflops), tone: 'orange' },
           ]}
@@ -576,10 +582,10 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Make the batch as large as possible while the layer takes no more than 10% longer than it does for a single vector."
+        question={`Predict first: one vector takes ${us(ONE_VECTOR_S)}, and past the ridge the layer’s time is its arithmetic, ${ns(perVector)} for every vector. How many vectors fit in ${us(ALLOWANCE * ONE_VECTOR_S)}, 10% more than one vector’s time? Then make the batch as large as possible while the layer takes no more than 10% longer than it does for a single vector.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${fmt(cheapest)} vectors take ${us(batchRun(cheapest).totalS)}, and one more would pass the 10% mark. Up to ${CROSS - 1} vectors the time hardly moves, because memory sets it; beyond, the arithmetic sets it, and it grows by ${ns(perVector)} a vector, so only a few more fit under the line.`}
+        success={`Solved: ${fmt(cheapest)} vectors take ${us(batchRun(cheapest).totalS)}, and one more would pass the 10% mark — as predicted, ${us(ALLOWANCE * ONE_VECTOR_S)} ÷ ${ns(perVector)} ≈ ${fmt(Math.floor((ALLOWANCE * ONE_VECTOR_S) / perVector))}. Up to ${CROSS - 1} vectors the time hardly moves, because memory sets it; beyond, the arithmetic sets it, so only a few more vectors fit under the line.`}
       />
 
       <H2>What an hour of GPU time is worth</H2>

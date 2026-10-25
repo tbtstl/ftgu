@@ -24,7 +24,7 @@ import {
 } from '../../../framework';
 import { SEASONAL_COSTS, normalMonthlyTemps, normalPlan, seasonalPlan, simulateYear, type SeasonalPlan, type YearDay } from '../../../engines/gas/market';
 import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
-import { COAL_SWITCH_BLOCKS, demandBlocks } from '../../../model/gas/demand';
+import { COAL_SWITCH_BLOCKS, LNG_VALUE, demandBlocks } from '../../../model/gas/demand';
 import { GAS_MONTHS, GAS_MONTH_START, GAS_YEAR_DAYS, WINTER_START, gasDayLabel, hdd, normalTemp, weatherYear, type WeatherYear } from '../../../model/gas/weather';
 import { BASINS, BAYPORT_LNG_FEEDGAS_BCFD, PIPELINE, STORAGE_SPECS } from '../../../model/gas/world';
 import { XYChart } from '../shared/XYChart';
@@ -115,8 +115,6 @@ const BASE = normalPlan();
 const BASE_SUM = seasonSummary(BASE);
 const BASE_RENT_TOTAL = BASE_SUM.rent * STORAGE_BCF * 1e6 * MMBTU_PER_MCF;
 const ENOUGH = enoughStorageScale();
-const ENOUGH_PLAN = seasonPlan({ ...SEASON_DEFAULTS, scale: ENOUGH });
-const ENOUGH_SUM = seasonSummary(ENOUGH_PLAN);
 const SMALL = seasonPlan({ ...SEASON_DEFAULTS, scale: 0.75 });
 const SMALL_SUM = seasonSummary(SMALL);
 const BIG = seasonPlan({ ...SEASON_DEFAULTS, scale: 1.5 });
@@ -125,6 +123,7 @@ const COLDER = seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, shift: -1 }));
 const WARMER = seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, shift: 1 }));
 const LNG_LOW = seasonSummary(seasonPlan({ ...SEASON_DEFAULTS, lng: 1.1 }));
 const NORTHLINE_COST = PIPELINE['calder-metro'].variableCost;
+const GULFWARD_COST = PIPELINE['calder-bayport'].variableCost;
 const MAY_METRO = BASE.price.metro[1];
 const NOV_METRO = BASE.price.metro[7];
 const SWITCH_VALUES = COAL_SWITCH_BLOCKS.map((b) => b.value);
@@ -140,8 +139,12 @@ for (let d = WINTER_START; d < GAS_YEAR_DAYS; d++) NORMAL_WINTER_HDD += hdd(norm
 // A real winter: one simulated year of weather against a year with every day at normal.
 
 export type WinterId = 'normal' | 'mild' | 'typical' | 'cold';
-/** Weather seeds for the three simulated winters: 15% milder than normal, about normal, 14% colder. */
-export const WINTER_SEEDS: Record<Exclude<WinterId, 'normal'>, number> = { mild: 23, typical: 11, cold: 29 };
+/**
+ * Weather seeds for the three simulated winters: the mild and typical winters of Lessons 4.1 and 4.2
+ * (9% fewer heating degree days than normal, and about normal), and a cold one with 14% more, which
+ * Lesson 4.5 reuses.
+ */
+export const WINTER_SEEDS: Record<Exclude<WinterId, 'normal'>, number> = { mild: 2, typical: 3, cold: 29 };
 const WINTER_LABEL: Record<WinterId, string> = { normal: 'Every day normal', mild: 'A mild winter', typical: 'A typical winter', cold: 'A cold winter' };
 
 const NORMAL_WEATHER: WeatherYear = (() => {
@@ -232,36 +235,35 @@ export default function Lesson() {
     st.shift !== 0 || Math.abs(st.lng - SEASON_DEFAULTS.lng) > 1e-9
       ? 'Set the winter back to normal and the LNG terminal back to its full 1.2 Bcf/d first.'
       : sum.full
-        ? `At ${fmt(capBcf, 1)} Bcf, storage is still full by November, and November costs ${gp(sum.step)} more than October.`
-        : `At ${fmt(capBcf, 1)} Bcf, storage peaks at ${fmt(sum.peak, 1)} Bcf and never fills, so November costs only the ${gp(ROUND_TRIP)} of carrying gas more than October. Would less storage do?`;
+        ? `At ${fmt(capBcf, 1)} Bcf, storage still fills by November.`
+        : `At ${fmt(capBcf, 1)} Bcf, storage never fills. Is that the least that doesn’t?`;
 
   return (
     <LessonPage id="gas/4.4">
       <P>
-        <a href={lessonHref('gas/4.3')}>The previous lesson</a> priced the right to move gas through space: firm capacity on Northline is worth whatever
-        Metro’s price exceeds Calder’s by, beyond the cost of the trip, on the days the pipe is full. Storage moves gas through time instead, and the same logic applies. Whoever owns room in Hollow Creek
-        or Salt Flat can buy gas in one month and sell it in a later one, so the value of that room shows up in how much more gas costs in one season than in
+        <a href={lessonHref('gas/4.3')}>The previous lesson</a> priced the right to move gas through space: firm capacity on Northline earns the gap between
+        Metro’s and Calder’s prices, beyond the cost of the trip, on the days the pipe is full. Storage moves gas through time instead. Whoever owns room in Hollow
+        Creek or Salt Flat can buy gas in one month and sell it in a later one, so the value of that room shows up in how much more gas costs in one season than in
         another.
       </P>
       <P>
         The region needs that room. Its two basins produce a steady {fmt(PRODUCTION, 1)} Bcf/d all year, but its demand swings with the{' '}
         <K tone="teal">temperature</K>: in a normal year Metro’s homes burn {fmt(HOMES_JUL, 2)} Bcf/d in July and {fmt(HOMES_JAN, 2)} in January, about{' '}
-        {fmt(HOMES_JAN / HOMES_JUL)} times as much. <a href={lessonHref('gas/3.4')}>Lesson 3.4</a>{' '}
-        showed what storage can do physically. Here we ask what the market does with it: how much gas it puts away each summer, and what that does to{' '}
-        <K c="price">prices</K> month by month.
+        {fmt(HOMES_JAN / HOMES_JUL)} times as much. <a href={lessonHref('gas/3.4')}>Lesson 3.4</a> showed what storage can do physically; here we ask how
+        much gas the market puts away each summer, and what that does to <K c="price">prices</K> month by month.
       </P>
       <P>
         To find out, we’ll solve a whole year at once. <a href={lessonHref('gas/3.2')}>Lesson 3.2</a> routed gas between places with a network solver; the same
         solver can route it between months. Make each place in each month a node, and treat each storage field as a set of pipes that carry gas from one month to
-        the next, with the field’s size as their capacity and its injection and withdrawal limits on the way in and out. Moving gas through time has a cost, as
-        moving it through space does: in our model {gp(SEASONAL_COSTS.injectCost)} per MMBtu to put it in, {gp(SEASONAL_COSTS.withdrawCost)} to take it out (fuel and
+        the next, with the field’s size as their capacity and its injection and withdrawal limits on the way in and out. Moving gas through time costs money too: in our model {gp(SEASONAL_COSTS.injectCost)} per MMBtu to put it in, {gp(SEASONAL_COSTS.withdrawCost)} to take it out (fuel and
         fees), and {gp(SEASONAL_COSTS.holdCostPerMonth)} for each month it sits there, mostly the interest on the money tied up in it. The solver finds the year’s
         cheapest pattern of production, storage and use, and every place in every month gets a price — the <b>seasonal plan</b>. All prices are simulated.
       </P>
       <P>
         In the next demonstration, the upper chart is the plan’s price at Calder Hub month by month, April to March, with the withdrawal season shaded; the lower
-        chart is the gas in the two storage fields at the start of each month. Change the size of the region’s storage, how cold the coming winter is expected to be,
-        and how much gas Bayport’s LNG terminal takes:
+        chart is the gas in the two storage fields at the start of each month. Under the charts, November’s price minus October’s splits into the cost of carrying
+        gas between them and whatever is left over, storage’s scarcity rent. Change the size of the region’s storage, how cold
+        the coming winter is expected to be, and how much gas Bayport’s LNG terminal takes:
       </P>
 
       <Figure name="Seasonal Gas Market" scenario={s}>
@@ -323,8 +325,6 @@ export default function Lesson() {
           items={[
             { label: 'average price, Apr–Oct', value: gp(sum.summer), tone: 'green' },
             { label: 'average price, Nov–Mar', value: gp(sum.winter), tone: 'green' },
-            { label: 'storage’s scarcity rent', value: `${gp(sum.rent)} per MMBtu`, tone: 'green' },
-            { label: 'storage at its fullest', value: sum.full ? `full, ${fmt(sum.capacity, 1)} Bcf` : `${fmt(sum.peak, 1)} of ${fmt(sum.capacity, 1)} Bcf`, tone: 'gold' },
           ]}
         />
         <Slider
@@ -357,11 +357,6 @@ export default function Lesson() {
           <Op>+</Op>
           <K c="price">{gp(sum.rent)} rent</K>
         </Eq>
-        <Caption>
-          {sum.full
-            ? `Storage fills by November 1, so the winter months cost more than the summer ones by more than it costs to carry gas between them.`
-            : `Storage never fills: there is room to spare, so every month costs exactly the carrying cost more than the month whose gas it holds.`}
-        </Caption>
       </Figure>
 
       <P>
@@ -385,23 +380,21 @@ export default function Lesson() {
         taking it out. November costs {gp(BASE_SUM.step)} more than October, so {gp(BASE_SUM.rent)} of the gap is not a cost at all. It is a{' '}
         <K c="price">scarcity rent</K>: storage is full, nobody can add another MMBtu to it, and the winter’s gas is dearer than the summer’s by more than the cost
         of moving it between them. That rent is what a unit of storage space is worth this year. Across the region’s {fmt(STORAGE_BCF)} Bcf of working gas it comes
-        to about {money(BASE_RENT_TOTAL)} a year — the money the owners of Hollow Creek and Salt Flat, or whoever has bought the right to use them, earn for having
-        room when room is short.
+        to about {money(BASE_RENT_TOTAL)} a year — what the owners of Hollow Creek and Salt Flat earn for having room when room is short.
       </P>
       <P>
-        Notice, too, where the price levels come from. In May Metro’s price is {gp(MAY_METRO)}, exactly the value of one of the coal-to-gas switching blocks of{' '}
-        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>, and in November it is {gp(NOV_METRO)}, the value of another (Calder sits{' '}
-        {gp(NORTHLINE_COST)} below, one trip up Northline). Storage moves gas between the seasons until it is full; what’s left over has to be balanced within each
-        season by the region’s most price-sensitive demand, Metro’s power plants deciding between coal and gas. Their blocks, valued from {gp(Math.min(...SWITCH_VALUES))}{' '}
-        to {gp(Math.max(...SWITCH_VALUES))}, are why the plan’s prices move in steps.
+        The price levels come from the demand curve of <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>. Metro’s price is {gp(MAY_METRO)} in May and{' '}
+        {gp(NOV_METRO)} in November (Calder sits {gp(NORTHLINE_COST)} below, one trip up Northline), each the value of one of Metro’s coal-to-gas switching blocks:
+        once storage has done what it can, what’s left in each season is balanced by power plants choosing between coal and gas. Their blocks, valued from{' '}
+        {gp(Math.min(...SWITCH_VALUES))} to {gp(Math.max(...SWITCH_VALUES))}, are why the plan’s prices move in steps.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the winter normal and the LNG terminal at 1.2 Bcf/d. What’s the least storage capacity, on the slider’s steps, at which storage no longer fills — so that November costs only the cost of carrying gas more than October?"
+        question="Predict first: if storage were big enough never to fill, how much more would November cost than October? Then, with the winter normal and the LNG terminal at 1.2 Bcf/d, find the least storage capacity, on the slider’s steps, at which storage no longer fills."
         solved={solved}
         status={status}
-        success={`Solved: ${fmt(STORAGE_BCF * ENOUGH, 1)} Bcf, ${pct(ENOUGH)} of today’s storage. The plan then fills it only to ${fmt(ENOUGH_SUM.peak, 1)} Bcf, so the summer-to-winter link never fills and November costs just the ${gp(ROUND_TRIP)} round trip more than October. One step smaller and storage fills again, and the scarcity rent comes back. Past that point extra storage earns its owners nothing beyond its costs: the region already stores all the summer gas it wants to.`}
+        success={`Solved: ${fmt(STORAGE_BCF * ENOUGH, 1)} Bcf, ${pct(ENOUGH)} of today’s storage. With room to spare, November costs just the ${gp(ROUND_TRIP)} of carrying gas more than October, and the rent is zero: anyone could carry October gas into November until the gap fell to the cost of doing it. One step smaller and storage fills again, and the scarcity rent comes back. Past this point extra storage earns its owners nothing beyond its costs, and the plan’s prices stop changing. Bigger fields still hold a little more gas at their peak, because in our model their injection and withdrawal rates grow with their size, but they never fill.`}
       />
 
       <H2>More storage, less storage</H2>
@@ -416,20 +409,24 @@ export default function Lesson() {
       <P>
         The expected winter matters as much. With storage full, a winter forecast just 1 °F colder than normal lifts the plan’s winter price to an average of{' '}
         {gp(COLDER.winter)}, and one 1 °F warmer drops it to {gp(WARMER.winter)}: once storage can’t hold any more summer gas, every extra MMBtu a colder winter needs
-        has to come from cutting back the next block of winter demand. That sensitivity is why gas traders watch long-range weather forecasts so closely. Demand from
-        outside the region works the same way: run the LNG terminal at 1.1 Bcf/d instead of 1.2 and the summer price falls to an average of {gp(LNG_LOW.summer)}.
+        has to come from cutting back the next block of winter demand. Demand from outside the region works the same way: run the LNG terminal at 1.1 Bcf/d
+        instead of 1.2 and the summer price falls to an average of {gp(LNG_LOW.summer)}. Our model exaggerates these swings: its wells can’t produce more in a
+        cold winter, and the demand that gives way comes in thin {fmt(COAL_SWITCH_BLOCKS[0].bcfd, 2)} Bcf/d blocks. Real markets, with many more producers and
+        users who can each adjust a little, move less — but the same way, which is why gas traders watch long-range weather forecasts so closely.
       </P>
 
       <H2>A real winter</H2>
       <P>
-        A plan is drawn up before the winter happens. The storage operators run their fields from it, but they also watch how much gas they actually hold. Each values
-        its gas at the plan’s price for the time of year — its <b>water value</b>, as hydroelectric operators say of the water behind a dam — and raises that value
-        when a cold spell has drawn the field down faster than planned, since the gas left must now last through more winter per Bcf. A field that’s behind plan
-        withdraws only at higher prices, and the whole market’s price rises with it.
+        A plan is drawn up before the winter happens. Each storage operator values its gas at the plan’s price for the time of year — its water value, as in{' '}
+        <a href={lessonHref('gas/4.2')}>Lesson 4.2</a> — and raises that value when a cold spell has drawn the field down faster than planned, since what’s left
+        must last the rest of the winter. A field behind plan withdraws only at higher prices, and the whole market’s price rises with it.
       </P>
       <P>
-        In the next demonstration the market runs day by day through a year of simulated weather. The dashed lines are a year with every day exactly normal; the solid
-        lines are the year you choose. Drag across a chart to read any day:
+        To say how cold a winter was, the gas industry counts <K tone="teal">heating degree days</K>. Each day adds one for every degree its mean temperature
+        falls below 65 °F, roughly where buildings start to need heat, so a day averaging 25 °F adds 40. Summed from November through March, a normal winter in our
+        region comes to {fmt(NORMAL_WINTER_HDD)}. In the next demonstration the market runs day by day through a year of
+        simulated weather. The dashed lines are a year with every day exactly normal; the solid lines are the year you choose. Drag across a chart to read any
+        day:
       </P>
 
       <Figure name="Seasonal Gas Market · a real winter" scenario={w}>
@@ -500,26 +497,24 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with every day normal. Even then storage doesn’t quite follow the plan: the fields can’t take gas as fast near the top as the plan’s monthly averages
-        assume (the ratchets of Lesson 3.4), so they enter the winter a little short and their operators price the winter a little higher, at {gp(W_NORMAL.winterPrice)}{' '}
-        on average. Now choose the cold winter, with {pct(W_COLD.winterHdd / NORMAL_WINTER_HDD - 1)} more heating degree days than normal. Storage falls behind
+        Even with every day normal, storage doesn’t quite follow the plan: the fields can’t take gas as fast near the top as the plan’s monthly averages assume
+        (the ratchets of Lesson 3.4), so they enter the winter a little short, and the winter averages {gp(W_NORMAL.winterPrice)}. Now choose the cold winter, with {pct(W_COLD.winterHdd / NORMAL_WINTER_HDD - 1)} more heating degree days than normal. Storage falls behind
         early, the operators raise their water values, and the winter averages {gp(W_COLD.winterPrice)}, with days as high as {gp(W_COLD.maxPrice)} — the Calder price
-        at which Bayport’s LNG cargoes stop paying, so the terminal takes less gas. Even so, it ends March with only {fmt(W_COLD.mar31, 1)} Bcf, against{' '}
-        {fmt(W_NORMAL.mar31, 1)} in the normal year. The mild winter, with {pct(1 - W_MILD.winterHdd / NORMAL_WINTER_HDD)} fewer heating degree days than normal, ends with{' '}
-        {fmt(W_MILD.mar31, 1)} Bcf left and averages {gp(W_MILD.winterPrice)}.
+        at which Bayport’s LNG cargoes stop paying ({gp(LNG_VALUE)} at Bayport, less the {gp(GULFWARD_COST)} trip down Gulfward), so the terminal takes less gas. Even so, it ends March with only {fmt(W_COLD.mar31, 1)} Bcf, against{' '}
+        {fmt(W_NORMAL.mar31, 1)} in the normal year. The mild winter of Lessons 4.1 and 4.2, with {pct(1 - W_MILD.winterHdd / NORMAL_WINTER_HDD)} fewer heating
+        degree days than normal, ends with {fmt(W_MILD.mar31, 1)} Bcf left and averages {gp(W_MILD.winterPrice)}.
       </P>
       <P>
-        The typical winter is the instructive one. Its {fmt(W_TYPICAL.winterHdd)} heating degree days are almost exactly the normal {fmt(NORMAL_WINTER_HDD)}, yet it
-        averages {gp(W_TYPICAL.winterPrice)}, not {gp(W_NORMAL.winterPrice)}. Its cold spells and mild spells roughly cancel in the degree days, but not in the price:
+        The typical winter of those lessons is the instructive one. Its {fmt(W_TYPICAL.winterHdd)} heating degree days are slightly fewer than the normal {fmt(NORMAL_WINTER_HDD)}, yet
+        it averages {gp(W_TYPICAL.winterPrice)}, not {gp(W_NORMAL.winterPrice)}. Its cold spells and mild spells roughly cancel in the degree days, but not in the price:
         a cold spell drains storage, raises water values and pushes the price up steeply, while a mild spell can only lower it gently toward the next block of
-        demand. Cold costs more than warmth saves. So the price the market should expect for a winter is higher than the price of a winter that’s exactly average —
-        something <FigRef to="Seasonal Gas Market">the first demonstration</FigRef>, which plans for exactly average weather, leaves out.
+        demand. Cold costs more than warmth saves. So the price to expect for a winter is higher than the price of an exactly average one — something{' '}
+        <FigRef to="Seasonal Gas Market">the first demonstration</FigRef>, which plans for average weather, leaves out.
       </P>
       <P>
-        A winter like the cold one also reaches past March. Storage that ends the winter low has to be refilled, so next summer’s gas is worth more too; storage that
-        ends it high can take less. Traders don’t wait to find out. They agree on prices for every coming month now, and those prices move each day with the weather,
-        the storage report and the forecasts. That set of prices — the forward curve, and the futures contracts that trade along it — is the subject of{' '}
-        <a href={lessonHref('gas/4.5')}>the next lesson</a>.
+        A winter like the cold one also reaches past March: storage that ends the winter low has to be refilled, so next summer’s gas is worth more too. Traders don’t
+        wait to find out. They agree prices for every coming month now, and those prices move each day with the weather, the storage report and the forecasts. That
+        set of prices — the forward curve, and the futures that trade along it — is the subject of <a href={lessonHref('gas/4.5')}>the next lesson</a>.
       </P>
     </LessonPage>
   );

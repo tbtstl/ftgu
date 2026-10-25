@@ -47,8 +47,10 @@ const COOLING_LABEL: Record<Cooling, string> = { air: 'Air', liquid: 'Liquid' };
 
 /** The first demonstration starts with two air-cooled A-class servers on a 40 kW feed. */
 export const RACK_DEFAULTS = { gpu: 'A' as GpuId, cooling: 'air' as Cooling, feed: 40 as Feed, servers: 2 };
-/** The second starts with 1,024 A-class GPUs, air-cooled, on 40 kW feeds. */
-export const HALL_DEFAULTS = { gpu: 'A' as GpuId, cooling: 'air' as Cooling, feed: 40 as Feed, gpus: 1024 };
+/** The cluster of the second demonstration: always 1,024 GPUs, the training cluster the rest of the chapter uses. */
+export const CLUSTER_GPUS = 1024;
+/** The second starts with A-class GPUs, air-cooled, on 40 kW feeds. */
+export const HALL_DEFAULTS = { gpu: 'A' as GpuId, cooling: 'air' as Cooling, feed: 40 as Feed };
 
 /** Most servers the rack's space allows: the slider's top. */
 export function spaceLimit(gpu: GpuId, cooling: Cooling): number {
@@ -107,11 +109,16 @@ export function rackSolved(s: { gpu: GpuId; cooling: Cooling; feed: number; serv
   return s.gpu === 'B' && r.gpus >= RACK_TARGET && r.violations.length === 0;
 }
 
-/** Challenge b: 1,024 A-class GPUs (or more) in no more than 20 racks. */
-export const HALL_TARGET = { gpus: 1024, racks: 20 };
-export function hallSolved(s: { gpu: GpuId; cooling: Cooling; feed: number; gpus: number }): boolean {
-  if (s.gpu !== 'A' || s.gpus < HALL_TARGET.gpus) return false;
-  return clusterLayout(s.gpu, s.cooling, s.feed, s.gpus).racks <= HALL_TARGET.racks;
+/** Challenge b: the smallest feed on which 1,024 A-class GPUs fit in 20 racks or fewer. */
+export const HALL_TARGET = { gpus: CLUSTER_GPUS, racks: 20 };
+/** Whether the cluster's GPUs fit in the hall's racks with this accelerator, cooling and feed. */
+export function hallFits(gpu: GpuId, cooling: Cooling, feed: number): boolean {
+  return clusterLayout(gpu, cooling, feed, HALL_TARGET.gpus).racks <= HALL_TARGET.racks;
+}
+/** The challenge's answer: the smallest feed on which the A-class fits, by either cooling. */
+export const HALL_MIN_FEED: Feed = FEEDS.find((f) => COOLINGS.some((c) => hallFits('A', c, f)))!;
+export function hallSolved(s: { gpu: GpuId; cooling: Cooling; feed: number }): boolean {
+  return s.gpu === 'A' && s.feed === HALL_MIN_FEED && hallFits('A', s.cooling, s.feed);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,16 +149,25 @@ export const NUMBERS = {
   bAir40: rackConfig({ gpu: 'B', cooling: 'air', servers: 3, feedKW: 40 }),
   bLiquid140: rackConfig({ gpu: 'B', cooling: 'liquid', servers: 10, feedKW: 140 }),
   homes: rackConfig({ gpu: 'A', cooling: 'air', servers: 4, feedKW: 40 }).rackKW / HOME_KW,
-  hallAirA: clusterLayout('A', 'air', 40, 1024),
-  hallLiquidA: clusterLayout('A', 'liquid', 100, 1024),
-  hallLiquidA60: clusterLayout('A', 'liquid', 60, 1024),
-  hallLiquidB: clusterLayout('B', 'liquid', 140, 1024),
+  hallAirA: clusterLayout('A', 'air', 40, CLUSTER_GPUS),
+  hallLiquidA: clusterLayout('A', 'liquid', 100, CLUSTER_GPUS),
+  hallLiquidA60: clusterLayout('A', 'liquid', 60, CLUSTER_GPUS),
+  hallLiquidB: clusterLayout('B', 'liquid', 140, CLUSTER_GPUS),
+  /** The fewest GPUs each of the hall's 20 racks must hold, and the servers that takes. */
+  hallPerRack: CLUSTER_GPUS / 20,
+  hallServersPerRack: Math.ceil(CLUSTER_GPUS / 20 / 8),
+  /** A rack of that many liquid-cooled A-class servers, with its switch. */
+  hallRackKW: rackConfig({ gpu: 'A', cooling: 'liquid', servers: Math.ceil(CLUSTER_GPUS / 20 / 8), feedKW: 140 }).rackKW,
 };
 
 const kw1 = (v: number) => `${fmt(v, 1)} kW`;
 const kw2 = (v: number) => `${fmt(v, 2)} kW`;
 const mw2 = (v: number) => `${fmt(v, 2)} MW`;
 const LIMIT_TEXT: Record<RackLimit, string> = { space: 'space', 'power feed': 'power feed', cooling: 'cooling' };
+
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const numberWord = (n: number) => WORDS[n] ?? fmt(n);
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function listText(xs: string[]): string {
   return xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
@@ -322,7 +338,8 @@ function RackDrawing({ gpu, cooling, feed, r }: { gpu: GpuId; cooling: Cooling; 
 // ---------------------------------------------------------------------------
 // The hall floor.
 
-function HallFloor({ gpu, cooling, feed, gpus, layout }: { gpu: GpuId; cooling: Cooling; feed: number; gpus: number; layout: ClusterLayout }) {
+function HallFloor({ gpu, cooling, feed, layout }: { gpu: GpuId; cooling: Cooling; feed: number; layout: ClusterLayout }) {
+  const gpus = CLUSTER_GPUS;
   const g = ACCELERATORS[gpu];
   if (!Number.isFinite(layout.racks)) {
     return (
@@ -403,18 +420,23 @@ export default function Lesson() {
 
   const s2 = useScenario('hall', HALL_DEFAULTS);
   const h = s2.state;
-  const layout = clusterLayout(h.gpu, h.cooling, h.feed, h.gpus);
+  const layout = clusterLayout(h.gpu, h.cooling, h.feed, CLUSTER_GPUS);
   const solvedB = hallSolved(h);
   const g2 = ACCELERATORS[h.gpu];
-  const rows: ConfigRow[] = GPU_IDS.flatMap((g) => COOLINGS.map((c) => ({ key: `${g}-${c}`, gpu: g, cooling: c, layout: clusterLayout(g, c, h.feed, h.gpus) })));
+  const rows: ConfigRow[] = GPU_IDS.flatMap((g) => COOLINGS.map((c) => ({ key: `${g}-${c}`, gpu: g, cooling: c, layout: clusterLayout(g, c, h.feed, CLUSTER_GPUS) })));
+  const hallBind = bindingLimits(h).map((b) => LIMIT_TEXT[b]);
+  const hallServers = layout.gpusPerRack / SERVERS[h.gpu].gpus;
+  const atHallDefaults = h.gpu === HALL_DEFAULTS.gpu && h.cooling === HALL_DEFAULTS.cooling && h.feed === HALL_DEFAULTS.feed;
   const statusB =
     h.gpu !== 'A'
       ? 'Choose the A-class first.'
-      : h.gpus < HALL_TARGET.gpus
-        ? `Set the GPUs to at least ${fmt(HALL_TARGET.gpus)}.`
-        : Number.isFinite(layout.racks)
-          ? `${fmt(h.gpus)} A-class GPUs take ${fmt(layout.racks)} racks of ${layout.gpusPerRack}.`
-          : `Not even one server fits a ${h.feed} kW feed.`;
+      : atHallDefaults
+        ? 'Make your prediction, then set the cooling and the feed.'
+        : !Number.isFinite(layout.racks)
+          ? `Not even one ${h.cooling}-cooled server fits a ${h.feed} kW feed.`
+          : !hallFits('A', h.cooling, h.feed)
+            ? `${h.cooling === 'air' ? 'Air' : 'Liquid'}-cooled on ${h.feed} kW feeds, the GPUs take ${fmt(layout.racks)} racks: more than ${HALL_TARGET.racks}.`
+            : `They fit in ${fmt(layout.racks)} racks. Would a smaller feed still do?`;
 
   const N = NUMBERS;
 
@@ -446,7 +468,7 @@ export default function Lesson() {
       <Figure name="GPU Rack Builder" scenario={s1}>
         <Segmented label="Accelerator" value={st.gpu} onChange={(v) => s1.set({ gpu: v })} options={GPU_IDS.map((g) => ({ value: g, label: ACCELERATORS[g].name }))} />
         <Segmented label="Cooling" value={st.cooling} onChange={(v) => s1.set({ cooling: v })} options={COOLINGS.map((c) => ({ value: c, label: `${COOLING_LABEL[c]}-cooled` }))} />
-        <Segmented label="Power feed" value={String(st.feed)} onChange={(v) => s1.set({ feed: Number(v) as Feed })} options={FEEDS.map((f) => ({ value: String(f), label: `${f} kW feed` }))} />
+        <Segmented label="Power feed" value={String(st.feed)} onChange={(v) => s1.set({ feed: Number(v) as Feed })} options={FEEDS.map((f, i) => ({ value: String(f), label: i === 0 ? `${f} kW feed` : `${f} kW` }))} />
         <RackDrawing gpu={st.gpu} cooling={st.cooling} feed={st.feed} r={r} />
         <Slider
           label="Servers in the rack"
@@ -455,16 +477,9 @@ export default function Lesson() {
           min={0}
           max={space}
           onChange={(v) => s1.set({ servers: v })}
-          display={`${r.servers} of ${space} that fit`}
+          display={`${r.servers} of ${space} the space allows`}
         />
-        <Readouts
-          items={[
-            { label: 'GPUs in the rack', value: fmt(r.gpus) },
-            { label: `rack power, feed ${st.feed} kW`, value: kw1(r.rackKW), tone: 'red' },
-            { label: 'rack units used', value: `${r.unitsUsed} of ${RACK_UNITS}` },
-            { label: 'GPUs’ share of the power', value: r.servers ? pct(r.gpuShare) : '—' },
-          ]}
-        />
+        <Readouts items={[{ label: 'GPUs in the rack', value: fmt(r.gpus) }]} />
         <Caption>{caption}</Caption>
       </Figure>
 
@@ -472,7 +487,7 @@ export default function Lesson() {
         The starting rack holds two {A.short} servers. Add two more and it is full: four servers, {N.fullAir.gpus} GPUs, {kw1(N.fullAir.rackKW)} — about as much as{' '}
         {fmt(N.homes)} homes in the electricity course’s model draw on average. Yet only {N.fullAir.unitsUsed} of its {RACK_UNITS} units are used. A fifth server
         would fit in the space but take the rack to {kw1(N.fifthAir.rackKW)}, past both the 40 kW feed and what air can carry away. The
-        rack runs out of power and of cooling long before it runs out of room. On the 17 kW feed of a hall built for ordinary servers, it runs out sooner still: a
+        rack runs out of power and of cooling one server before it runs out of room. On the 17 kW feed of a hall built for ordinary servers, it runs out sooner still: a
         single {A.short} server, {N.oldHall.gpus} GPUs, is all that fits.
       </P>
       <P>
@@ -499,27 +514,18 @@ export default function Lesson() {
       <H2>From racks to a hall</H2>
       <P>
         A training run of the kind <a href={lessonHref('compute/3.3')}>Lesson 3.3</a> sized needs a thousand GPUs or more, so the question becomes how many racks,
-        how much floor and how much power a whole cluster takes. In the next demonstration, choose the accelerator, its cooling, the feed every rack is given and
-        the number of GPUs; each rack is filled as far as its limits allow, and the floor plan draws one tile per rack. The table compares every accelerator and way
-        of cooling at the same feed:
+        how much floor and how much power a whole cluster takes. The next demonstration builds a cluster of {fmt(CLUSTER_GPUS)} GPUs. Choose the accelerator, its
+        cooling and the feed every rack is given; each rack is filled as far as its limits allow, and the floor plan draws one tile per rack. The table compares every
+        accelerator and way of cooling at the same feed:
       </P>
 
       <Figure name="GPU Rack Builder · cluster" scenario={s2}>
         <Segmented label="Accelerator" value={h.gpu} onChange={(v) => s2.set({ gpu: v })} options={GPU_IDS.map((g) => ({ value: g, label: ACCELERATORS[g].name }))} />
         <Segmented label="Cooling" value={h.cooling} onChange={(v) => s2.set({ cooling: v })} options={COOLINGS.map((c) => ({ value: c, label: `${COOLING_LABEL[c]}-cooled` }))} />
-        <Segmented label="Power feed" value={String(h.feed)} onChange={(v) => s2.set({ feed: Number(v) as Feed })} options={FEEDS.map((f) => ({ value: String(f), label: `${f} kW feed` }))} />
-        <HallFloor gpu={h.gpu} cooling={h.cooling} feed={h.feed} gpus={h.gpus} layout={layout} />
-        <Slider label="GPUs in the cluster" value={h.gpus} min={256} max={4096} step={256} onChange={(v) => s2.set({ gpus: v })} display={fmt(h.gpus)} />
-        <Readouts
-          items={[
-            { label: 'racks', value: Number.isFinite(layout.racks) ? fmt(layout.racks) : '—' },
-            { label: 'IT power', value: Number.isFinite(layout.itMW) ? mw2(layout.itMW) : '—', tone: 'red' },
-            { label: 'floor', value: Number.isFinite(layout.floorM2) ? `${fmt(layout.floorM2)} m²` : '—' },
-            { label: 'power per m² of floor', value: Number.isFinite(layout.racks) ? kw1(layout.densityKWm2) : '—', tone: 'red' },
-          ]}
-        />
+        <Segmented label="Power feed" value={String(h.feed)} onChange={(v) => s2.set({ feed: Number(v) as Feed })} options={FEEDS.map((f, i) => ({ value: String(f), label: i === 0 ? `${f} kW feed` : `${f} kW` }))} />
+        <HallFloor gpu={h.gpu} cooling={h.cooling} feed={h.feed} layout={layout} />
         <DataTable
-          caption={`${fmt(h.gpus)} GPUs on ${h.feed} kW feeds, by accelerator and cooling`}
+          caption={`${fmt(CLUSTER_GPUS)} GPUs on ${h.feed} kW feeds, by accelerator and cooling`}
           rows={rows}
           rowKey={(x) => x.key}
           rowClass={(x) => (x.gpu === h.gpu && x.cooling === h.cooling ? 'hl' : !Number.isFinite(x.layout.racks) ? 'dim' : '')}
@@ -534,7 +540,7 @@ export default function Lesson() {
         />
         <Caption>
           {Number.isFinite(layout.racks)
-            ? `${fmt(h.gpus)} ${g2.short} GPUs, ${h.cooling}-cooled on ${h.feed} kW feeds: ${fmt(layout.racks)} racks of up to ${layout.gpusPerRack}, ${mw2(layout.itMW)} before cooling and losses.`
+            ? `Each ${h.cooling}-cooled ${g2.short} rack on a ${h.feed} kW feed holds ${hallServers} server${hallServers === 1 ? '' : 's'}, ${layout.gpusPerRack} GPUs, before its ${listText(hallBind)} ${hallBind.length > 1 ? 'run' : 'runs'} out. The table’s IT power is before cooling and losses.`
             : `On a ${h.feed} kW feed, not even one ${h.cooling}-cooled ${g2.short} server fits.`}
         </Caption>
       </Figure>
@@ -551,10 +557,10 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="GPU Rack Builder · cluster"
-        question={`A data hall has room for only ${HALL_TARGET.racks} more racks. Fit at least ${fmt(HALL_TARGET.gpus)} A-class GPUs into them.`}
+        question={`A data hall has room for only ${HALL_TARGET.racks} more racks. What is the smallest feed on which ${fmt(HALL_TARGET.gpus)} A-class GPUs fit into them? Predict it first — how many servers must each rack hold, and what do they draw? — then set it.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved. Air cooling caps an A-class rack at four servers, 32 GPUs, whatever the feed, so ${fmt(HALL_TARGET.gpus)} GPUs need ${fmt(N.hallAirA.racks)} racks. With liquid cooling, a 60 kW feed takes seven servers, 56 GPUs, and ${fmt(N.hallLiquidA60.racks)} racks are enough; a 100 kW feed fills each rack to its ten-server space limit, and ${fmt(N.hallLiquidA.racks)} racks do it.`}
+        success={`Solved: ${HALL_MIN_FEED} kW, liquid-cooled. ${fmt(HALL_TARGET.gpus)} GPUs in ${HALL_TARGET.racks} racks means at least ${fmt(N.hallPerRack, 1)} a rack, so ${numberWord(N.hallServersPerRack)} servers of eight GPUs. ${capitalize(numberWord(N.hallServersPerRack))} liquid-cooled servers and the rack’s switch draw ${kw1(N.hallRackKW)}: more than a 40 kW feed delivers, within ${HALL_MIN_FEED} kW, and ${fmt(N.hallLiquidA60.racks)} racks are enough. Air can’t do it on any feed: it carries only ${COOLING_LIMIT_KW.air} kW out of a rack, four servers, so the GPUs need ${fmt(N.hallAirA.racks)} racks.`}
       />
 
       <H2>Density</H2>

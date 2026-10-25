@@ -74,6 +74,9 @@ export interface CapacityWinter {
   maxDay: number;
   maxTemp: number;
   maxMetro: number;
+  /** The winter's (November–March) coldest day, and Hollow Creek's working gas at the end of the widest spread's day, Bcf. */
+  coldestDay: number;
+  maxHollow: number;
 }
 
 /** Runs the market through each of the twenty winters (seeds 1–20). */
@@ -84,6 +87,7 @@ export function capacityWinters(): CapacityWinter[] {
     const full = y.map((d) => (d.flow[NL.id] ?? 0) >= NL.capacityBcfd - 1e-6);
     const margins = spreads.map((s) => Math.max(0, s - NL.variableCost)).sort((a, b) => b - a);
     const maxSpread = Math.max(...spreads);
+    const coldest = y.slice(WINTER_START).reduce((a, d) => (d.tempF < a.tempF ? d : a));
     return {
       seed: i + 1,
       spreads,
@@ -96,6 +100,8 @@ export function capacityWinters(): CapacityWinter[] {
       maxDay: spreads.indexOf(maxSpread),
       maxTemp: y[spreads.indexOf(maxSpread)].tempF,
       maxMetro: y[spreads.indexOf(maxSpread)].price.metro,
+      coldestDay: coldest.day,
+      maxHollow: y[spreads.indexOf(maxSpread)].storage.hollowcreek,
     };
   });
 }
@@ -117,6 +123,10 @@ const SPIKES = WINTERS.filter((w) => w.maxSpread > 1);
 const SPIKE_COLDEST = Math.min(...SPIKES.map((w) => w.maxTemp));
 const SPIKE_WARMEST = Math.max(...SPIKES.map((w) => w.maxTemp));
 export const SPIKE_METRO_PRICE = Math.max(...WINTERS.map((w) => w.maxMetro));
+/** Of the winters with a real spike, those whose best day was the winter's coldest, and those whose best day came on a milder day. */
+export const SPIKE_ON_COLDEST = SPIKES.filter((w) => w.maxDay === w.coldestDay);
+export const SPIKE_NOT_COLDEST = SPIKES.filter((w) => w.maxDay !== w.coldestDay);
+export const SPIKE_COUNT = SPIKES.length;
 
 // ---------------------------------------------------------------------------
 // The open season.
@@ -178,6 +188,12 @@ const DEFAULT = expansionOutcome(CAPACITY_AUCTION_DEFAULTS);
 const DEFAULT_UNIFORM = expansionOutcome({ ...CAPACITY_AUCTION_DEFAULTS, rule: 'uniform' });
 const ALL_MARKETERS_BEST = EXPANSION_MMBTU_D * BEST_WINTER.firm;
 const ANCHOR = expansionOutcome({ rule: 'payAsBid', qty: ANCHOR_ANSWER, bid: METRO_GAS_VALUE });
+/** What the marketers would pay for the whole expansion, and the rest of the station's annual cost, $. */
+export const MARKETERS_ALL = MARKETER_BID * EXPANSION_MMBTU_D;
+export const ANCHOR_GAP = EXPANSION_ANNUAL_COST - MARKETERS_ALL;
+/** What each MMBtu/d Metro Gas takes from the marketers adds a year, $, and the exact contract that pays for the station, MMBtu/d. */
+export const ANCHOR_MARGIN = METRO_GAS_VALUE - MARKETER_BID;
+export const ANCHOR_EXACT = ANCHOR_GAP / ANCHOR_MARGIN;
 
 // ---------------------------------------------------------------------------
 // Figure 1: bids for capacity, highest first, against the expansion and its cost.
@@ -303,7 +319,7 @@ function WinterBars({ selected, onSelect }: { selected: number; onSelect: (n: nu
         );
       })}
       <text className="ax ax-e" x={616} y={210}>
-        simulated winter
+        simulated winter · click a bar to see its days
       </text>
     </svg>
   );
@@ -318,7 +334,6 @@ export default function Lesson() {
   const st = a.state;
   const out = expansionOutcome(st);
   const solved = anchorSolved(st);
-  const avgRate = out.revenue / EXPANSION_MMBTU_D;
   const short = EXPANSION_ANNUAL_COST - out.revenue;
 
   const w = useScenario('winters', { winter: BEST_WINTER.seed });
@@ -328,12 +343,12 @@ export default function Lesson() {
 
   const status =
     st.rule !== 'payAsBid'
-      ? `Under a uniform price Metro Gas pays only the lowest winning bid, so the pipeline collects ${money(out.revenue)} — set the rule so each shipper pays its own bid.`
+      ? 'The challenge uses the other rule: set it so each shipper pays its own bid.'
       : st.bid > METRO_GAS_VALUE
         ? `Metro Gas can’t justify more than ${usd(METRO_GAS_VALUE)}: lower its bid.`
         : out.built
-          ? `At ${fmt(st.qty)} MMBtu/d the pipeline collects ${money(out.revenue)} a year and the station gets built. Could Metro Gas sign up for less?`
-          : `At ${fmt(st.qty)} MMBtu/d and ${usd(st.bid)}, the pipeline collects ${money(out.revenue)} a year, ${money(short)} short of what the station costs.`;
+          ? `At ${fmt(st.qty)} MMBtu/d the station gets built. Is that the smallest contract your arithmetic allows?`
+          : `At ${fmt(st.qty)} MMBtu/d and ${usd(st.bid)}, the pipeline is ${money(short)} a year short.`;
 
   return (
     <LessonPage id="gas/4.3">
@@ -362,8 +377,9 @@ export default function Lesson() {
       </P>
       <P>
         Before building, the pipeline holds an <b>open season</b>: it offers the new capacity and asks shippers to bid. Two kinds turn up here. Marketers would pay what
-        the space earns from the Metro–Calder spread in an average winter, {usd(MARKETER_BID, 2)} per MMBtu/d a year — the second demonstration shows where that number
-        comes from. Metro Gas, the city’s utility, has a different reason to bid: it must keep homes warm on the coldest day of the year, and its next-best way of doing
+        the space earns them. On any day, one MMBtu/d of firm capacity lets its holder buy an MMBtu at Calder and sell it at Metro, keeping the spread less the{' '}
+        {usd(NL.variableCost, 2)} cost of the trip whenever that is positive. Added up over a gas year and averaged over twenty simulated winters, that comes to{' '}
+        {usd(MARKETER_BID, 2)} per MMBtu/d a year, and that is what the marketers bid; the second demonstration shows the winters one by one. Metro Gas, the city’s utility, has a different reason to bid: it must keep homes warm on the coldest day of the year, and its next-best way of doing
         that, a peaking plant of its own near the city, would cost more than {usd(METRO_GAS_VALUE)} a year for each MMBtu/d (an illustrative figure). You are Metro Gas.
         In the next demonstration, choose how much capacity to sign up for, what to bid, and how the pipeline charges the winners:
       </P>
@@ -390,7 +406,6 @@ export default function Lesson() {
           items={[
             { label: 'Metro Gas wins', value: `${fmt(out.metroGas)} MMBtu/d`, tone: 'orange' },
             { label: 'the pipeline collects a year', value: money(out.revenue), tone: 'green' },
-            { label: 'average rate per MMBtu/d', value: usd(avgRate, 2), tone: 'green' },
             { label: 'the station', value: out.built ? 'gets built' : `${money(short)} short`, tone: out.built ? 'green' : 'red' },
           ]}
         />
@@ -410,21 +425,24 @@ export default function Lesson() {
       <P>
         At the starting settings Metro Gas signs up for {fmt(CAPACITY_AUCTION_DEFAULTS.qty)} MMBtu/d at {usd(METRO_GAS_VALUE)}, and the marketers take the other{' '}
         {fmt(DEFAULT.marketers)} at {usd(MARKETER_BID, 2)}. Each paying its own bid, the pipeline collects {money(DEFAULT.revenue)} a year, well short of the{' '}
-        {money(EXPANSION_ANNUAL_COST)} the station costs. Switch the rule so every winner pays the lowest winning bid and it collects only{' '}
-        {money(DEFAULT_UNIFORM.revenue)}: Metro Gas now pays the marketers’ {usd(MARKETER_BID, 2)} too, because the last unit of capacity went to a marketer.
+        {money(EXPANSION_ANNUAL_COST)} the station costs. Now switch to the rule wholesale electricity markets use for energy, where every winner pays one
+        clearing price — here the lowest winning bid. The pipeline collects only {money(DEFAULT_UNIFORM.revenue)}: the last unit of capacity went to a marketer, so
+        Metro Gas pays the marketers’ {usd(MARKETER_BID, 2)} too. One clearing price is set by whoever values the last unit least, and unless Metro Gas takes every
+        unit, that is an arbitrageur whose bid can’t fund the station. Pipelines charge each shipper its own rate instead, and so will we for the rest of this lesson.
       </P>
       <P>
         The marketers’ money comes nowhere near paying for the station. Even if they bid what the capacity earned in the harshest of our twenty simulated winters,{' '}
         {usd(BEST_WINTER.firm, 2)}, and took all of it, they would pay {money(ALL_MARKETERS_BEST)} a year. A spread that opens on a handful of days isn’t worth enough to
-        build for. What pays for pipelines is the shippers who need the space for something other than arbitrage.
+        build for — and that is the spread on today’s line. With the station built, Northline would fill on fewer days and the spread would earn less still, as{' '}
+        <a href={lessonHref('gas/5.1')}>Lesson 5.1</a> shows. What pays for pipelines is the shippers who need the space for something other than arbitrage.
       </P>
 
       <Challenge
         id="a"
-        question={`With each shipper paying its own bid, and Metro Gas bidding no more than its ${usd(METRO_GAS_VALUE)} value, what’s the smallest contract, to the nearest ${fmt(QTY_STEP)} MMBtu/d, that gets the station built?`}
+        question={`Estimate first: Metro Gas pays ${usd(METRO_GAS_VALUE)} a year for each MMBtu/d it signs for, the marketers ${usd(MARKETER_BID, 2)} for each of the rest of the ${fmt(EXPANSION_MMBTU_D)}, and the station needs ${money(EXPANSION_ANNUAL_COST)} a year. How much must Metro Gas sign for? Work it out, round up to the slider’s ${fmt(QTY_STEP)} MMBtu/d steps, then set it, with each shipper paying its own bid, to check.`}
         solved={solved}
         status={status}
-        success={`Solved: ${fmt(ANCHOR_ANSWER)} MMBtu/d, ${pct(ANCHOR_ANSWER / EXPANSION_MMBTU_D)} of the new capacity, at ${usd(METRO_GAS_VALUE)}. The pipeline then collects ${money(ANCHOR.revenue)} a year against a cost of ${money(EXPANSION_ANNUAL_COST)}; the marketers’ ${fmt(ANCHOR.marketers)} MMBtu/d adds only ${money(ANCHOR.marketers * MARKETER_BID)}. The expansion is built on the back of one customer who needs nearly all of it — an anchor shipper.`}
+        success={`Solved: ${fmt(ANCHOR_ANSWER)} MMBtu/d at ${usd(METRO_GAS_VALUE)}. The marketers would pay ${money(MARKETERS_ALL)} for all of the capacity, so Metro Gas has to bring in the other ${money(ANCHOR_GAP)}, and each MMBtu/d it takes from them adds ${usd(ANCHOR_MARGIN, 2)}: ${money(ANCHOR_GAP)} ÷ ${usd(ANCHOR_MARGIN, 2)} ≈ ${fmt(Math.round(ANCHOR_EXACT / 1000) * 1000)} MMBtu/d, or ${fmt(ANCHOR_ANSWER)} on the slider — ${pct(ANCHOR_ANSWER / EXPANSION_MMBTU_D)} of the new capacity. The pipeline then collects ${money(ANCHOR.revenue)} a year. The expansion is built on the back of one customer who needs nearly all of it — an anchor shipper.`}
       />
 
       <H2>Anchor shippers</H2>
@@ -442,7 +460,8 @@ export default function Lesson() {
         A buyer who needs reliability pays for it in the reservation charge, every day of the year, to be sure of a few. To see how few, the next demonstration follows
         one MMBtu/d of capacity on today’s Northline through twenty simulated winters of the market from the previous lessons, holding it two ways: firm, earning the
         Metro–Calder spread less the ${NL.variableCost.toFixed(2)} cost of moving gas every day; and interruptible, earning the same but only on the days the pipe has room,
-        and paying a further {usd(IT_RATE, 2)} on every MMBtu moved. Choose a winter to see its days:
+        and paying a further {usd(IT_RATE, 2)} on every MMBtu moved. Winters 1, 2 and 3 are the harsh, mild and typical winters of{' '}
+        <a href={lessonHref('gas/4.2')}>Lesson 4.2</a>. Click a winter’s bar to see its days:
       </P>
 
       <Figure name="Capacity Auction · firm and interruptible" scenario={w}>
@@ -484,15 +503,17 @@ export default function Lesson() {
             { label: 'interruptible capacity earned', value: usd(win.interruptible, 2), tone: 'red' },
           ]}
         />
-        <Slider label="Winter" value={w.state.winter} min={1} max={WINTER_COUNT} onChange={(v) => w.set({ winter: v })} display={`${w.state.winter} of ${WINTER_COUNT}`} />
       </Figure>
 
       <P>
         Firm capacity’s value is lumpy. Averaged over the twenty winters it earned {usd(MARKETER_BID, 2)} a year — the marketers’ bid — but in {UNDER_A_DOLLAR} of them
         it earned less than a dollar, and the best, winter {BEST_WINTER.seed}, brought in {usd(BEST_WINTER.firm, 2)}. Northline ran full on {fmt(AVG_FULL_DAYS, 1)} days
         a winter on average, and in {NEVER_FULL} of them never at all. Across all twenty, {pct(TOP_THREE_SHARE)} of what firm capacity earned came from each winter’s
-        three best days. Those are the coldest days, between {fmt(SPIKE_COLDEST)} and {fmt(SPIKE_WARMEST)} °F in these runs, when Metro wants more gas than Northline,
-        the Valley Line and Hollow Creek’s wells can deliver together. The interruptible industry has already been cut, and Metro’s price climbs as high
+        three best days. Those days are cold, but not always the coldest. Of the {fmt(SPIKE_COUNT)} winters whose spread ever passed $1, the best day was the
+        winter’s coldest in {fmt(SPIKE_ON_COLDEST.length)}; in the other {fmt(SPIKE_NOT_COLDEST.length)} it came in February or March, on a milder day, with
+        Hollow Creek drawn down, as it did in winter 3. Each of those best days fell between {fmt(SPIKE_COLDEST)} and{' '}
+        {fmt(SPIKE_WARMEST)} °F. On such a day Metro wants more gas than Northline, the Valley Line and Hollow Creek’s wells can deliver together, the
+        interruptible industry has already been cut, and Metro’s price climbs as high
         as {usd(SPIKE_METRO_PRICE, 2)}, the price at which the city’s gas-fired power plants would rather burn oil.
       </P>
       <P>

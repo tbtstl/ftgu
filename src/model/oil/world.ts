@@ -1,11 +1,11 @@
 // The oil course's world: one petroleum system the whole course returns to.
 //
-//   Ridgeback Basin (inland)  — Ridgeback shale wells (Ridgeback Light) and the old Northfield
+//   Pinyon Basin (inland)  — Pinyon shale wells (Pinyon Light) and the old Northfield
 //                                conventional field (Northfield Sour).
 //   Coldwater (far north)     — heavy-oil fields (Coldwater Heavy), piped south to Kessler.
 //   Kessler hub (inland)      — tank farms where the basin's pipelines meet.
-//   The Kessler–Calder line   — a 500-mile crude pipeline to the coast.
-//   Port Calder (coast)       — the Calder refinery and an export terminal.
+//   The Kessler–Corran line   — a 500-mile crude pipeline to the coast.
+//   Port Corran (coast)       — the Corran refinery and an export terminal.
 //   Overseas                  — Northport, a refining center across the ocean, and Eastbay, a
 //                                distant importing region, both reached by tanker.
 //
@@ -17,7 +17,7 @@ export const REF_PRICES = {
   /** Benchmark crudes. */
   wti: 75,
   brent: 79,
-  /** Products at Port Calder. */
+  /** Products at Port Corran. */
   lpg: 36,
   naphtha: 68,
   gasoline: 96,

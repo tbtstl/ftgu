@@ -19,9 +19,9 @@ import {
   useScenario,
 } from '../../../framework';
 import { marketDay, normalPlan, planInventory, simulateYear, waterValueOf, type MarketDay, type StorageState, type YearDay } from '../../../engines/gas/market';
-import { bindingArcs } from '../../../engines/gas/network';
+import { bindingArcs, corridorDesign } from '../../../engines/gas/network';
 import { withdrawCapacity } from '../../../engines/gas/storage';
-import { COAL_SWITCH_BLOCKS, OIL_SWITCH_VALUE, PROTECTED_VALUE } from '../../../model/gas/demand';
+import { COAL_SWITCH_BLOCKS, LNG_VALUE, OIL_SWITCH_VALUE, PROTECTED_VALUE } from '../../../model/gas/demand';
 import { GAS_MONTH_START, gasDayLabel, normalTemp, weatherYear } from '../../../model/gas/weather';
 import { BASINS, GAS_NODES, PIPELINE, PIPELINES, STORAGE_SPECS, type GasNodeId } from '../../../model/gas/world';
 import { GasMap } from '../shared/GasMap';
@@ -57,23 +57,22 @@ export function hubDay(s: HubState): MarketDay {
   return marketDay({ tempF: s.temp, storage, waterValue, capacity: { [NL.id]: s.northline }, production: { ridgeback: s.ridgeback } });
 }
 
-const metroBasisAt = (s: HubState) => {
-  const d = hubDay(s);
-  return d.price.metro - d.price.calder;
-};
+/** Whether Northline runs at its capacity on a day. */
+const northlineFull = (s: HubState) => hubDay(s).flow[NL.id] >= s.northline - 1e-6;
+const atStartExceptTemp = (s: HubState) =>
+  s.hollow === HUB_DEFAULTS.hollow && Math.abs(s.northline - HUB_DEFAULTS.northline) < 1e-9 && Math.abs(s.ridgeback - HUB_DEFAULTS.ridgeback) < 1e-9;
 
 /**
- * The challenge: with the rest of the network as it starts, the warmest whole degree at which Metro's
- * price stands more than $1 above Calder's.
+ * The challenge: with the rest of the network as it starts, the warmest whole degree at which
+ * Northline runs full.
  */
-export function breakawaySolved(s: HubState): boolean {
-  const atStart = s.hollow === HUB_DEFAULTS.hollow && Math.abs(s.northline - HUB_DEFAULTS.northline) < 1e-9 && Math.abs(s.ridgeback - HUB_DEFAULTS.ridgeback) < 1e-9;
-  return atStart && metroBasisAt(s) > 1 && metroBasisAt({ ...s, temp: s.temp + 1 }) <= 1;
+export function northlineFullSolved(s: HubState): boolean {
+  return atStartExceptTemp(s) && northlineFull(s) && !northlineFull({ ...s, temp: s.temp + 1 });
 }
 
-/** The warmest whole degree (°F) at which Metro's basis exceeds $1, everything else at its start. */
-export function breakawayTemp(): number {
-  for (let t = 45; t >= -15; t--) if (metroBasisAt({ ...HUB_DEFAULTS, temp: t }) > 1) return t;
+/** The warmest whole degree (°F) at which Northline is full, everything else at its start. */
+export function northlineFullTemp(): number {
+  for (let t = 45; t >= -15; t--) if (northlineFull({ ...HUB_DEFAULTS, temp: t })) return t;
   return NaN;
 }
 
@@ -102,7 +101,6 @@ function gasFill(p: number): string {
 
 // Numbers quoted in the prose.
 const START = hubDay(HUB_DEFAULTS);
-const HC_DELIVER = withdrawCapacity(HC, HUB_DEFAULTS.hollow);
 const COLD = (t: number) => hubDay({ ...HUB_DEFAULTS, temp: t });
 /** The warmest whole degree (°F), everything else at its start, at which the day's market satisfies `pred`. */
 export function warmestWhere(pred: (d: MarketDay) => boolean): number {
@@ -117,7 +115,17 @@ export const BASIS_STEPS = {
   industry: warmestWhere((d) => d.price.metro >= 20 - 1e-9),
   homes: warmestWhere((d) => d.price.metro >= PROTECTED_VALUE - 1e-9),
 };
+/** What each degree colder adds to Northline's flow at the start, Bcf/d, and the room it has left. */
+export const NL_PER_DEGREE = COLD(HUB_DEFAULTS.temp - 1).flow[NL.id] - START.flow[NL.id];
+export const NL_ROOM = NL.capacityBcfd - START.flow[NL.id];
+/** The challenge's answer: the warmest whole degree at which Northline is full. */
+export const NL_FULL_TEMP = northlineFullTemp();
 const NL_OUT = (c: number) => hubDay({ ...HUB_DEFAULTS, northline: c });
+/** Northline's capacity with one, and with two, of its compressor stations out, Bcf/d (the corridor design of Lesson 3.1). */
+export const NL_ONE_OUT = corridorDesign(NL.id, NL.sizeIn, NL.stations - 1).capacityBcfd;
+export const NL_TWO_OUT = corridorDesign(NL.id, NL.sizeIn, NL.stations - 2).capacityBcfd;
+/** The day Metro's power plants turn to oil: Bayport's price and the LNG terminal's take then. */
+export const OIL_DAY = COLD(BASIS_STEPS.oil);
 /** What a full shortcut earns per MMBtu at the start: the price difference across it less its variable cost. */
 export const SHORTCUT_RENT = {
   coastal: START.price.bayport - START.price.ridgeback - CL.variableCost,
@@ -186,8 +194,9 @@ export default function Lesson() {
   const rb = day.price.ridgeback - day.price.calder;
   const caps: Record<string, number> = Object.fromEntries(PIPELINES.map((p) => [p.id, p.id === NL.id ? st.northline : p.capacityBcfd]));
   const setter = metroSetter(day, st);
-  const solved = breakawaySolved(st);
-  const atStart = st.hollow === HUB_DEFAULTS.hollow && Math.abs(st.northline - HUB_DEFAULTS.northline) < 1e-9 && Math.abs(st.ridgeback - HUB_DEFAULTS.ridgeback) < 1e-9;
+  const solved = northlineFullSolved(st);
+  const atStart = atStartExceptTemp(st);
+  const nlFull = day.flow[NL.id] >= st.northline - 1e-6;
 
   const placeNames = (ids: string[]) => ids.map((id) => PIPELINE[id]?.name ?? id);
   const caption = binding.length
@@ -222,7 +231,7 @@ export default function Lesson() {
       <P>
         In the next demonstration it’s January 20, the coldest day of a normal year, and every place’s price comes from the market of Lesson 4.1 cleared across the
         network instead of at one point. Each circle shows its place’s price and its basis to Calder; each pipeline, its flow and its capacity. Make the day colder,
-        drain Hollow Creek, take a compressor station off Northline, or let Ridgeback produce more:
+        drain Hollow Creek, cut Northline’s capacity as a compressor station outage would, or let Ridgeback produce more:
       </P>
 
       <Figure name="Hub Price Map" scenario={s}>
@@ -242,14 +251,7 @@ export default function Lesson() {
             return `${fmt(inv)} Bcf · ${verb}`;
           }}
         />
-        <Readouts
-          items={[
-            { label: 'Calder Hub', value: `${gp(day.price.calder)}/MMBtu`, tone: 'green' },
-            { label: 'Metro’s basis', value: basis(mb), tone: mb > 1 ? 'red' : 'green' },
-            { label: 'Ridgeback’s basis', value: basis(rb), tone: rb < -1 ? 'red' : 'green' },
-            { label: 'Hollow Creek can deliver', value: bcfd(withdrawCapacity(HC, st.hollow)), tone: 'gold' },
-          ]}
-        />
+        <Readouts items={[{ label: 'Hollow Creek can deliver', value: bcfd(withdrawCapacity(HC, st.hollow)), tone: 'gold' }]} />
         <Slider label="Metro’s temperature" tone="teal" value={st.temp} min={-15} max={45} onChange={(v) => s.set({ temp: v })} display={`${fmt(st.temp)} °F`} />
         <Slider label="Working gas in Hollow Creek" tone="gold" value={st.hollow} min={0} max={HC.workingBcf} onChange={(v) => s.set({ hollow: v })} display={`${st.hollow} Bcf`} />
         <Slider
@@ -278,11 +280,13 @@ export default function Lesson() {
         The caption names two pipelines that are full even so: the Coastal Line and the Valley Line. Each is a shortcut from a basin straight to a market, so it
         fills first, and the gas that doesn’t fit goes the long way round through Calder, which then sets the price at both ends. Across each shortcut the prices
         differ by more than the cost of using it — by an extra {gp(SHORTCUT_RENT.coastal)} per MMBtu on the Coastal Line and {gp(SHORTCUT_RENT.valley)} on the
-        Valley Line — and whoever holds space on it keeps that extra. Remember that when we come to who owns a pipeline’s capacity.
+        Valley Line — and whoever holds space on it keeps that extra. It is what makes space on a full pipeline worth owning, which is where{' '}
+        <a href={lessonHref('gas/4.3')}>Lesson 4.3</a> picks up.
       </P>
       <P>
-        Metro also has gas of its own nearby. Hollow Creek’s operator offers the field’s gas at its water value, what the gas is expected to be worth later in the
-        winter, and when the field holds what its plan expects, that value is the hub price plus the cost of bringing gas up from Calder: Hollow Creek’s gas and
+        Metro also has gas of its own nearby. Hollow Creek’s operator offers the field’s gas at its <b>water value</b> — what the gas is expected to be worth later
+        in the winter, as hydroelectric operators say of the water behind a dam — and when the field holds what its plan expects, that value is the hub price plus
+        the cost of bringing gas up from Calder: Hollow Creek’s gas and
         Northline’s cost the city the same. Today the field holds a fraction more than planned, so its gas is a hair cheaper and the city draws it first — the{' '}
         {bcfd(-START.storageFlow.hollowcreek, 2)} that {fmt(HUB_DEFAULTS.hollow)} Bcf of working gas can deliver (<a href={lessonHref('gas/3.4')}>Lesson 3.4</a>).
         Northline brings the rest, {bcfd(START.flow[NL.id], 2)} of its {bcfd(NL.capacityBcfd, 1)}, and that last unit from Calder sets Metro’s price.
@@ -290,10 +294,27 @@ export default function Lesson() {
 
       <H2>When the city runs short</H2>
       <P>
-        Now make Metro colder. Down to {fmt(BASIS_STEPS.breaks + 1)} °F nothing seems to happen: Hollow Creek is already delivering all it can, so every extra cubic foot
-        comes up Northline, and Metro’s price stays the hub’s plus transport. At {fmt(BASIS_STEPS.breaks)} °F Northline is full as well, and nothing more can reach the city at
-        any price. Metro’s price stops being set by supply and starts being set by whoever is willing to stop using gas: power plants that would turn back to coal,
-        at {gp(COLD(BASIS_STEPS.breaks).price.metro)}, then {gp(COLD(BASIS_STEPS.breaks - 1).price.metro)}; interruptible industry, which gives up its gas at{' '}
+        Now make Metro colder. Hollow Creek is already delivering all it can and the Valley Line is full, so every extra cubic foot the city burns has to come up
+        Northline — about {fmt(NL_PER_DEGREE * 1000)} MMcf/d more for each degree — and while it can, Metro’s price stays the hub’s plus transport. Today Northline
+        carries {bcfd(START.flow[NL.id])} of its {bcfd(NL.capacityBcfd, 1)}.
+      </P>
+
+      <Challenge
+        id="a"
+        figure="Hub Price Map"
+        question={`Predict first: from Northline’s spare room and the ${fmt(NL_PER_DEGREE * 1000)} MMcf/d each degree adds, at about what temperature does it fill? Then make Metro colder to check, and find the warmest whole degree at which Northline is full.`}
+        solved={solved}
+        status={
+          !atStart
+            ? 'Put Hollow Creek, Northline and Ridgeback back where they started (Reset does it), then change only the temperature.'
+            : `At ${fmt(st.temp)} °F Northline ${nlFull ? 'is full' : 'still has room'}.`
+        }
+        success={`Solved: ${fmt(NL_FULL_TEMP)} °F. ${fmt(NL_ROOM * 1000)} MMcf/d of room at ${fmt(NL_PER_DEGREE * 1000)} a degree lasts about ${fmt(NL_ROOM / NL_PER_DEGREE, 1)} degrees, from ${fmt(HUB_DEFAULTS.temp)} °F to about ${fmt(HUB_DEFAULTS.temp - NL_ROOM / NL_PER_DEGREE, 1)} °F. A degree warmer, Metro’s basis is still the ${basis(NL.variableCost)} of transport; here nothing more can reach the city at any price, and it jumps to ${basis(COLD(NL_FULL_TEMP).price.metro - COLD(NL_FULL_TEMP).price.calder)}. Basis doesn’t rise gently with the cold: it sits at the transport cost until the city’s last source is used up, then jumps to the price of the first customer willing to do without.`}
+      />
+
+      <P>
+        Once Northline is full, Metro’s price is set by whoever is willing to stop using gas: power plants that would turn back to coal, at{' '}
+        {gp(COLD(BASIS_STEPS.breaks).price.metro)}, then {gp(COLD(BASIS_STEPS.breaks - 1).price.metro)}; interruptible industry, which gives up its gas at{' '}
         {gp(COLD(BASIS_STEPS.interruptible).price.metro)} from {fmt(BASIS_STEPS.interruptible)} °F; power plants switching to oil at {gp(COLD(BASIS_STEPS.oil).price.metro)} from{' '}
         {fmt(BASIS_STEPS.oil)} °F. Calder doesn’t notice — it stays at {gp(COLD(BASIS_STEPS.oil).price.calder)} — so Metro’s basis leaps from{' '}
         {basis(START.price.metro - START.price.calder)} to {basis(COLD(BASIS_STEPS.oil).price.metro - COLD(BASIS_STEPS.oil).price.calder)} over{' '}
@@ -301,25 +322,18 @@ export default function Lesson() {
         {fmt(BASIS_STEPS.homes)} °F there isn’t enough gas left for the city’s homes: the price reaches the {gp(PROTECTED_VALUE, 0)} that stands in our model for rationing.
       </P>
 
-      <Challenge
-        id="a"
-        figure="Hub Price Map"
-        question="With Hollow Creek, Northline and Ridgeback as they start, what’s the warmest whole-degree temperature at which Metro’s price stands more than $1 above Calder’s?"
-        solved={solved}
-        status={
-          !atStart
-            ? 'Put Hollow Creek, Northline and Ridgeback back where they started (Reset does it), then change only the temperature.'
-            : mb > 1
-              ? `At ${fmt(st.temp)} °F Metro’s basis is ${basis(mb)}. Is it still above $1 a degree warmer?`
-              : `At ${fmt(st.temp)} °F Metro’s basis is ${basis(mb)}.`
-        }
-        success={`Solved: ${fmt(st.temp)} °F, where Metro’s basis is ${basis(mb)}; a degree warmer it is ${basis(metroBasisAt({ ...st, temp: st.temp + 1 }))}. The break comes when Metro’s demand outgrows Northline’s ${bcfd(NL.capacityBcfd, 1)}, the Valley Line’s ${bcfd(PIPELINE['sandhill-metro'].capacityBcfd)} and Hollow Creek’s ${bcfd(HC_DELIVER, 2)} together. Basis doesn’t rise gently with the cold; it sits at the transport cost until the city’s last source is used up, then jumps to the price of the first customer willing to do without.`}
-      />
-
       <P>
-        The same break comes in warmer weather when the city’s supply is weaker. Put the temperature back and lower Northline’s capacity, as if a compressor station
-        had failed: at {bcfd(1.0, 1)} Metro’s basis is {basis(NL_OUT(1.0).price.metro - NL_OUT(1.0).price.calder)}, at {bcfd(0.8, 1)}{' '}
-        {basis(NL_OUT(0.8).price.metro - NL_OUT(0.8).price.calder)}. Or drain Hollow Creek, which lowers what it can deliver and, because each Bcf it has left is
+        Compare the single market of <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>, where Bayport’s LNG terminal gave way at {gp(LNG_VALUE)}, before Metro’s
+        interruptible industry had to stop at $8. On the network the order changes. At {fmt(BASIS_STEPS.oil)} °F Metro’s power plants are burning oil at{' '}
+        {gp(OIL_DAY.price.metro)}, while Bayport, on the far side of Calder with gas to spare, still exports its full {bcfd(OIL_DAY.sectors.lng, 1)} at{' '}
+        {gp(OIL_DAY.price.bayport)}. Once Northline is full, only Metro’s own users can give way.
+      </P>
+      <P>
+        The same break comes in warmer weather when the city’s supply is weaker. Put the temperature back and lower Northline’s capacity, as if compressor
+        stations had failed. With one of its three stations out, Northline can still carry {bcfd(NL_ONE_OUT)}, more than the {bcfd(START.flow[NL.id])} Metro
+        needs from it today, and nothing changes. With two out it carries only {bcfd(NL_TWO_OUT)}, and Metro’s basis jumps to{' '}
+        {basis(NL_OUT(NL_TWO_OUT).price.metro - NL_OUT(NL_TWO_OUT).price.calder)}; at {bcfd(0.8, 1)} it is {basis(NL_OUT(0.8).price.metro - NL_OUT(0.8).price.calder)}.
+        Or drain Hollow Creek, which lowers what it can deliver and, because each Bcf it has left is
         worth more to the rest of the winter, raises the price it asks. Late in a cold winter, a city’s storage is lowest exactly when its demand is highest, which
         is when its basis is most likely to break away.
       </P>
@@ -340,8 +354,8 @@ export default function Lesson() {
 
       <H2>A winter of basis</H2>
       <P>
-        Real winters don’t come one day at a time. In the next demonstration the region runs through three simulated winters, day by day, with Hollow Creek drawing
-        down as it goes. The upper chart is Metro’s basis, the middle one Metro’s temperature, and the lower one the working gas left in Hollow Creek. Choose a
+        Real winters don’t come one day at a time. In the next demonstration the region runs through three simulated winters — the mild and typical winters of{' '}
+        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a> and a harsh one — day by day, with Hollow Creek drawing down as it goes. The upper chart is Metro’s basis, the middle one Metro’s temperature, and the lower one the working gas left in Hollow Creek. Choose a
         winter:
       </P>
 

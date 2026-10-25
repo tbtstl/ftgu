@@ -10,14 +10,14 @@
 //     stabilizes, leaning against price moves with its spare capacity) and random outages. Stocks
 //     absorb the difference; the Brent-like benchmark follows stocks (engines/oil/market).
 //   • The inland hub: the crude network's closed-form prices (engines/oil/network) set the WTI-like
-//     Kessler price from basin production and the Kessler–Calder line; when the line is full,
+//     Kessler price from basin production and the Kessler–Corran line; when the line is full,
 //     crude backs up into Kessler's tanks. Each hub's futures curve follows from its stocks
 //     (theory of storage, Lesson 5.4).
 //   • Products: world refinery runs (with spring and autumn maintenance and random outages) make
 //     gasoline and distillate against seasonal demand; their stocks set the crack spreads, and
 //     refiners lean their yields toward the richer product.
 //   • Quality: high-sulfur fuel oil wanders around its usual discount to crude, and the sour and
-//     heavy crudes' differentials follow it (slopes fitted to the Calder refinery model, Lesson 4.5).
+//     heavy crudes' differentials follow it (slopes fitted to the Corran refinery model, Lesson 4.5).
 // All prices are simulated; WTI and Brent are names for the model's two benchmarks.
 
 import { WORLD, crackFromStocks, futuresCurve, inventoryPrice, PRODUCT_DEFAULTS } from '../../engines/oil/market';
@@ -27,10 +27,10 @@ import { gaussian, rng } from '../random';
 export interface HistoryParams {
   years?: number;
   seed?: number;
-  /** Ridgeback Basin production at the start, kb/d, and its growth per year. */
+  /** Pinyon Basin production at the start, kb/d, and its growth per year. */
   basinStart?: number;
   basinGrowth?: number;
-  /** Kessler–Calder line capacity, kb/d, and an expansion (year it opens, kb/d added). */
+  /** Kessler–Corran line capacity, kb/d, and an expansion (year it opens, kb/d added). */
   pipeline?: number;
   expansion?: { year: number; add: number } | null;
   /** Rail capacity from Kessler to the coast, kb/d. */
@@ -47,9 +47,19 @@ export interface HistoryParams {
   seasonality?: number;
   /** A lasting change in fuel oil's discount to crude (like the 2020 marine-fuel sulfur cap): the year it starts and the $/bbl added to the discount. */
   fuelOilShock?: { year: number; size: number } | null;
+  /**
+   * The share of fuel oil's gap from its usual discount that closes each week, as users and cokers
+   * answer price (the model's 0.95 weekly persistence is 1 − this). Defaults to
+   * FUEL_OIL_REVERSION, at which half of any gap closes in about 13.5 weeks; 0 means the gap never
+   * closes, and the discount wanders freely.
+   */
+  fuelOilReversion?: number;
 }
 
-export const HISTORY_DEFAULTS: Required<Omit<HistoryParams, 'expansion' | 'fuelOilShock'>> & { expansion: { year: number; add: number } | null; fuelOilShock: { year: number; size: number } | null } = {
+/** The default share of fuel oil's gap from its usual discount that closes each week. */
+export const FUEL_OIL_REVERSION = 0.05;
+
+export const HISTORY_DEFAULTS: Required<Omit<HistoryParams, 'expansion' | 'fuelOilShock' | 'fuelOilReversion'>> & { expansion: { year: number; add: number } | null; fuelOilShock: { year: number; size: number } | null } = {
   years: 5,
   seed: 2024,
   basinStart: 380,
@@ -79,7 +89,7 @@ export interface HistoryWeek {
   kesslerFill: number;
   basinSupply: number;
   pipelineCapacity: number;
-  /** Share of the Kessler–Calder line in use. */
+  /** Share of the Kessler–Corran line in use. */
   pipelineUse: number;
   /** World refinery runs and the runs lost to outages, mb/d. */
   runs: number;
@@ -96,17 +106,17 @@ export interface HistoryWeek {
   crack321: number;
   /** The same crack against Brent, $/bbl. */
   crack321Brent: number;
-  /** Light crude delivered to Port Calder, $/bbl (the coast's own price; Lesson 4.4). */
-  calderCrude: number;
+  /** Light crude delivered to Port Corran, $/bbl (the coast's own price; Lesson 4.4). */
+  corranCrude: number;
   hsfo: number;
-  /** Physical crude prices: Northfield Sour at Kessler, Coldwater Heavy delivered to Port Calder. */
+  /** Physical crude prices: Northfield Sour at Kessler, Coldwater Heavy delivered to Port Corran. */
   northfield: number;
   coldwater: number;
-  /** Aframax freight, Port Calder to Northport, $/bbl. */
+  /** Aframax freight, Port Corran to Northport, $/bbl. */
   freight: number;
 }
 
-/** The fuel-oil sensitivity of each crude's differential, fitted to the Calder refinery model. */
+/** The fuel-oil sensitivity of each crude's differential, fitted to the Corran refinery model. */
 export const DIFF_SLOPE = { northfield: 0.154, coldwater: 0.364 };
 
 const cache = new Map<string, HistoryWeek[]>();
@@ -225,10 +235,11 @@ export function oilHistory(params: HistoryParams = {}): HistoryWeek[] {
 
     // Quality and freight.
     const discMean = 17 + (p.fuelOilShock && t >= p.fuelOilShock.year ? p.fuelOilShock.size : 0);
-    hsfoDisc = 0.95 * hsfoDisc + 0.05 * discMean + 1.0 * gaussian(r);
+    const pullBack = p.fuelOilReversion ?? FUEL_OIL_REVERSION;
+    hsfoDisc = (1 - pullBack) * hsfoDisc + pullBack * discMean + 1.0 * gaussian(r);
     const hsfo = brent - hsfoDisc;
     const northfield = wti - 5.0 + DIFF_SLOPE.northfield * (hsfo - 62 * (brent / P0));
-    const coldwater = hub.calder - 16.2 + DIFF_SLOPE.coldwater * (hsfo - 62 * (brent / P0));
+    const coldwater = hub.corran - 16.2 + DIFF_SLOPE.coldwater * (hsfo - 62 * (brent / P0));
     freightMult = Math.max(0.5, 0.97 * freightMult + 0.03 + 0.05 * gaussian(r) + (r() < 0.01 ? 0.6 : 0));
     const freight = 2.57 * freightMult;
 
@@ -255,7 +266,7 @@ export function oilHistory(params: HistoryParams = {}): HistoryWeek[] {
       dieselCrack: dCrack,
       crack321,
       crack321Brent,
-      calderCrude: hub.calder,
+      corranCrude: hub.corran,
       hsfo,
       northfield,
       coldwater,

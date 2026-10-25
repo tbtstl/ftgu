@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, pct, useScenario } from '../../../framework';
-import { COMPONENTS, bubblePoint, dewPoint, flash, relativeVolatility, stages, txy, type Component } from '../../../engines/oil/phase';
+import { COMPONENTS, boilingPoint, bubblePoint, dewPoint, flash, relativeVolatility, stages, txy, type Component } from '../../../engines/oil/phase';
 import { rng } from '../../../model/random';
 
 type PairId = 'hexOct' | 'hepOct' | 'penDec';
@@ -11,10 +11,32 @@ const PAIRS: Record<PairId, { light: Component; heavy: Component; label: string 
 };
 const LIGHT = '#4590ce';
 const HEAVY = '#d0702a';
+/** The boiling diagram's curves are neutral, so they don't read as the light (blue) or heavy (orange) component. */
+const BUBBLE = '#333333';
+const DEW = '#8a8a8a';
+const DEW_DASH = '6 4';
+
+/** The pressure slider's range, atm. */
+export const P_MIN = 0.2;
+export const P_MAX = 3;
+
+/**
+ * The boiling diagram's temperature axis for a pair, fixed across the whole pressure range: from
+ * below the light component's boiling point at the lowest pressure to above the heavy one's at the
+ * highest, in steps of 20 °C. Because it doesn't move with the pressure, the curves visibly do.
+ */
+export function pairAxis(pair: PairId): [number, number] {
+  const { light, heavy } = PAIRS[pair];
+  return [Math.floor((boilingPoint(light, P_MIN) - 5) / 20) * 20, Math.ceil((boilingPoint(heavy, P_MAX) + 5) / 20) * 20];
+}
 
 function degC(t: number): string {
   return `${fmt(t, 1)} °C`;
 }
+
+/** The pressure-drop example: the half-and-half hexane–octane mixture held at 70 °C, taken from 1 atm to 0.5 atm. */
+export const PRESSURE_DROP_T = 70;
+export const PRESSURE_DROP_P = 0.5;
 
 /** Challenge a: half the hexane–octane mixture (by molecules) boiled, at 1 atm from 50/50. */
 export function halfBoiledSolved(pair: PairId, z: number, p: number, t: number): boolean {
@@ -92,8 +114,7 @@ export default function Lesson() {
   const bub = bubblePoint(comps, [zf, 1 - zf], p);
   const dew = dewPoint(comps, [zf, 1 - zf], p);
   const curve = useMemo(() => txy(light, heavy, p, 51), [light, heavy, p]);
-  const tLo = Math.floor((curve[curve.length - 1].bubble - 15) / 10) * 10;
-  const tHi = Math.ceil((curve[0].bubble + 15) / 10) * 10;
+  const [tLo, tHi] = pairAxis(pair);
   const tMin = 0;
   const tMax = 220;
 
@@ -106,7 +127,10 @@ export default function Lesson() {
   const b50 = bubblePoint(hexOct, [0.5, 0.5], 1);
   const d50 = dewPoint(hexOct, [0.5, 0.5], 1);
   const firstVapor = flash(hexOct, [0.5, 0.5], b50 + 1e-6, 1).y[0];
-  const hep4 = stages(COMPONENTS.heptane, COMPONENTS.octane, 0.5, 1, 4);
+  const dropFlash = flash(hexOct, [0.5, 0.5], PRESSURE_DROP_T, PRESSURE_DROP_P);
+  const hep2 = stages(COMPONENTS.heptane, COMPONENTS.octane, 0.5, 1, 2);
+  const odds = (y: number) => y / (1 - y);
+  const alphaHep = relativeVolatility(COMPONENTS.heptane, COMPONENTS.octane, 110);
 
   const solvedA = halfBoiledSolved(pair, z, p, t);
   const solvedB = fewestStagesSolved(s2.state.pair, s2.state.z, s2.state.n);
@@ -137,8 +161,8 @@ export default function Lesson() {
           items={[
             { label: light.name, color: LIGHT },
             { label: heavy.name, color: HEAVY },
-            { label: 'Starts to boil (bubble point)', color: '#4590ce', kind: 'line' },
-            { label: 'Fully vapor (dew point)', color: '#e75b55', kind: 'line' },
+            { label: 'Starts to boil (bubble point)', color: BUBBLE, kind: 'line' },
+            { label: 'Fully vapor (dew point)', color: DEW, kind: 'line', dashed: true },
           ]}
         />
         <svg
@@ -149,7 +173,7 @@ export default function Lesson() {
         >
           <Vessel vapor={f.vapor} xLight={f.x[0]} yLight={f.y[0]} lightName={light.name} />
           <g transform="translate(300 0)">
-            <TxyMini curve={curve} t={t} tLo={tLo} tHi={tHi} z={zf} f={f} />
+            <TxyMini curve={curve} t={t} tLo={tLo} tHi={tHi} z={zf} f={f} p={p} />
           </g>
         </svg>
         <Readouts
@@ -160,14 +184,14 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Temperature" tone="red" value={t} min={tMin} max={tMax} step={0.5} onChange={(v) => s.set({ t: v })} display={degC(t)} />
-        <Slider label="Pressure" tone="blue" value={p} min={0.2} max={3} step={0.05} onChange={(v) => s.set({ p: Math.round(v * 100) / 100 })} display={`${fmt(p, 2)} atm`} />
+        <Slider label="Pressure" tone="blue" value={p} min={P_MIN} max={P_MAX} step={0.05} onChange={(v) => s.set({ p: Math.round(v * 100) / 100 })} display={`${fmt(p, 2)} atm`} />
         <Slider label={`${light.name} in the mixture`} value={z} min={0} max={100} onChange={(v) => s.set({ z: v })} display={`${z}%`} />
         <Caption>
           {f.phase === 'liquid'
-            ? `At ${degC(t)} the mixture is all liquid. It starts to boil at ${degC(bub)}.`
+            ? `At ${degC(t)} the mixture is all liquid: it hasn’t reached its bubble point.`
             : f.phase === 'vapor'
               ? `At ${degC(t)} the mixture is all vapor.`
-              : `Between its bubble and dew points the mixture is part vapor, part liquid. The vapor is richer in ${light.name.toLowerCase()} (${pct(f.y[0])}) than the liquid (${pct(f.x[0])}).`}
+              : `Between its bubble and dew points the mixture is part vapor, part liquid, and the vapor is richer in ${light.name.toLowerCase()} than the liquid.`}
         </Caption>
       </Figure>
 
@@ -178,8 +202,8 @@ export default function Lesson() {
       </P>
       <P>
         The chart shows the whole story. The lower curve marks where each mixture starts to boil, the <b>bubble point</b>; the upper curve where it finishes, the{' '}
-        <b>dew point</b>. Between them, the horizontal line at the current temperature connects the composition of the liquid, on the lower curve, to the composition of
-        the vapor in balance with it, on the upper curve. However the mixture starts, the vapor is always richer in the lighter component.
+        <b>dew point</b>. Between them, the horizontal line at the current temperature connects the composition of the liquid, the filled dot on the lower curve, to the composition of
+        the vapor in balance with it, the open dot on the upper curve. However the mixture starts, the vapor is always richer in the lighter component.
       </P>
 
       <Challenge
@@ -192,11 +216,18 @@ export default function Lesson() {
 
       <H2>Pressure</H2>
       <P>
-        Now drag the pressure. Lowering it lowers every boiling point, because the molecules need less vapor pressure to escape: at half an atmosphere, the same
-        mixture starts to boil at {degC(bubblePoint(hexOct, [0.5, 0.5], 0.5))}. Raising it does the opposite. This matters a great deal for crude oil. The heaviest
+        Now drag the pressure. The chart’s temperature scale stays put, so watch both curves slide: lowering the pressure lowers every boiling point, because the
+        molecules need less vapor pressure to escape. At half an atmosphere, the same mixture starts to boil at {degC(bubblePoint(hexOct, [0.5, 0.5], 0.5))}. Raising the
+        pressure does the opposite. This matters a great deal for crude oil. The heaviest
         molecules would need temperatures so high to boil at atmospheric pressure that they would break apart first, as we saw in{' '}
         <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>. So refineries boil the heavy end of the crude a second time, in a column held at a small fraction of atmospheric
         pressure. We’ll see that column in <a href={lessonHref('oil/3.1')}>Lesson 3.1</a>.
+      </P>
+      <P>
+        Lowering the pressure can also make a liquid boil without any heating. Hold the half-and-half mixture at {PRESSURE_DROP_T} °C: at 1 atm it is all liquid, but
+        lower the pressure to {fmt(PRESSURE_DROP_P, 1)} atm and {pct(dropFlash.vapor)} of its molecules boil off, in a vapor that is {pct(dropFlash.y[0])} hexane. The
+        light molecules leave first, so a liquid laden with them sheds them as the pressure falls. Crude oil deep underground holds gas dissolved in it under high
+        pressure, and as the oil rises up a well, that gas bubbles out, as we’ll see in <a href={lessonHref('oil/2.1')}>Lesson 2.1</a>.
       </P>
 
       <H2>Stage after stage</H2>
@@ -209,34 +240,31 @@ export default function Lesson() {
       <Figure name="Phase Equilibrium Explorer · stages" scenario={s2}>
         <Segmented label="Mixture" value={s2.state.pair} onChange={(v) => s2.set({ pair: v })} options={(Object.keys(PAIRS) as PairId[]).map((k) => ({ value: k, label: PAIRS[k].label }))} />
         <StageStack stages={st} light={P2.light} heavy={P2.heavy} z={s2.state.z / 100} />
-        <Readouts
-          items={[
-            { label: `${P2.light.name.toLowerCase()} in the top vapor`, value: pct(top.vapor, 1), tone: 'blue' },
-            { label: <K tone="red">top stage boils at</K>, value: degC(top.t), tone: 'red' },
-          ]}
-        />
         <Slider label="Stages" value={s2.state.n} min={1} max={8} onChange={(v) => s2.set({ n: v })} display={`${s2.state.n}`} />
         <Slider label={`${P2.light.name} in the starting liquid`} value={s2.state.z} min={5} max={95} onChange={(v) => s2.set({ z: v })} display={`${s2.state.z}%`} />
       </Figure>
 
       <P>
-        How quickly the stages separate a mixture depends on how different its components’ vapor pressures are. The ratio of the two, called the{' '}
-        <b>relative volatility</b>, is what each stage multiplies: across their boiling range, hexane’s vapor pressure is about {fmt(relativeVolatility(COMPONENTS.hexane, COMPONENTS.octane, 100))}{' '}
-        times octane’s, heptane’s only about {fmt(relativeVolatility(COMPONENTS.heptane, COMPONENTS.octane, 110), 1)} times. Pentane and decane, five carbons apart, are
-        almost completely separated by a single stage. Hexane and octane need about three for 99%. Heptane and octane differ by a single carbon, and each stage gains
-        less: from 50% heptane, four stages reach {pct(hep4[3].vapor, 1)}. Molecules that boil close together are the hardest to separate, and the most expensive.
+        How quickly the stages separate a mixture depends on how different its components’ vapor pressures are. The ratio of the two is called the{' '}
+        <b>relative volatility</b>: across their boiling range, hexane’s vapor pressure is about {fmt(relativeVolatility(COMPONENTS.hexane, COMPONENTS.octane, 100))}{' '}
+        times octane’s, heptane’s only about {fmt(alphaHep, 1)} times. Each stage multiplies not the light
+        component’s share but the ratio of light molecules to heavy ones, by about the relative volatility. Pentane and decane, five carbons apart, are almost
+        completely separated by a single stage. Hexane and octane need about three for 99%. Heptane and octane differ by a single carbon, and each stage gains less:
+        from even numbers of each, one stage gives a vapor with about {fmt(odds(hep2[0].vapor), 1)} heptane molecules for every octane, {pct(hep2[0].vapor)} heptane,
+        and two stages about {fmt(odds(hep2[1].vapor), 1)} for every one, {pct(hep2[1].vapor)}. Molecules that boil close together are the hardest to separate, and the
+        most expensive.
       </P>
 
       <Challenge
         id="b"
-        question="Starting from a half-and-half liquid of heptane and octane, find the fewest stages that give a vapor at least 95% heptane."
+        question="Starting from a half-and-half liquid of heptane and octane, how few stages can give a vapor at least 95% heptane? Predict it first from how each stage multiplies the ratio — 95% means 19 heptane molecules for every octane — then set the stages to check."
         solved={solvedB}
         status={
           s2.state.pair !== 'hepOct' || s2.state.z !== 50
             ? 'Choose heptane + octane, starting from 50% heptane.'
             : `${s2.state.n} stage${s2.state.n > 1 ? 's' : ''}: ${pct(top.vapor, 1)} heptane at the top.`
         }
-        success={`Solved: ${s2.state.n} stages, giving ${pct(top.vapor, 1)} heptane. A distillation column stacks dozens of stages in one tower, and runs them continuously instead of one batch at a time.`}
+        success={`Solved: ${s2.state.n} stages, giving ${pct(top.vapor, 1)} heptane. Multiplying the ratio by about ${fmt(alphaHep, 1)} three times gives only about ${fmt(alphaHep ** 3)} to one, short of 19; a fourth stage passes it. A distillation column stacks dozens of stages in one tower, and runs them continuously instead of one batch at a time.`}
       />
 
       <P>
@@ -248,7 +276,7 @@ export default function Lesson() {
       <P>
         Crude oil isn’t two components but thousands, with boiling points spread almost continuously from below freezing to beyond 550 °C. A column can’t pull out pure
         compounds from that, and a refinery doesn’t want it to. Instead it draws off streams at different heights, each a band of boiling points: the cuts of{' '}
-        <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>. We’ll build that column in Chapter 3. First, though, one more property decides what those cuts are worth: the
+        <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>. We’ll build that column in Chapter 3. First, though, one more property bears on what those cuts are worth: the
         energy each one releases when it burns. That is the subject of the <a href={lessonHref('oil/1.5')}>next lesson</a>.
       </P>
     </LessonPage>
@@ -263,6 +291,7 @@ function TxyMini({
   tHi,
   z,
   f,
+  p,
 }: {
   curve: Array<{ x: number; bubble: number; dew: number }>;
   t: number;
@@ -270,6 +299,7 @@ function TxyMini({
   tHi: number;
   z: number;
   f: ReturnType<typeof flash>;
+  p: number;
 }) {
   const X0 = 46;
   const X1 = 330;
@@ -285,7 +315,7 @@ function TxyMini({
   return (
     <g>
       <text className="ax" x={X0} y={12}>
-        Temperature
+        Temperature at {fmt(p, 2)} atm
       </text>
       {ticks.map((v) => (
         <g key={v}>
@@ -296,23 +326,25 @@ function TxyMini({
         </g>
       ))}
       <line className="base" x1={X0} x2={X1} y1={Y0} y2={Y0} />
-      <path d={path('dew')} fill="none" stroke="#e75b55" strokeWidth={2.5} />
-      <path d={path('bubble')} fill="none" stroke="#4590ce" strokeWidth={2.5} />
-      <text className="ax" x={sx(0.02)} y={Y1 + 14}>
+      <path d={path('dew')} fill="none" stroke={DEW} strokeWidth={2.5} strokeDasharray={DEW_DASH} />
+      <path d={path('bubble')} fill="none" stroke={BUBBLE} strokeWidth={2.5} />
+      {/* Region labels in the corners the curves never reach: the heavy end boils hottest, the light end coolest. */}
+      <text className="ax ax-e" x={sx(0.98)} y={Y1 + 14}>
         vapor
       </text>
-      <text className="ax ax-e" x={sx(0.98)} y={Y0 - 8}>
+      <text className="ax" x={sx(0.02)} y={Y0 - 8}>
         liquid
       </text>
       {inRange && <line className="cur" x1={X0} x2={X1} y1={sy(t)} y2={sy(t)} />}
       {f.phase === 'two-phase' && inRange && (
         <g>
           <line x1={sx(f.x[0])} x2={sx(f.y[0])} y1={sy(t)} y2={sy(t)} stroke="#333" strokeWidth={2.5} />
-          <circle cx={sx(f.x[0])} cy={sy(t)} r={5} fill="#4590ce" stroke="#fff" strokeWidth={1.5} />
-          <circle cx={sx(f.y[0])} cy={sy(t)} r={5} fill="#e75b55" stroke="#fff" strokeWidth={1.5} />
+          <circle cx={sx(f.x[0])} cy={sy(t)} r={5} fill={BUBBLE} stroke="#fff" strokeWidth={1.5} />
+          <circle cx={sx(f.y[0])} cy={sy(t)} r={5} fill="#fff" stroke={BUBBLE} strokeWidth={2} />
         </g>
       )}
-      {inRange && <circle cx={sx(z)} cy={sy(t)} r={4} fill="#333" />}
+      {/* The whole mixture's composition: a short tick, so it isn't mistaken for the liquid's dot. */}
+      {inRange && <line x1={sx(z)} x2={sx(z)} y1={sy(t) - 8} y2={sy(t) + 8} stroke="#333" strokeWidth={2} />}
       {[0, 0.25, 0.5, 0.75, 1].map((v) => (
         <text key={v} className="ax ax-m" x={sx(v)} y={Y0 + 15}>
           {v * 100}%

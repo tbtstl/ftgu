@@ -23,10 +23,10 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { YEARS, fieldSeason, irrigationResponse } from '../../../engines/agriculture/farm';
+import { YEARS, fieldSeason, historyYields, irrigationResponse } from '../../../engines/agriculture/farm';
 import { nitrogenSeason } from '../../../engines/agriculture/soil';
 import { simulatedYear } from '../../../model/agriculture/climate';
-import { N_PRICE, PLAN_PRICE, PUMP_PER_ACRE_INCH, perBushelCost } from '../../../model/agriculture/economics';
+import { N_PRICE, PLAN_PRICE, PUMP_PER_ACRE_INCH, SEED_PER_THOUSAND, perBushelCost } from '../../../model/agriculture/economics';
 import { DISTRICT, dayOf } from '../../../model/agriculture/region';
 import { HistogramChart } from '../shared/HistogramChart';
 import { buAc, perBu } from '../shared/format';
@@ -42,6 +42,57 @@ const PLANTERS = [
   { label: '16-row', perDay: 180, cost: 32000 },
   { label: '24-row', perDay: 270, cost: 46000 },
 ];
+
+/** Corn yield in each of the 100 seasons at one nitrogen rate, lb N per acre applied at planting (see `nitrogenTable`). */
+export function nitrogenYields(rate: number): number[] {
+  return N_YEARS.map((y) => {
+    const base = fieldSeason(y, { district: 'prairie', crop: 'corn' });
+    const ns = nitrogenSeason(simulatedYear(y, 'prairie'), base, { rate, timing: 'spring', om: PRAIRIE.om, ph: PRAIRIE.ph, pawIn: PRAIRIE.pawIn });
+    return fieldSeason(y, { district: 'prairie', crop: 'corn', nutrient: Math.round(ns.sufficiency * 1000) / 1000 }).yield;
+  });
+}
+
+const mean = (a: number[]) => a.reduce((s, x) => s + x, 0) / a.length;
+
+/** Seeding rates in the optimizer, seeds (plants) per acre. */
+export const SEED_LEVELS = Array.from({ length: 7 }, (_, i) => 24000 + i * 2000);
+/** Seeding rates compared in the prose, seeds (plants) per acre. */
+export const SEEDS = [28000, 30000, 32000, 34000];
+
+let seedTable: number[] | null = null;
+/** Cedar Bend's average corn yield at each seeding rate in SEED_LEVELS, over all 200 seasons. */
+function seedCurveYields(): number[] {
+  if (!seedTable) seedTable = SEED_LEVELS.map((p) => mean(historyYields({ district: 'prairie', crop: 'corn', population: p })));
+  return seedTable;
+}
+
+/** Cedar Bend's average corn yield at each seeding rate in SEEDS, over all 200 seasons. */
+export function seedYields(): number[] {
+  const t = seedCurveYields();
+  return SEEDS.map((p) => t[SEED_LEVELS.indexOf(p)]);
+}
+
+/**
+ * Cedar Bend's budget (Lesson 2.5) against this lesson's optima, at the plan prices: what rounding
+ * nitrogen up from 120 to 150 lb and seed up from 30,000 to 32,000 costs on average, $ per acre; in
+ * how many of the 100 seasons 150 lb earns more than 120; and the expected yield at 150 lb against
+ * the same seasons with nitrogen never short.
+ */
+export function budgetVsOptimum() {
+  const margin = PLAN_PRICE.corn - perBushelCost('corn');
+  const at120 = nitrogenYields(120);
+  const at150 = nitrogenYields(150);
+  const net = (y: number, rate: number) => y * margin - rate * N_PRICE;
+  const seeds = seedYields();
+  const seedNet = (i: number) => seeds[i] * margin - (SEEDS[i] / 1000) * SEED_PER_THOUSAND;
+  return {
+    nitrogenCost: mean(at120) * margin - 120 * N_PRICE - (mean(at150) * margin - 150 * N_PRICE),
+    seedCost: seedNet(1) - seedNet(2),
+    wetWins: at150.filter((y, i) => net(y, 150) > net(at120[i], 120)).length,
+    yieldAt150: mean(at150),
+    neverShort: mean(historyYields({ district: 'prairie', crop: 'corn' }, N_YEARS)),
+  };
+}
 
 let nTable: number[][] | null = null;
 /**
@@ -63,7 +114,7 @@ export function nitrogenTable(): number[][] {
   return nTable;
 }
 
-type InputKey = 'nitrogen' | 'water' | 'planter';
+type InputKey = 'nitrogen' | 'seed' | 'water' | 'planter';
 
 export interface InputCurve {
   levels: number[];
@@ -86,6 +137,15 @@ export function inputCurve(input: InputKey, cornPrice: number, inputPrice: numbe
     const value = output.map((y) => y * margin);
     const cost = N_RATES.map((r) => r * inputPrice);
     return finish(N_RATES, output, value, cost);
+  }
+  if (input === 'seed') {
+    const output = seedCurveYields();
+    return finish(
+      SEED_LEVELS,
+      output,
+      output.map((y) => y * margin),
+      SEED_LEVELS.map((p) => (p / 1000) * inputPrice),
+    );
   }
   if (input === 'water') {
     const pts = irrigationResponse(ALLOWANCES, cornPrice, inputPrice);
@@ -112,11 +172,17 @@ function finish(levels: number[], output: number[], value: number[], cost: numbe
   return { levels, output, value, cost, net, best };
 }
 
-/** The challenge: with nitrogen at $1.20 a pound, the rate that maximizes the return to nitrogen. */
-export function doubledNitrogenSolved(input: InputKey, level: number, cornPrice: number, nPrice: number): boolean {
-  if (input !== 'nitrogen' || Math.abs(nPrice - 1.2) > 1e-6 || Math.abs(cornPrice - PLAN_PRICE.corn) > 1e-6) return false;
-  const c = inputCurve('nitrogen', cornPrice, nPrice);
-  return level === c.best;
+/** The challenge's nitrogen price, $ per lb: more than double today's 60 cents. */
+export const DEAR_N_PRICE = 1.4;
+
+/** Whether the optimizer is set to the challenge's prices: nitrogen at DEAR_N_PRICE, corn at the plan price. */
+export function atDearNitrogen(input: InputKey, cornPrice: number, nPrice: number): boolean {
+  return input === 'nitrogen' && Math.abs(nPrice - DEAR_N_PRICE) < 1e-6 && Math.abs(cornPrice - PLAN_PRICE.corn) < 1e-6;
+}
+
+/** The challenge: with nitrogen at $1.40 a pound and corn at $4.60, the rate (an index into N_RATES) that maximizes the return to nitrogen. */
+export function dearNitrogenSolved(input: InputKey, level: number, cornPrice: number, nPrice: number): boolean {
+  return atDearNitrogen(input, cornPrice, nPrice) && level === inputCurve('nitrogen', cornPrice, nPrice).best;
 }
 
 const INPUTS: Record<InputKey, { label: string; unit: (l: number) => string; price: { label: string; min: number; max: number; step: number; def: number; show: (v: number) => string } }> = {
@@ -124,6 +190,11 @@ const INPUTS: Record<InputKey, { label: string; unit: (l: number) => string; pri
     label: 'Nitrogen',
     unit: (l) => `${fmt(N_RATES[l])} lb N/ac`,
     price: { label: 'Nitrogen price', min: 0.3, max: 1.5, step: 0.05, def: N_PRICE, show: (v) => `${usd(v, 2)} per lb` },
+  },
+  seed: {
+    label: 'Seed',
+    unit: (l) => `${fmt(SEED_LEVELS[l])} seeds/ac`,
+    price: { label: 'Seed price', min: 1.5, max: 6, step: 0.1, def: SEED_PER_THOUSAND, show: (v) => `${usd(v, 2)} per 1,000 seeds` },
   },
   water: {
     label: 'Irrigation water',
@@ -133,18 +204,23 @@ const INPUTS: Record<InputKey, { label: string; unit: (l: number) => string; pri
   planter: {
     label: 'Planter size',
     unit: (l) => `${PLANTERS[l].label}, ${PLANTERS[l].perDay} ac/day`,
-    price: { label: 'Planter cost', min: 0.5, max: 2, step: 0.1, def: 1, show: (v) => `${fmt(v * 100)}% of list` },
+    price: { label: 'Planter ownership cost', min: 0.5, max: 2, step: 0.1, def: 1, show: (v) => `${usd(PLANTERS[0].cost * v)}–${usd(PLANTERS[PLANTERS.length - 1].cost * v)} a year` },
   },
 };
 
 function levelLabel(input: InputKey, i: number): string {
   if (input === 'nitrogen') return fmt(N_RATES[i]);
+  if (input === 'seed') return `${fmt(SEED_LEVELS[i] / 1000)}k`;
   if (input === 'water') return fmt(ALLOWANCES[i]);
   return PLANTERS[i].label;
 }
 
-/** Output against the input, and each step's marginal value against its marginal cost. */
-function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputCurve; level: number }) {
+/**
+ * Output against the input, and each step's marginal value against its marginal cost. With
+ * `hideBest` (the challenge, unsolved) the best-return marker is left out and the bars are drawn
+ * in one color, so the reader compares each bar with the cost line.
+ */
+function ResponseChart({ input, curve, level, hideBest }: { input: InputKey; curve: InputCurve; level: number; hideBest: boolean }) {
   const n = curve.levels.length;
   const x = scale(0, n - 1, 80, 600);
   const [o0, o1] = niceDomain(Math.min(...curve.output), Math.max(...curve.output), 4);
@@ -162,7 +238,7 @@ function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputC
       className="chart"
       viewBox="0 0 640 362"
       role="img"
-      aria-label={`${INPUTS[input].label}: at ${INPUTS[input].unit(level)} the expected ${isPlanter ? 'bushels lost a year are' : 'yield is'} ${fmt(Math.abs(curve.output[level]), 1)}. The return over the input’s cost is highest at ${INPUTS[input].unit(curve.best)}.`}
+      aria-label={`${INPUTS[input].label}: at ${INPUTS[input].unit(level)} the expected ${isPlanter ? 'bushels lost a year are' : 'yield is'} ${fmt(Math.abs(curve.output[level]), 1)}.${hideBest ? '' : ` The return over the input’s cost is highest at ${INPUTS[input].unit(curve.best)}.`}`}
     >
       <text className="ax" x={80} y={14}>
         {outLabel}
@@ -172,10 +248,14 @@ function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputC
       {curve.output.map((o, i) => (
         <circle key={i} cx={x(i)} cy={yo(o)} r={i === level ? 6 : 3} fill={i === level ? GRAPHIC.gold : '#fcfcfb'} stroke={GRAPHIC.gold} strokeWidth={2} />
       ))}
-      <line x1={x(curve.best)} x2={x(curve.best)} y1={26} y2={330} stroke={TEXT.green} strokeWidth={1.5} strokeDasharray="5 4" />
-      <text className="ax" x={x(curve.best) + 5} y={40} style={{ fill: TEXT.green }}>
-        best return
-      </text>
+      {!hideBest && (
+        <>
+          <line x1={x(curve.best)} x2={x(curve.best)} y1={26} y2={330} stroke={TEXT.green} strokeWidth={1.5} strokeDasharray="5 4" />
+          <text className="ax" x={x(curve.best) + 5} y={40} style={{ fill: TEXT.green }}>
+            best return
+          </text>
+        </>
+      )}
       <text className="ax" x={80} y={196}>
         Each step: value of the extra bushels (bars) and the extra cost (line), $
       </text>
@@ -187,7 +267,7 @@ function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputC
           y={Math.min(ym(0), ym(v))}
           width={step}
           height={Math.abs(ym(v) - ym(0))}
-          fill={v >= mc[i] ? GRAPHIC.green : GRAPHIC.red}
+          fill={hideBest ? GRAPHIC.gray : v >= mc[i] ? GRAPHIC.green : GRAPHIC.red}
           opacity={0.55}
         />
       ))}
@@ -198,7 +278,7 @@ function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputC
       />
       <line className="cur" x1={x(level)} x2={x(level)} y1={26} y2={330} />
       {curve.levels.map((_, i) =>
-        n <= 6 || i % 2 === 0 ? (
+        n <= 7 || i % 2 === 0 ? (
           <text key={i} className="ax ax-m" x={x(i)} y={348}>
             {levelLabel(input, i)}
           </text>
@@ -209,15 +289,32 @@ function ResponseChart({ input, curve, level }: { input: InputKey; curve: InputC
 }
 
 export default function Lesson() {
-  const s = useScenario('inputs', { input: 'nitrogen' as InputKey, level: 6, corn: PLAN_PRICE.corn, nPrice: N_PRICE, pump: PUMP_PER_ACRE_INCH, planterCost: 1 });
+  const s = useScenario('inputs', {
+    input: 'nitrogen' as InputKey,
+    level: 6,
+    corn: PLAN_PRICE.corn,
+    nPrice: N_PRICE,
+    seedPrice: SEED_PER_THOUSAND,
+    pump: PUMP_PER_ACRE_INCH,
+    planterCost: 1,
+  });
   const { input, corn } = s.state;
-  const inputPrice = input === 'nitrogen' ? s.state.nPrice : input === 'water' ? s.state.pump : s.state.planterCost;
+  const inputPrice = input === 'nitrogen' ? s.state.nPrice : input === 'seed' ? s.state.seedPrice : input === 'water' ? s.state.pump : s.state.planterCost;
   const curve = useMemo(() => inputCurve(input, corn, inputPrice), [input, corn, inputPrice]);
   const maxLevel = curve.levels.length - 1;
   const level = Math.min(s.state.level, maxLevel);
   const priceDef = INPUTS[input].price;
-  const solved = doubledNitrogenSolved(input, level, corn, s.state.nPrice);
+  const solved = dearNitrogenSolved(input, level, corn, s.state.nPrice);
+  // While the challenge is set up but unsolved, the figure doesn't point at the answer.
+  const hideBest = atDearNitrogen(input, corn, s.state.nPrice) && !solved;
   const perUnit = input === 'planter' ? ' a year' : ' an acre';
+  const atToday = useMemo(() => inputCurve('nitrogen', PLAN_PRICE.corn, N_PRICE), []);
+  const stepValue = (i: number) => atToday.value[i + 1] - atToday.value[i];
+  const planter = useMemo(() => inputCurve('planter', PLAN_PRICE.corn, 1), []);
+  const seeds = useMemo(() => seedYields(), []);
+  const budget = useMemo(() => budgetVsOptimum(), []);
+  const cornMargin = PLAN_PRICE.corn - perBushelCost('corn');
+  const seedStep = 2 * SEED_PER_THOUSAND;
 
   const h = useScenario('hindsight', { corn: PLAN_PRICE.corn, nPrice: N_PRICE });
   const hindsight = useMemo(() => {
@@ -252,10 +349,11 @@ export default function Lesson() {
         two meet is the economic optimum, and it is always short of the most the crop could use, because the last steps add bushels worth less than they cost.
       </P>
       <P>
-        In the next demonstration, choose an input. The upper chart is its expected payoff, averaged over the model’s simulated seasons: Cedar Bend’s corn yield
-        against nitrogen applied at planting (from the season-by-season nitrogen budget of Lesson 1.3); corn yield on an irrigated High Plains field against the
-        season’s water allowance; and, for machinery, the bushels Cedar Bend loses each year to late planting with each size of planter (from{' '}
-        <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a>). The lower chart is each step’s marginal value — green while it pays, red once it doesn’t — against
+        In the next demonstration, choose an input. The upper chart is its expected payoff: Cedar Bend’s corn yield against nitrogen applied at planting, from the
+        season-by-season nitrogen budget of <a href={lessonHref('agriculture/1.3')}>Lesson 1.3</a>, averaged over the first 100 of the model’s seasons; the same
+        yield against the number of seeds planted per acre, over all 200; corn yield on an irrigated High Plains field against the season’s water allowance, over
+        the first 100; and, for machinery, the bushels Cedar Bend loses each year to late planting with each size of planter, averaged over the 200 springs of{' '}
+        <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a>. The lower chart is each step’s marginal value — green while it pays, red once it doesn’t — against
         its marginal cost. Move the level and the prices:
       </P>
 
@@ -263,15 +361,19 @@ export default function Lesson() {
         <Segmented
           label="Input"
           value={input}
-          onChange={(v) => s.set({ input: v, level: v === 'nitrogen' ? 6 : v === 'water' ? 4 : 0 })}
+          onChange={(v) => s.set({ input: v, level: v === 'nitrogen' ? 6 : v === 'seed' ? 4 : v === 'water' ? 4 : 0 })}
           options={(Object.keys(INPUTS) as InputKey[]).map((k) => ({ value: k, label: INPUTS[k].label }))}
         />
-        <ResponseChart input={input} curve={curve} level={level} />
+        <ResponseChart input={input} curve={curve} level={level} hideBest={hideBest} />
         <Legend
           items={[
             { label: input === 'planter' ? 'Bushels lost a year' : 'Expected yield', color: GRAPHIC.gold, kind: 'line' },
-            { label: 'Extra value, when it pays', color: GRAPHIC.green },
-            { label: 'Extra value, when it doesn’t', color: GRAPHIC.red },
+            ...(hideBest
+              ? [{ label: 'Extra value of each step', color: GRAPHIC.gray }]
+              : [
+                  { label: 'Extra value, when it pays', color: GRAPHIC.green },
+                  { label: 'Extra value, when it doesn’t', color: GRAPHIC.red },
+                ]),
             { label: 'Extra cost', color: '#333', kind: 'line' },
           ]}
         />
@@ -279,8 +381,12 @@ export default function Lesson() {
           items={[
             { label: input === 'planter' ? 'bushels lost a year' : 'expected yield', value: input === 'planter' ? fmt(-curve.output[level]) : buAc(curve.output[level], 1), tone: 'gold' },
             { label: `crop value less input cost,${perUnit}`, value: usd(curve.net[level]), tone: 'green' },
-            { label: 'best level at these prices', value: INPUTS[input].unit(curve.best), tone: 'green' },
-            { label: `given up at this level,${perUnit}`, value: usd(curve.net[curve.best] - curve.net[level]), tone: curve.best === level ? 'ink' : 'red' },
+            ...(hideBest
+              ? []
+              : [
+                  { label: 'best level at these prices', value: INPUTS[input].unit(curve.best), tone: 'green' as const },
+                  { label: `given up at this level,${perUnit}`, value: usd(curve.net[curve.best] - curve.net[level]), tone: curve.best === level ? ('ink' as const) : ('red' as const) },
+                ]),
           ]}
         />
         <Slider label={INPUTS[input].label} tone="teal" value={level} min={0} max={maxLevel} step={1} onChange={(v) => s.set({ level: v })} display={INPUTS[input].unit(level)} />
@@ -294,7 +400,15 @@ export default function Lesson() {
           step={priceDef.step}
           onChange={(v) => {
             const r = Math.round(v / priceDef.step) * priceDef.step;
-            s.set(input === 'nitrogen' ? { nPrice: Math.round(r * 100) / 100 } : input === 'water' ? { pump: r } : { planterCost: Math.round(r * 10) / 10 });
+            s.set(
+              input === 'nitrogen'
+                ? { nPrice: Math.round(r * 100) / 100 }
+                : input === 'seed'
+                  ? { seedPrice: Math.round(r * 10) / 10 }
+                  : input === 'water'
+                    ? { pump: r }
+                    : { planterCost: Math.round(r * 10) / 10 },
+            );
           }}
           display={priceDef.show(inputPrice)}
         />
@@ -306,42 +420,52 @@ export default function Lesson() {
         pounds, with 172.0 bushels. Cheaper nitrogen or dearer corn pushes the optimum up; dearer nitrogen or cheaper corn pulls it down — at $3.50 corn it falls to
         100 pounds, and with nitrogen at 30 cents it rises to 140. What matters is the ratio of the two prices.
       </P>
-      <P>
-        Water on the High Plains behaves the same way. The first two inches allowed lift the expected yield from 78.6 bushels to 109.1, and the gain shrinks with
-        every step after; the crop stops asking for more at about 8.6 inches pumped in an average season, whatever the allowance. At $11 an acre-inch, the best
-        allowance is 12 inches; at $20 it is 10, and at $30, 8. The planter gives the least comfortable answer. Measured on the average spring, the 8-row is the
-        best buy: going up to the 12-row saves about 343 bushels a year, worth $1,500, for $8,000 more in ownership costs. (These planter costs are illustrative.)
-        Bigger planters earn their keep in the wet springs <FigRef to="Farm Planner · planting schedule">the planting schedule</FigRef> showed, and in labor this
-        model doesn’t count — which is why the average is not the whole story.
-      </P>
-      <P>
-        Seed follows the same arithmetic. Averaged over the 200 seasons, Cedar Bend’s corn yields 172.6 bushels at 28,000 plants an acre, 174.3 at 30,000, 175.8 at
-        32,000 and 177.1 at 34,000. Each extra 2,000 seeds costs $7.20. Going from 28,000 to 30,000 adds 1.7 bushels, worth $7.40, and just pays; the next step adds
-        1.5, worth $6.60, and doesn’t. The planting rate that maximizes return, about 30,000, is again below the rate that maximizes yield. Agronomists at land-grant
-        universities publish nitrogen and seeding-rate recommendations built on exactly this idea: the rate where the last unit just pays for itself, at the
-        prices of the day.
-      </P>
 
       <Challenge
         id="a"
-        question="Suppose nitrogen doubles in price, to $1.20 a pound, with corn still at $4.60. What nitrogen rate now gives the highest return?"
+        question="Suppose nitrogen climbs to $1.40 a pound, with corn still at $4.60, so each 20-pound step costs $28 instead of $12. The bars don’t move — they are the value of each step’s extra bushels — only the cost line does. Predict the rate that now earns the most, then set the price and that rate to check. The best-return marker stays hidden until you find it."
         solved={solved}
         status={
           input !== 'nitrogen'
             ? 'Choose nitrogen.'
-            : Math.abs(s.state.nPrice - 1.2) > 1e-6
-              ? `Nitrogen is at ${usd(s.state.nPrice, 2)} a pound. Set it to $1.20.`
+            : Math.abs(s.state.nPrice - DEAR_N_PRICE) > 1e-6
+              ? `Nitrogen is at ${usd(s.state.nPrice, 2)} a pound. Set it to $1.40.`
               : Math.abs(corn - PLAN_PRICE.corn) > 1e-6
                 ? 'Set corn back to $4.60.'
                 : `At ${fmt(N_RATES[level])} pounds, crop value less nitrogen is ${usd(curve.net[level])} an acre.`
         }
-        success={`Solved: at $1.20 a pound the best rate is ${fmt(N_RATES[level])} pounds, ${fmt(N_RATES[inputCurve('nitrogen', PLAN_PRICE.corn, N_PRICE).best] - N_RATES[level])} less than at 60 cents, and the expected yield gives up ${fmt(inputCurve('nitrogen', PLAN_PRICE.corn, N_PRICE).output[inputCurve('nitrogen', PLAN_PRICE.corn, N_PRICE).best] - curve.output[level], 1)} bushels. When fertilizer prices jump, farmers cut back at the margin, and the valley produces a little less corn: input prices, too, shape how much food a region grows.`}
+        success={
+          solved
+            ? `Solved: at ${usd(DEAR_N_PRICE, 2)} a pound, the step from ${N_RATES[level - 1]} to ${N_RATES[level]} pounds still pays — its bushels are worth ${usd(stepValue(level - 1), 2)} against ${usd(DEAR_N_PRICE * 20)} — but the next one brings only ${usd(stepValue(level), 2)}. The return peaks at ${N_RATES[level]} pounds, ${N_RATES[atToday.best] - N_RATES[level]} less than at 60 cents, and the expected yield gives up ${fmt(atToday.output[atToday.best] - curve.output[level], 1)} bushels. When fertilizer prices jump, farmers cut back at the margin and the valley grows a little less corn: input prices, too, shape how much food a region grows.`
+            : ''
+        }
       />
+
+      <P>
+        Seed follows the same arithmetic; choose it in <FigRef to="Crop Input Optimizer">the optimizer</FigRef>. Averaged over all 200 seasons, Cedar Bend’s
+        corn yields {fmt(seeds[0], 1)} bushels at {fmt(SEEDS[0])} plants an acre,{' '}
+        {fmt(seeds[1], 1)} at {fmt(SEEDS[1])}, {fmt(seeds[2], 1)} at {fmt(SEEDS[2])} and {fmt(seeds[3], 1)} at {fmt(SEEDS[3])}. Each extra 2,000 seeds costs{' '}
+        {usd(seedStep, 2)}. Going from {fmt(SEEDS[0])} to {fmt(SEEDS[1])} adds {fmt(seeds[1] - seeds[0], 2)} bushels, worth {usd((seeds[1] - seeds[0]) * cornMargin, 2)}{' '}
+        after hauling and drying, and just pays; the next step adds {fmt(seeds[2] - seeds[1], 2)}, worth {usd((seeds[2] - seeds[1]) * cornMargin, 2)}, and doesn’t.
+        The planting rate that maximizes return, about 30,000, is again below the rate that maximizes yield. Agronomists at land-grant
+        universities publish nitrogen and seeding-rate recommendations built on exactly this idea: the rate where the last unit just pays for itself, at the
+        prices of the day.
+      </P>
+      <P>
+        Water on the High Plains behaves the same way. The first two inches allowed lift the expected yield from 78.6 bushels to 109.1, and the gain shrinks with
+        every step after; the crop stops asking for more at about 8.6 inches pumped in an average season, whatever the allowance. At $11 an acre-inch, the best
+        allowance is 12 inches; at $20 it is 10, and at $30, 8. The planter gives the least comfortable answer. Measured on the average spring, the 8-row is the
+        best buy: going up to the 12-row saves about {fmt(planter.output[1] - planter.output[0])} bushels a year, worth about{' '}
+        {usd(Math.round((planter.value[1] - planter.value[0]) / 100) * 100)}, for {usd(planter.cost[1] - planter.cost[0])} more a year in ownership costs. (These
+        planter costs are illustrative.)
+        Bigger planters earn their keep in the wet springs <FigRef to="Farm Planner · planting schedule">the planting schedule</FigRef> showed, and in labor this
+        model doesn’t count — which is why the average is not the whole story.
+      </P>
 
       <H2>The right rate, in hindsight</H2>
       <P>
         The optimum in <FigRef to="Crop Input Optimizer">the optimizer</FigRef> is an average over seasons, and Cedar Bend never farms an average season. In a wet
-        spring, rain drains through the root zone and carries nitrate below the roots, as in Lesson 1.3, and the crop needs more fertilizer to make up; in a dry one
+        spring, rain drains through the root zone and carries nitrate below the roots, as in <a href={lessonHref('agriculture/1.3')}>Lesson 1.3</a>, and the crop needs more fertilizer to make up; in a dry one
         less is lost, and in a drought the crop can’t use what it has. The farmer has to choose the rate at planting, before any of this is known. In the next
         demonstration, each bar counts the seasons, out of 100, in which a given rate would have earned the most, with perfect hindsight; the line is the single rate
         that does best on average:
@@ -375,9 +499,17 @@ export default function Lesson() {
       <P>
         At the starting prices the best single rate is 120 pounds, and in 73 of the 100 seasons the best rate in hindsight was within 20 pounds of it. Thirteen
         seasons wanted 160 pounds or more; five wanted 60 or less. Sticking to the plan cost Cedar Bend about $7 an acre a year against a farmer who somehow knew the
-        weather in advance — the price of not knowing. Farmers chip away at it with the split application of Lesson 1.3, holding back part of the nitrogen until
+        weather in advance — the price of not knowing. Farmers chip away at it with the split application of{' '}
+        <a href={lessonHref('agriculture/1.3')}>Lesson 1.3</a>, holding back part of the nitrogen until
         June, when the spring’s rain is known. It is the same idea as a forecast, the subject of Chapter 3: information that arrives before a decision is worth
         money.
+      </P>
+      <P>
+        Cedar Bend’s own budget, which <a href={lessonHref('agriculture/2.5')}>Lesson 2.5</a> adds up, rounds both inputs up: 150 pounds of nitrogen and 32,000
+        seeds. Many farmers do the same. The top of each curve is flat, so in our model the extra seed costs {budget.seedCost < 1 ? 'less than a dollar' : `about ${usd(budget.seedCost)}`}{' '}
+        an acre on average and the extra nitrogen about {usd(budget.nitrogenCost)}, and the nitrogen earns part of that back in wet springs: 150 pounds beats 120 in{' '}
+        {budget.wetWins} of the 100 seasons. The other lessons simply assume the crop is never short of nitrogen. At 150 pounds that is nearly true: an expected{' '}
+        {fmt(budget.yieldAt150, 1)} bushels on this curve, against {fmt(budget.neverShort, 1)} when nitrogen never runs short.
       </P>
 
       <P>

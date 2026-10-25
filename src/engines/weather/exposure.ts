@@ -1,4 +1,4 @@
-// What the weather does to three businesses in the Calder region, season by season, over the
+// What the weather does to three businesses in the Fenwick region, season by season, over the
 // archive: the gas utility's winter margin (more cold, more gas sold), the Marlow corn farm's
 // profit (heat and drought cut the yield), and the Hollin Ridge wind farm's year (more wind, more
 // power to sell). The archive is simulated; so are these businesses.
@@ -27,12 +27,12 @@ export interface UtilityWinter {
   margin: number;
 }
 
-/** Calder Bay's heating degree days over winter y (November y – March y + 1). */
+/** Fenwick Bay's heating degree days over winter y (November y – March y + 1). */
 export function winterHdd(y: number, knobs: WorldKnobs = {}): number {
   let s = 0;
   for (const [dy, m] of WINTER_MONTHS) {
     const { start, days } = monthDays(y + dy, m);
-    for (let i = 0; i < days; i++) s += hdd(tempF('calder', start + i, knobs));
+    for (let i = 0; i < days; i++) s += hdd(tempF('fenwick', start + i, knobs));
   }
   return s;
 }
@@ -41,7 +41,7 @@ export function winterHdd(y: number, knobs: WorldKnobs = {}): number {
 export const WINTER_DAYS = WINTER_MONTHS.reduce((s, [, m]) => s + monthDays(1, m).days, 0);
 
 /**
- * The utility's winter: its sendout day by day (heating degree days at Calder Bay, scaled up on
+ * The utility's winter: its sendout day by day (heating degree days at Fenwick Bay, scaled up on
  * windy days), and the margin it earns on it. The wind is why the margin doesn't follow the
  * degree days exactly.
  */
@@ -52,7 +52,7 @@ export function utilityWinter(y: number, knobs: WorldKnobs = {}, u = UTILITY): U
   for (const [dy, m] of WINTER_MONTHS) {
     const { start, days } = monthDays(y + dy, m);
     for (let i = 0; i < days; i++) {
-      const dh = hdd(tempF('calder', start + i, knobs));
+      const dh = hdd(tempF('fenwick', start + i, knobs));
       h += dh;
       const wind = CITY_WIND_SHARE * a.wind[start + i];
       volume += u.baseLoad + u.perHdd * dh * (1 + u.perWindMs * (wind - u.meanWind));

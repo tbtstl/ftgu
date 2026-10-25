@@ -1,4 +1,4 @@
-// A simulated market for Calder Bay degree-day contracts, and the tools to trade against it
+// A simulated market for Fenwick Bay degree-day contracts, and the tools to trade against it
 // honestly. The market's price is its own estimate of the index: the days already settled,
 // plus a forecast that may be a few days stale, plus — for the days beyond any forecast — the
 // average of the same calendar days over the past few years ("burn"), which ignores ENSO and
@@ -58,7 +58,7 @@ export interface ForecasterView {
 export function expectedIndex(spec: ContractSpec, year: number, valuationDay: number, view: ForecasterView = {}): number {
   const a = archive();
   const knobs = view.knobs ?? {};
-  const cl = climateFor('calder', knobs);
+  const cl = climateFor('fenwick', knobs);
   const H = LEAD_MAX;
   const { start, end } = contractSpan(spec, year);
   const t = valuationDay;
@@ -68,7 +68,7 @@ export function expectedIndex(spec: ContractSpec, year: number, valuationDay: nu
   let sum = 0;
   for (let d = start; d <= end; d++) {
     if (d <= t) {
-      sum += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+      sum += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
       continue;
     }
     const lead = d - issue;
@@ -89,7 +89,7 @@ export function expectedIndex(spec: ContractSpec, year: number, valuationDay: nu
     }
     const monthsAhead = (info.year - issueInfo.year) * 12 + (info.month - issueInfo.month);
     const nino = view.ignoreEnso ? 0 : monthsAhead <= 0 ? ninoAt(Math.max(0, Math.min(a.z.length - 1, issue))) : ninoForecast(issueInfo.year, issueInfo.month, monthsAhead);
-    const mean = expectedTemp('calder', d, knobs) + sdDay * knownZ + ensoF * ENSO_MONTH_WEIGHT[info.month] * nino;
+    const mean = expectedTemp('fenwick', d, knobs) + sdDay * knownZ + ensoF * ENSO_MONTH_WEIGHT[info.month] * nino;
     sum += expectedDegreeDays(spec.kind, mean, sdDay * Math.sqrt(Math.max(0, 1 - share)), spec.base);
   }
   return sum;
@@ -106,7 +106,7 @@ export function burnDay(kind: DegreeKind, d: number, years: number, knobs: World
     for (let j = -3; j <= 3; j++) {
       const x = dd + j;
       if (x < 0) continue;
-      s += degreeDays(kind, tempF('calder', x, knobs), base);
+      s += degreeDays(kind, tempF('fenwick', x, knobs), base);
       n++;
     }
   }
@@ -208,7 +208,7 @@ export function replay(spec: ContractSpec, years: number[], daysBefore: number, 
     if (!side) continue;
     const { end } = contractSpan(spec, y);
     let settled = 0;
-    for (let d = start; d <= end; d++) settled += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+    for (let d = start; d <= end; d++) settled += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
     const pnl = side * rule.size * payoff({ ...spec, type: 'future', strike: price }, settled);
     const info = dayInfo(t);
     out.push({ year: y, month: info.month, day: info.dom, side, price, fair, settled, pnl });
@@ -259,7 +259,7 @@ export function hedgeWinters(
     const { start, end } = contractSpan(spec, y);
     const q = marketQuote(spec, y, start - daysBefore, m, knobs);
     let hdd = 0;
-    for (let d = start; d <= end; d++) hdd += degreeDays(spec.kind, tempF('calder', d, knobs), spec.base);
+    for (let d = start; d <= end; d++) hdd += degreeDays(spec.kind, tempF('fenwick', d, knobs), spec.base);
     const hedgePnl = contracts * spec.tick * (q.bid - hdd);
     return { winter: y, hdd, price: q.bid, unhedged: margins[i], hedged: margins[i] + hedgePnl };
   });

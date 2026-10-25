@@ -23,7 +23,9 @@ import {
   useScenario,
 } from '../../../framework';
 import { EXPORT_PACE, MARKETING_MONTHS, inventoryYear, simulateBin, type BinResult } from '../../../engines/agriculture/storage';
+import { CORN_SCHEDULE } from '../../../engines/agriculture/grain';
 import { REFERENCE_YEAR } from '../../../model/agriculture/climate';
+import { DRYING_PER_POINT } from '../../../model/agriculture/economics';
 import { MONTHS, MONTH_START, dateLabel, dayOf } from '../../../model/agriculture/region';
 import { centsPlain } from '../shared/format';
 import { CROP_LINE } from '../shared/tones';
@@ -58,11 +60,37 @@ function run(st: BinState): BinResult {
   });
 }
 
-/** The challenge: without aeration, held to July 15, the wettest corn (half-point steps) that doesn't spoil. */
+/**
+ * The challenge: with aeration, held to July 15, the wettest corn (half-point steps) that doesn't spoil. The reader
+ * predicts it from the halving rule: 15% corn uses a quarter of its time, and two halvings (three points) use all of it.
+ */
 export function wettestSolved(st: BinState): boolean {
-  if (st.aeration !== 'off' || st.days !== TO_JULY) return false;
+  if (st.aeration !== 'on' || st.days !== TO_JULY) return false;
   const ok = (m: number) => run({ ...st, dryTo: m }).spoiledAt < 0;
   return ok(st.dryTo) && !ok(st.dryTo + 0.5);
+}
+
+/** The wettest corn (half-point steps, up to the harvest moisture) still sound on July 15, with or without aeration. */
+export function wettestSound(aeration: 'on' | 'off'): number {
+  let best = NaN;
+  for (let m = 13; m <= HARVEST_MOISTURE + 1e-9; m += 0.5) if (run({ dryTo: m, aeration, days: TO_JULY, where: 'farm' }).spoiledAt < 0) best = m;
+  return best;
+}
+
+/** Moisture points, written without a needless “.0”. */
+function points(x: number): string {
+  return fmt(x, Number.isInteger(x) ? 0 : 1);
+}
+
+/** The share of allowable time used, as a percentage — with a decimal near 100% so “sound” never reads as “100% used”. */
+function usedPct(spoilage: number): string {
+  return `${fmt(spoilage * 100, spoilage > 0.99 && spoilage < 1 ? 1 : 0)}%`;
+}
+
+/** The day corn held to July 15 at this moisture starts to spoil, or null if it stays sound. */
+function spoilDay(dryTo: number, aeration: 'on' | 'off'): string | null {
+  const r = run({ dryTo, aeration, days: TO_JULY, where: 'farm' });
+  return r.spoiledAt >= 0 ? dateLabel((FILL + r.spoiledAt) % 365) : null;
 }
 
 /** Air and grain temperature through storage, with the spoilage index underneath. */
@@ -106,34 +134,12 @@ function BinChart({ r }: { r: BinResult }) {
   );
 }
 
-function Bin({ r, aeration }: { r: BinResult; aeration: boolean }) {
-  const last = r.days[r.days.length - 1];
-  const temp = Math.max(-10, Math.min(30, last.grain));
-  const color = mix('#b9d3ea', '#e9a07a', (temp + 10) / 40);
-  return (
-    <svg className="diagram" viewBox="0 0 640 120" role="img" aria-label={`A bin of corn at ${fmt(last.grain, 1)} °C, aeration fans ${aeration ? 'on' : 'off'}.`}>
-      <path d="M260 40 L320 14 L380 40 Z" fill="#d9d4c8" />
-      <rect x={260} y={40} width={120} height={70} fill="#ece7dc" stroke="#999" />
-      <rect x={262} y={52} width={116} height={56} fill={color} />
-      <text className="lab" x={320} y={84} textAnchor="middle">
-        {fmt(last.grain, 1)} °C
-      </text>
-      <g transform="translate(400 96)">
-        <circle r={10} fill="none" stroke={aeration ? GRAPHIC.blue : '#bbb'} strokeWidth={2} />
-        <path d="M0 -8 L3 0 L0 8 M-8 0 L0 3 L8 0" stroke={aeration ? GRAPHIC.blue : '#bbb'} strokeWidth={2} fill="none" />
-        <text className="ax" x={16} y={4}>
-          fan {aeration ? 'on in cold weather' : 'off'}
-        </text>
-      </g>
-    </svg>
-  );
-}
-
 export default function Lesson() {
   const s = useScenario('silo', { dryTo: 15, aeration: 'on' as 'on' | 'off', days: TO_JULY, where: 'farm' as 'farm' | 'elevator' });
   const st = s.state;
   const r = useMemo(() => run(st), [st]);
   const solved = useMemo(() => wettestSolved(st), [st]);
+  const wettestOff = useMemo(() => wettestSound('off'), []);
   const last = r.days[r.days.length - 1];
   const sellDay = (FILL + st.days) % 365;
 
@@ -155,7 +161,9 @@ export default function Lesson() {
         water, slowly when the grain is cool and dry and much faster when it is warm and wet. Storage managers think in terms of an <K tone="red">allowable storage
         time</K>: how long grain at a given temperature and moisture keeps before it has lost about half a percent of its dry matter and begins to go out of
         condition. In our model it is 200 days for corn at 15% moisture and 15.6 °C (60 °F), and it roughly halves for every 5.6 °C warmer and every point and a
-        half wetter. Two tools stretch it. <K tone="blue">Drying</K> takes the moisture down, at {centsPlain(0.035, 1)} a point. And <K tone="blue">aeration</K> fans
+        half wetter. Two tools stretch it. <K tone="blue">Drying</K> takes the moisture down, at {centsPlain(DRYING_PER_POINT, 1)} a point in the farm’s own dryer —
+        cheaper than the {centsPlain(CORN_SCHEDULE.drying, 1)} the elevator charged in <a href={lessonHref('agriculture/4.1')}>Lesson 4.1</a>. And{' '}
+        <K tone="blue">aeration</K> fans
         push cold autumn and winter air through the bin to chill the grain, and are shut off in spring so that warm air doesn’t heat it again. In the next
         demonstration, Cedar Bend fills a bin on {dateLabel(FILL, true)} with corn harvested at {HARVEST_MOISTURE}% moisture. The red line is the grain’s
         temperature, the gray line the air’s; the gold area is the share of the allowable storage time used up. Choose how dry, whether to aerate and how long to
@@ -163,7 +171,6 @@ export default function Lesson() {
       </P>
 
       <Figure name="Grain Silo" scenario={s}>
-        <Bin r={r} aeration={st.aeration === 'on'} />
         <BinChart r={r} />
         <Legend
           items={[
@@ -174,7 +181,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `condition on ${dateLabel(sellDay)}`, value: r.spoiledAt >= 0 ? `spoiling since ${dateLabel((FILL + r.spoiledAt) % 365)}` : `sound, ${fmt(last.spoilage * 100)}% used`, tone: r.spoiledAt >= 0 ? 'red' : 'green' },
+            { label: `condition on ${dateLabel(sellDay)}`, value: r.spoiledAt >= 0 ? `spoiling since ${dateLabel((FILL + r.spoiledAt) % 365)}` : `sound, ${usedPct(last.spoilage)} used`, tone: r.spoiledAt >= 0 ? 'red' : 'green' },
             { label: 'drying, per bushel', value: centsPlain(r.costs.drying + r.costs.overdrying) },
             { label: 'storage', value: centsPlain(r.costs.storage) },
             { label: 'interest on the grain', value: centsPlain(r.costs.interest) },
@@ -205,25 +212,25 @@ export default function Lesson() {
 
       <P>
         Dried to 15% and aerated, the corn spends the winter frozen: the fans pull it below freezing by Christmas, and with the bin sealed in spring it warms only
-        to about 6 °C by June while the air passes 25. By July 15 it has used a quarter of its allowable time. Without the fans the same corn stays near 7 °C all
-        winter and 10 °C by June, and uses 60%. Now make it wetter. Without aeration, 16% corn just makes it to July 15; at 16.5% it starts spoiling in mid-June,
-        and at 17% in April. With aeration, the same 17% corn is still sound in July.
+        to about 6 °C by June while the air passes 25. By July 15 it has used a quarter of its allowable time. Without the fans the same corn stays around 8 °C all
+        winter and 10 °C by June, and uses 60%. Now make it wetter. In our model wetter corn follows the same temperatures; moisture only shortens its allowable
+        time, halving it for every point and a half, so each point and a half wetter doubles the share the same months use up.
       </P>
 
       <Challenge
         id="a"
-        question="Switch the fans off and hold the corn until July 15. What is the wettest it can go into the bin, in half-point steps, without spoiling?"
+        question="Predict first with the halving rule, then check: with the fans on, 15% corn has used a quarter of its allowable time by July 15. What is the wettest it can go into the bin, in half-point steps, and still be sound on July 15?"
         solved={solved}
         status={
-          st.aeration !== 'off'
-            ? 'Switch aeration off.'
+          st.aeration !== 'on'
+            ? 'Switch the aeration fans back on.'
             : st.days !== TO_JULY
               ? `The corn is held until ${dateLabel(sellDay)}. Hold it until July 15.`
               : r.spoiledAt >= 0
-                ? `At ${fmt(st.dryTo, 1)}% the corn starts spoiling on ${dateLabel((FILL + r.spoiledAt) % 365)}.`
-                : `At ${fmt(st.dryTo, 1)}% the corn is sound on July 15, with ${fmt(last.spoilage * 100)}% of its time used. Could it go in wetter?`
+                ? `At ${fmt(st.dryTo, 1)}% the corn starts spoiling on ${dateLabel((FILL + r.spoiledAt) % 365)}, before July 15.`
+                : `At ${fmt(st.dryTo, 1)}% the corn is still sound on July 15.`
         }
-        success={`Solved: without aeration, ${fmt(st.dryTo, 1)}% corn reaches July 15 with ${fmt(last.spoilage * 100)}% of its allowable time used; half a point wetter and it would spoil first. Fans let the same bin hold corn a point and a half wetter, saving about 5 cents a bushel of drying — which is why almost every bin built for long storage has them.`}
+        success={`Solved: two halvings take a quarter of the allowable time to all of it, and each is a point and a half of moisture, so aerated corn can go in three points wetter: ${points(st.dryTo)}% corn reaches July 15 with ${usedPct(last.spoilage)} of its time used, while ${points(st.dryTo + 0.5)}% would start spoiling on ${spoilDay(st.dryTo + 0.5, 'on')}. Without the fans 15% corn already uses 60%, so not even one halving fits: ${points(wettestOff)}% just makes it, and ${points(wettestOff + 0.5)}% starts spoiling on ${spoilDay(wettestOff + 0.5, 'off')}. The fans let the bin hold corn ${points(st.dryTo - wettestOff)} points wetter, saving ${centsPlain((st.dryTo - wettestOff) * DRYING_PER_POINT)} a bushel of drying — which is why almost every bin built for long storage has them.`}
       />
 
       <P>
@@ -234,7 +241,8 @@ export default function Lesson() {
       </P>
       <P>
         Wheat runs the calendar the other way round. It comes out of the field in July, dry enough to store without a dryer, but into the hottest weeks of the year,
-        when insects are most active; managers cool it with fans on the first cool nights of autumn. Its long storage season is the winter, when it keeps easily.
+        when insects are most active; managers run the fans on cool summer nights right after harvest to take the field heat out, then cool it further as autumn
+        comes. Its long storage season is the winter, when it keeps easily.
       </P>
       <P>
         Look too at what holding costs. Dried to 15%, stored on the farm and held to mid-July, the corn costs 14 cents a bushel to dry, about 18 cents in bins and

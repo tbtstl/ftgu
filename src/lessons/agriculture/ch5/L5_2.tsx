@@ -37,6 +37,7 @@ import {
   type HarvestCurve,
 } from '../../../engines/agriculture/market';
 import { meanValley } from '../../../engines/agriculture/world';
+import { REFERENCE_YEAR } from '../../../model/agriculture/climate';
 import { dayOf } from '../../../model/agriculture/region';
 import { PriceChart } from '../shared/PriceChart';
 import { centsPlain } from '../shared/format';
@@ -56,11 +57,28 @@ export function curveOf(st: CurveState): HarvestCurve {
   return harvestCurve({ valley: st.valley === CURVE0.valley ? meanValley() : st.valley, world: st.world / 100, carryIn: st.carryIn });
 }
 
+/** Nine months' interest on the corn Cedar Bend keeps instead of selling at harvest, $ a bushel, as storageReturn counts it. */
+export function interestOf(st: CurveState): number {
+  return (INTEREST / 12) * 9 * curveOf(st).harvestCash;
+}
+
 /** Challenge 1: the smallest shortfall elsewhere (whole percent) at which hedged storage at Cedar Bend until July stops paying. */
 export function stopsPayingSolved(st: CurveState): boolean {
   if (st.valley !== CURVE0.valley || st.carryIn !== CURVE0.carryIn) return false;
   const pays = (w: number) => storageReturn(curveOf({ ...st, world: w })) >= 0;
   return !pays(st.world) && pays(st.world + 1);
+}
+
+/** July's premium over December on a curve, as a share of full carry: the first demonstration's readout. */
+function carryShareOf(c: HarvestCurve): number {
+  return (c.futures.Jul - c.futures.Dec) / (c.carry * ((EXPIRY.Jul - EXPIRY.Dec) / MONTH_DAYS));
+}
+
+/** The shares of full carry at the last whole percent short at which storing still pays in the first demonstration, and the first at which it doesn't. */
+export function carryEdge(): { paid: number; lost: number } {
+  let w = 0;
+  while (w > -10 && storageReturn(curveOf({ ...CURVE0, world: w - 1 })) >= 0) w--;
+  return { paid: carryShareOf(curveOf({ ...CURVE0, world: w })), lost: carryShareOf(curveOf({ ...CURVE0, world: w - 1 })) };
 }
 
 export const HARVEST_SALE = dayOf(10, 15);
@@ -76,11 +94,36 @@ export function storedReturn(year: number, sell: SaleMonth, hedged: boolean): nu
   return c1 - c0 - cost + hedge;
 }
 
-/** Challenge 2: the year in which storing hedged until July lost the most. */
+/** Storing until a contract's expiry over the sixty years: the average return hedged, and how many years unhedged storage lost money. */
+export function storageRecord(sell: SaleMonth): { hedgedMean: number; unhedgedLosses: number } {
+  const ys = Array.from({ length: MARKET_YEARS }, (_, i) => i + 1);
+  return {
+    hedgedMean: ys.reduce((t, y) => t + storedReturn(y, sell, true), 0) / MARKET_YEARS,
+    unhedgedLosses: ys.filter((y) => storedReturn(y, sell, false) <= 0).length,
+  };
+}
+
+/** The sixty-year storage figure's starting state: the reference season, not the answer to its challenge. */
+export const STORAGE0 = { sell: 'Jul' as SaleMonth, hedged: 'yes' as 'yes' | 'no', year: REFERENCE_YEAR };
+
+/** The year in which storing hedged until July lost the most: the drought year, the record's only inverted curve. */
 export function worstStorageYear(): number {
   let worst = 1;
   for (let y = 2; y <= MARKET_YEARS; y++) if (storedReturn(y, 'Jul', true) < storedReturn(worst, 'Jul', true)) worst = y;
   return worst;
+}
+
+/** Challenge 2: of the years in which storing hedged until July paid, the one whose curve paid the least share of full carry. */
+export function thinnestCarryYear(): number {
+  let best = 0;
+  for (let y = 1; y <= MARKET_YEARS; y++) if (storedReturn(y, 'Jul', true) > 0 && (best === 0 || cropYear(y).theta < cropYear(best).theta)) best = y;
+  return best;
+}
+
+/** Solved on a year in which storing hedged until July paid, with a carry — in whole percent, as the readout shows it — as thin as any that paid. */
+export function thinCarrySolved(st: typeof STORAGE0): boolean {
+  if (st.sell !== 'Jul' || st.hedged !== 'yes' || storedReturn(st.year, 'Jul', true) <= 0) return false;
+  return Math.round(cropYear(st.year).theta * 100) === Math.round(cropYear(thinnestCarryYear()).theta * 100);
 }
 
 const CONTRACT_LABEL: Record<Contract, string> = { Dec: 'Dec', Mar: 'Mar', May: 'May', Jul: 'Jul' };
@@ -149,14 +192,21 @@ export default function Lesson() {
   const spread = c.futures.Jul - c.futures.Dec;
   const fullSpread = c.carry * ((EXPIRY.Jul - EXPIRY.Dec) / MONTH_DAYS);
   const solved1 = useMemo(() => stopsPayingSolved(s.state), [s.state]);
+  const interest = (INTEREST / 12) * 9 * c.harvestCash;
+  const interest0 = useMemo(() => interestOf(CURVE0), []);
 
-  const h = useScenario('storage', { sell: 'Jul' as SaleMonth, hedged: 'yes' as 'yes' | 'no', year: 46 });
+  const h = useScenario('storage', STORAGE0);
   const values = useMemo(() => Array.from({ length: MARKET_YEARS }, (_, i) => storedReturn(i + 1, h.state.sell, h.state.hedged === 'yes')), [h.state.sell, h.state.hedged]);
   const avg = values.reduce((a, b) => a + b, 0) / values.length;
   const paid = values.filter((v) => v > 0).length;
   const worst = useMemo(() => worstStorageYear(), []);
-  const solved2 = h.state.sell === 'Jul' && h.state.hedged === 'yes' && h.state.year === worst;
+  const worstYr = cropYear(worst);
+  const worstReturn = useMemo(() => storedReturn(worst, 'Jul', true), [worst]);
+  const solved2 = useMemo(() => thinCarrySolved(h.state), [h.state]);
+  const edge = useMemo(() => carryEdge(), []);
   const yr = cropYear(h.state.year);
+  const yearReturn = values[h.state.year - 1];
+  const byMonth = useMemo(() => ({ Mar: storageRecord('Mar'), May: storageRecord('May'), Jul: storageRecord('Jul') }), []);
 
   return (
     <LessonPage id="agriculture/5.2">
@@ -211,16 +261,17 @@ export default function Lesson() {
 
       <H2>Harvest pressure, and who is paid to store</H2>
       <P>
-        The spread is not the only reward for storing. At harvest, Fairview bids 35 cents under its value to ration its bin space, as in{' '}
-        <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a>; by midwinter the rush is over and it bids only its 8-cent handling cost under. A farmer who keeps corn
-        in a bin collects both the carry and that <K tone="teal">harvest pressure</K> unwinding. And by selling July futures at harvest — a{' '}
+        The spread is not the only reward for storing. At harvest, Fairview bids 35 cents under its value to ration its bin space — its <i>harvest spread</i>,
+        as in <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a>. By midwinter the rush is over and it bids only its 8-cent handling cost under. The harvest
+        spread less the handling cost, 27 cents in a normal year, is the <K tone="teal">harvest pressure</K>, and a farmer who keeps corn in a bin collects both
+        the carry and that pressure unwinding. And by selling July futures at harvest — a{' '}
         <i>storage hedge</i> — the farmer can lock both in. In a normal year Fairview bids $4.30 in mid-October and should bid $5.02 in mid-July; Cedar Bend’s own
         bins cost about 2 cents a bushel a month plus interest, so storing hedged earns 32 cents a bushel.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the valley’s harvest average and 100 million tons carried in. How short must everyone else’s harvest be, to the whole percent, before storing hedged at Cedar Bend until July stops paying?"
+        question="Keep the valley’s harvest average and 100 million tons carried in. As everyone else’s harvest shrinks, two things work against storing: July’s premium over December thins, and dearer corn costs more interest to hold. The premium is gone at 8% short. Predict first: does storing hedged at Cedar Bend until July stop paying before that, or only once the curve inverts? Then find how short everyone else’s harvest must be, to the whole percent, for it to stop paying."
         solved={solved1}
         status={
           s.state.valley !== CURVE0.valley || s.state.carryIn !== CURVE0.carryIn
@@ -229,14 +280,14 @@ export default function Lesson() {
               ? `With everyone else’s harvest at ${s.state.world}%, storing still earns ${centsPlain(ret)} a bushel.`
               : `At ${s.state.world}% storing loses ${centsPlain(-ret)} a bushel. Is this the first whole percent where it does?`
         }
-        success={`Solved: with everyone else’s harvest ${Math.abs(s.state.world)}% short, July pays only ${centsPlain(spread)} over December and storing loses ${centsPlain(-ret)} a bushel; a point less short and it still pays. Scarcity shows up as a thin spread: the market stops paying to keep corn when the world needs it now. Farmers who store anyway are betting on the price, not earning a carry.`}
+        success={`Solved: with everyone else’s harvest ${Math.abs(s.state.world)}% short, July pays only ${centsPlain(spread)} over December, ${fmt((spread / fullSpread) * 100)}% of full carry, while nine months’ interest on corn worth ${usd(c.harvestCash, 2)} at harvest has grown to ${centsPlain(interest)} a bushel, from ${centsPlain(interest0)} in a normal year. Together they tip the return over: storing loses ${centsPlain(-ret)} a bushel, and a point less short it still pays. Scarcity shows up twice — as a thin spread, and as dearer corn to finance — and the market stops paying to keep corn when the world needs it now. Farmers who store anyway are betting on the price, not earning a carry.`}
       />
 
       <P>
         The valley’s own harvest pushes the other way. Make it 650 million bushels and the network of{' '}
-        <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a> fills. December futures fall only to $4.68, because the valley is a small part of the world, but
-        corn that can’t all leave the valley this year is worth far less than the port’s price: Fairview widens its harvest spread to 42 cents to keep its bins
-        from overflowing and bids $2.60. With stocks plentiful the curve pays nearly full carry, and storing hedged earns 52 cents a bushel. The market is paying
+        <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a> fills. December futures fall 92 cents, to $4.68, but Fairview’s bid falls $1.70, to $2.60:
+        corn that can’t all leave the valley this year is worth far less than the port’s price, and Fairview widens its harvest spread to 42 cents to keep its
+        bins from overflowing. With stocks plentiful the curve pays nearly full carry, and storing hedged earns 52 cents a bushel. The market is paying
         the valley’s farmers to keep their corn on the farm until there is room to move it.
       </P>
       <P>
@@ -278,24 +329,42 @@ export default function Lesson() {
 
       <P>
         Stored hedged until July, a bushel earned 29 cents on average and paid in 58 of the sixty years. Stored unhedged it earned more on average, 34 cents,
-        because prices in these sixty simulated years happened to rise after harvest more often than not, but it lost money in 17 years, as much as $1.11 a bushel.
+        because July futures in these sixty simulated years happened to rise after harvest by 5 cents on average — though they rose in only 31 of the sixty —
+        but it lost money in 17 years, as much as $1.11 a bushel.
         Unhedged storage is two businesses at once: storing corn, and betting on its price. The hedge strips out the bet and leaves the business, which earns
         what the curve and the harvest basis pay. That is why commercial grain firms almost always store hedged, and why a merchant reads the curve, not the price,
         to decide whether to fill a bin.
       </P>
+      <P>
+        Sell in March or May instead and the hedged return hardly changes: {fmt(byMonth.Mar.hedgedMean * 100)} cents a bushel to March,{' '}
+        {fmt(byMonth.May.hedgedMean * 100)} to May. Month by month, the carry the curve pays only about covers Cedar Bend’s bins and interest; what storing
+        really earns is the harvest pressure unwinding, and that is over by February. Unhedged, each extra month adds to the bet: storing to March lost money in{' '}
+        {byMonth.Mar.unhedgedLosses} years, to July in {byMonth.Jul.unhedgedLosses}.
+      </P>
 
       <Challenge
         id="b"
-        question="Store hedged until July. In which simulated year did storing lose the most?"
+        question={
+          <>
+            Store hedged until July. Predict first from <FigRef to="Crop-Year Price Model">the first demonstration</FigRef>: at what share of full carry did
+            storing hedged there stop paying? Then find the year in which storing hedged still paid on the thinnest carry — the least share of full carry the
+            curve paid in any year that storing paid.
+          </>
+        }
         solved={solved2}
         status={
           h.state.sell !== 'Jul' || h.state.hedged !== 'yes'
             ? 'Choose July and hedged.'
-            : `In year ${h.state.year} storing hedged earned ${values[h.state.year - 1] >= 0 ? '' : '−'}${centsPlain(Math.abs(values[h.state.year - 1]))} a bushel.`
+            : `In year ${h.state.year} the curve paid ${fmt(yr.theta * 100)}% of full carry, and storing hedged ${yearReturn > 0 ? 'earned' : 'lost'} ${centsPlain(Math.abs(yearReturn))} a bushel.`
         }
-        success={`Solved: in year ${h.state.year} the market was inverted — stocks-to-use fell to ${fmt(yr.world.stocksToUse * 100, 1)}%, and July futures traded under December — so storing hedged lost ${centsPlain(Math.abs(values[h.state.year - 1]))} a bushel. In an inverse the market is paying holders to sell now. The physical reason is the drought of that summer, the valley’s worst of the sixty.`}
+        success={`Solved: in year ${h.state.year} July paid only ${fmt(yr.theta * 100)}% of full carry — world stocks-to-use was ${fmt(yr.world.stocksToUse * 100, 1)}% — and storing hedged earned just ${centsPlain(yearReturn)} a bushel. No year that paid did so on a thinner carry. That matches the first demonstration, where storing paid on ${fmt(edge.paid * 100)}% of full carry and lost on ${fmt(edge.lost * 100)}%: on a carry that thin, what the curve and the harvest pressure pay barely covers the bins and the interest. The world’s stocks set the shape of the curve, and the shape decides whether a bin of corn is worth keeping.`}
       />
 
+      <P>
+        At the other end of the record is year {worst}, the only one in which the curve was inverted. World stocks-to-use fell to{' '}
+        {fmt(worstYr.world.stocksToUse * 100, 1)}%, July futures traded under December, and storing hedged lost {centsPlain(-worstReturn)} a bushel: in an
+        inverse the market is paying holders to sell now. The physical reason is the drought of that summer, the valley’s worst of the sixty.
+      </P>
       <P>
         The curve prices corn across time at one place, Port Sable. Corn at Fairview, Halsted or Dunmore is worth something different again, by the cost and
         the capacity of getting it to a port — and by the elevator’s harvest rush in <FigRef to="Crop-Year Price Model">the curve</FigRef>’s gold

@@ -1,9 +1,11 @@
 // The reader's shipping company for Chapter 6, kept in this browser so each capstone lesson picks
 // up where the last left it: the fleet and its financing (6.1), the cargo world it trades in (6.2),
 // the operations desk's policy (6.3) and the physical dials of the tournament (6.5). Every lesson
-// also works from the starting company.
+// also works from the starting company: figures that reuse earlier lessons' parts can switch
+// between the starting company (which the prose describes) and the reader's.
 
 import { useSyncExternalStore } from 'react';
+import { fmt } from '../../../framework/format';
 import {
   DEFAULT_POLICY,
   DEFAULT_WORLD,
@@ -15,7 +17,7 @@ import {
   type OpsPolicy,
 } from '../../../engines/shipping/company';
 import { NEUTRAL_DRIVERS, type TournamentDrivers } from '../../../engines/shipping/tournament';
-import { standardHistory } from '../../../model/shipping/history';
+import { monthLabel, standardHistory } from '../../../model/shipping/history';
 import { ROUTES, type ClassId } from '../../../model/shipping/trades';
 
 export interface CompanyDesign {
@@ -162,11 +164,70 @@ export function updateCompany(fn: (d: CompanyDesign) => CompanyDesign) {
   write(sanitize(fn(read())));
 }
 
+/** The parts of the company, each owned by one lesson. */
+export type CompanyPart = 'ships' | 'world' | 'policy' | 'drivers';
+
 /** Put one part of the company back to its start, or the whole company. */
-export function resetCompany(part?: 'ships' | 'world' | 'policy' | 'drivers') {
+export function resetCompany(part?: CompanyPart) {
   const d = defaultDesign();
   if (!part) return write(d);
   const cur = read();
   if (part === 'ships') write({ ...cur, ships: d.ships, finance: d.finance });
   else write({ ...cur, [part]: d[part] });
+}
+
+/** Put some fields of the cargo world back to their start, leaving the rest as the reader set them. */
+export function resetWorldFields(keys: Array<keyof CargoWorld>) {
+  const d = defaultDesign();
+  const cur = read();
+  const world = { ...cur.world };
+  for (const k of keys) (world as Record<string, unknown>)[k] = d.world[k];
+  write({ ...cur, world });
+}
+
+/** The starting company (what the prose describes). */
+export const STARTING: CompanyDesign = defaultDesign();
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Whether a part of the reader's company differs from the starting company's. */
+export function partChanged(d: CompanyDesign, part: CompanyPart): boolean {
+  if (part === 'ships') return !same(d.ships, STARTING.ships) || !same(d.finance, STARTING.finance);
+  return !same(d[part], STARTING[part]);
+}
+
+/** Whether some fields of the reader's cargo world differ from the start. */
+export function worldFieldsChanged(d: CompanyDesign, keys: Array<keyof CargoWorld>): boolean {
+  return keys.some((k) => !same(d.world[k], STARTING.world[k]));
+}
+
+/**
+ * Ask before a lesson's Reset puts its part of the company back: the later lessons use it. Nothing
+ * to ask if it is already at the start. Returns whether to go ahead.
+ */
+export function confirmReset(what: string, changed: boolean): boolean {
+  if (!changed) return true;
+  try {
+    return typeof window !== 'undefined' && typeof window.confirm === 'function' && window.confirm(`Reset puts ${what} back to the starting company’s, and the later lessons will use that. Reset?`) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Chapter 6's one money format for sums: millions with an “m”, to two decimals below $10 million
+ * and one above (“$0.82m”, “$22.6m”, “−$5.23m”). Rates keep their units (“$12,100/day”, “$7.31/t”).
+ */
+export function money(x: number, digits?: number): string {
+  if (!Number.isFinite(x)) return '—';
+  const m = Math.abs(x) / 1e6;
+  const d = digits ?? (m >= 9.995 ? 1 : 2);
+  const s = fmt(m, d);
+  return `${x < 0 && s.replace(/[0.,]/g, '') !== '' ? '−' : ''}$${s}m`;
+}
+
+/** “July of Year 9” for a month of the history. */
+export function when(t: number): string {
+  const [y, m] = monthLabel(t).split(', ');
+  return `${m} of ${y}`;
 }

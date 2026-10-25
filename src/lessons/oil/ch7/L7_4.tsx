@@ -22,7 +22,7 @@ import {
   tint,
   useScenario,
 } from '../../../framework';
-import { BUSINESS_DEFAULTS, FAN_SEEDS, businessFan, exposures, fanOf, quantile, runBusiness, type Band, type BusinessFan, type OilBusiness } from '../../../engines/oil/business';
+import { BUSINESS_DEFAULTS, FAN_SEEDS, businessFan, corranPrices, exposures, fanOf, quantile, runBusiness, type Band, type BusinessFan, type OilBusiness } from '../../../engines/oil/business';
 import { NETWORK_DEFAULTS } from '../../../engines/oil/network';
 import { CRACK_RATIOS, crackOf } from '../../../engines/oil/trading';
 import { HISTORY_DEFAULTS, oilHistory, type HistoryParams, type HistoryWeek } from '../../../model/oil/history';
@@ -38,12 +38,13 @@ export type SeriesId = 'wti' | 'crack' | 'basis' | 'heavy';
 export const SERIES: Record<SeriesId, { label: string; axis: string; value: (w: HistoryWeek) => number }> = {
   wti: { label: 'WTI at Kessler', axis: 'WTI at Kessler, $ per barrel (simulated)', value: (w) => w.wti },
   crack: {
-    label: 'Calder’s crack',
-    axis: 'Crack in Calder’s product mix against Brent, $ per barrel',
-    value: (w) => crackOf(w, 'brent', CRACK_RATIOS.calder),
+    label: 'Corran’s crack',
+    axis: 'Crack in Corran’s product mix against Brent, $ per barrel',
+    value: (w) => crackOf(w, 'brent', CRACK_RATIOS.corran),
   },
-  basis: { label: 'Kessler–Calder spread', axis: 'Light crude at Port Calder minus WTI at Kessler, $ per barrel', value: (w) => w.calderCrude - w.wti },
-  heavy: { label: 'Coldwater’s discount', axis: 'Light crude minus Coldwater Heavy at Port Calder, $ per barrel', value: (w) => w.calderCrude - w.coldwater },
+  basis: { label: 'Kessler–Corran spread', axis: 'Light crude at Port Corran minus WTI at Kessler, $ per barrel', value: (w) => w.corranCrude - w.wti },
+  // Measured against Pinyon Light, the crude the coker of Lesson 7.2 swaps out, as 7.2 measures it.
+  heavy: { label: 'Coldwater’s discount', axis: 'Pinyon Light minus Coldwater Heavy at Port Corran, $ per barrel', value: (w) => corranPrices(w).crude.pinyon - w.coldwater },
 };
 
 const SERIES_IDS: SeriesId[] = ['wti', 'crack', 'basis', 'heavy'];
@@ -62,9 +63,9 @@ export interface Drivers {
   refinery: number;
   /** Scale on the seasonal swings in demand. */
   seasonality: number;
-  /** Ridgeback Basin growth, kb/d a year. */
+  /** Pinyon Basin growth, kb/d a year. */
   growth: number;
-  /** Year the Kessler–Calder expansion opens, or never. */
+  /** Year the Kessler–Corran expansion opens, or never. */
   expansion: ExpansionYear;
   /** Rail capacity from Kessler to the coast, kb/d. */
   rail: number;
@@ -185,7 +186,7 @@ export const BASIS_LIMIT = 4;
 export const GROWTH_STEP = 10;
 export const GROWTH_MAX = 140;
 
-/** The highest P90 of the Kessler–Calder spread over the five years, at a basin growth (every other driver at its start). */
+/** The highest P90 of the Kessler–Corran spread over the five years, at a basin growth (every other driver at its start). */
 export function basisPeakP90(growth: number): number {
   return Math.max(...seriesFan({ ...DRIVER_DEFAULTS, growth }, 'basis').map((b) => b.p90));
 }
@@ -203,6 +204,10 @@ export function steadyBasisSolved(d: Drivers): boolean {
   if (basisPeakP90(d.growth) >= BASIS_LIMIT) return false;
   return d.growth + GROWTH_STEP > GROWTH_MAX || basisPeakP90(d.growth + GROWTH_STEP) >= BASIS_LIMIT;
 }
+
+/** What challenge a is predicted from: the line's room over the basin's starting output, kb/d, and the years until the expansion opens. */
+export const LINE_ROOM = HISTORY_DEFAULTS.pipeline - HISTORY_DEFAULTS.basinStart;
+export const EXPANSION_YEARS = EXPANSION.year;
 
 /** The answer to challenge a. */
 export function fastestSteadyGrowth(): number {
@@ -289,14 +294,23 @@ function computeFacts() {
   const heavyShift = mean(hs.slice(from).map((w, i) => SERIES.heavy.value(w) - SERIES.heavy.value(h0[from + i])));
   const cash = businessFan(BUSINESS_DEFAULTS, paramsOf(D));
   const cashFree = businessFan(BUSINESS_DEFAULTS, paramsOf({ ...D, group: 'free' }));
+  const cashNoSeasons = businessFan(BUSINESS_DEFAULTS, paramsOf({ ...D, seasonality: 0 }));
   const firstWeakest = FAN_SEEDS.filter((seed) => {
     const r = runBusiness(BUSINESS_DEFAULTS, { ...paramsOf(D), seed });
     return r.quarters.indexOf(Math.min(...r.quarters)) === 0;
   }).length;
   const p50s = cash.quarters.map((q) => q.p50);
+  const wtiYears = [1, 2, 3, 4, 5].map((y) => bandWidth(wti, y));
+  const wtiPeakIdx = wtiYears.indexOf(Math.max(...wtiYears));
+  const wtiLater = wtiYears.slice(wtiPeakIdx + 1);
   return {
     wti1: bandWidth(wti, 1),
     wti4: bandWidth(wti, 4),
+    wtiYears,
+    wtiPeak: wtiYears[wtiPeakIdx],
+    wtiPeakYear: wtiPeakIdx + 1,
+    wtiLaterLo: Math.min(...wtiLater),
+    wtiLaterHi: Math.max(...wtiLater),
     free4: bandWidth(free, 4),
     wtiOutside: outsideShare(h0, wti, 'wti'),
     crackBand: mean(crack.map((b) => b.p90 - b.p10)),
@@ -314,6 +328,7 @@ function computeFacts() {
     heavyShift,
     cash,
     cashFree,
+    cashNoSeasons,
     firstWeakest,
     q1: p50s[0],
     qPeak: Math.max(...p50s),
@@ -323,7 +338,7 @@ function computeFacts() {
     exposureLater: exposures(BUSINESS_DEFAULTS, 156),
   };
 }
-function getFacts() {
+export function getFacts() {
   if (!facts) facts = computeFacts();
   return facts;
 }
@@ -414,15 +429,18 @@ export default function Lesson() {
         Before it decides how to protect itself, it needs a desk that can say what those prices are likely to do — and, just as important, how far anyone can see.
       </P>
       <P>
-        Our desk doesn’t make one guess. It runs the course’s physics thirty times: the course’s own five years and 29 others drawn from the same model with
-        different luck, as <a href={lessonHref('oil/6.5')}>Lesson 6.5</a> did with eight. In each week it reads the middle of the thirty, the{' '}
-        <K tone="violet">central path</K> (P50), and a <K tone="violet">band</K> from the <K tone="violet">P10</K> to the <K tone="violet">P90</K>, with three
-        histories in thirty below it and three above. The width of the band is what the physics can’t pin down. Every price here is simulated for teaching.
+        Our desk doesn’t make one guess. It runs the course’s physics through the thirty histories that valued the oil fields in{' '}
+        <a href={lessonHref('oil/7.1')}>Lesson 7.1</a>: the course’s own five years and 29 others drawn from the same model with different luck. In each week it
+        reads the middle of the thirty, the <K tone="violet">central path</K> (P50), and a <K tone="violet">band</K> from the <K tone="violet">P10</K> to the{' '}
+        <K tone="violet">P90</K>, with three histories in thirty below it and three above — the middle 80% of Lesson 7.1, read week by week. The width of the band
+        is what the physics can’t pin down. Every price here is simulated for teaching.
       </P>
+      <BusinessCard />
       <P>
-        The desk watches four prices. <K c="price">WTI</K> at Kessler is what the company’s fields sell at; <K c="price">Calder’s crack</K>, its own product mix
-        against Brent, is what the refinery earns; the <K c="price">Kessler–Calder spread</K> is what firm space earns; and{' '}
-        <K c="price">Coldwater’s discount</K> is what makes the coker pay. In the next demonstration, pick a price, then change the physical world and watch which
+        The desk watches four prices. <K c="price">WTI</K> at Kessler is what the company’s fields sell at; <K c="price">Corran’s crack</K>, its own product mix
+        against Brent, is what the refinery earns; the <K c="price">Kessler–Corran spread</K> is what firm space earns; and{' '}
+        <K c="price">Coldwater’s discount</K>, Pinyon Light less Coldwater Heavy at Port Corran as in <a href={lessonHref('oil/7.2')}>Lesson 7.2</a>, is what
+        makes the coker pay. In the next demonstration, pick a price, then change the physical world and watch which
         bands move:
       </P>
 
@@ -437,7 +455,7 @@ export default function Lesson() {
         />
         <XYChart
           ariaLabel={`${SERIES[id].label} over five simulated years. The band from P10 to P90 averages ${dollars(w1)} wide in year 1 and ${dollars(w4)} in year 4; the central path runs from ${dollars(cLo)} to ${dollars(cHi)}. At ${fmt(st.at, 1)} years: P10 ${dollars(cur.p10)}, P50 ${dollars(cur.p50)}, P90 ${dollars(cur.p90)}; the course’s history ${dollars(hist[week])}.`}
-          height={250}
+          height={236}
           x={[0, 5]}
           y={[yLo, yHi]}
           xTicks={[0, 1, 2, 3, 4, 5]}
@@ -468,7 +486,7 @@ export default function Lesson() {
             { label: <K tone="violet">band, year 1</K>, value: dollars(w1), tone: 'violet' },
             { label: <K tone="violet">band, year 4</K>, value: dollars(w4), tone: 'violet' },
             { label: 'central path moves', value: dollars(cHi - cLo), tone: 'green' },
-            { label: 'weeks the course’s history is outside', value: pct(outside) },
+            { label: 'history outside band', value: pct(outside) },
           ]}
         />
         <GroupLabel>Physical drivers</GroupLabel>
@@ -498,21 +516,22 @@ export default function Lesson() {
           display={st.fuelShift === 0 ? 'none' : `+$${fmt(st.fuelShift)} after year ${FUEL_SHIFT_YEAR}`}
         />
         <Caption>
-          Drag across the chart, or use the arrow keys, to read a week. At {fmt(st.at, 1)} years, the desk’s band for {SERIES[id].label} runs from{' '}
-          {dollars(cur.p10)} to {dollars(cur.p90)} around a central {dollars(cur.p50)}; the course’s history was at {dollars(hist[week])}.
+          Drag across the chart, or use the arrow keys, to read a week. At {fmt(st.at, 1)} years the band runs from {dollars(cur.p10)} to {dollars(cur.p90)} around{' '}
+          {dollars(cur.p50)}; the course’s history was at {dollars(hist[week])}.
         </Caption>
       </Figure>
 
       <P>
-        Start with <K c="price">WTI</K>. In the first year the band averages {dollars(f.wti1)} wide; in the fourth, {dollars(f.wti4)}. It doesn’t keep widening
-        the further out the desk looks, because the physics pulls prices back: stocks drift toward normal (<a href={lessonHref('oil/5.1')}>Lesson 5.1</a>), and the producer group leans
+        Start with <K c="price">WTI</K>. In the first year the band averages {dollars(f.wti1)} wide. It widens to {dollars(f.wtiPeak)} in year{' '}
+        {f.wtiPeakYear}, then settles between {dollars(f.wtiLaterLo)} and {dollars(f.wtiLaterHi)} for the rest of the five years. It doesn’t keep widening the
+        further out the desk looks, because the physics pulls prices back: stocks drift toward normal (<a href={lessonHref('oil/5.1')}>Lesson 5.1</a>), and the producer group leans
         against big moves (<a href={lessonHref('oil/5.5')}>Lesson 5.5</a>). Let the group stop steadying prices and the band in year 4 averages{' '}
         {dollars(f.free4)}. Either way, most of what WTI will do lies inside the band. The desk can say how uncertain the price is, not where it will go — and
         the course’s own history spent {pct(f.wtiOutside)} of its weeks outside even that band.
       </P>
       <P>
-        Calder’s crack is different. Its band averages only {dollars(f.crackBand)}, while its central path rises and falls by {dollars(f.crackSwing)} each year,
-        lowest in {f.crackTrough} and highest in {f.crackPeak}: Calder’s mix leans toward diesel, whose crack is strongest in the cold months (
+        Corran’s crack is different. Its band averages only {dollars(f.crackBand)}, while its central path rises and falls by {dollars(f.crackSwing)} each year,
+        lowest in {f.crackTrough} and highest in {f.crackPeak}: Corran’s mix leans toward diesel, whose crack is strongest in the cold months (
         <a href={lessonHref('oil/6.3')}>Lesson 6.3</a>). The seasons are a forecast the desk can make years ahead. Most of what’s left in the band is refinery
         outages around the world, which drain product stocks without warning (<a href={lessonHref('oil/5.5')}>Lesson 5.5</a>); with none, the band averages{' '}
         {dollars(f.calmBand)}.
@@ -520,7 +539,7 @@ export default function Lesson() {
 
       <H2>Forecasts the physics can make</H2>
       <P>
-        The <K c="price">Kessler–Calder spread</K> is the most foreseeable price the company has. Its central path sits near the line’s{' '}
+        The <K c="price">Kessler–Corran spread</K> is the most foreseeable price the company has. Its central path sits near the line’s{' '}
         ${fmt(NETWORK_DEFAULTS.pipelineTariff)} tariff until about {yrs(f.basisFrom)} years in, climbs as high as {dollars(f.basisHigh)} — the rail freight —
         while the line is full, and falls back when the expansion opens {yrs(f.basisTo)} years in (<a href={lessonHref('oil/5.2')}>Lesson 5.2</a>). The basin’s growth and the expansion’s date are both known, so the desk
         can draw that shape in advance. Its band is widest in year 2, averaging {dollars(f.basis2)}, when a few thousand barrels a day decide whether the line is
@@ -536,23 +555,24 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`With every other driver at its starting value, find the fastest basin growth, to the nearest ${GROWTH_STEP} kb/d a year, at which the Kessler–Calder spread’s P90 stays under $${BASIS_LIMIT} in every week of the five years.`}
+        question={`Predict first. The line carries ${fmt(HISTORY_DEFAULTS.pipeline)} kb/d, ${fmt(LINE_ROOM)} kb/d more than the basin sends it at the start, and its expansion opens ${WORDS[EXPANSION_YEARS] ?? EXPANSION_YEARS} years in. What is the fastest basin growth, to the nearest ${GROWTH_STEP} kb/d a year, at which the line keeps room until the expansion — so the Kessler–Corran spread’s P90 stays under $${BASIS_LIMIT} in every week? Set it, with every other driver at its starting value, to check.`}
         solved={solvedA}
         status={
           !atStartExceptGrowth(drivers)
             ? 'Set every driver except basin growth back to its starting value.'
-            : basisPeak >= BASIS_LIMIT
-              ? `At ${fmt(drivers.growth)} kb/d a year the spread’s P90 reaches ${dollars(basisPeak)}: in some histories the line fills.`
-              : `At ${fmt(drivers.growth)} kb/d a year the P90 never passes ${dollars(basisPeak)}. Could the basin grow faster?`
+            : 'Make your estimate from the line’s room and the expansion’s date, then set the basin growth; the spread’s band shows the result.'
         }
-        success={`Solved: ${fmt(drivers.growth)} kb/d a year. The P90 peaks at ${dollars(basisPeak)}${Number.isFinite(nextPeak) ? `; at ${fmt(drivers.growth + GROWTH_STEP)} kb/d it reaches ${dollars(nextPeak)}, because in some histories the line fills before the expansion opens and the spread jumps to the rail freight` : ''}. Below that growth the desk can promise the company a narrow spread; above it, it can only promise a band.`}
+        success={`Solved: ${fmt(drivers.growth)} kb/d a year. In ${WORDS[EXPANSION_YEARS] ?? EXPANSION_YEARS} years the basin adds ${fmt(drivers.growth * EXPANSION_YEARS)} kb/d, inside the line’s ${fmt(LINE_ROOM)} kb/d of room, and the P90 peaks at ${dollars(basisPeak)}${Number.isFinite(nextPeak) ? `; at ${fmt(drivers.growth + GROWTH_STEP)} kb/d a year it adds ${fmt((drivers.growth + GROWTH_STEP) * EXPANSION_YEARS)}, so in some histories the line fills before the expansion opens and the P90 jumps to ${dollars(nextPeak)}, the rail freight` : ''}. Below that growth the desk can promise the company a narrow spread; above it, only a band.`}
       />
 
       <H2>The company’s cash at risk</H2>
       <P>
         A forecast of prices is a step toward the forecast that matters: the company’s cash. In the next demonstration, the desk runs your plan from Lessons 7.1 to
         7.3 — and any hedges from <a href={lessonHref('oil/7.5')}>Lesson 7.5</a> — through the same thirty histories, and shows each quarter’s operating cash as a
-        band, with the course’s history drawn in. You can switch to the starting plan to compare:
+        band, with the course’s history drawn in. Its last readout measures each quarter as <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> measured Corran,
+        against a plan made as the quarter began at that lesson’s seasonal forward prices — each price as it stood then, plus the change its calendar expects by
+        each week. It takes each history’s worst quarter against that plan and shows the P10 across the thirty, a shortfall that one history in ten reaches or
+        exceeds. You can switch to the starting plan to compare:
       </P>
 
       <Figure name="Oil Forecasting Desk · cash flow at risk" scenario={s2}>
@@ -565,7 +585,6 @@ export default function Lesson() {
             { value: 'start', label: 'Starting plan' },
           ]}
         />
-        {cs.plan === 'yours' && <BusinessCard />}
         <Legend
           items={[
             { label: 'P10–P90 of the quarter’s cash', color: BAND_FILL },
@@ -631,6 +650,7 @@ export default function Lesson() {
         <Caption>
           {usingStart ? 'The starting plan' : 'Your plan'} earns {billions(cf.total.p10)} to {billions(cf.total.p90)} over five years in eight histories out of ten
           ({pct(width / cf.total.p50, 1)} of the central {billions(cf.total.p50)}); the course’s history earned {billions(course.sums.total)}.
+          {usingStart ? '' : ' Your plan differs from the starting plan, which the text quotes; choose the starting plan to compare.'}
         </Caption>
       </Figure>
 
@@ -649,14 +669,15 @@ export default function Lesson() {
         average is only {dollars(f.averageBand)} wide, or {dollars(f.averageBandFree)} without the group. And the company’s two halves face crude in opposite
         directions: each $1 rise in crude {moves(f.exposureNow.crude).replace(' it ', ' its daily cash ')} today, since a dearer crude squeezes the refinery (as{' '}
         <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> found) {f.exposureNow.crude < 0 ? 'more than it helps the fields' : 'less than it helps the fields'}, and{' '}
-        {moves(f.exposureLater.crude)} three years on, with the waterflood and the new wells producing. Each $1 on Calder’s crack, by contrast, is worth{' '}
+        {moves(f.exposureLater.crude)} three years on, with the waterflood and the new wells producing. Each $1 on Corran’s crack, by contrast, is worth{' '}
         {kusd(f.exposureNow.crack)} a day.
       </P>
       <P>
-        Over a single quarter, crude matters more. Measured as Lesson 6.4 measured Calder, against a plan that holds each quarter’s prices where they stood when
-        it began, the worst quarter of the five years falls {millions(-f.cash.worstSurprise.p50)} short in the median history and{' '}
+        Over a single quarter, the swings don’t average out. Against the plan made at each quarter’s start, the worst quarter of the five years falls{' '}
+        {millions(-f.cash.worstSurprise.p50)} short in the median history and{' '}
         {millions(-f.cash.worstSurprise.p10)} or more in one history in ten; without the producer group’s steadying hand, {millions(-f.cashFree.worstSurprise.p10)}.
-        Part of that shortfall is the seasons, which the desk saw coming; the rest no one could.
+        Little of it is the seasons: the plan already holds them, as a futures curve would, and with the seasons taken out of demand the one-in-ten shortfall
+        is {millions(-f.cashNoSeasons.worstSurprise.p10)}. What’s left is what no one could see coming.
       </P>
 
       <Challenge
@@ -669,7 +690,7 @@ export default function Lesson() {
             ? 'Switch to the starting plan (or set your plan back to it).'
             : `The band is ${millions(width, 0)} wide, against ${millions(startWidth, 0)} in the course’s world; the target is under ${millions(startWidth / 2, 0)}.`
         }
-        success={`Solved: the band is ${millions(width, 0)} wide, against ${millions(startWidth, 0)} in the course’s world.${csd.refinery < DRIVER_DEFAULTS.refinery ? ` With ${csd.refinery === 0 ? 'no refinery outages' : `only ${fmt(csd.refinery, 1)} refinery outages a year`} around the world, Calder’s crack — the company’s largest exposure — has little left to surprise it with.` : ''}`}
+        success={`Solved: the band is ${millions(width, 0)} wide, against ${millions(startWidth, 0)} in the course’s world.${csd.refinery < DRIVER_DEFAULTS.refinery ? ` With ${csd.refinery === 0 ? 'no refinery outages' : `only ${fmt(csd.refinery, 1)} refinery outages a year`} around the world, Corran’s crack — the company’s largest exposure — has little left to surprise it with.` : ''}`}
       />
 
       <P>

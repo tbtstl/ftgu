@@ -94,7 +94,7 @@ import {
 import { RESTART_MINUTES, bestInterval, checkpointMinutes, spotJobOf, spotRun } from '../src/engines/compute/spotCheckpoint';
 import { LEVERS_DEFAULT, businessUnder, contextUnder, fixedPerYearFor } from '../src/engines/compute/strategyChallenge';
 import { SUPPLY_DEFAULTS, dieYield, diesPerWafer, supplyChain, BUILD } from '../src/engines/compute/supplyChain';
-import { trainingRun, trainFlopsPerToken, TRAIN_COMPUTE_EFFICIENCY } from '../src/engines/compute/training';
+import { trainingRun, TRAIN_COMPUTE_EFFICIENCY } from '../src/engines/compute/training';
 import { forwardPass, layerOps } from '../src/engines/compute/transformer';
 import {
   NFET,
@@ -121,8 +121,8 @@ import {
   conducts,
   halfAdderSolved,
   rippleCaption,
+  rippleOutSolved,
   rowsRight,
-  slowestSolved,
   stageValues,
 } from '../src/lessons/compute/ch1/L1_3';
 import {
@@ -131,7 +131,7 @@ import {
   INTERVAL,
   chargeAt,
   errorText,
-  longestIntervalSolved,
+  hottestAt64Solved,
   modelBytes,
   num,
   sixteenBitSolved,
@@ -189,7 +189,6 @@ import {
   MEM_DEFAULTS,
   NORM_TARGET,
   batchIntensity,
-  batchSolved,
   cacheSolved,
   compareTflops,
   crossoverBatch,
@@ -209,8 +208,6 @@ import {
   earlierAt,
   explore,
   feedForwardComputeBound,
-  feedForwardSolved,
-  feedForwardThreshold,
   memoryUse,
   tokensAt,
 } from '../src/lessons/compute/ch3/L3_1';
@@ -300,7 +297,7 @@ import {
   CHIP_DEFAULTS,
   HALL_MW,
   RACK_KW,
-  bayportSolved,
+  marstonSolved,
   dailyPue,
   fullSpeed,
   sitePue,
@@ -407,15 +404,14 @@ import {
 import {
   LESSON_NUMBERS as L6_1_N,
   YIELD_DEFAULTS,
-  bestMargin,
-  bestSolved,
+  chatMarginSolved as L6_1_chatMarginSolved,
   chatThresholdMs,
   fleetFixedPerWeek,
   lServesChat,
+  loserSolved,
   referenceBidsB,
   revenueByWorkload,
   runYield,
-  thresholdSolved as L6_1_thresholdSolved,
 } from '../src/lessons/compute/ch6/L6_1';
 import {
   JOBS,
@@ -476,12 +472,12 @@ import {
   priceSolved,
 } from '../src/lessons/compute/ch6/L6_5';
 import {
-  BAYPORT_RACKS,
+  MARSTON_RACKS,
   CHAT_TARGET,
   EXAMPLE_ANSWER,
   LESSON_NUMBERS as L7_1_N,
   allChecksPass,
-  bayportSolved as L7_1_bayportSolved,
+  marstonSolved as L7_1_marstonSolved,
   capacityOf,
   customerDemand,
   evalOf,
@@ -860,14 +856,15 @@ describe('chip power', () => {
       expect(rippleCaption(def)).toBe('Bit 1 generates a carry, and bit 2 must wait for that carry, so bit 3’s sum digit is the last to settle, after 6 gate delays, about 48 ps.');
     });
 
-    it('solves the slowest-sum challenge exactly when bits 1 and 2 propagate', () => {
-      expect(slowestSolved(RIPPLE_DEFAULTS.a, RIPPLE_DEFAULTS.b)).toBe(false);
-      expect(slowestSolved(15, 1)).toBe(true);
-      expect(slowestSolved(5, 10)).toBe(true);
+    it('solves the ripple-out challenge exactly when a carry from bit 0 reaches the final carry out', () => {
+      expect(rippleOutSolved(RIPPLE_DEFAULTS.a, RIPPLE_DEFAULTS.b)).toBe(false);
+      expect(rippleOutSolved(15, 1)).toBe(true);
+      // Every column propagates, but no carry is born: slow, yet not the ripple asked for.
+      expect(rippleOutSolved(5, 10)).toBe(false);
       for (let a = 0; a < 16; a++)
         for (let b = 0; b < 16; b++) {
           const r = rippleAdder(toBits(a, 4), toBits(b, 4));
-          expect(slowestSolved(a, b)).toBe(r.bits[1].kind === 'propagate' && r.bits[2].kind === 'propagate');
+          expect(rippleOutSolved(a, b)).toBe(r.carryOut && r.bits[3].carryReady === rippleWorstCase(4));
         }
     });
 
@@ -888,13 +885,13 @@ describe('chip power', () => {
 
 {
   describe('compute 1.4 memory cell lab', () => {
-    it('solves the refresh challenge only at 95 °C and 50 ms', () => {
-      expect(longestIntervalSolved('dram', 95, 50)).toBe(true);
-      expect(longestIntervalSolved('dram', 95, 48)).toBe(false);
-      expect(longestIntervalSolved('dram', 95, 52)).toBe(false);
-      expect(longestIntervalSolved('sram', 95, 50)).toBe(false);
-      expect(longestIntervalSolved(CELL_DEFAULTS.cell, CELL_DEFAULTS.temp, CELL_DEFAULTS.interval)).toBe(false);
-      expect((50 - INTERVAL.min) % INTERVAL.step).toBe(0);
+    it('solves the refresh challenge only at 91 °C with the standard 64 ms', () => {
+      expect(hottestAt64Solved('dram', 91, 64)).toBe(true);
+      expect(hottestAt64Solved('dram', 90, 64)).toBe(false);
+      expect(hottestAt64Solved('dram', 92, 64)).toBe(false);
+      expect(hottestAt64Solved('sram', 91, 64)).toBe(false);
+      expect(hottestAt64Solved(CELL_DEFAULTS.cell, CELL_DEFAULTS.temp, CELL_DEFAULTS.interval)).toBe(false);
+      expect((64 - INTERVAL.min) % INTERVAL.step).toBe(0);
     });
 
     it('follows the cell between refreshes', () => {
@@ -1258,8 +1255,8 @@ describe('chip power', () => {
 
     it('quotes the waves correctly', () => {
       expect(LESSON_NUMBERS.w133).toBeCloseTo(0.504, 3);
-      const w = waves(1000, 4);
-      expect([w.waves, w.slots, w.lastWave]).toEqual([2, 528, 472]);
+      const w = waves(1000, 1);
+      expect([w.waves, w.slots, w.lastWave]).toEqual([8, 132, 76]);
       expect(LESSON_NUMBERS.w1000).toBeCloseTo(0.947, 3);
       expect(issueUtilization(8, 40)).toBeCloseTo(0.615, 3);
     });
@@ -1378,14 +1375,9 @@ describe('chip power', () => {
       expect(run({ kernel: 'gemm', bw: 0.5 }).tflops).toBe(989);
     });
 
-    it('solves challenge a only at the smallest compute-bound batch', () => {
+    it('finds lesson 2.3’s smallest compute-bound batch (challenge a: tests/compute-ch2.test.ts)', () => {
       expect(smallestComputeBatch()).toBe(319);
       expect(batchIntensity(318)).toBeLessThan(ridgePoint(A));
-      expect(batchSolved({ ...MEM_DEFAULTS, batch: 319 })).toBe(true);
-      expect(batchSolved({ ...MEM_DEFAULTS, batch: 320 })).toBe(false);
-      expect(batchSolved({ ...MEM_DEFAULTS, batch: 318 })).toBe(false);
-      expect(batchSolved(MEM_DEFAULTS)).toBe(false);
-      expect(batchSolved({ ...MEM_DEFAULTS, batch: 319, passes: 2 })).toBe(false);
     });
 
     it('shows the cache helping, then limiting', () => {
@@ -1400,13 +1392,13 @@ describe('chip power', () => {
       expect(r2(big.tflops)).toBe(3.53);
     });
 
-    it('solves challenge b with repeat reads that fit in the cache', () => {
+    it('solves challenge b at the largest working set two passes keep at 6 TFLOPS (details: tests/compute-ch2.test.ts)', () => {
       expect(NORM_TARGET).toBe(6);
       expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm' })).toBe(false);
-      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', passes: 4 })).toBe(false); // 134 MB doesn't fit
-      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', passes: 32 })).toBe(false); // 5.24 TFLOPS at most
-      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', wsLog: Math.log10(40), passes: 2 })).toBe(true);
-      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', wsLog: Math.log10(40), passes: 2, bw: 3.4 })).toBe(false);
+      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', passes: 4 })).toBe(false);
+      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', wsLog: Math.log10(40), passes: 2 })).toBe(false); // fits, but not the largest
+      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', wsLog: 1.75, passes: 2 })).toBe(true);
+      expect(cacheSolved({ ...MEM_DEFAULTS, kernel: 'norm', wsLog: 1.75, passes: 2, bw: 3.4 })).toBe(false);
     });
 
     it('compares the three accelerators', () => {
@@ -1470,13 +1462,15 @@ describe('chip power', () => {
       expect(dur(allReduce('A', 128, 1e6, 'two-level').seconds)).toBe('2.07 ms');
     });
 
-    it('solves the challenge only with two levels on 64 A-class GPUs', () => {
+    it('solves the challenge only with two levels on 64 A-class GPUs (details: tests/compute-ch2.test.ts)', () => {
       expect(clusterSolved(CLUSTER_DEFAULTS)).toBe(false);
       expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8 })).toBe(false);
-      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level' })).toBe(true);
-      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', gpu: 'B' })).toBe(false);
+      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level' })).toBe(false); // 16.1 GB: under 0.2 s, but not the most
+      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', logBytes: 10.35 })).toBe(true);
+      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'flat', logBytes: 10.35 })).toBe(false);
+      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', logBytes: 10.35, gpu: 'B' })).toBe(false);
       expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', logBytes: 9 })).toBe(false);
-      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', gpu: 'L' })).toBe(false);
+      expect(clusterSolved({ ...CLUSTER_DEFAULTS, servers: 8, algo: 'two-level', logBytes: 10.35, gpu: 'L' })).toBe(false);
     });
   });
 }
@@ -1574,7 +1568,6 @@ describe('chip power', () => {
 
 {
   const M8 = MODELS['8B'];
-  const GPU = ACCELERATORS.A;
   const r = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
   describe('lesson 3.1: neural network computation', () => {
@@ -1615,18 +1608,6 @@ describe('chip power', () => {
       expect(r(p.pass.memoryBoundShare * 100, 1)).toBe(7.6);
     });
 
-    it('has challenge a: the fewest tokens for compute-bound feed-forward multiplies', () => {
-      const t = feedForwardThreshold();
-      expect(t.exact).toBe(326);
-      expect(t.tokens).toBe(332);
-      expect(feedForwardSolved(t.k, 0)).toBe(true);
-      expect(feedForwardSolved(t.k, 100)).toBe(true);
-      expect(feedForwardSolved(t.k + 1, 0)).toBe(false);
-      expect(feedForwardSolved(t.k - 1, 0)).toBe(false);
-      expect(feedForwardSolved(EXPLORER_DEFAULTS.tk, EXPLORER_DEFAULTS.ek)).toBe(false);
-      expect(forwardPass(M8, 326, 326, GPU).ops.find((o) => o.id === 'up')!.bound).toBe('compute');
-    });
-
     it('has challenge b: attention longer than the feed-forward block', () => {
       expect(attentionSolved(EXPLORER_DEFAULTS.tk, EXPLORER_DEFAULTS.ek)).toBe(false);
       expect(attentionSolved(0, EARLIER_MAX_K)).toBe(false);
@@ -1653,15 +1634,6 @@ describe('chip power', () => {
       expect(kvBytesPerToken(MODELS['70B'])).toBe(327680);
       expect(memoryUse('8B', 16, 4096).fits).toBe(true);
       expect(r(paramCount(M8) / 1e9, 2)).toBe(8.03);
-    });
-
-    it('quotes the training numbers', () => {
-      const train = trainFlopsPerToken('8B', 4096);
-      const fwd = 2 * matmulParams(M8) + 4 * M8.layers * 4096 * M8.d;
-      expect(r(train / 1e9, 1)).toBe(48.2);
-      expect(r(fwd / 1e9, 1)).toBe(17.2);
-      expect(r((train * 1e12) / (GPU.bf16Tflops * 1e12) / 86400)).toBe(565);
-      expect(16 * matmulParams(M8)).toBeGreaterThan(100e9);
     });
 
     it('walks the highlight in proportion to time', () => {
@@ -1936,27 +1908,30 @@ describe('chip power', () => {
   });
 
   describe('lesson 3.4: the challenge', () => {
-    it('has its best rate at 9 a second, with max batch 150–156 only', () => {
+    it('has its best rate at 7.5 a second in this sample, with any max batch from 91 up', () => {
       const ok: number[] = [];
       for (let c = 1; c <= CAP_MAX; c++) if (meetsLimits(runLab(BEST_RATE, c))) ok.push(c);
+      expect(BEST_RATE).toBe(7.5);
+      expect(BEST_CAPS).toEqual([91, CAP_MAX]);
       expect(ok[0]).toBe(BEST_CAPS[0]);
       expect(ok[ok.length - 1]).toBe(BEST_CAPS[1]);
       expect(ok.length).toBe(BEST_CAPS[1] - BEST_CAPS[0] + 1);
       for (let c = 1; c <= CAP_MAX; c++) expect(meetsLimits(runLab(BEST_RATE + RATE_STEP, c))).toBe(false);
       for (let c = 8; c <= CAP_MAX; c += 8) expect(meetsLimits(runLab(BEST_RATE + 2 * RATE_STEP, c))).toBe(false);
-      expect(runLab(BEST_RATE, 128).overloaded).toBe(true);
-      expect(Math.round(runLab(BEST_RATE, 256).tpot * 1e3)).toBe(51);
+      expect(runLab(BEST_RATE, 84).overloaded).toBe(true);
+      expect(runLab(BEST_RATE + RATE_STEP, 256).tpot).toBeGreaterThan(0.04);
     }, 30000);
 
-    it('is solved at the best rate or one step below, and not at the start', () => {
+    it('is solved only at the best rate, and not at the start', () => {
       expect(rateSolved(L3_4_LAB_DEFAULTS.rate, L3_4_LAB_DEFAULTS.cap)).toBe(false);
-      expect(rateSolved(9, 152)).toBe(true);
-      expect(rateSolved(8.5, 200)).toBe(true);
+      expect(rateSolved(7.5, 128)).toBe(true);
+      expect(rateSolved(7, 200)).toBe(false);
+      expect(rateSolved(6.5, 200)).toBe(false);
       expect(rateSolved(8, 200)).toBe(false);
-      expect(rateSolved(9, 256)).toBe(false);
-      const best = runLab(9, 152);
-      expect(Math.round(best.throughput)).toBe(2647);
-      expect(Math.round(best.utilization * 100)).toBe(43);
+      expect(rateSolved(7.5, 84)).toBe(false);
+      const best = runLab(7.5, 256);
+      expect(Math.round(best.throughput)).toBe(2235);
+      expect(Math.round(best.utilization * 100)).toBe(36);
     });
   });
 
@@ -1971,10 +1946,10 @@ describe('chip power', () => {
     });
 
     it('costs more GPU-hours per million tokens to keep the promises', () => {
-      const gh = (t: number) => r2((SERVE.tp * 1e6) / (t * 3600));
-      expect(gh(runLab(9, 152).throughput)).toBe(0.42);
-      expect(gh(runLab(RATE_MAX, CAP_MAX).throughput)).toBe(0.36);
-      expect(gh(servingPoint(SERVE, CAP_AVERAGE, INPUT, OUTPUT).tokensPerS)).toBe(0.32);
+      const gh = (t: number) => Math.round(((SERVE.tp * 1e6) / (t * 3600)) * 1000) / 1000;
+      expect(gh(runLab(7.5, 256).throughput)).toBe(0.497);
+      expect(gh(runLab(RATE_MAX, CAP_MAX).throughput)).toBe(0.356);
+      expect(gh(servingPoint(SERVE, CAP_AVERAGE, INPUT, OUTPUT).tokensPerS)).toBe(0.325);
     });
   });
 }
@@ -2087,9 +2062,9 @@ describe('chip power', () => {
       expect(chipCooling('B', 30, 'air').throttled).toBe(false);
       expect(chipCooling('B', 35, 'air').speed).toBeCloseTo(0.954, 3);
       expect(chipCooling('B', 35, 'liquid').throttled).toBe(false);
-      expect(annualPue(SITES.bayport, { cooling: 'air', supplyC: 24 }).pue).toBeCloseTo(1.305, 3);
+      expect(annualPue(SITES.marston, { cooling: 'air', supplyC: 24 }).pue).toBeCloseTo(1.305, 3);
       expect(annualPue(SITES.techpark, { cooling: 'air', supplyC: 24 }).pue).toBeCloseTo(1.271, 3);
-      expect(annualPue(SITES.northfield, { cooling: 'liquid', supplyC: 35 }).pue).toBeCloseTo(1.113, 3);
+      expect(annualPue(SITES.fernhill, { cooling: 'liquid', supplyC: 35 }).pue).toBeCloseTo(1.113, 3);
       expect(outdoorTempC(SITES.techpark, 205 * 24 + 15)).toBeCloseTo(29, 2);
     });
   });
@@ -2156,13 +2131,14 @@ describe('chip power', () => {
       expect(rackConfig({ gpu: 'B', cooling: 'liquid', servers: 8, feedKW: 100 }).rackKW).toBeCloseTo(91.3, 1);
     });
 
-    it('solves challenge b only with liquid cooling on a 60 kW feed or more', () => {
+    it('solves challenge b only with liquid cooling on the smallest feed that fits, 60 kW', () => {
       expect(hallSolved(HALL_DEFAULTS)).toBe(false);
-      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 60, gpus: 1024 })).toBe(true);
-      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 100, gpus: 1024 })).toBe(true);
-      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 40, gpus: 1024 })).toBe(false);
-      for (const feed of [40, 60, 100, 140]) expect(hallSolved({ gpu: 'A', cooling: 'air', feed, gpus: 1024 })).toBe(false);
-      expect(hallSolved({ gpu: 'B', cooling: 'liquid', feed: 140, gpus: 1024 })).toBe(false);
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 60 })).toBe(true);
+      // 100 kW fits too, but it is not the smallest feed.
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 100 })).toBe(false);
+      expect(hallSolved({ gpu: 'A', cooling: 'liquid', feed: 40 })).toBe(false);
+      for (const feed of [40, 60, 100, 140]) expect(hallSolved({ gpu: 'A', cooling: 'air', feed })).toBe(false);
+      expect(hallSolved({ gpu: 'B', cooling: 'liquid', feed: 140 })).toBe(false);
     });
 
     it('quotes the engine’s numbers', () => {
@@ -2216,13 +2192,13 @@ describe('chip power', () => {
       for (const redundancy of ['N', 'N+1', '2N'] as const) for (let psu = 90; psu <= 97; psu += 0.5) expect(lossSolved({ ...CHAIN_DEFAULTS, redundancy, psu })).toBe(false);
     });
 
-    it('finds the largest IT load Bayport can connect', () => {
+    it('finds the largest IT load Marston can connect', () => {
       expect(gridSolved(SITE_DEFAULTS)).toBe(false);
-      expect(gridSolved({ site: 'bayport', itMW: 14.5, redundancy: 'N+1' })).toBe(true);
-      expect(gridSolved({ site: 'bayport', itMW: 14, redundancy: 'N+1' })).toBe(false);
-      expect(gridSolved({ site: 'bayport', itMW: 15, redundancy: 'N+1' })).toBe(false);
-      expect(gridSolved({ site: 'bayport', itMW: 14.5, redundancy: '2N' })).toBe(false);
-      expect(siteRun({ site: 'bayport', itMW: 15, redundancy: 'N+1' }).over).toBe(true);
+      expect(gridSolved({ site: 'marston', itMW: 14.5, redundancy: 'N+1' })).toBe(true);
+      expect(gridSolved({ site: 'marston', itMW: 14, redundancy: 'N+1' })).toBe(false);
+      expect(gridSolved({ site: 'marston', itMW: 15, redundancy: 'N+1' })).toBe(false);
+      expect(gridSolved({ site: 'marston', itMW: 14.5, redundancy: '2N' })).toBe(false);
+      expect(siteRun({ site: 'marston', itMW: 15, redundancy: 'N+1' }).over).toBe(true);
     });
   });
 
@@ -2267,11 +2243,11 @@ describe('chip power', () => {
       expect(n.tpPeak).toBeCloseTo(27.3, 1);
       expect(siteRun(SITE_DEFAULTS).coolingMW).toBeCloseTo(6.35, 2);
       expect(n.tpGenerators).toEqual({ units: 11, installedMW: 33 });
-      expect(siteRun({ ...SITE_DEFAULTS, site: 'bayport' }).peakMW).toBeCloseTo(27.5, 1);
+      expect(siteRun({ ...SITE_DEFAULTS, site: 'marston' }).peakMW).toBeCloseTo(27.5, 1);
       expect(n.bayMax).toBe(14.5);
       expect(n.tpMax).toBe(43.5);
       expect(n.nfMax).toBe(153);
-      expect(largestItFor('bayport', 'N+1')).toBe(14.5);
+      expect(largestItFor('marston', 'N+1')).toBe(14.5);
       expect(roundTo(n.bayGpus, 100)).toBe(12100);
       expect(roundTo(n.tpGpus, 100)).toBe(36400);
       expect(roundTo(n.nfGpus, 100)).toBe(128200);
@@ -2339,25 +2315,25 @@ describe('chip power', () => {
       expect(tpl.pue).toBeCloseTo(1.143, 3);
       expect(Math.round(tpl.freeShare * 100)).toBe(67);
       expect((tpl.coolingPerKW * HALL_MW * 8760) / 1000).toBeCloseTo(14.7, 1);
-      expect(sitePue('bayport', air24).pue).toBeCloseTo(1.305, 3);
-      expect(sitePue('bayport', air24).freeShare).toBe(0);
-      expect(sitePue('northfield', air24).pue).toBeCloseTo(1.205, 3);
-      expect(Math.round(sitePue('northfield', air24).freeShare * 100)).toBe(49);
-      expect(sitePue('bayport', liq(35)).pue).toBeCloseTo(1.173, 3);
-      expect(sitePue('northfield', liq(35)).pue).toBeCloseTo(1.113, 3);
-      expect(sitePue('bayport', liq(40)).pue).toBeCloseTo(1.147, 3);
-      expect(sitePue('bayport', liq(39)).pue).toBeCloseTo(1.151, 3);
-      expect(sitePue('bayport', liq(45)).pue).toBeCloseTo(1.134, 3);
-      expect(SITES.bayport.gridMW / sitePue('bayport', air24).peakPue).toBeCloseTo(14.5, 1);
-      expect(SITES.bayport.gridMW / sitePue('bayport', liq(40)).peakPue).toBeCloseTo(16.2, 1);
+      expect(sitePue('marston', air24).pue).toBeCloseTo(1.305, 3);
+      expect(sitePue('marston', air24).freeShare).toBe(0);
+      expect(sitePue('fernhill', air24).pue).toBeCloseTo(1.205, 3);
+      expect(Math.round(sitePue('fernhill', air24).freeShare * 100)).toBe(49);
+      expect(sitePue('marston', liq(35)).pue).toBeCloseTo(1.173, 3);
+      expect(sitePue('fernhill', liq(35)).pue).toBeCloseTo(1.113, 3);
+      expect(sitePue('marston', liq(40)).pue).toBeCloseTo(1.147, 3);
+      expect(sitePue('marston', liq(39)).pue).toBeCloseTo(1.151, 3);
+      expect(sitePue('marston', liq(45)).pue).toBeCloseTo(1.134, 3);
+      expect(SITES.marston.gridMW / sitePue('marston', air24).peakPue).toBeCloseTo(14.5, 1);
+      expect(SITES.marston.gridMW / sitePue('marston', liq(40)).peakPue).toBeCloseTo(16.2, 1);
     });
 
-    it('solves the Bayport challenge only with 40 °C water', () => {
-      expect(bayportSolved(BUILDING_DEFAULTS)).toBe(false);
-      expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'liquid', waterC: 40 })).toBe(true);
-      for (const w of [25, 30, 35, 39, 41, 45]) expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'liquid', waterC: w })).toBe(false);
-      for (const a of [18, 24, 27]) expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'bayport', cooling: 'air', airC: a })).toBe(false);
-      expect(bayportSolved({ ...BUILDING_DEFAULTS, site: 'techpark', cooling: 'liquid', waterC: 40 })).toBe(false);
+    it('solves the Marston challenge only with 40 °C water', () => {
+      expect(marstonSolved(BUILDING_DEFAULTS)).toBe(false);
+      expect(marstonSolved({ ...BUILDING_DEFAULTS, site: 'marston', cooling: 'liquid', waterC: 40 })).toBe(true);
+      for (const w of [25, 30, 35, 39, 41, 45]) expect(marstonSolved({ ...BUILDING_DEFAULTS, site: 'marston', cooling: 'liquid', waterC: w })).toBe(false);
+      for (const a of [18, 24, 27]) expect(marstonSolved({ ...BUILDING_DEFAULTS, site: 'marston', cooling: 'air', airC: a })).toBe(false);
+      expect(marstonSolved({ ...BUILDING_DEFAULTS, site: 'techpark', cooling: 'liquid', waterC: 40 })).toBe(false);
     });
 
     it('keeps chillers between three and nine units of heat per unit of electricity at these sites', () => {
@@ -2496,14 +2472,14 @@ describe('chip power', () => {
     });
 
     it('quotes the sites, electricity and accelerators correctly', () => {
-      expect(cents(N.bayport)).toBe(2.36);
+      expect(cents(N.marston)).toBe(2.36);
       expect(cents(N.north)).toBe(2.16);
-      expect(Math.round(N.bayportShare * 1000) / 10).toBe(6.9);
+      expect(Math.round(N.marstonShare * 1000) / 10).toBe(6.9);
       expect(Math.round(N.northShare * 1000) / 10).toBe(2.6);
       expect(cents(N.power2x)).toBe(2.31);
       expect(cents(N.powerFree)).toBe(2.13);
       expect(about(N.perMwTechpark)).toBe('610');
-      expect(about(N.bayportGpus)).toBe('12,000');
+      expect(about(N.marstonGpus)).toBe('12,000');
       expect(cents(N.bLiquid)).toBe(3.39);
       expect(Math.round((N.bLiquid / N.basePerUsed - 1) * 100)).toBe(53);
     });
@@ -2526,7 +2502,7 @@ describe('chip power', () => {
 
     it('solves the first challenge only with capital terms, at 70%', () => {
       expect(underTargetSolved(PLANNER_DEFAULTS)).toBe(false);
-      for (const site of ['bayport', 'techpark', 'northfield'] as const)
+      for (const site of ['marston', 'techpark', 'fernhill'] as const)
         for (const cooling of ['air', 'liquid'] as const) expect(underTargetSolved({ ...PLANNER_DEFAULTS, site, cooling })).toBe(false);
       expect(underTargetSolved({ ...PLANNER_DEFAULTS, util: 80 })).toBe(false);
       expect(underTargetSolved({ ...PLANNER_DEFAULTS, life: 7 })).toBe(true);
@@ -2614,14 +2590,14 @@ describe('chip power', () => {
     it('prices GPUs near users above remote ones when latency binds', () => {
       expect(productivity('chat70', 'B')).toBeCloseTo(36 / 14, 6);
       const c = clearMarket(MARKET_BUYERS, MARKET_SUPPLY);
-      expect(c.prices.bayport.A).toBeCloseTo(3.5, 2);
-      expect(c.prices.northfield.A).toBeCloseTo(1.52, 2);
-      expect(c.prices.bayport.B).toBeCloseTo(9.0, 2);
+      expect(c.prices.marston.A).toBeCloseTo(3.5, 2);
+      expect(c.prices.fernhill.A).toBeCloseTo(1.52, 2);
+      expect(c.prices.marston.B).toBeCloseTo(9.0, 2);
       const loose = clearMarket(
         MARKET_BUYERS.map((b) => (b.id === 'chat70' || b.id === 'frontier400' ? { ...b, maxRttMs: 100 } : b)),
         MARKET_SUPPLY,
       );
-      expect(loose.prices.bayport.A).toBeCloseTo(loose.prices.northfield.A, 2);
+      expect(loose.prices.marston.A).toBeCloseTo(loose.prices.fernhill.A, 2);
     });
   });
 }
@@ -2641,12 +2617,14 @@ describe('chip power', () => {
       expect(cheapestIn('frontier400', 'gpuHour', list)).toBe('A');
     });
 
-    it('solves challenge a only by lowering the L-class to about $0.51', () => {
+    it('solves challenge a only at the highest L-class price that is cheapest for batch, $0.50', () => {
+      const batch = { ...L5_1_EXPLORER_DEFAULTS, work: 'batch8' as const, unit: 'work' as const };
       expect(lParityForBatch()).toBeCloseTo(0.515, 3);
       expect(cheapLSolved(L5_1_EXPLORER_DEFAULTS)).toBe(false);
-      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.5 })).toBe(true);
-      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.55 })).toBe(false);
-      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.5, pB: 6 })).toBe(false);
+      expect(cheapLSolved({ ...batch, pL: 0.5 })).toBe(true);
+      expect(cheapLSolved({ ...batch, pL: 0.55 })).toBe(false);
+      expect(cheapLSolved({ ...batch, pL: 0.45 })).toBe(false);
+      expect(cheapLSolved({ ...L5_1_EXPLORER_DEFAULTS, pL: 0.5 })).toBe(false);
     });
 
     it('solves challenge b at an A-class price of $2.55', () => {
@@ -2814,10 +2792,12 @@ describe('chip power', () => {
     it('quotes the starting month correctly', () => {
       expect(Math.round(L5_3_N.peak)).toBe(5675);
       expect(Math.round(L5_3_N.average)).toBe(3389);
-      expect(L5_3_N.utilization).toBeCloseTo(0.677, 3);
-      expect(L5_3_N.unmetShare).toBeCloseTo(0.00046, 5);
-      expect(L5_3_N.shortHours).toBe(4);
-      expect(Math.round(L5_3_N.shortWorst)).toBe(675);
+      // The starting fleet of 6,000 serves everything; the shortfall is quoted at the 4,900-GPU answer.
+      expect(L5_3_N.startUtil).toBeCloseTo(0.565, 3);
+      expect(L5_3_N.startUnmet).toBe(0);
+      expect(L5_3_N.flexUnmet).toBeCloseTo(0.00065, 5);
+      expect(L5_3_N.flexShortHours).toBe(5);
+      expect(Math.round(L5_3_N.flexShortWorst)).toBe(775);
       expect(SHORT_IN_OVERLAP).toBe(true);
       expect(Math.round(L5_3_N.trough)).toBe(1046);
       expect(L5_3_N.trainingMax).toBe(3072);
@@ -2827,7 +2807,7 @@ describe('chip power', () => {
       expect(Math.round(L5_3_N.shares.batch * 100)).toBe(15);
       expect(Math.round(L5_3_N.shares.dev * 100)).toBe(2);
       expect(Math.round(L5_3_N.noTrainingPeak)).toBe(2964);
-      expect(L5_3_N.noTrainingUtil).toBeCloseTo(0.457, 3);
+      expect(L5_3_N.noTrainingUtil).toBeCloseTo(0.467, 3);
       const s = segmentHours(runDemand(DEMO_DEFAULTS));
       expect(s.total).toBeCloseTo(s.hours.inference + s.hours.training + s.hours.batch + s.hours.dev, 6);
       expect(hourLabel(17)).toBe('Mon 17:00, week 1');
@@ -2835,8 +2815,8 @@ describe('chip power', () => {
 
     it('shows flexible batch saving GPUs', () => {
       expect(Math.round(L5_3_N.fixedPeak)).toBe(6552);
-      expect(L5_3_N.fixedUnmet).toBeCloseTo(0.0218, 4);
-      expect(L5_3_N.fixedShortHours).toBe(117);
+      expect(L5_3_N.fixedUnmet).toBeCloseTo(0.0271, 4);
+      expect(L5_3_N.fixedShortHours).toBe(125);
       expect(L5_3_N.flexFleet).toBe(4900);
       expect(L5_3_N.fixedFleet).toBe(6100);
       expect(L5_3_N.fullFleet).toBe(5700);
@@ -3004,7 +2984,7 @@ describe('chip power', () => {
   const r2 = (x: number) => Math.round(x * 100) / 100;
 
   describe('lesson 5.5 challenges', () => {
-    it('a: the tightest latency limit with one price everywhere is Northfield’s 40 ms', () => {
+    it('a: the tightest latency limit with one price everywhere is Fernhill’s 40 ms', () => {
       expect(latencySolved(MARKET_DEFAULTS)).toBe(false);
       expect(latencySolved({ ...MARKET_DEFAULTS, lat: 40 })).toBe(true);
       expect(latencySolved({ ...MARKET_DEFAULTS, lat: 39 })).toBe(false);
@@ -3037,7 +3017,7 @@ describe('chip power', () => {
       expect(Math.round(L5_5_N.chatShortInB)).toBe(106);
       expect(L5_5_N.batchWanted).toBe(20000);
       expect(Math.round(L5_5_N.batchServed)).toBe(8932);
-      expect(L5_5_N.supply.bayport.A + L5_5_N.supply.techpark.A).toBe(11000);
+      expect(L5_5_N.supply.marston.A + L5_5_N.supply.techpark.A).toBe(11000);
     });
 
     it('loosening and tightening the latency limit', () => {
@@ -3049,7 +3029,7 @@ describe('chip power', () => {
       expect(r2(L5_5_N.runCostTechA)).toBe(0.08);
       expect(r2(L5_5_N.tightBayB / L5_5_N.tightBayA)).toBe(3);
       const open = marketAt({ ...MARKET_DEFAULTS, lat: 40 });
-      expect(open.allocation.some((a) => a.buyer === 'chat70' && a.site === 'northfield')).toBe(true);
+      expect(open.allocation.some((a) => a.buyer === 'chat70' && a.site === 'fernhill')).toBe(true);
       expect(marketAt({ ...MARKET_DEFAULTS, lat: 5 }).idle.techpark.A).toBeGreaterThan(0);
     });
 
@@ -3064,9 +3044,9 @@ describe('chip power', () => {
 
     it('who sets each price', () => {
       const c = marketAt(MARKET_DEFAULTS);
-      expect(priceSetter(c, MARKET_DEFAULTS, 'bayport', 'B')).toEqual({ kind: 'buyer', id: 'chat70' });
-      expect(priceSetter(c, MARKET_DEFAULTS, 'northfield', 'B')).toEqual({ kind: 'buyer', id: 'batch8' });
-      expect(priceSetter(c, MARKET_DEFAULTS, 'northfield', 'A')).toEqual({ kind: 'chain' });
+      expect(priceSetter(c, MARKET_DEFAULTS, 'marston', 'B')).toEqual({ kind: 'buyer', id: 'chat70' });
+      expect(priceSetter(c, MARKET_DEFAULTS, 'fernhill', 'B')).toEqual({ kind: 'buyer', id: 'batch8' });
+      expect(priceSetter(c, MARKET_DEFAULTS, 'fernhill', 'A')).toEqual({ kind: 'chain' });
       expect(r2(worth('chat70', 'B'))).toBe(9);
       expect(r2(worth('frontier400', 'B'))).toBe(13.5);
       expect(r2(worth('code8', 'B'))).toBe(11.88);
@@ -3112,7 +3092,7 @@ describe('chip power', () => {
 
   describe('moving work between regions', () => {
     const job = { gpuHours: 100000, gpus: 512, dataInTB: 50, dataOutTB: 5, maxRttMs: Infinity, deadlineHours: 400 };
-    const route = { from: 'techpark' as const, to: 'northfield' as const, priceFrom: 3.5, priceTo: 1.52, linkGbps: 100, egressPerGB: 0.05 };
+    const route = { from: 'techpark' as const, to: 'fernhill' as const, priceFrom: 3.5, priceTo: 1.52, linkGbps: 100, egressPerGB: 0.05 };
     it('saves when the price gap beats the cost of moving data', () => {
       expect(transferHours(50, 100)).toBeCloseTo(1.389, 3);
       const m = moveJob(job, route);
@@ -3130,7 +3110,7 @@ describe('chip power', () => {
       expect(gpuGridKW()).toBeCloseTo(1.476, 3);
       const be = breakEvenPrices({ value: 2.4, capShare: 0.7, capAbove: 0, pauseAbove: 0 });
       expect(be.pause).toBeCloseTo(2323, 0);
-      expect(be.cap).toBeCloseTo(970, 0);
+      expect(be.cap).toBeCloseTo(1316, 0);
       const bt = backtest({ value: 0.95, capShare: 0.7, capAbove: 384, pauseAbove: 920 });
       expect(bt.gain).toBeGreaterThan(0);
       expect(bt.hoursPaused).toBe(6);
@@ -3140,7 +3120,7 @@ describe('chip power', () => {
       const full = powerCapPlan(20, 1);
       const capped = powerCapPlan(20, 0.7);
       expect(full.gpus).toBe(13549);
-      expect(capped.work / full.work).toBeCloseTo(1.173, 3);
+      expect(capped.work / full.work).toBeCloseTo(1.054, 3);
     });
   });
 
@@ -3163,26 +3143,21 @@ describe('chip power', () => {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
   describe('lesson 6.1: yield management', () => {
-    it('earns most by ranking GPUs by value (challenge a)', () => {
-      const best = bestMargin();
-      expect(best.policy).toBe('best-value');
-      expect(r0(best.margin)).toBe(934144);
-      expect(bestSolved(YIELD_DEFAULTS)).toBe(false);
-      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value' })).toBe(true);
-      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', protect: 150 })).toBe(true);
-      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', protect: 300 })).toBe(false);
-      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'first-come', protect: 300 })).toBe(false);
-      // The physics must be the reference: a different power price doesn't count.
-      expect(bestSolved({ ...YIELD_DEFAULTS, policy: 'best-value', power: 20 })).toBe(false);
+    it('earns most with the best allocation; batch is the workload that waits (challenge a)', () => {
+      expect(r0(runYield({ ...YIELD_DEFAULTS, policy: 'best' }).margin)).toBe(938580);
+      expect(loserSolved(YIELD_DEFAULTS)).toBe(false);
+      expect(loserSolved({ ...YIELD_DEFAULTS, policy: 'best', guessA: 'batch8' })).toBe(true);
+      expect(loserSolved({ ...YIELD_DEFAULTS, policy: 'best', guessA: 'tune8' })).toBe(false);
+      expect(loserSolved({ ...YIELD_DEFAULTS, guessA: 'batch8' })).toBe(false);
     });
 
     it('finds the L-class’s chat threshold (challenge b)', () => {
       expect(chatThresholdMs()).toBe(38);
       expect(lServesChat(37)).toBe(false);
       expect(lServesChat(38)).toBe(true);
-      expect(L6_1_thresholdSolved({ chatMs: 38 })).toBe(true);
-      expect(L6_1_thresholdSolved(YIELD_DEFAULTS)).toBe(false);
-      expect(L6_1_thresholdSolved({ chatMs: 39 })).toBe(false);
+      expect(L6_1_chatMarginSolved({ ...YIELD_DEFAULTS, chatMs: 38, guessB: 'lower' })).toBe(true);
+      expect(L6_1_chatMarginSolved({ ...YIELD_DEFAULTS, guessB: 'lower' })).toBe(false);
+      expect(L6_1_chatMarginSolved({ ...YIELD_DEFAULTS, chatMs: 38, guessB: 'raise' })).toBe(false);
       // One request alone on eight L-class cards: a little over 37 ms a token.
       const tpot = servingPoint({ model: '70B', gpu: 'L', tp: 8, precision: 'bf16' }, 1, 1000, 300).tpot;
       expect(tpot).toBeGreaterThan(0.037);
@@ -3195,20 +3170,22 @@ describe('chip power', () => {
       expect(r0(L6_1_N.fcMargin)).toBe(876210);
       expect(r0(L6_1_N.fcBatchOnB)).toBe(16908);
       expect(pct(1 - L6_1_N.fcServed.frontier400)).toBe('17%');
-      expect(r0(L6_1_N.bvMargin)).toBe(934144);
-      expect(r0(L6_1_N.bvGain)).toBe(57934);
-      expect(r0(L6_1_N.bvGainShare * 100, 1)).toBe(6.6);
-      expect(L6_1_N.bvCodeOnB).toBe(1);
-      expect(L6_1_N.bvFrontierOnB).toBe(1);
-      expect(r0(L6_1_N.bvServed.code8, 6)).toBe(1);
-      expect(r0(L6_1_N.bvServed.frontier400, 6)).toBe(1);
-      expect(r0(L6_1_N.bvServed.chat70, 6)).toBe(1);
-      expect(r0(L6_1_N.bvServed.batch8 * 100)).toBe(82);
+      expect(r0(L6_1_N.bestMargin)).toBe(938580);
+      expect(r0(L6_1_N.bestGain)).toBe(62370);
+      expect(r0(L6_1_N.bestGainShare * 100, 1)).toBe(7.1);
+      expect(L6_1_N.bestCodeOnA).toBe(1);
+      expect(L6_1_N.bestFrontierOnB).toBe(1);
+      expect(r0(L6_1_N.bestServed.code8, 6)).toBe(1);
+      expect(r0(L6_1_N.bestServed.frontier400, 6)).toBe(1);
+      expect(r0(L6_1_N.bestServed.chat70, 6)).toBe(1);
+      expect(r0(L6_1_N.bestServed.batch8 * 100)).toBe(85);
       expect(r0(L6_1_N.fcUtil.A * 100)).toBe(87);
-      expect(r0(L6_1_N.bvUtil.A * 100)).toBe(86);
+      expect(r0(L6_1_N.bestUtil.A * 100)).toBe(85);
+      expect(r0(L6_1_N.bidMargin)).toBe(934144);
+      expect(r0(L6_1_N.bidShort)).toBe(4436);
       expect(r0(L6_1_N.fc300Margin)).toBe(885919);
       expect(r0(L6_1_N.fc300Recovered)).toBe(9709);
-      expect(r0(L6_1_N.fc300RecoveredShare * 100)).toBe(17);
+      expect(r0(L6_1_N.fc300RecoveredShare * 100)).toBe(16);
       expect(r0(L6_1_N.fc300BatchOnA)).toBe(95660);
       expect(pct(1 - L6_1_N.fc300Served.frontier400)).toBe('15%');
     });
@@ -3236,17 +3213,17 @@ describe('chip power', () => {
       expect(r0(L6_1_N.bf16WeightsGB)).toBe(812);
       expect(r0(L6_1_N.bf16UsableAGB)).toBe(576);
       expect(r0(L6_1_N.prodFrontierBBf16, 2)).toBe(1.46);
-      expect(r0(L6_1_N.bf16BvMargin)).toBe(808252);
-      expect(r0(L6_1_N.bf16Loss)).toBe(125892);
-      expect(r0(L6_1_N.bf16FrontierServed * 100)).toBe(24);
-      expect(r0(L6_1_N.bf16Gain)).toBe(27920);
-      expect(r0(L6_1_N.chat20BvMargin)).toBe(911499);
+      expect(r0(L6_1_N.bf16BestMargin)).toBe(894563);
+      expect(r0(L6_1_N.bf16Loss)).toBe(44018);
+      expect(r0(L6_1_N.bf16FrontierServed * 100)).toBe(95);
+      expect(r0(L6_1_N.bf16BidMargin)).toBe(808252);
+      expect(r0(L6_1_N.chat20BestMargin)).toBe(923078);
       expect(r0(L6_1_N.prodChatLAt, 3)).toBe(0.018);
       expect(r0(L6_1_N.fcBeforeThreshold)).toBe(876612);
       expect(r0(L6_1_N.fcAtThreshold)).toBe(875481);
-      expect(r0(L6_1_N.bvPower)).toBe(19622);
-      expect(r0(L6_1_N.power400Cost)).toBe(142703);
-      expect(r0(L6_1_N.power400Margin)).toBe(811063);
+      expect(r0(L6_1_N.bestPower)).toBe(19487);
+      expect(r0(L6_1_N.power400Cost)).toBe(141726);
+      expect(r0(L6_1_N.power400Margin)).toBe(816342);
     });
 
     it('does most batch work at night under best value', () => {
@@ -3313,13 +3290,17 @@ describe('chip power', () => {
       const b = bestOf(PLAN_DEFAULTS.growth, PLAN_DEFAULTS.sigma);
       expect(b.mean.reserved).toBe(260);
       expect(b.p95.reserved).toBe(300);
+      // Solved by predicting “right of 260” and then finding the bottom of the bad-year curve.
+      const right = { ...PLAN_DEFAULTS, guess: 'right' as const };
       expect(badYearSolved(PLAN_DEFAULTS)).toBe(false);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 300 })).toBe(true);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 290 })).toBe(true);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 310 })).toBe(true);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 260 })).toBe(false);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 330 })).toBe(false);
-      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 300, sigma: 6 })).toBe(false);
+      expect(badYearSolved({ ...right, reserved: 300 })).toBe(true);
+      expect(badYearSolved({ ...right, reserved: 290 })).toBe(true);
+      expect(badYearSolved({ ...right, reserved: 310 })).toBe(true);
+      expect(badYearSolved({ ...right, reserved: 260 })).toBe(false);
+      expect(badYearSolved({ ...right, reserved: 330 })).toBe(false);
+      expect(badYearSolved({ ...right, reserved: 300, sigma: 6 })).toBe(false);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, reserved: 300 })).toBe(false);
+      expect(badYearSolved({ ...PLAN_DEFAULTS, guess: 'left', reserved: 300 })).toBe(false);
       // The sweep the chart draws agrees with the plan the readouts show.
       const pt = sweepOf(PLAN_DEFAULTS.growth, PLAN_DEFAULTS.sigma).find((x) => x.reserved === 300)!;
       expect(pt.p95 / planOf({ ...PLAN_DEFAULTS, reserved: 300 }).p95).toBeCloseTo(1, 9);
@@ -3331,14 +3312,13 @@ describe('chip power', () => {
       const t = JOBS.train70;
       expect(spotBeatsReserved(t, 0.75, 10)).toBe(true);
       expect(spotBeatsReserved(t, 0.8, 10)).toBe(false);
-      expect(wideSolved({ job: 'train70', reclaims: 0.75, restart: 10 })).toBe(true);
-      expect(wideSolved({ job: 'train70', reclaims: 0.7, restart: 10 })).toBe(false);
-      expect(wideSolved({ job: 'train70', reclaims: 0.8, restart: 10 })).toBe(false);
-      expect(wideSolved({ job: 'train70', reclaims: 0.75, restart: 9 })).toBe(false);
-      expect(wideSolved({ job: 'tune8', reclaims: 0.75, restart: 10 })).toBe(false);
+      expect(wideSolved({ reclaims: 0.75, restart: 10 })).toBe(true);
+      expect(wideSolved({ reclaims: 0.7, restart: 10 })).toBe(false);
+      expect(wideSolved({ reclaims: 0.8, restart: 10 })).toBe(false);
+      expect(wideSolved({ reclaims: 0.75, restart: 9 })).toBe(false);
       expect(wideSolved(L6_2_SPOT_DEFAULTS)).toBe(false);
       // Floating-point slider values still land on the grid.
-      expect(wideSolved({ job: 'train70', reclaims: 0.7500000000000001, restart: 10 })).toBe(true);
+      expect(wideSolved({ reclaims: 0.7500000000000001, restart: 10 })).toBe(true);
     });
   });
 
@@ -3346,23 +3326,23 @@ describe('chip power', () => {
     it('the plan', () => {
       expect(r0(L6_2_N.averageHourNow)).toBe(262);
       expect(r0(L6_2_N.finalPeak)).toBe(614);
-      expect(r0(L6_2_N.spotYear)).toBe(902280);
-      expect(r0(L6_2_N.allOnDemandMean / 1e6, 2)).toBe(7.79);
-      expect(r0(L6_2_N.allOnDemandP95 / 1e6, 2)).toBe(8.92);
+      // The plan covers the firm need only (the interruptible work is the spot section's).
+      expect(r0(L6_2_N.allOnDemandMean / 1e6, 2)).toBe(6.88);
+      expect(r0(L6_2_N.allOnDemandP95 / 1e6, 2)).toBe(8.02);
       expect(L6_2_N.bestMeanReserved).toBe(260);
-      expect(r0(L6_2_N.bestMeanMean / 1e6, 2)).toBe(6.31);
-      expect(r0(L6_2_N.bestMeanP95 / 1e6, 2)).toBe(7.3);
+      expect(r0(L6_2_N.bestMeanMean / 1e6, 2)).toBe(5.41);
+      expect(r0(L6_2_N.bestMeanP95 / 1e6, 2)).toBe(6.4);
       expect(L6_2_N.bestP95Reserved).toBe(300);
-      expect(r0(L6_2_N.bestP95P95 / 1e6, 2)).toBe(7.25);
-      expect(r0(L6_2_N.bestP95Mean / 1e6, 2)).toBe(6.36);
+      expect(r0(L6_2_N.bestP95P95 / 1e6, 2)).toBe(6.34);
+      expect(r0(L6_2_N.bestP95Mean / 1e6, 2)).toBe(5.46);
       expect(r0(L6_2_N.bestP95Mean - L6_2_N.bestMeanMean)).toBe(48603);
       expect(r0(L6_2_N.bestMeanP95 - L6_2_N.bestP95P95)).toBe(54838);
       expect(r0(L6_2_N.bestP95Idle * 100)).toBe(11);
       expect(r0(L6_2_N.bestMeanIdle * 100)).toBe(6);
-      expect(r0(L6_2_N.r500Mean / 1e6, 2)).toBe(8.02);
+      expect(r0(L6_2_N.r500Mean / 1e6, 2)).toBe(7.12);
       expect(L6_2_N.r500Mean).toBeGreaterThan(L6_2_N.allOnDemandMean);
-      expect(r0(L6_2_N.maxCheapest / 1e6, 2)).toBe(12.12);
-      expect(r0(L6_2_N.maxDearest / 1e6, 2)).toBe(12.22);
+      expect(r0(L6_2_N.maxCheapest / 1e6, 2)).toBe(11.21);
+      expect(r0(L6_2_N.maxDearest / 1e6, 2)).toBe(11.32);
       expect(L6_2_N.calmBest).toBe(270);
       expect(L6_2_N.calmBestP95).toBe(270);
       expect(L6_2_N.wildBestMean).toBe(250);
@@ -3378,16 +3358,9 @@ describe('chip power', () => {
       expect(L6_2_N.tuneInterval).toBe(17);
       expect(r0(L6_2_N.tuneCross, 1)).toBe(18.5);
       expect([L6_2_N.tuneGpus, L6_2_N.tuneServers, L6_2_N.trainGpus, L6_2_N.trainServers]).toEqual([10, 2, 304, 38]);
-      expect(r0(L6_2_N.trainHalf, 2)).toBe(1.35);
-      expect(r0(L6_2_N.trainOne, 2)).toBe(1.89);
       expect(r0(L6_2_N.trainTwo, 2)).toBe(7.04);
-      expect(r0(L6_2_N.trainTwoUseful * 100)).toBe(14);
-      expect(L6_2_N.trainFour).toBe(Infinity);
       expect(r0(L6_2_N.trainCross, 2)).toBe(0.77);
       expect(r0(L6_2_N.trainCross * L6_2_N.trainServers)).toBe(29);
-      expect(r0(L6_2_N.trainHalfRestart2, 2)).toBe(1.17);
-      expect(r0(L6_2_N.trainHalfRestart20, 2)).toBe(1.66);
-      expect(r0(L6_2_N.trainHalfRestart30, 2)).toBe(2.15);
       expect(r0(L6_2_N.reservedYear / 1e6, 2)).toBe(1.4);
       expect(r0(L6_2_N.tuneSpotYear / 1e6, 2)).toBe(0.9);
       expect(bestSpot(JOBS.tune8, 2, 10).interruptionsPerDay).toBe(4);
@@ -3401,7 +3374,7 @@ describe('chip power', () => {
   const r0 = (x: number, d = 0) => Math.round(x * 10 ** d) / 10 ** d;
 
   describe('regionSchedule.ts: a day of jobs on one link', () => {
-    const route = { from: 'techpark' as const, to: 'northfield' as const, priceFrom: 3.5, priceTo: 1.5158, linkGbps: 100, egressPerGB: 0.05 };
+    const route = { from: 'techpark' as const, to: 'fernhill' as const, priceFrom: 3.5, priceTo: 1.5158, linkGbps: 100, egressPerGB: 0.05 };
     it('moves the jobs that pay, keeps the rest home with a reason', () => {
       const d = scheduleDay(DAY_JOBS, route);
       const why = Object.fromEntries(d.rows.map((r) => [r.job.id, r.why]));
@@ -3440,7 +3413,7 @@ describe('chip power', () => {
       expect(r0(L6_3_N.near, 2)).toBe(3.5);
       expect(r0(L6_3_N.far, 2)).toBe(1.52);
       expect(r0(L6_3_N.gap, 2)).toBe(1.98);
-      expect(r0(marketAtLatency(39).prices.northfield.A, 2)).toBe(1.52);
+      expect(r0(marketAtLatency(39).prices.fernhill.A, 2)).toBe(1.52);
       expect(r0(L6_3_N.open, 2)).toBe(1.4);
       expect(r0(L6_3_N.openFar, 2)).toBe(1.4);
       expect(routeOf(JOB_DEFAULTS).linkGbps).toBe(100);
@@ -3461,17 +3434,21 @@ describe('chip power', () => {
       expect(r0(L6_3_N.preOpenSaving)).toBe(-2750);
     });
 
-    it('challenge a: 3,000 TB is the largest dataset on the slider that still saves', () => {
+    it('challenge a: at 10¢ per GB, 1,000 TB is the largest dataset on the slider that still saves', () => {
+      // At the starting 5¢ it would be 3,000 TB; doubling the fee halves the break-even.
       expect(L6_3_N.preBestTB).toBe(3000);
-      expect(L6_3_N.preNextTB).toBe(5000);
-      expect(L6_3_N.preBestSaving).toBeGreaterThan(0);
-      expect(L6_3_N.preNextSaving).toBeLessThan(0);
-      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000) })).toBe(true);
+      expect(L6_3_N.feeBestTB).toBe(1000);
+      expect(L6_3_N.feeNextTB).toBe(2000);
+      expect(L6_3_N.feeBestSaving).toBeGreaterThan(0);
+      expect(L6_3_N.feeNextSaving).toBeLessThan(0);
+      const at10 = { ...JOB_DEFAULTS, egress: 10 };
+      expect(largestSolved({ ...at10, data: DATA_TB.indexOf(1000) })).toBe(true);
       expect(largestSolved(JOB_DEFAULTS)).toBe(false);
-      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(2000) })).toBe(false);
-      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(5000) })).toBe(false);
-      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000), egress: 6 })).toBe(false);
-      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000), lat: 40 })).toBe(false);
+      expect(largestSolved(at10)).toBe(false);
+      expect(largestSolved({ ...at10, data: DATA_TB.indexOf(500) })).toBe(false);
+      expect(largestSolved({ ...at10, data: DATA_TB.indexOf(2000) })).toBe(false);
+      expect(largestSolved({ ...JOB_DEFAULTS, data: DATA_TB.indexOf(3000) })).toBe(false);
+      expect(largestSolved({ ...at10, data: DATA_TB.indexOf(1000), lat: 40 })).toBe(false);
     });
 
     it('quotes the services and the overnight batch', () => {
@@ -3514,7 +3491,7 @@ describe('chip power', () => {
       expect(L6_3_slowestSolved({ ...DAY_DEFAULTS, link: LINKS.indexOf(40) })).toBe(true);
       expect(L6_3_slowestSolved(DAY_DEFAULTS)).toBe(false);
       expect(L6_3_slowestSolved({ ...DAY_DEFAULTS, link: LINKS.indexOf(25) })).toBe(false);
-      // With the assistants able to reach Northfield nothing is worth moving, so nothing solves it.
+      // With the assistants able to reach Fernhill nothing is worth moving, so nothing solves it.
       expect(worthMoving({ ...DAY_DEFAULTS, lat: 40 })).toEqual([]);
       expect(LINKS.some((_, i) => L6_3_slowestSolved({ ...DAY_DEFAULTS, lat: 40, link: i }))).toBe(false);
     });
@@ -3543,19 +3520,19 @@ describe('chip power', () => {
       expect(r(L6_4_N.spikeEnergy, 2)).toBe(3.22);
       expect(r(-L6_4_N.spikeNetFull, 2)).toBe(0.82);
       expect(r(-L6_4_N.spikeNetPause, 2)).toBe(0.96);
-      expect(r(-L6_4_N.spikeNetCap, 2)).toBe(0.28);
-      expect(r(L6_4_N.cap240)).toBe(970);
+      expect(r(-L6_4_N.spikeNetCap, 2)).toBe(0.53);
+      expect(r(L6_4_N.cap240)).toBe(1316);
       expect(r(L6_4_N.pause240)).toBe(2323);
-      expect(r(L6_4_N.cap095)).toBe(384);
+      expect(r(L6_4_N.cap095)).toBe(521);
       expect(r(L6_4_N.pause095)).toBe(919);
     });
 
     it('backtests the policy over the history', () => {
-      expect([L6_4_N.run240.hoursCapped, L6_4_N.run240.hoursPaused, r(L6_4_N.run240.gain, 2), r(L6_4_N.run240.energyFlat, 2)]).toEqual([6, 0, 3.21, 233.43]);
-      expect([L6_4_N.run095.hoursCapped, L6_4_N.run095.hoursPaused, r(L6_4_N.run095.gain, 2)]).toEqual([4, 6, 8]);
-      expect(r(L6_4_N.run095.energyFlat - L6_4_N.run095.energyPolicy, 2)).toBe(14.38);
-      expect(r(L6_4_N.run025.gain, 2)).toBe(14.74);
-      expect(r(L6_4_N.run095.gain * 1000)).toBe(8003);
+      expect([L6_4_N.run240.hoursCapped, L6_4_N.run240.hoursPaused, r(L6_4_N.run240.gain, 2), r(L6_4_N.run240.energyFlat, 2)]).toEqual([6, 0, 1.69, 233.43]);
+      expect([L6_4_N.run095.hoursCapped, L6_4_N.run095.hoursPaused, r(L6_4_N.run095.gain, 2)]).toEqual([1, 6, 7.84]);
+      expect(r(L6_4_N.run095.energyFlat - L6_4_N.run095.energyPolicy, 2)).toBe(13.71);
+      expect(r(L6_4_N.run025.gain, 2)).toBe(13.95);
+      expect(r(L6_4_N.run095.gain * 1000)).toBe(7844);
       expect(r(L6_4_N.fleet120Cost / 1e6, 1)).toBe(4.5);
     });
 
@@ -3563,9 +3540,9 @@ describe('chip power', () => {
       const d = L6_4_N.dayDefault;
       expect(d.hours.filter((h) => h.mode === 'capped').length).toBe(3);
       expect(d.hours.filter((h) => h.mode === 'paused').length).toBe(0);
-      expect(r(d.energyFlat - d.energyPolicy, 2)).toBe(2.89);
+      expect(r(d.energyFlat - d.energyPolicy, 2)).toBe(2.13);
       expect(r(d.workLost, 2)).toBe(1.29);
-      expect(r(d.gain, 2)).toBe(1.6);
+      expect(r(d.gain, 2)).toBe(0.84);
       expect(dayRun(L6_4_DAY_DEFAULTS).gain).toBeCloseTo(d.gain, 9);
     });
 
@@ -3593,19 +3570,17 @@ describe('chip power', () => {
     it('quotes the hall under a fixed connection', () => {
       expect(L6_4_N.full.running).toBe(13549);
       expect(L6_4_N.full.dark).toBe(6451);
-      expect(L6_4_N.at70.running).toBe(19356);
-      expect(r(L6_4_N.at70.work)).toBe(15893);
-      expect(r((L6_4_N.at70.work / L6_4_N.full.work - 1) * 100, 1)).toBe(17.3);
-      expect(L6_4_N.bestCap).toBe(68);
-      expect(L6_4_N.atBest.running).toBe(19926);
-      expect(r(L6_4_N.atBest.work)).toBe(16094);
-      expect(r((L6_4_N.atBest.work / L6_4_N.full.work - 1) * 100, 1)).toBe(18.8);
+      expect(L6_4_N.at70.running).toBe(17395);
+      expect(r(L6_4_N.at70.work)).toBe(14283);
+      expect(r((L6_4_N.at70.work / L6_4_N.full.work - 1) * 100, 1)).toBe(5.4);
+      expect(L6_4_N.bestCap).toBe(57);
+      expect(L6_4_N.atBest.running).toBe(19834);
+      expect(r(L6_4_N.atBest.work)).toBe(14471);
+      expect(r((L6_4_N.atBest.work / L6_4_N.full.work - 1) * 100, 1)).toBe(6.8);
       expect(L6_4_N.allFitCap).toBe(L6_4_N.bestCap - 1);
-      expect(r(L6_4_N.atAllFit.work)).toBe(16018);
-      expect(L6_4_N.extraGpus).toBe(5807);
-      expect(r(L6_4_N.extraWork)).toBe(2344);
-      expect(r(L6_4_N.extraCost / 1e6, 1)).toBe(79);
-      expect(r(L6_4_N.costPerExtraWork)).toBe(33708);
+      expect(r(L6_4_N.atAllFit.work)).toBe(14442);
+      expect(L6_4_N.extraGpus).toBe(3846);
+      expect(r(L6_4_N.extraWork)).toBe(734);
       expect(r(L6_4_N.gpuYear)).toBe(13607);
     });
 
@@ -3615,13 +3590,13 @@ describe('chip power', () => {
     });
 
     it('solves challenge b only at the best cap', () => {
-      expect(bestCap(CHALLENGE_OWNED)).toBe(68);
+      expect(bestCap(CHALLENGE_OWNED)).toBe(57);
       expect(capSolved(L6_4_HALL_DEFAULTS)).toBe(false);
-      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68 })).toBe(true);
-      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 67 })).toBe(false);
-      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 69 })).toBe(false);
-      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68, linear: true })).toBe(false);
-      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 68, owned: 21000 })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 57 })).toBe(true);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 56 })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 58 })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 57, linear: true })).toBe(false);
+      expect(capSolved({ ...L6_4_HALL_DEFAULTS, cap: 57, owned: 21000 })).toBe(false);
     });
 
     it('backtests fast enough at the slowest settings', () => {
@@ -3660,20 +3635,22 @@ describe('chip power', () => {
   });
 
   describe('lesson 6.5: the contract desk', () => {
-    it('starts from the engine’s defaults, with the drop from 2.67 A-class GPUs’ work', () => {
+    it('starts from the engine’s defaults, with the drop from chat’s 2.69 A-class GPUs’ work', () => {
       const p = L6_5_paramsOf(DESK_DEFAULTS);
       expect(p.contractPrice).toBe(1.3);
       expect(p.bArrival).toBe(5);
-      expect(p.bDrop).toBeCloseTo(0.2509, 4);
+      expect(DESK_DEFAULTS.ratio).toBe(2.69);
+      expect(p.bDrop).toBeCloseTo(0.2565, 4);
     });
 
-    it('challenge a: the highest unhedged price with at most 10% chance of loss', () => {
+    it('challenge a: the highest unhedged price at which the 5th-percentile path doesn’t lose', () => {
       expect(priceSolved(DESK_DEFAULTS)).toBe(false);
-      expect(L6_5_N.priceAnswer).toBe(1.21);
-      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.21 })).toBe(true);
-      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.2 })).toBe(false);
-      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.22 })).toBe(false);
-      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.21, hedge: 5 })).toBe(false);
+      expect(L6_5_N.priceAnswer).toBe(1.15);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.15 })).toBe(true);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.14 })).toBe(false);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.16 })).toBe(false);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.15, hedge: 5 })).toBe(false);
+      expect(priceSolved({ ...DESK_DEFAULTS, price: 1.15, resale: 81 })).toBe(false);
     });
 
     it('challenge b: the smallest forward sale that keeps the 5th percentile from losing', () => {
@@ -3682,6 +3659,10 @@ describe('chip power', () => {
       expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 60 })).toBe(true);
       expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 55 })).toBe(false);
       expect(hedgeSolved({ ...DESK_DEFAULTS, hedge: 65 })).toBe(false);
+      // The question fixes the prices and the world: other routes to a safe 5th percentile don't count.
+      expect(hedgeSolved({ ...DESK_DEFAULTS, price: 1.15 })).toBe(false);
+      expect(hedgeSolved({ ...DESK_DEFAULTS, resale: 95 })).toBe(false);
+      expect(hedgeSolved({ ...DESK_DEFAULTS, price: 1.21, hedge: 25 })).toBe(false);
     });
 
     it('challenge c: the worst path that still makes money', () => {
@@ -3700,37 +3681,39 @@ describe('chip power', () => {
       expect(L6_5_N.quarters).toBe(12);
       expect(L6_5_N.startPrice).toBe(2.4);
       expect(L6_5_N.bPrice).toBe(4.8);
-      expect(Math.round(L6_5_N.aAfter * 100) / 100).toBe(1.8);
-      expect(p(L6_5_N.drop, 0)).toBe(25);
-      expect(m(L6_5_N.mean)).toBe(1.84);
-      expect(m(L6_5_N.worst)).toBe(-3.55);
-      expect(m(L6_5_N.best)).toBe(11.71);
-      expect(m(L6_5_N.p5)).toBe(-1.62);
-      expect(p(L6_5_N.probLoss)).toBe(21.8);
+      expect(Math.round(L6_5_N.aAfter * 100) / 100).toBe(1.78);
+      expect(p(L6_5_N.drop, 0)).toBe(26);
+      expect(m(L6_5_N.mean)).toBe(1.79);
+      expect(m(L6_5_N.sd)).toBe(2.3);
+      expect(p(L6_5_N.withinSd, 0)).toBe(68);
+      expect(m(L6_5_N.worst)).toBe(-3.6);
+      expect(m(L6_5_N.best)).toBe(11.57);
+      expect(m(L6_5_N.p5)).toBe(-1.68);
+      expect(p(L6_5_N.probLoss)).toBe(22.6);
       expect(Math.round(L6_5_N.breakEven * 100) / 100).toBe(1.68);
       expect(L6_5_N.medianBelowQuarter).toBe(7);
-      expect(Math.round(L6_5_N.medianLast * 100) / 100).toBe(1.4);
-      expect(p(L6_5_N.early)).toBe(44.1);
+      expect(Math.round(L6_5_N.medianLast * 100) / 100).toBe(1.39);
+      expect(p(L6_5_N.early)).toBe(45.8);
       expect(p(L6_5_N.never)).toBe(3.2);
-      expect(p(L6_5_N.ratio3Drop, 0)).toBe(33);
-      expect(p(L6_5_N.ratio3Loss)).toBe(33.5);
+      expect(L6_5_N.ratioFrontier).toBe(3.13);
+      expect(p(L6_5_N.ratioFrontierDrop, 0)).toBe(36);
+      expect(p(L6_5_N.ratioFrontierLoss)).toBe(38.9);
       expect(Math.round(L6_5_N.ratioArith * 100) / 100).toBe(2.28);
       expect(p(L6_5_N.arithLoss)).toBe(9.3);
-      expect(p(L6_5_N.fail10Loss)).toBe(40.7);
-      expect(p(L6_5_N.resale70Loss)).toBe(59.3);
-      expect(p(L6_5_N.resale90Loss)).toBe(4.6);
-      expect(p(L6_5_N.priceAnswerLoss)).toBe(9.4);
-      expect(p(L6_5_N.priceNextLoss)).toBe(10.3);
-      expect(m(L6_5_N.priceAnswerMean)).toBe(2.88);
+      expect(p(L6_5_N.fail10Loss)).toBe(41.8);
+      expect(p(L6_5_N.resale70Loss)).toBe(60.3);
+      expect(p(L6_5_N.resale90Loss)).toBe(5);
+      expect(p(L6_5_N.priceAnswerLoss)).toBe(4.1);
+      expect(m(L6_5_N.priceAnswerMean)).toBe(3.52);
       expect(Math.round(L6_5_N.ownerCost * 100) / 100).toBe(1.55);
-      expect(m(L6_5_N.hedge50Mean)).toBe(1.54);
-      expect(p(L6_5_N.hedge50Loss)).toBe(7.6);
+      expect(m(L6_5_N.hedge50Mean)).toBe(1.51);
+      expect(p(L6_5_N.hedge50Loss)).toBe(8.2);
       expect(m(L6_5_N.hedge100)).toBe(1.23);
-      expect(m(L6_5_N.hedgeAnswerP5)).toBe(0.09);
-      expect(m(L6_5_N.hedgeBelowP5)).toBe(-0.05);
-      expect(m(L6_5_N.hedgeAnswerMean)).toBe(1.48);
-      expect(p(L6_5_N.hedgeAnswerLoss)).toBe(3.5);
-      expect(L6_5_N.firstProfitable).toBe(219);
+      expect(m(L6_5_N.hedgeAnswerP5)).toBe(0.07);
+      expect(m(L6_5_N.hedgeBelowP5)).toBe(-0.08);
+      expect(m(L6_5_N.hedgeAnswerMean)).toBe(1.45);
+      expect(p(L6_5_N.hedgeAnswerLoss)).toBe(3.9);
+      expect(L6_5_N.firstProfitable).toBe(227);
     });
   });
 }
@@ -3748,7 +3731,7 @@ describe('chip power', () => {
       const hot = evaluateFleet({ ...FLEET_DEFAULT, supplyC: 35 });
       expect(hot.speed.B).toBeLessThan(1);
       expect(hot.checks.find((c) => c.id === 'cooling')!.ok).toBe(false);
-      expect(evaluateFleet({ ...FLEET_DEFAULT, site: 'bayport', gpus: { L: 0, A: 12000, B: 4000 } }).checks.find((c) => c.id === 'grid')!.ok).toBe(false);
+      expect(evaluateFleet({ ...FLEET_DEFAULT, site: 'marston', gpus: { L: 0, A: 12000, B: 4000 } }).checks.find((c) => c.id === 'grid')!.ok).toBe(false);
     });
 
     it('prices customers’ work per unit and sells to those who value it', () => {
@@ -3756,7 +3739,7 @@ describe('chip power', () => {
       const off = offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT, fleetProductivity(FLEET_DEFAULT));
       expect(off.every((o) => o.gpu === 'B')).toBe(true);
       expect(off[0].price).toBeCloseTo(4.8 / 2.69, 1);
-      const far = offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, { ...FLEET_DEFAULT, site: 'northfield' });
+      const far = offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, { ...FLEET_DEFAULT, site: 'fernhill' });
       expect(far.find((o) => o.customer.workload === 'code8')!.share).toBe(0);
     });
 
@@ -3827,32 +3810,32 @@ describe('chip power', () => {
       expect(Math.round(L7_1_N.big48Training * 100)).toBe(86);
     });
 
-    it('solves the challenge only at Bayport, within 60 racks, with the chat capacity and every check', () => {
-      expect(L7_1_bayportSolved(FLEET_DEFAULT)).toBe(false);
-      expect(L7_1_bayportSolved({ ...FLEET_DEFAULT, site: 'bayport' })).toBe(false); // passes, but too little chat
-      expect(L7_1_bayportSolved(EXAMPLE_ANSWER)).toBe(true);
+    it('solves the challenge only at Marston, within 60 racks, with the chat capacity and every check', () => {
+      expect(L7_1_marstonSolved(FLEET_DEFAULT)).toBe(false);
+      expect(L7_1_marstonSolved({ ...FLEET_DEFAULT, site: 'marston' })).toBe(false); // passes, but too little chat
+      expect(L7_1_marstonSolved(EXAMPLE_ANSWER)).toBe(true);
       expect(L7_1_N.exOk).toBe(true);
       expect(L7_1_N.exRacks).toBe(28);
       expect(Math.round(L7_1_N.exChat)).toBe(6032);
       expect(L7_1_N.exGridPeak).toBeCloseTo(4.0, 1);
       expect(L7_1_N.exAirRacks).toBe(94);
       // The same answer at Tech Park, or with too few ports for 2,240 GPUs, fails.
-      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, site: 'techpark' })).toBe(false);
-      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, downPorts: 34 })).toBe(false);
+      expect(L7_1_marstonSolved({ ...EXAMPLE_ANSWER, site: 'techpark' })).toBe(false);
+      expect(L7_1_marstonSolved({ ...EXAMPLE_ANSWER, downPorts: 34 })).toBe(false);
       // Air can't do it: three B-class servers per rack.
       expect(rackConfig({ gpu: 'B', cooling: 'air', servers: 0, feedKW: 140 }).maxServers).toBe(3);
       expect(rackConfig({ gpu: 'B', cooling: 'liquid', servers: 0, feedKW: 140 }).maxServers).toBe(10);
       for (const feed of [17, 30, 40, 60, 100, 140]) {
-        const airMax = { ...FLEET_DEFAULT, site: 'bayport' as const, feedKW: feed, gpus: { L: 0, A: 0, B: 1440 }, downPorts: 63 };
+        const airMax = { ...FLEET_DEFAULT, site: 'marston' as const, feedKW: feed, gpus: { L: 0, A: 0, B: 1440 }, downPorts: 63 };
         expect(capacityOf(airMax).chat70).toBeLessThan(CHAT_TARGET);
       }
       // Liquid A-class alone can't either: 60 racks × 80 GPUs.
-      const allA = { ...FLEET_DEFAULT, site: 'bayport' as const, cooling: 'liquid' as const, feedKW: 140, gpus: { L: 0, A: BAYPORT_RACKS * 80, B: 0 }, downPorts: 63 };
-      expect(evalOf(allA).racks).toBe(BAYPORT_RACKS);
+      const allA = { ...FLEET_DEFAULT, site: 'marston' as const, cooling: 'liquid' as const, feedKW: 140, gpus: { L: 0, A: MARSTON_RACKS * 80, B: 0 }, downPorts: 63 };
+      expect(evalOf(allA).racks).toBe(MARSTON_RACKS);
       expect(capacityOf(allA).chat70).toBeLessThan(CHAT_TARGET);
       // A smaller liquid feed still works with more racks.
-      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, feedKW: 60 })).toBe(true);
-      expect(L7_1_bayportSolved({ ...EXAMPLE_ANSWER, gpus: { L: 0, A: 0, B: 2176 } })).toBe(false);
+      expect(L7_1_marstonSolved({ ...EXAMPLE_ANSWER, feedKW: 60 })).toBe(true);
+      expect(L7_1_marstonSolved({ ...EXAMPLE_ANSWER, gpus: { L: 0, A: 0, B: 2176 } })).toBe(false);
     });
 
     it('quotes the capacities and the customers’ demand', () => {
@@ -3864,8 +3847,8 @@ describe('chip power', () => {
       expect(L7_1_N.chatByB / L7_1_N.gpus.A).toBeCloseTo(2 / 3, 1);
       expect(L7_1_N.demandAvgTotal).toBe(1800);
       expect(customerDemand(CUSTOMERS_DEFAULT, 'peak').chat70).toBe(600);
-      // At Northfield, code completion is out of reach (40 ms against 20).
-      const nf = { ...FLEET_DEFAULT, site: 'northfield' as const };
+      // At Fernhill, code completion is out of reach (40 ms against 20).
+      const nf = { ...FLEET_DEFAULT, site: 'fernhill' as const };
       expect(evalOf(nf).checks.every((c) => c.ok)).toBe(true);
     });
   });
@@ -3940,7 +3923,7 @@ describe('chip power', () => {
       const d = defaultCloud();
       const empty = weekView({ ...d, fleet: { ...d.fleet, gpus: { L: 0, A: 0, B: 0 } } });
       expect(empty.servedShare).toBe(1);
-      const far = weekView({ ...d, fleet: { ...d.fleet, site: 'northfield' } });
+      const far = weekView({ ...d, fleet: { ...d.fleet, site: 'fernhill' } });
       expect(far.ctx.off.find((o) => o.customer.workload === 'code8')!.reason).toMatch(/too far/);
     });
   });
@@ -4021,7 +4004,7 @@ describe('chip power', () => {
       const empty = { ...START, fleet: { ...START.fleet, gpus: { L: 0, A: 0, B: 0 } } };
       expect(Number.isFinite(weekOf(empty).profit)).toBe(true);
       expect(customersLost(empty)).toEqual([]);
-      const far = { ...START, fleet: { ...START.fleet, site: 'northfield' as const } };
+      const far = { ...START, fleet: { ...START.fleet, site: 'fernhill' as const } };
       expect(customersLost(far)).toEqual([]);
       expect(weekOf({ ...START, prices: PRICEBOOK_DEFAULT }).profit).toBeCloseTo(L7_3_N.listProfit, 6);
     });
@@ -4119,7 +4102,8 @@ describe('chip power', () => {
 
     it('one hour at a time', () => {
       expect([r0(N.peak.demand), r0(N.peak.owned), r0(N.peak.unmet)]).toEqual([2093, 1730, 363]);
-      expect([r0(N.night.demand), r0(N.night.unmet), r0(N.night.idleA)]).toEqual([1366, 162, 458]);
+      // The night example is 03:00, the chat startup's quietest hour.
+      expect([r0(N.night.demand), r0(N.night.unmet), r0(N.night.idleA)]).toEqual([1353, 161, 469]);
       // The peak is the busiest hour of the week.
       const week = runWeek(START, plan('tiered'), NORMAL);
       const busiest = week.hours.reduce((m, h, i) => (h.demand > week.hours[m].demand ? i : m), 0);
@@ -4188,19 +4172,21 @@ describe('chip power', () => {
       expect(offers(CUSTOMERS_DEFAULT, PRICEBOOK_DEFAULT, FLEET_DEFAULT).every((o) => o.gpu === 'B')).toBe(true);
     });
 
-    it('solves challenge a only with a buildable design worth $10M against the starting world and customers', () => {
+    it('solves challenge a only with a buildable design worth $18M against the starting world and customers', () => {
       const W = WORLD_STATE_DEFAULTS;
+      const priced = { ...RIGHT_SIZED, prices: { ...RIGHT_SIZED.prices, reserved: { ...RIGHT_SIZED.prices.reserved, B: 5 }, onDemand: { ...RIGHT_SIZED.prices.onDemand, B: 6 } } };
       expect(isStartingWorld(W)).toBe(true);
-      expect(targetSolved(RIGHT_SIZED, W)).toBe(true);
+      expect(targetSolved(priced, W)).toBe(true);
+      expect(targetSolved(RIGHT_SIZED, W)).toBe(false);
       expect(targetSolved(defaultCloud(), W)).toBe(false);
-      expect(targetSolved(RIGHT_SIZED, { ...W, energy: 1.25 })).toBe(false);
+      expect(targetSolved(priced, { ...W, energy: 1.25 })).toBe(false);
       const greedy = { ...RIGHT_SIZED, customers: RIGHT_SIZED.customers.map((c) => ({ ...c, size: c.size * 2 })) };
       expect(customersAreStarting(greedy.customers)).toBe(false);
       expect(targetSolved(greedy, W)).toBe(false);
       const unbuildable = { ...RIGHT_SIZED, fleet: { ...RIGHT_SIZED.fleet, feedKW: 8 } };
       expect(evaluateFleet(unbuildable.fleet).ok).toBe(false);
       expect(targetSolved(unbuildable, W)).toBe(false);
-      expect(TARGET).toBe(10e6);
+      expect(TARGET).toBe(18e6);
     });
 
     it('solves challenge b with a saved strategy that beats the start on both counts', () => {

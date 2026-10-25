@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Caption, Challenge, Eq, FigRef, Figure, H2, K, Legend, LessonPage, Op, P, Readouts, Slider, fmt, lessonHref, niceDomain, niceTicks, pct, usd, useScenario } from '../../../framework';
-import { CURVE_DEFAULTS, convenienceYield, fullCarry, futuresCurve } from '../../../engines/oil/market';
+import { CURVE_DEFAULTS, WORLD, convenienceYield, fullCarry, futuresCurve, inventoryPrice } from '../../../engines/oil/market';
+import { NETWORK_DEFAULTS, hubPricesFast } from '../../../engines/oil/network';
 import { VESSELS } from '../../../model/oil/logistics';
 import { XYChart } from '../shared/charts';
 
@@ -13,6 +14,27 @@ const DAYS_PER_MONTH = 30.4;
 /** The hub fill above which, in the engine, onshore tanks are effectively full. */
 export const TANK_TOPS = 0.97;
 
+/**
+ * Kessler's spot price, as the course history sets it: from the crude network (Lessons 4.4 and
+ * 5.2), with Northport at the reference price and room on the Kessler–Corran line. The hub's fill
+ * shapes the curve but doesn't move spot.
+ */
+export const NETWORK_PRICES = hubPricesFast(NETWORK_DEFAULTS);
+export const KESSLER_SPOT = NETWORK_PRICES.kessler;
+
+/**
+ * How the course history links Kessler's fill to the world's stocks (src/model/oil/history.ts,
+ * `worldFill`): normal fill, plus this many points of fill for each 1 (100%) the world's stocks sit
+ * from normal, before congestion and local swings.
+ */
+export const KESSLER_NORMAL_FILL = 0.55;
+export const FILL_PER_WORLD_STOCKS = 7;
+
+/** Where the world's stocks pull Kessler's fill, 0–1, in the course history (before local swings). */
+export function fillFromWorld(worldStocks: number): number {
+  return KESSLER_NORMAL_FILL + FILL_PER_WORLD_STOCKS * (worldStocks / WORLD.normalStocks - 1);
+}
+
 export interface CurveState {
   /** Hub fill, percent. */
   fill: number;
@@ -23,24 +45,47 @@ export interface CurveState {
 
 export const CURVE_STATE_DEFAULTS: CurveState = { fill: 55, fee: CURVE_DEFAULTS.fee, rate: CURVE_DEFAULTS.rate * 100 };
 export const FILL_STEP = 1;
+/** Challenge a's dearer storage fee, $/bbl-month (the financing rate stays at its default). */
+export const CHALLENGE_FEE = 0.7;
 
-function curveOf(st: CurveState): number[] {
-  return futuresCurve({ fill: st.fill / 100, fee: st.fee, rate: st.rate / 100 });
+/** The futures curve at Kessler: spot from the network, the spreads from the hub's fill. */
+export function curveOf(st: CurveState): number[] {
+  return futuresCurve({ fill: st.fill / 100, spot: KESSLER_SPOT, fee: st.fee, rate: st.rate / 100 });
 }
 
-/** The front spread, M2 − M1, $/bbl. */
+/** The front spread, M2 − M1, $/bbl (positive in contango, negative in backwardation). */
 export function frontSpread(st: CurveState): number {
   const c = curveOf(st);
   return c[1] - c[0];
 }
 
+/** The front spread as displayed, rounded to the cent. */
+function frontCents(st: CurveState): number {
+  return Math.round(frontSpread(st) * 100) / 100;
+}
+
 /**
- * Challenge a: at the default fee and rate, the emptiest hub (on the 1% grid) whose front spread
- * is in contango (M2 − M1 ≥ 0) — the point where backwardation gives way.
+ * The emptiest hub (on the 1% grid) whose front spread, to the cent as displayed, has not tipped into
+ * backwardation (M2 − M1 ≥ $0.00) — the point where backwardation gives way, at a fee and rate.
+ */
+export function flatFill(fee: number, rate: number = CURVE_STATE_DEFAULTS.rate): number {
+  for (let fill = 5; fill <= 100; fill += FILL_STEP) if (frontCents({ fill, fee, rate }) >= 0 && frontCents({ fill: fill - FILL_STEP, fee, rate }) < 0) return fill;
+  return NaN;
+}
+
+/** Challenge a's setting is in place: the dearer fee, with the financing rate at its default. */
+export function turnReady(st: CurveState): boolean {
+  return Math.abs(st.fee - CHALLENGE_FEE) < 1e-9 && st.rate === CURVE_STATE_DEFAULTS.rate;
+}
+
+/**
+ * Challenge a: with storage dearer ($0.70 a barrel-month), the emptiest hub on the 1% grid whose
+ * front spread has not tipped into backwardation. The reader predicts the direction (dearer carry
+ * needs a larger convenience yield, so emptier tanks) from the prose's flat point at the default fee.
  */
 export function turnSolved(st: CurveState): boolean {
-  if (st.fee !== CURVE_STATE_DEFAULTS.fee || st.rate !== CURVE_STATE_DEFAULTS.rate) return false;
-  return frontSpread(st) >= 0 && frontSpread({ ...st, fill: st.fill - FILL_STEP }) < 0;
+  if (!turnReady(st)) return false;
+  return frontCents(st) >= 0 && frontCents({ ...st, fill: st.fill - FILL_STEP }) < 0;
 }
 
 export interface TankState {
@@ -55,22 +100,32 @@ export const TANK_FILL_STEP = 0.5;
 
 /** Front spread and the onshore full carry at a fill, with a cost of storage at sea. */
 export function tankTops(st: TankState): { spread: number; carry: number; spot: number } {
-  const c = futuresCurve({ fill: st.fill / 100, floatingCost: st.floating, months: 2 });
+  const c = futuresCurve({ fill: st.fill / 100, spot: KESSLER_SPOT, floatingCost: st.floating, months: 2 });
   return { spread: c[1] - c[0], carry: fullCarry(c[0]), spot: c[0] };
-}
-
-/** Challenge b: the lowest fill (on the 0.5% grid) at which the front spread pays more than onshore storage costs. */
-export function tankTopsSolved(st: TankState): boolean {
-  const over = (fill: number) => {
-    const t = tankTops({ ...st, fill });
-    return t.spread > t.carry + 1e-9;
-  };
-  return over(st.fill) && !over(st.fill - TANK_FILL_STEP);
 }
 
 /** A VLCC's all-in cost per day implied by a cost of storage per barrel-month. */
 export function impliedDayRate(perBblMonth: number): number {
   return (perBblMonth * VESSELS.vlcc.cargo) / DAYS_PER_MONTH;
+}
+
+/** The cost of storing a barrel for a month on a VLCC that costs `perDay` dollars a day, all in. */
+export function perBarrelMonth(perDay: number): number {
+  return (perDay * DAYS_PER_MONTH) / VESSELS.vlcc.cargo;
+}
+
+/** Challenge b's VLCC rate in a rush for floating storage, $ a day, all in. */
+export const RUSH_DAY_RATE = 100000;
+/** How close the cost-at-sea slider must sit to the converted rate: the nearest 5-cent steps either side. */
+export const SEA_COST_TOLERANCE = 0.035;
+
+/**
+ * Challenge b: with VLCCs at $100,000 a day, the reader converts that to a cost per barrel-month
+ * ($1.52), predicts the front spread with the tanks completely full, and checks it: the cost at sea
+ * set to the nearest step ($1.50 or $1.55) with Kessler 100% full.
+ */
+export function tankTopsSolved(st: TankState): boolean {
+  return st.fill >= 100 - 1e-9 && Math.abs(st.floating - perBarrelMonth(RUSH_DAY_RATE)) <= SEA_COST_TOLERANCE;
 }
 
 function money(x: number, d = 2): string {
@@ -146,13 +201,22 @@ export default function Lesson() {
 
   // Reference points quoted in the prose (default fee and rate).
   const at = (fill: number) => {
-    const c = futuresCurve({ fill });
+    const c = curveOf({ ...CURVE_STATE_DEFAULTS, fill: fill * 100 });
     return { spot: c[0], m21: c[1] - c[0], m121: c[11] - c[0], carry: fullCarry(c[0]), cy: convenienceYield(fill) };
   };
   const normal = at(0.55);
   const ninety = at(0.9);
   const twenty = at(0.2);
   const thirty = at(0.3);
+  const flatAt = flatFill(CURVE_STATE_DEFAULTS.fee);
+  const flat = at(flatAt / 100);
+  // The world's stocks 5% short (Lesson 5.1): Brent, Kessler's network price, and the fill they pull Kessler toward.
+  const shortStocks = WORLD.normalStocks * 0.95;
+  const shortBrent = inventoryPrice(shortStocks);
+  const shortKessler = hubPricesFast({ ...NETWORK_DEFAULTS, northportPrice: shortBrent }).kessler;
+  const shortFill = fillFromWorld(shortStocks);
+  const shortCurve = futuresCurve({ fill: shortFill, spot: shortKessler, months: 2 });
+  const shortFront = shortCurve[1] - shortCurve[0];
 
   const s2 = useScenario<TankState>('tank-tops', TANK_DEFAULTS);
   const tt = tankTops(s2.state);
@@ -169,14 +233,8 @@ export default function Lesson() {
   const ships = s2.state.fill / 100 > TANK_TOPS ? Math.min(6, Math.ceil(((s2.state.fill / 100 - TANK_TOPS) / (1 - TANK_TOPS)) * 6)) : 0;
   const solvedB = tankTopsSolved(s2.state);
   const full = at(1);
-  const hireOnly = (VESSELS.vlcc.hire * DAYS_PER_MONTH) / VESSELS.vlcc.cargo;
-  const firstOver = useMemo(() => {
-    for (let q = 900; q <= 1000; q += 5) {
-      const t = tankTops({ fill: q / 10, floating: CURVE_DEFAULTS.floatingCost });
-      if (t.spread > t.carry + 1e-9) return q / 10;
-    }
-    return 100;
-  }, []);
+  const hireOnly = perBarrelMonth(VESSELS.vlcc.hire);
+  const allInDay = Math.round(impliedDayRate(CURVE_DEFAULTS.floatingCost) / 1000) * 1000;
 
   return (
     <LessonPage id="oil/5.4">
@@ -189,15 +247,19 @@ export default function Lesson() {
       </P>
       <P>
         Prices agreed today for delivery later are traded on exchanges as <b>futures</b>. A futures contract is a standardized promise to buy or sell a fixed quantity
-        of a specified oil, delivered at a specified place in a specified month, at a price agreed now. The New York Mercantile Exchange’s WTI contract, for example, is
-        for 1,000 barrels of light sweet crude delivered at Cushing, Oklahoma; in our world, the Kessler hub plays that part. Most traders close their positions before
-        the delivery month arrives, but anyone still holding one must deliver or take delivery of real oil, and that possibility ties the futures price to the
-        physical barrel. Line up the prices for each delivery month and you have the <K c="price">futures curve</K>. When later months are dearer than nearer ones, the
-        market is in <b>contango</b>; when they are cheaper, it is in <b>backwardation</b>.
+        of a specified oil, delivered at a specified place in a specified month, at a price agreed now — the WTI contract of{' '}
+        <a href={lessonHref('oil/5.2')}>Lesson 5.2</a>, delivered at Cushing, is one, and in our world the Kessler hub plays Cushing’s part. Most traders close their
+        positions before the delivery month arrives, but anyone still holding one must deliver or take delivery of real oil, and that possibility ties the futures price
+        to the physical barrel. Line up the prices for each delivery month and you have the <K c="price">futures curve</K>. In the words of{' '}
+        <a href={lessonHref('oil/4.3')}>Lesson 4.3</a>, the curve is in contango when later months are dearer than nearer ones, and in backwardation when they
+        are cheaper. We’ll quote the gap between two months as the later minus the
+        earlier — month 2 minus month 1 at the front of the curve — so a positive spread means contango and a negative one backwardation. Traders often quote it the
+        other way round, nearer minus later, so it pays to check the sign.
       </P>
       <P>
-        In the next demonstration, the curve runs over the next 24 delivery months for crude at Kessler, from the model’s own stocks: set how full the hub’s tanks are,
-        and what it costs to store a barrel there. The dashed line adds a full month’s cost of carry for every month; all prices are simulated:
+        In the next demonstration, the curve runs over the next 24 delivery months for crude at Kessler. Spot is held where the crude network puts it, with Brent at the
+        reference {usd(NETWORK_DEFAULTS.northportPrice)} and room on the line to the coast; the rest of the curve comes from the hub’s own stocks. Set how full the
+        hub’s tanks are, and what it costs to store a barrel there. The dashed line adds a full month’s cost of carry for every month; all prices are simulated:
       </P>
 
       <Figure name="Oil Futures Curve" scenario={s1}>
@@ -255,8 +317,13 @@ export default function Lesson() {
         Start with the tanks at their normal level, {pct(0.55)} full. Spot crude is {money(normal.spot)}, the second month {signedMoney(normal.m21)} dearer, and a year out{' '}
         {money(normal.spot + normal.m121)}: a gentle contango. Fill the tanks and the curve steepens, but only so far. At {pct(0.9)} full the second month is{' '}
         {signedMoney(ninety.m21)} over the first, close to the full cost of carrying a barrel for a month, {money(ninety.carry)}. Now drain them. At {pct(0.2)} full,
-        spot jumps to {money(twenty.spot)} and the curve tips over: the second month is {money(-twenty.m21)} cheaper than the first, and a year out{' '}
-        {money(-twenty.m121)} cheaper.
+        the curve tips over: the second month is {money(-twenty.m21)} cheaper than the first, and a year out {money(-twenty.m121)} cheaper.
+      </P>
+      <P>
+        Spot doesn’t move at all. In our model, Kessler’s spot is set not by its own tanks but by the network of <a href={lessonHref('oil/4.4')}>Lessons 4.4</a>{' '}
+        and <a href={lessonHref('oil/5.2')}>5.2</a>: Port Corran’s {money(NETWORK_PRICES.corran)} less the {money(NETWORK_DEFAULTS.pipelineTariff)} pipeline
+        tariff. If Kessler paid much more than that, shippers would keep crude at home, or bring it in, rather than send it to the coast, and the tanks would refill.
+        What the tanks set is the shape of the curve.
       </P>
 
       <H2>The theory of storage</H2>
@@ -286,24 +353,34 @@ export default function Lesson() {
         one more barrel is worth almost nothing for its own sake; when they are nearly empty, it can keep a refinery running. Economists call this the theory of storage,
         and in our model it sets each month’s spread directly: full carry minus convenience yield. At normal stocks, the convenience yield of {money(normal.cy)} takes a
         bite out of the {money(normal.carry)} of carry, leaving {signedMoney(normal.m21)}. At {pct(0.2)} full, a convenience yield of {money(twenty.cy)} swamps a carry of{' '}
-        {money(twenty.carry)}.
+        {money(twenty.carry)}. In between, the two match and the front of the curve goes flat: at {flatAt}% full, where the convenience yield has fallen to{' '}
+        {money(flat.cy)}.
       </P>
       <P>
         The curve can also bend. Stocks don’t stay low forever: high prices draw out supply and hold back demand, so traders expect the tanks to refill. At {pct(0.3)}{' '}
         full, the front of the curve is still in backwardation, {signedMoney(thirty.m21)} a month, but a year out it has turned up again, {signedMoney(thirty.m121)}{' '}
         over spot. The curve is a picture of where stocks are now and where the market expects them to go.
       </P>
+      <P>
+        Where does Kessler’s fill come from? Mostly from the world. The hub’s tanks hold a sliver of the world’s commercial stocks of{' '}
+        <a href={lessonHref('oil/5.1')}>Lesson 5.1</a>, and they rise and fall with them: in the course’s simulated history, every 1% the world’s stocks sit below
+        normal pulls Kessler about {fmt(FILL_PER_WORLD_STOCKS)} percentage points emptier. Local events add swings of their own — crude backs up in Kessler’s tanks
+        when the line to the coast is full or nearby refineries shut for maintenance. So a world 5% short of stocks, at {fmt(shortStocks)} million barrels, does two
+        things at once. It lifts Brent to {money(shortBrent)}, as Lesson 5.1 found, and Kessler’s spot with it to {money(shortKessler)}, through the network. And it
+        drains Kessler toward {pct(shortFill)} full, where the front of its curve sits {money(-shortFront)} in backwardation. A high spot price and a backwardated
+        curve usually arrive together, but by different routes: the level comes from the world through Brent, the shape from the tanks.
+      </P>
 
       <Challenge
         id="a"
-        question="With the storage fee and financing rate at their starting values, find the emptiest the Kessler tanks can be, to the nearest percent, while the front of the curve (month 2 minus month 1) is still in contango."
+        question={`Suppose storage at Kessler gets dearer: set the fee to ${money(CHALLENGE_FEE)} a barrel-month, with financing still at ${fmt(CURVE_STATE_DEFAULTS.rate)}%. Predict first: does the point where the front of the curve goes flat move to fuller tanks or emptier ones? Then find the emptiest the tanks can be, to the nearest percent, without the front (month 2 minus month 1, to the cent) tipping into backwardation.`}
         solved={solvedA}
         status={
-          st.fee !== CURVE_STATE_DEFAULTS.fee || st.rate !== CURVE_STATE_DEFAULTS.rate
-            ? 'Set the storage fee back to $0.40 and the financing rate back to 6%.'
+          !turnReady(st)
+            ? `Set the storage fee to ${money(CHALLENGE_FEE)} and the financing rate to ${fmt(CURVE_STATE_DEFAULTS.rate)}%.`
             : `At ${st.fill}% full, month 2 minus month 1 is ${signedMoney(m21)}.`
         }
-        success={`Solved: ${st.fill}% full. There, the convenience yield of ${money(cy)} just falls short of the ${money(carry)} cost of carry. One percent emptier and holding oil is worth more than storing it costs, so the market pays a premium for prompt barrels: backwardation. Traders watch the front spread as a gauge of how tight stocks are.`}
+        success={`Solved: ${st.fill}% full, emptier than the ${flatAt}% of the starting fee. Dearer storage lifts full carry to ${money(carry)}, so a barrel has to be scarcer before its convenience yield outweighs the cost of keeping it; here the convenience yield of ${money(cy)} falls just short. One percent emptier and holding oil is worth more than storing it costs, so the market pays a premium for prompt barrels: backwardation. Traders watch the front spread as a gauge of how tight stocks are.`}
       />
 
       <H2>Tank tops</H2>
@@ -311,8 +388,9 @@ export default function Lesson() {
         Full carry limits contango only while there is somewhere to put the oil. As a hub fills, the space left gets harder to use — tank bottoms can’t be pumped out,
         roofs can’t float any higher, different crudes need tanks of their own — and in our model the hub’s tanks are effectively full beyond {pct(TANK_TOPS)}. After
         that, the next barrel has to be stored somewhere dearer, and the dearest common option is a tanker anchored offshore. At the calm-market hire of{' '}
-        {usd(VESSELS.vlcc.hire)} a day from <a href={lessonHref('oil/4.2')}>Lesson 4.2</a>, a VLCC’s hire alone comes to {money(hireOnly)} per barrel per month; with
-        fuel, crew and insurance the model puts the all-in cost at {money(CURVE_DEFAULTS.floatingCost)}. In the next demonstration, fill the last few percent of the tanks
+        {usd(VESSELS.vlcc.hire)} a day from <a href={lessonHref('oil/4.2')}>Lesson 4.2</a>, a VLCC’s hire alone comes to {money(hireOnly)} per barrel per month
+        ({fmt(DAYS_PER_MONTH, 1)} days’ hire spread over its {fmt(VESSELS.vlcc.cargo / 1e6)} million barrels); with fuel and insurance the model puts the all-in cost at{' '}
+        {money(CURVE_DEFAULTS.floatingCost)}, about {usd(allInDay)} a day. In the next demonstration, fill the last few percent of the tanks
         and set the cost of storing at sea:
       </P>
 
@@ -347,8 +425,6 @@ export default function Lesson() {
           items={[
             { label: 'front spread', value: signedMoney(tt.spread), tone: 'green' },
             { label: 'full carry onshore', value: money(tt.carry) },
-            { label: <K tone="orange">storing at sea</K>, value: money(s2.state.floating), tone: 'orange' },
-            { label: 'a VLCC’s all-in cost a day', value: usd(impliedDayRate(s2.state.floating)) },
           ]}
         />
         <Slider
@@ -381,27 +457,23 @@ export default function Lesson() {
       </P>
       <P>
         The real market showed how far this can go. In the spring of 2020, as the pandemic shut down travel, demand for oil collapsed far faster than production could be
-        cut. Stocks swelled, tanks at Cushing filled, and traders chartered tankers simply to hold oil at sea. On April 20, 2020, the expiring May WTI futures contract
+        cut. Stocks swelled, tanks at Cushing neared their limits, and traders chartered tankers simply to hold oil at sea. On April 20, 2020, the expiring May WTI futures contract
         settled at −$37.63 a barrel. Anyone still holding it had to take delivery of 1,000 barrels at Cushing for each contract, with almost nowhere to put them, and
         sellers paid buyers to take their oil. The next month’s contract, with time for stocks to clear, stayed well above zero.
       </P>
 
       <Challenge
         id="b"
-        question="Find the lowest fill, to the nearest half percent, at which the front spread pays more than storing a barrel onshore costs — the point where only storage at sea will do."
+        question={`Suppose a rush for floating storage drives VLCC rates to ${usd(RUSH_DAY_RATE)} a day, all in. Predict first: what is that per barrel per month, and so what will the front spread be with Kessler’s tanks completely full? Then set the cost of storing at sea, to the nearest 5 cents, fill the tanks, and check.`}
         solved={solvedB}
-        status={
-          s2.state.floating <= tt.carry
-            ? `At ${money(s2.state.floating)} a barrel-month, storing at sea is no dearer than onshore carry (${money(tt.carry)}), so the spread never has to rise past it. Raise the cost of storing at sea.`
-            : `At ${fmt(s2.state.fill, 1)}% full, the front spread is ${signedMoney(tt.spread)} and onshore carry costs ${money(tt.carry)}.`
-        }
-        success={`Solved: ${fmt(s2.state.fill, 1)}% full. From here the curve is paying for storage nobody can provide onshore, so the spread is set by the cost at sea, ${money(s2.state.floating)} a barrel-month in this setting${s2.state.floating === CURVE_DEFAULTS.floatingCost ? '' : ` (at the default ${money(CURVE_DEFAULTS.floatingCost)}, the answer is ${fmt(firstOver, 1)}%)`}. A super-contango is a sign that storage itself has become the scarce thing.`}
+        status={`At ${fmt(s2.state.fill, 1)}% full, with storage at sea at ${money(s2.state.floating)} a barrel-month, the front spread is ${signedMoney(tt.spread)}.`}
+        success={`Solved: ${usd(RUSH_DAY_RATE)} a day for ${fmt(DAYS_PER_MONTH, 1)} days, spread over ${fmt(VESSELS.vlcc.cargo / 1e6)} million barrels, is ${money(perBarrelMonth(RUSH_DAY_RATE))} a barrel-month. With nowhere onshore for the next barrel, the front spread is ${signedMoney(tt.spread)}: the cost at sea, less a sliver of convenience yield. A super-contango is a sign that storage itself has become the scarce thing, and that tanker rates now set the front of the curve.`}
       />
 
       <P>
         The futures curve, then, is a reading of stocks: backwardation when they’re scarce, contango up to full carry when they’re ample, and past full carry when the tanks
         run out. Return to <FigRef to="Oil Futures Curve">the first demonstration</FigRef> and try any level between. Stocks change slowly most of the time, a few
-        million barrels a week. Occasionally they change fast — a war, a hurricane, a pandemic — and the whole curve moves with them. That is the subject of the{' '}
+        million barrels a week. Occasionally they change fast — a war, a hurricane, a pandemic — and prices lurch with them. That is the subject of the{' '}
         <a href={lessonHref('oil/5.5')}>next lesson</a>.
       </P>
     </LessonPage>

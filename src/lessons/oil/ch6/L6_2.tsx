@@ -1,12 +1,14 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 import { Caption, Challenge, FigRef, Figure, GRAPHIC, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, TEXT, fmt, lessonHref, niceDomain, niceTicks, pct, usd, useScenario } from '../../../framework';
 import { RULE_DEFAULTS, backtest, basisRule, expansionWeek, qualityRule, type BacktestResult } from '../../../engines/oil/trading';
 import { CRUDE_COLOR } from '../../../model/oil/crudes';
-import { HISTORY_DEFAULTS, oilHistory, type HistoryWeek } from '../../../model/oil/history';
-import { XYChart, type XYBand } from '../shared/charts';
+import { NETWORK_DEFAULTS } from '../../../engines/oil/network';
+import { FUEL_OIL_REVERSION, HISTORY_DEFAULTS, oilHistory, type HistoryWeek } from '../../../model/oil/history';
+import { XYChart } from '../shared/charts';
+import { LONG_SWATCH, RISK_TONE, SHORT_SWATCH, YEAR_TICKS, money, pnlTone, positionBands, yearTick } from './style';
 
 // ---------------------------------------------------------------------------
-// The basis trade: Brent − WTI, driven by the Kessler–Calder line.
+// The basis trade: Brent − WTI, driven by the Kessler–Corran line.
 
 /** Positions are traded in units of one spread, 1,000 barrels a leg; the lesson holds up to 10. */
 export const UNITS = 10;
@@ -14,9 +16,9 @@ export const UNITS = 10;
 export type ExpansionYear = '1' | '2' | '3' | '4' | '5' | 'never';
 
 export interface BasisState {
-  /** Ridgeback Basin growth, kb/d per year. */
+  /** Pinyon Basin growth, kb/d per year. */
   growth: number;
-  /** Year the Kessler–Calder expansion opens, or never; and the capacity it adds, kb/d. */
+  /** Year the Kessler–Corran expansion opens, or never; and the capacity it adds, kb/d. */
   year: ExpansionYear;
   add: number;
   /** Rail capacity from Kessler to the coast, kb/d. */
@@ -99,7 +101,7 @@ export function idleGrowth(): number {
 }
 
 // ---------------------------------------------------------------------------
-// The quality trade: Coldwater Heavy − light crude at Port Calder, driven by fuel oil.
+// The quality trade: Coldwater Heavy − light crude at Port Corran, driven by fuel oil.
 
 export type ShiftYear = '1' | '2' | '3' | '4';
 
@@ -107,22 +109,35 @@ export interface QualityState {
   /** A lasting widening of fuel oil's discount to Brent: the year it starts and its size, $/bbl. */
   year: ShiftYear;
   shift: number;
+  /** How fast fuel oil's discount returns to its usual level: the share of the gap that closes each week, % (users and cokers answering price). */
+  pull: number;
   /** The rule: weeks behind the discount's average, and how far from it the discount must sit, $/bbl. */
   lookback: number;
   band: number;
 }
 
-export const QUALITY_DEFAULTS: QualityState = { year: '2', shift: 0, lookback: RULE_DEFAULTS.quality.lookback, band: RULE_DEFAULTS.quality.band };
+export const PULL_DEFAULT = FUEL_OIL_REVERSION * 100;
+export const PULL_MAX = 20;
+
+export const QUALITY_DEFAULTS: QualityState = { year: '2', shift: 0, pull: PULL_DEFAULT, lookback: RULE_DEFAULTS.quality.lookback, band: RULE_DEFAULTS.quality.band };
 
 export function qualityHistory(st: QualityState): HistoryWeek[] {
-  return oilHistory({ fuelOilShock: st.shift > 0 ? { year: Number(st.year), size: st.shift } : null });
+  return oilHistory({
+    fuelOilShock: st.shift > 0 ? { year: Number(st.year), size: st.shift } : null,
+    ...(st.pull === PULL_DEFAULT ? {} : { fuelOilReversion: st.pull / 100 }),
+  });
+}
+
+/** Weeks for half of a gap in fuel oil's discount to close, at a weekly pull in %. */
+export function halfLife(pull: number): number {
+  return pull > 0 ? Math.log(0.5) / Math.log(1 - pull / 100) : Infinity;
 }
 
 const qualityCache = new Map<string, Run>();
 
 /** The quality rule run over the history, at 10 units. */
 export function runQuality(st: QualityState): Run {
-  const key = JSON.stringify([st.shift > 0 ? st.year : '-', st.shift, st.lookback, st.band]);
+  const key = JSON.stringify([st.shift > 0 ? st.year : '-', st.shift, st.pull, st.lookback, st.band]);
   let r = qualityCache.get(key);
   if (!r) {
     const h = qualityHistory(st);
@@ -136,13 +151,13 @@ export function runQuality(st: QualityState): Run {
 export const SHIFT_MAX = 20;
 
 function qualityRuleAtDefaults(st: QualityState): boolean {
-  return st.lookback === QUALITY_DEFAULTS.lookback && st.band === QUALITY_DEFAULTS.band;
+  return st.lookback === QUALITY_DEFAULTS.lookback && st.band === QUALITY_DEFAULTS.band && st.pull === QUALITY_DEFAULTS.pull;
 }
 
 /**
- * Challenge b: with the rule at its starting settings and the shift starting two years in, the
- * smallest whole-dollar lasting widening of fuel oil's discount that leaves the quality trader with
- * a five-year loss.
+ * Challenge b: with the rule and fuel oil's pull at their starting settings and the shift starting
+ * two years in, the smallest whole-dollar lasting widening of fuel oil's discount that leaves the
+ * quality trader with a five-year loss.
  */
 export function losingShiftSolved(st: QualityState): boolean {
   if (st.year !== '2' || !qualityRuleAtDefaults(st)) return false;
@@ -198,8 +213,14 @@ function computeFacts() {
     if (Math.abs(runBasis({ ...BASIS_DEFAULTS, rail: r }).result.stats.total - base.result.stats.total) > 1) break;
     railFrom = r;
   }
+  const ns = runBasis({ ...BASIS_DEFAULTS, lead: 0 }).result;
   const q = runQuality(QUALITY_DEFAULTS);
   const q10 = runQuality({ ...QUALITY_DEFAULTS, shift: 10 });
+  const noPull = runQuality({ ...QUALITY_DEFAULTS, pull: 0 });
+  // Without the expansion: the week the basin first outgrows pipeline and rail together.
+  const nv = runBasis({ ...BASIS_DEFAULTS, year: 'never' });
+  const N = NETWORK_DEFAULTS;
+  const railFull = nv.h.findIndex((w) => w.basinSupply + Math.min(N.coldwaterSupply, N.coldwaterLine) - N.inlandDemand > w.pipelineCapacity + BASIS_DEFAULTS.rail);
   const shiftWeek = 2 * 52;
   return {
     basis: base.result.stats,
@@ -217,7 +238,10 @@ function computeFacts() {
     openingFrom: spread[opening - 1],
     openingTo: spread[opening],
     openingPnl: pnl[opening - 1],
-    never: runBasis({ ...BASIS_DEFAULTS, year: 'never' }).result.stats.total,
+    never: nv.result.stats.total,
+    noShort: ns.stats.total,
+    noShortOpening: ns.pnl[opening - 1],
+    neverRailYear: railFull >= 0 ? Math.floor(railFull / 52) + 1 : NaN,
     noRail: runBasis({ ...BASIS_DEFAULTS, rail: 0 }).result.stats.total,
     railFrom,
     quality: q.result.stats,
@@ -225,6 +249,8 @@ function computeFacts() {
     qualityTurnover: q.result.turnover,
     q10: q10.result.stats,
     q10YearAfter: sum(q10.result.pnl.slice(shiftWeek, shiftWeek + 52)),
+    noPull: noPull.result.stats,
+    noPullCosts: noPull.result.costs,
   };
 }
 function getFacts() {
@@ -238,45 +264,17 @@ function getFacts() {
 const SPREAD = GRAPHIC.green;
 const PIPE = GRAPHIC.orange;
 const FUEL_OIL = GRAPHIC.gold;
-const LONG_FILL = 'rgba(69, 144, 206, .16)';
-const SHORT_FILL = 'rgba(231, 91, 85, .15)';
 
-function thousands(x: number): string {
-  return usd(Math.round(x / 1000) * 1000);
-}
-
-function millions(x: number): string {
-  return Math.abs(x) >= 1e6 ? `$${fmt(x / 1e6, 2)} million` : thousands(x);
-}
-
-function money(x: number, digits = 2): string {
+/** Prices and spreads, $/bbl. */
+function dollars(x: number, digits = 2): string {
   return usd(x, digits);
 }
 
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five'];
+const ORDINALS = ['first', 'second', 'third', 'fourth', 'fifth'];
 function yearsWord(t: number): string {
   const n = Math.round(t);
   return Math.abs(t - n) < 1e-9 && n >= 0 && n < WORDS.length ? WORDS[n] : fmt(t, 1);
-}
-
-const yearTick = (v: number) => (v === 0 ? 'start' : `year ${v}`);
-
-/** Contiguous runs of long and short positions as shaded x bands (position i is held from week i to i + 1). */
-function positionBands(pos: number[]): XYBand[] {
-  const bands: XYBand[] = [];
-  let i = 0;
-  while (i < pos.length) {
-    const s = Math.sign(pos[i]);
-    if (s === 0) {
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j + 1 < pos.length && Math.sign(pos[j + 1]) === s) j++;
-    bands.push({ from: i / 52, to: (j + 1) / 52, color: s > 0 ? LONG_FILL : SHORT_FILL });
-    i = j + 1;
-  }
-  return bands;
 }
 
 function kFormat(v: number): string {
@@ -287,7 +285,7 @@ function kFormat(v: number): string {
 }
 
 /** The running total of a weekly P&L, in thousands of dollars. */
-function PnlChart({ pnl, ariaLabel, height = 140 }: { pnl: number[]; ariaLabel: string; height?: number }) {
+function PnlChart({ pnl, ariaLabel, height = 120 }: { pnl: number[]; ariaLabel: string; height?: number }) {
   const pts: Array<[number, number]> = [[0, 0]];
   let run = 0;
   pnl.forEach((p, i) => {
@@ -302,7 +300,7 @@ function PnlChart({ pnl, ariaLabel, height = 140 }: { pnl: number[]; ariaLabel: 
       height={height}
       x={[0, 5]}
       y={[lo, hi]}
-      xTicks={[0, 1, 2, 3, 4, 5]}
+      xTicks={YEAR_TICKS}
       xFormat={yearTick}
       yTicks={niceTicks(lo, hi, 3)}
       yFormat={kFormat}
@@ -312,11 +310,6 @@ function PnlChart({ pnl, ariaLabel, height = 140 }: { pnl: number[]; ariaLabel: 
   );
 }
 
-function GroupLabel({ children }: { children: ReactNode }) {
-  return <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: TEXT.gray, margin: '14px 0 2px' }}>{children}</div>;
-}
-
-const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
 
 export default function Lesson() {
   const f = getFacts();
@@ -363,7 +356,7 @@ export default function Lesson() {
     });
     return { mid, up, dn };
   }, [avgs, qs.band]);
-  const qualityPts = useMemo(() => qh.map((w) => [w.t, w.coldwater - w.calderCrude] as [number, number]), [qh]);
+  const qualityPts = useMemo(() => qh.map((w) => [w.t, w.coldwater - w.corranCrude] as [number, number]), [qh]);
   const discVals = discPts.map((p) => p[1]);
   const [dLo, dHi] = niceDomain(Math.min(5, ...discVals), Math.max(25, ...discVals), 4);
   const qVals = qualityPts.map((p) => p[1]);
@@ -381,8 +374,10 @@ export default function Lesson() {
       <P>
         <a href={lessonHref('oil/6.1')}>Lesson 6.1</a> traded a spread in time: a barrel at Kessler this month against the same barrel next month, priced by how
         full the tanks were. This lesson trades spreads in <b>space</b> and in <b>quality</b>. The first is Brent against WTI, the coast against the inland hub.
-        The second is a heavy, sour crude against a light, sweet one at the same port. Both are the differentials of <a href={lessonHref('oil/5.2')}>Lesson 5.2</a>,
-        and both have physical causes we’ve already derived: the pipeline out of the Ridgeback Basin, and the residue in a heavy barrel.
+        The difference between a local price and a benchmark price is called a <K c="price">basis</K>: Brent − WTI is the basis between the coast and the inland
+        hub, and a trader who holds it is a basis trader. The second is a heavy, sour crude against a light, sweet one at the same port. Both are the
+        differentials of <a href={lessonHref('oil/5.2')}>Lesson 5.2</a>,
+        and both have physical causes we’ve already derived: the pipeline out of the Pinyon Basin, and the residue in a heavy barrel.
       </P>
       <P>
         WTI and Brent are real benchmarks, but every price here comes from the course’s simulated five years of weeks, not from any market. Being{' '}
@@ -390,33 +385,34 @@ export default function Lesson() {
         narrows. The trader here holds up to 10 units, 1,000 barrels a leg each, so a $1 move in the spread is worth $10,000.
       </P>
       <P>
-        Physics gives this spread a floor and a ceiling. While the Kessler–Calder line has room, nobody ships inland crude to the coast for less than it costs to
-        ship, so the spread sits near the line’s $2 tariff plus the coast’s small discount to Northport — {money(f.floor)} on average in this history
+        Physics gives this spread a floor and a ceiling. While the Kessler–Corran line has room, nobody ships inland crude to the coast for less than it costs to
+        ship, so the spread sits near the line’s $2 tariff plus the coast’s small discount to Northport — {dollars(f.floor)} on average in this history
         (<a href={lessonHref('oil/4.4')}>Lesson 4.4</a>). Once the <K tone="orange">line is full</K>, the next barrel leaves by rail and the spread jumps to the rail
-        freight: {money(f.ceiling)} on average in the weeks the line is full. The rule tries to sit on the floor just before the jump: it goes long when the line is at least 96% full and the spread is
+        freight: {dollars(f.ceiling)} on average in the weeks the line is full. The rule tries to sit on the floor just before the jump: it goes long when the line is at least 96% full and the spread is
         still within $3 of its lowest level of the past 12 weeks. And because the expansion’s opening date is public, it goes short in the 4 weeks before the
         opening while the spread is still wide.
       </P>
       <P>
         In the next demonstration, the shaded weeks are the trader’s positions. Set the physical drivers — how fast the basin grows, when the expansion opens and how
-        big it is, how much the railroad can take — and the rule’s settings, and watch what happens to the profit:
+        big it is, how much the railroad can take — and watch what happens to the profit. The last slider sets how many weeks before the opening the rule goes
+        short:
       </P>
 
       <Figure name="Crude Basis Trader" scenario={s1}>
         <Legend
           items={[
             { label: 'Brent − WTI (simulated)', color: SPREAD, kind: 'line' },
-            { label: 'Kessler–Calder line use', color: PIPE, kind: 'line' },
-            { label: 'Long the spread', color: LONG_FILL },
-            { label: 'Short the spread', color: SHORT_FILL },
+            { label: 'Kessler–Corran line use', color: PIPE, kind: 'line' },
+            { label: 'Long the spread', color: LONG_SWATCH },
+            { label: 'Short the spread', color: SHORT_SWATCH },
           ]}
         />
         <XYChart
-          ariaLabel={`Brent minus WTI over five simulated years, from ${money(Math.min(...spreadPts.map((p) => p[1])))} to ${money(maxSpread)}. The trader is long the spread for ${longWeeks} weeks and short for ${shortWeeks}.`}
-          height={170}
+          ariaLabel={`Brent minus WTI over five simulated years, from ${dollars(Math.min(...spreadPts.map((p) => p[1])))} to ${dollars(maxSpread)}. The trader is long the spread for ${longWeeks} weeks and short for ${shortWeeks}.`}
+          height={150}
           x={[0, 5]}
           y={[0, yTop]}
-          xTicks={[0, 1, 2, 3, 4, 5]}
+          xTicks={YEAR_TICKS}
           xFormat={yearTick}
           yFormat={(v) => `$${fmt(v)}`}
           yLabel="Brent minus WTI, $ per barrel"
@@ -425,11 +421,11 @@ export default function Lesson() {
           refs={openRef}
         />
         <XYChart
-          ariaLabel={`Use of the Kessler–Calder line: at most ${pct(maxUse)}; the rule’s trigger is ${pct(st.use)}.`}
-          height={110}
+          ariaLabel={`Use of the Kessler–Corran line: at most ${pct(maxUse)}; the rule’s trigger is ${pct(st.use)}.`}
+          height={100}
           x={[0, 5]}
           y={[useLo, 100]}
-          xTicks={[0, 1, 2, 3, 4, 5]}
+          xTicks={YEAR_TICKS}
           xFormat={yearTick}
           yTicks={niceTicks(useLo, 100, 3)}
           yFormat={(v) => `${v}%`}
@@ -437,16 +433,15 @@ export default function Lesson() {
           series={[{ points: usePts, color: PIPE, width: 2 }]}
           refs={[{ axis: 'y', at: st.use * 100, color: TEXT.orange, dash: '4 4', label: `trigger ${pct(st.use)}` }, ...openRef.map((r) => ({ ...r, label: undefined }))]}
         />
-        <PnlChart pnl={r1.pnl} ariaLabel={`Cumulative profit of the basis trader: ${usd(r1.stats.total)} after five years, maximum drawdown ${usd(r1.stats.maxDrawdown)}.`} />
+        <PnlChart pnl={r1.pnl} ariaLabel={`Cumulative profit of the basis trader: ${money(r1.stats.total)} after five years, maximum drawdown ${money(r1.stats.maxDrawdown)}.`} />
         <Readouts
           items={[
-            { label: <K c="price">total P&amp;L</K>, value: usd(r1.stats.total), tone: tone(r1.stats.total) },
-            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(r1.stats.sharpe, 2), tone: 'violet' },
-            { label: <K tone="violet">maximum drawdown</K>, value: usd(r1.stats.maxDrawdown), tone: 'violet' },
-            { label: 'trading costs', value: usd(r1.costs) },
+            { label: <K c="price">total P&amp;L</K>, value: money(r1.stats.total), tone: pnlTone(r1.stats.total) },
+            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(r1.stats.sharpe, 2), tone: RISK_TONE },
+            { label: <K tone="violet">maximum drawdown</K>, value: money(r1.stats.maxDrawdown), tone: RISK_TONE },
+            { label: 'trading costs', value: money(r1.costs) },
           ]}
         />
-        <GroupLabel>Physical drivers</GroupLabel>
         <Slider label="Basin growth" tone="orange" value={st.growth} min={0} max={GROWTH_MAX} step={GROWTH_STEP} onChange={(v) => s1.set({ growth: v })} display={`${fmt(st.growth)} kb/d a year`} />
         <Segmented
           label="Expansion opens"
@@ -473,30 +468,33 @@ export default function Lesson() {
           display={never ? '—' : `${fmt(st.add)} kb/d`}
         />
         <Slider label="Rail capacity" tone="orange" value={st.rail} min={0} max={300} step={25} onChange={(v) => s1.set({ rail: v })} display={`${fmt(st.rail)} kb/d`} />
-        <GroupLabel>Trading rule</GroupLabel>
-        <Slider label="Long when line use reaches" tone="violet" value={st.use} min={0.8} max={1} step={0.01} onChange={(v) => s1.set({ use: Math.round(v * 100) / 100 })} display={pct(st.use)} />
-        <Slider label="Spread within" tone="violet" value={st.stretch} min={0.5} max={8} step={0.5} onChange={(v) => s1.set({ stretch: v })} display={`${money(st.stretch)} of its 12-week low`} />
-        <Slider label="Short before the opening" tone="violet" value={st.lead} min={0} max={12} onChange={(v) => s1.set({ lead: v })} display={`${st.lead} weeks`} />
+        <Slider
+          label="Rule: short before opening"
+          tone="violet"
+          value={st.lead}
+          min={0}
+          max={12}
+          disabled={never}
+          onChange={(v) => s1.set({ lead: v })}
+          display={never ? '—' : st.lead === 0 ? 'no short' : `${st.lead} week${st.lead === 1 ? '' : 's'}`}
+        />
         <Caption>
           {firstTrigger < 0
             ? `The line never gets ${pct(st.use)} full, so the rule never goes long.`
-            : `The line first reaches ${pct(st.use)} full ${fmt(firstTrigger / 52, 1)} years in.`}{' '}
-          {r1.turnover === 0
-            ? 'The trader has nothing to do.'
-            : `The trader is long for ${longWeeks} weeks and short for ${shortWeeks}, and makes ${usd(r1.stats.total)}.`}
+            : `The line first reaches ${pct(st.use)} full ${fmt(firstTrigger / 52, 1)} years in; the trader is long for ${longWeeks} weeks and short for ${shortWeeks}.`}
         </Caption>
       </Figure>
 
       <P>
-        With the starting settings, the trader makes {thousands(f.basis.total)} over the five years, with a <K tone="violet">Sharpe ratio</K> of{' '}
-        {fmt(f.basis.sharpe, 2)} (average weekly profit divided by its standard deviation, scaled to a year) and a <K tone="violet">maximum drawdown</K> — the worst
-        fall from a previous high — of {thousands(f.basis.maxDrawdown)}, after {thousands(f.basisCosts)} of trading costs. Almost all of it comes from two
+        With the starting settings, the trader makes {money(f.basis.total)} over the five years, with a Sharpe ratio of {fmt(f.basis.sharpe, 2)} and a maximum
+        drawdown of {money(f.basis.maxDrawdown)} (both as in <a href={lessonHref('oil/6.1')}>Lesson 6.1</a>), after {money(f.basisCosts)} of trading
+        costs. Almost all of it comes from two
         episodes. Between {fmt(f.jumpFrom, 1)} and {fmt(f.jumpTo, 1)} years in, the line hovers around full, and as the basin’s output moves from week to week the
         spread flips between floor and ceiling. {f.jumps === 4 ? 'Four' : fmt(f.jumps)} times the rule was holding the spread at the floor when it jumped, earning
-        between {thousands(f.jumpMin)} and {thousands(f.jumpMax)} each time; once the spread had jumped, the rule stepped aside, so it wasn’t holding when the line
+        between {money(f.jumpMin)} and {money(f.jumpMax)} each time; once the spread had jumped, the rule stepped aside, so it wasn’t holding when the line
         drained and the spread fell back. Then, in the weeks before the expansion opens, {yearsWord(f.openingYears)} years in, it goes short, and in the opening week
-        the spread falls from {money(f.openingFrom)} to {money(f.openingTo)}: another {thousands(f.openingPnl)}. Through the {f.steadyWeeks} weeks of steady
-        congestion in between, with the spread pinned at the rail freight, it makes {thousands(f.steadyPnl)}.
+        the spread falls from {dollars(f.openingFrom)} to {dollars(f.openingTo)}: another {money(f.openingPnl)}. Through the {f.steadyWeeks} weeks of steady
+        congestion in between, with the spread pinned at the rail freight, it makes {money(f.steadyPnl)}.
       </P>
       <P>
         The edge is an asymmetry made by physics. Near the floor, the spread can hardly fall, and it can jump by the whole difference between pipeline and rail.
@@ -517,19 +515,23 @@ export default function Lesson() {
         success={`Solved: ${fmt(st.growth)} kb/d a year. The basin then fills at most ${pct(maxUse)} of the line, so the spread never leaves its floor. At ${fmt(st.growth + GROWTH_STEP)} kb/d the line reaches ${nextGrowth ? pct(Math.max(...nextGrowth.h.map((w) => w.pipelineUse))) : '—'} full and the trader goes to work. No congestion, no trade: the opportunity is the pipeline running out of room.`}
       />
 
-      <H2>What a backtest can’t see</H2>
       <P>
         The other drivers change the size of the prize rather than its existence. With {fmt(f.railFrom)} kb/d of rail or more, the railroad never fills before the
-        expansion opens, and the result is the same {thousands(f.basis.total)}. With less, the railroad fills too, and WTI falls toward what a stranded barrel is
-        worth: with no rail at all the trader makes {millions(f.noRail)}. Without the expansion, the congestion never ends, and it makes {millions(f.never)}. More rail
+        expansion opens, and the result is the same {money(f.basis.total)}. With less, the railroad fills too, and WTI falls toward what a stranded barrel is
+        worth: with no rail at all the trader makes {money(f.noRail)}. Without the expansion, the congestion never ends; in its{' '}
+        {ORDINALS[f.neverRailYear - 1] ?? fmt(f.neverRailYear)} year the basin outgrows the railroad as well, and the trader makes {money(f.never)}. More rail
         caps the jump; only more pipeline, or slower growth, removes it. This is the mechanism of <a href={lessonHref('oil/4.1')}>Lesson 4.1</a>’s pipeline limits
         and <a href={lessonHref('oil/4.4')}>Lesson 4.4</a>’s network, seen through a trading account.
       </P>
+
+      <H2>What a backtest can’t see</H2>
       <P>
         Now some honesty about the number. In our history the spread is set each week by that week’s flows, and nobody in it looks ahead. A real market sees the same
         pipeline statistics we do. When the line is 97% full, the spread for the coming months already trades somewhere between floor and ceiling, at roughly the
         odds of the line filling, and a well-publicized opening date is priced into the forward months after it. So the short before the opening, a profit made from
-        a date everyone knew, is the part of this backtest that most overstates what a trader could have earned. Who reliably earns the spread? A shipper with firm
+        a date everyone knew, is the part of this backtest that most overstates what a trader could have earned. Set the rule’s short before the opening to zero to take
+        that bet out: the trader is then still long when the line opens, {f.noShortOpening < 0 ? `loses ${money(-f.noShortOpening)}` : `makes ${money(f.noShortOpening)}`}{' '}
+        that week, and makes {money(f.noShort)} in all. Who reliably earns the spread? A shipper with firm
         space on the line, who buys at Kessler, sells at the coast and pays only the tariff. Owning pipeline capacity is, economically, a long position in this
         spread.
       </P>
@@ -537,34 +539,35 @@ export default function Lesson() {
       <H2>Quality spreads</H2>
       <P>
         The second half of every differential is quality. A third of Coldwater Heavy is residue, and whatever the coker can’t take leaves the refinery as{' '}
-        <K tone="gold">high-sulfur fuel oil</K> (<a href={lessonHref('oil/3.2')}>Lesson 3.2</a>). So Coldwater’s discount to light crude at Port Calder moves
-        with fuel oil’s discount to Brent, by a little over a third of every dollar — the relation Calder’s refinery model gave in{' '}
+        <K tone="orange">high-sulfur fuel oil</K> (<a href={lessonHref('oil/3.2')}>Lesson 3.2</a>). So Coldwater’s discount to light crude at Port Corran moves
+        with fuel oil’s discount to Brent, by a little over a third of every dollar — the relation Corran’s refinery model gave in{' '}
         <a href={lessonHref('oil/4.5')}>Lesson 4.5</a>. And fuel oil’s discount tends to drift back toward its usual level: cheap fuel oil invites more of it to be
-        burned and upgraded, and dear fuel oil less. In our model, half of any gap closes in about three months.
+        burned and upgraded, and dear fuel oil less. In our model, {fmt(PULL_DEFAULT)}% of any gap closes each week, so half of it closes in about{' '}
+        {fmt(halfLife(PULL_DEFAULT), 1)} weeks — some three months.
       </P>
       <P>
         That suggests a <K tone="violet">mean-reversion</K> rule. Compare fuel oil’s discount with its average over the previous 26 weeks. When it is more than $2
         wider, buy Coldwater and sell light crude, 1,000 barrels a leg per unit, betting that the discount narrows and Coldwater recovers; when it is more than $2
-        narrower, do the reverse. In the next demonstration, the physical driver is a lasting widening of fuel oil’s discount, starting in a year you choose — the
-        kind of change a new rule on what ships may burn can make. Start with no shift:
+        narrower, do the reverse. In the next demonstration, the physical drivers are that pull back toward the usual discount, and a lasting widening of fuel
+        oil’s discount, starting in a year you choose — the kind of change a new rule on what ships may burn can make. Start with no shift:
       </P>
 
       <Figure name="Crude Basis Trader · quality spread" scenario={s2}>
         <Legend
           items={[
             { label: 'Fuel oil’s discount to Brent', color: FUEL_OIL, kind: 'line' },
-            { label: `Its ${qs.lookback}-week average ± ${money(qs.band, qs.band % 1 ? 2 : 0)}`, color: FUEL_OIL, kind: 'line', dashed: true },
+            { label: `Its ${qs.lookback}-week average ± ${dollars(qs.band, qs.band % 1 ? 2 : 0)}`, color: FUEL_OIL, kind: 'line', dashed: true },
             { label: 'Coldwater − light crude', color: CRUDE_COLOR.coldwater, kind: 'line' },
-            { label: 'Long Coldwater', color: LONG_FILL },
-            { label: 'Short Coldwater', color: SHORT_FILL },
+            { label: 'Long Coldwater', color: LONG_SWATCH },
+            { label: 'Short Coldwater', color: SHORT_SWATCH },
           ]}
         />
         <XYChart
-          ariaLabel={`Fuel oil’s discount to Brent over five simulated years: average ${money(discBefore)} before the shift point and ${money(discAfter)} after. The trader is long Coldwater for ${qLong} weeks and short for ${qShort}.`}
-          height={170}
+          ariaLabel={`Fuel oil’s discount to Brent over five simulated years: average ${dollars(discBefore)} before the shift point and ${dollars(discAfter)} after. The trader is long Coldwater for ${qLong} weeks and short for ${qShort}.`}
+          height={150}
           x={[0, 5]}
           y={[dLo, dHi]}
-          xTicks={[0, 1, 2, 3, 4, 5]}
+          xTicks={YEAR_TICKS}
           xFormat={yearTick}
           yFormat={(v) => `$${fmt(v)}`}
           yLabel="Fuel oil’s discount to Brent, $ per barrel"
@@ -578,27 +581,35 @@ export default function Lesson() {
           refs={qs.shift > 0 ? [{ axis: 'x', at: shiftAt, color: '#555', dash: '4 4', label: 'shift begins' }] : []}
         />
         <XYChart
-          ariaLabel={`Coldwater Heavy minus light crude at Port Calder, between ${money(Math.min(...qVals))} and ${money(Math.max(...qVals))}.`}
-          height={120}
+          ariaLabel={`Coldwater Heavy minus light crude at Port Corran, between ${dollars(Math.min(...qVals))} and ${dollars(Math.max(...qVals))}.`}
+          height={100}
           x={[0, 5]}
           y={[qLo, qHi]}
-          xTicks={[0, 1, 2, 3, 4, 5]}
+          xTicks={YEAR_TICKS}
           xFormat={yearTick}
           yTicks={niceTicks(qLo, qHi, 3)}
           yFormat={(v) => (v < 0 ? `−$${fmt(-v)}` : `$${fmt(v)}`)}
-          yLabel="Coldwater Heavy − light crude at Port Calder, $ per barrel"
+          yLabel="Coldwater Heavy − light crude at Port Corran, $ per barrel"
           series={[{ points: qualityPts, color: CRUDE_COLOR.coldwater, width: 2 }]}
         />
-        <PnlChart pnl={r2.pnl} height={130} ariaLabel={`Cumulative profit of the quality trader: ${usd(r2.stats.total)} after five years, maximum drawdown ${usd(r2.stats.maxDrawdown)}.`} />
+        <PnlChart pnl={r2.pnl} ariaLabel={`Cumulative profit of the quality trader: ${money(r2.stats.total)} after five years, maximum drawdown ${money(r2.stats.maxDrawdown)}.`} />
         <Readouts
           items={[
-            { label: <K c="price">total P&amp;L</K>, value: usd(r2.stats.total), tone: tone(r2.stats.total) },
-            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(r2.stats.sharpe, 2), tone: 'violet' },
-            { label: <K tone="violet">maximum drawdown</K>, value: usd(r2.stats.maxDrawdown), tone: 'violet' },
-            { label: 'trading costs', value: usd(r2.costs) },
+            { label: <K c="price">total P&amp;L</K>, value: money(r2.stats.total), tone: pnlTone(r2.stats.total) },
+            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(r2.stats.sharpe, 2), tone: RISK_TONE },
+            { label: <K tone="violet">maximum drawdown</K>, value: money(r2.stats.maxDrawdown), tone: RISK_TONE },
+            { label: 'trading costs', value: money(r2.costs) },
           ]}
         />
-        <GroupLabel>Physical driver</GroupLabel>
+        <Slider
+          label="Fuel oil’s pull back to normal"
+          tone="gold"
+          value={qs.pull}
+          min={0}
+          max={PULL_MAX}
+          onChange={(v) => s2.set({ pull: v })}
+          display={qs.pull === 0 ? 'none' : `${fmt(qs.pull)}% of the gap a week`}
+        />
         <Segmented
           label="Fuel-oil shift begins"
           value={qs.year}
@@ -617,51 +628,51 @@ export default function Lesson() {
           min={0}
           max={SHIFT_MAX}
           onChange={(v) => s2.set({ shift: v })}
-          display={qs.shift === 0 ? 'none' : `${money(qs.shift, 0)} wider`}
+          display={qs.shift === 0 ? 'none' : `${dollars(qs.shift, 0)} wider`}
         />
-        <GroupLabel>Trading rule</GroupLabel>
-        <Slider label="Average over" tone="violet" value={qs.lookback} min={4} max={52} onChange={(v) => s2.set({ lookback: v })} display={`${qs.lookback} weeks`} />
-        <Slider label="Act when the discount is" tone="violet" value={qs.band} min={0.5} max={5} step={0.5} onChange={(v) => s2.set({ band: v })} display={`${money(qs.band, qs.band % 1 ? 2 : 0)} from it`} />
         <Caption>
+          {qs.pull === 0 ? 'Nothing pulls fuel oil’s discount back: it wanders wherever its weekly shocks take it.' : `Half of any gap in fuel oil’s discount closes in ${fmt(halfLife(qs.pull), 1)} weeks.`}{' '}
           {qs.shift === 0
-            ? `Fuel oil’s discount averages ${money(avg(discVals))} over the five years.`
-            : `Fuel oil’s discount averages ${money(discBefore)} before the shift and ${money(discAfter)} after it; in the year after it begins the trader ${yearAfter >= 0 ? 'makes' : 'loses'} ${usd(Math.abs(yearAfter))}.`}{' '}
-          The trader is long Coldwater for {qLong} weeks and short for {qShort}.
+            ? `The discount averages ${dollars(avg(discVals))} over the five years.`
+            : `The discount averages ${dollars(discBefore)} before the shift and ${dollars(discAfter)} after; in the year after it begins the trader ${yearAfter >= 0 ? 'makes' : 'loses'} ${money(Math.abs(yearAfter))}.`}
         </Caption>
       </Figure>
 
       <P>
-        With no shift, the quality trader makes {thousands(f.quality.total)} over the five years, with a Sharpe ratio of {fmt(f.quality.sharpe, 2)} and a maximum
-        drawdown of {thousands(f.quality.maxDrawdown)}. It trades often, buying or selling {fmt(f.qualityTurnover)} units over the five years, so costs take{' '}
-        {thousands(f.qualityCosts)} of the {thousands(f.quality.total + f.qualityCosts)} it made before them. Like the basis trade, it rests on a physical
-        mechanism: refiners and fuel-oil users responding to price, which keeps pulling the discount back.
+        With no shift, the quality trader makes {money(f.quality.total)} over the five years, with a Sharpe ratio of {fmt(f.quality.sharpe, 2)} and a maximum
+        drawdown of {money(f.quality.maxDrawdown)}. It trades often, buying or selling {fmt(f.qualityTurnover)} units over the five years, so costs take{' '}
+        {money(f.qualityCosts)} of the {money(f.quality.total + f.qualityCosts)} it made before them. Like the basis trade, it rests on a physical
+        mechanism: refiners and fuel-oil users responding to price, which keeps pulling the discount back. Switch the mechanism off by setting the pull to zero. A
+        wide discount is now no more likely to narrow than to widen further, the rule’s bets on its return are coin flips, and the trader makes only{' '}
+        {money(f.noPull.total)}, with a Sharpe ratio of {fmt(f.noPull.sharpe, 2)}, after {money(f.noPullCosts)} of costs.
       </P>
       <P>
         Physical facts can change for good. <a href={lessonHref('oil/4.5')}>Lesson 4.5</a> recalled one: on January 1, 2020, the International Maritime
-        Organization’s global limit on <K tone="gold">sulfur</K> in ships’ fuel fell from 3.5% to 0.5%, and in the months around that date high-sulfur fuel oil
+        Organization’s global limit on <K tone="orange">sulfur</K> in ships’ fuel fell from 3.5% to 0.5%, and in the months around that date high-sulfur fuel oil
         fell sharply against crude. Set a $10
-        shift after year 2. The rule sees fuel oil cheapening beyond its average, buys Coldwater, and keeps buying while the discount walks to its new level; in the
-        year after the shift begins it loses {thousands(-f.q10YearAfter)}, and its five-year total falls to {thousands(f.q10.total)}. A mean-reversion rule can’t
+        shift after year 2, with the pull back at {fmt(PULL_DEFAULT)}%. The rule sees fuel oil cheapening beyond its average, buys Coldwater, and stays long while
+        the discount walks to its new level; in the
+        year after the shift begins it loses {money(-f.q10YearAfter)}, and its five-year total falls to {money(f.q10.total)}. A mean-reversion rule can’t
         tell a lasting change from noise until its own average catches up, and by then it has paid for the lesson.
       </P>
 
       <Challenge
         id="b"
-        question="With the rule at its starting settings and the shift beginning after year 2, find the smallest lasting widening of fuel oil’s discount, to the nearest dollar, that leaves the quality trader with a loss over the five years."
+        question={`With fuel oil’s pull at its starting ${fmt(PULL_DEFAULT)}% a week and the shift beginning after year 2, find the smallest lasting widening of fuel oil’s discount, to the nearest dollar, that leaves the quality trader with a loss over the five years.`}
         solved={solvedB}
         status={
           qs.year !== '2' || !qualityRuleAtDefaults(qs)
-            ? `Start the shift after year 2 and set the rule back to a ${QUALITY_DEFAULTS.lookback}-week average and a $${QUALITY_DEFAULTS.band} band.`
-            : `With a ${money(qs.shift, 0)} shift the quality trader ${r2.stats.total >= 0 ? 'makes' : 'loses'} ${usd(Math.abs(r2.stats.total))} over the five years.`
+            ? `Start the shift after year 2 and set fuel oil’s pull back to ${fmt(PULL_DEFAULT)}% a week.`
+            : `With a ${dollars(qs.shift, 0)} shift the quality trader ${r2.stats.total >= 0 ? 'makes' : 'loses'} ${money(Math.abs(r2.stats.total))} over the five years.`
         }
-        success={`Solved: ${money(qs.shift, 0)}. The trader loses ${usd(-r2.stats.total)}; with ${money(qs.shift - 1, 0)} it would have made ${usd(prevShift)}. In the year after the shift begins it loses ${usd(-yearAfter)}, buying Coldwater as fuel oil cheapened and waiting for a return to normal that never came.`}
+        success={`Solved: ${dollars(qs.shift, 0)}. The trader loses ${money(-r2.stats.total)}; with ${dollars(qs.shift - 1, 0)} it would have made ${money(prevShift)}. In the year after the shift begins it loses ${money(-yearAfter)}, buying Coldwater as fuel oil cheapened and waiting for a return to normal that never came.`}
       />
 
       <P>
         Both spreads are prices of physical facts. The basis is the price of pipeline room, and the quality spread is the price of what a refinery can do with a
         heavy barrel’s residue. A strategy built on either works while those facts behave as they have, and stops when one changes: a pipeline opens, a regulation
-        takes effect. Return to <FigRef to="Crude Basis Trader">the first demonstration</FigRef> and choose <b>Never</b> for the expansion, or add rail, and you can
-        watch the basis trade’s profit follow the plumbing.
+        takes effect. Return to <FigRef to="Crude Basis Trader">the first demonstration</FigRef> and choose <b>Never</b> for the expansion, or cut the rail, and you
+        can watch the basis trade’s profit follow the plumbing.
       </P>
       <P>
         These are spreads between crudes. A refinery lives on a different spread: between the crude it buys and the gasoline and diesel it sells. The{' '}

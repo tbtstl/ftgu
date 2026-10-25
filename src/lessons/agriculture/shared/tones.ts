@@ -15,7 +15,7 @@ export const TONE = {
   heat: 'red',
   light: 'violet',
   growth: 'teal',
-  nutrient: 'violet',
+  nutrient: 'green',
   price: 'green',
 } as const satisfies Record<string, Tone>;
 

@@ -23,17 +23,17 @@ import {
   type MixResult,
 } from '../src/engines/agriculture/farm';
 import { allCornSolved, plantingStats } from '../src/lessons/agriculture/ch2/L2_1';
-import { doubledNitrogenSolved, inputCurve } from '../src/lessons/agriculture/ch2/L2_2';
+import { dearNitrogenSolved, inputCurve } from '../src/lessons/agriculture/ch2/L2_2';
 import { bestScoutingThreshold, outcome, strategyRecord, thresholdSolved } from '../src/lessons/agriculture/ch2/L2_3';
 import { bestStart, harvestSolved, wheatValue } from '../src/lessons/agriculture/ch2/L2_4';
 import { acreBudget, breakevenSolved, farmProfits } from '../src/lessons/agriculture/ch2/L2_5';
 import { withEvents, type WeatherEvent } from '../src/model/agriculture/climate';
 import { canopyReflectance, ndvi, seasonNdvi } from '../src/engines/agriculture/vegetation';
-import { ridgeSoilSolved, suitability } from '../src/lessons/agriculture/ch3/L3_1';
+import { suitability, warmerSolved } from '../src/lessons/agriculture/ch3/L3_1';
 import { droughtSolved, freezeSolved, type LabState } from '../src/lessons/agriculture/ch3/L3_2';
-import { ndviSolved } from '../src/lessons/agriculture/ch3/L3_3';
+import { lookalikeSolved } from '../src/lessons/agriculture/ch3/L3_3';
 import { fitFor, pairSolved } from '../src/lessons/agriculture/ch3/L3_4';
-import { endings, normalWeatherProduction, percentileSolved, production } from '../src/lessons/agriculture/ch3/L3_5';
+import { independentSolved, normalWeatherProduction, production } from '../src/lessons/agriculture/ch3/L3_5';
 import { ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
 import { lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
 import { ridgeSolved } from '../src/lessons/agriculture/ch1/L1_3';
@@ -44,11 +44,11 @@ import { harvestRush } from '../src/engines/agriculture/elevator';
 import { DEFAULT_NETWORK, districtProduction, networkCapacity, routeCrop, scaleSupply } from '../src/engines/agriculture/logistics';
 import { clearWorld, worldHistory } from '../src/engines/agriculture/world';
 import { valleySeason } from '../src/engines/agriculture/valley';
-import { moistureSolved } from '../src/lessons/agriculture/ch4/L4_1';
+import { gradeSolved } from '../src/lessons/agriculture/ch4/L4_1';
 import { wettestSolved } from '../src/lessons/agriculture/ch4/L4_2';
 import { blendGain, blendSolved, spreadSolved } from '../src/lessons/agriculture/ch4/L4_3';
 import { NET0, bargeSolved, fillShare, railSolved, seasons, settingsOf } from '../src/lessons/agriculture/ch4/L4_4';
-import { WORLD0, balanceOf, bufferSolved, dearBigYear, history, valleyAverage } from '../src/lessons/agriculture/ch4/L4_5';
+import { WORLD0, balanceOf, dearShortfallSolved, dearBigYear, history, valleyAverage } from '../src/lessons/agriculture/ch4/L4_5';
 import { EXPIRY, MARKET_YEARS, cropYear, decFutures, harvestCurve, portSpot, storageReturn } from '../src/engines/agriculture/market';
 import { allSeasons, revenue, summarize, walkForward } from '../src/engines/agriculture/hedging';
 import { deliverySolved, expiryCash, hedgeRecord, worstMarginYear } from '../src/lessons/agriculture/ch5/L5_1';
@@ -70,14 +70,14 @@ import {
   type MerchantPlan,
 } from '../src/engines/agriculture/capstone';
 import { bestBins, resilientSolved, summaryOf } from '../src/lessons/agriculture/ch6/L6_1';
-import { bestCalibrated, calibration, worstAugustMiss } from '../src/lessons/agriculture/ch6/L6_2';
+import { calibration, worstAugustMiss } from '../src/lessons/agriculture/ch6/L6_2';
 import { CHALLENGE_SEASONS, beatClimatology, bestHalfWidth, climatologyScore, crps, modelScore } from '../src/lessons/agriculture/ch6/L6_3';
 import { bestMinCarry, bestSpread, largestSafeCharter } from '../src/lessons/agriculture/ch6/L6_4';
 import { stats, steadiestPosition } from '../src/lessons/agriculture/ch6/L6_5';
 import { DEFAULT_MERCHANT } from '../src/lessons/agriculture/shared/capstone';
 import { checkpointForecast, valleyCorn } from '../src/engines/agriculture/market';
 import { observe } from '../src/engines/agriculture/forecast';
-import { bumperSolved } from '../src/lessons/agriculture/ch1/L1_5';
+import { thinnerSolved } from '../src/lessons/agriculture/ch1/L1_5';
 
 const P = DISTRICT.prairie;
 const REF = simulatedYear(REFERENCE_YEAR, 'prairie');
@@ -109,8 +109,8 @@ describe('chapter 1: photosynthesis (1.1)', () => {
     expect(r1(leafAssimilation('corn', 1500, 420, 28).net)).toBe(47.3);
     expect(r1(leafAssimilation('wheat', 1500, 420, 28).net)).toBe(23.5);
     expect(r1(leafAssimilation('wheat', 1500, 560, 28).net)).toBe(28.5);
-    expect(r1(leafAssimilation('corn', 1500, 420, 28, 0.3).net)).toBe(30.6);
-    expect(r1(leafAssimilation('wheat', 1500, 420, 28, 0.3).net)).toBe(8.7);
+    expect(r1(leafAssimilation('corn', 1500, 420, 28, 0.3).net)).toBe(33.7);
+    expect(r1(leafAssimilation('wheat', 1500, 420, 28, 0.3).net)).toBe(10.8);
     // Wheat ahead below about 18 °C in strong light.
     expect(leafAssimilation('wheat', 1500, 420, 18).net).toBeGreaterThan(leafAssimilation('corn', 1500, 420, 18).net);
     expect(leafAssimilation('wheat', 1500, 420, 19).net).toBeLessThan(leafAssimilation('corn', 1500, 420, 19).net);
@@ -127,7 +127,8 @@ describe('chapter 1: photosynthesis (1.1)', () => {
     expect(interception('corn', 3.8)).toBeLessThan(0.9);
   });
   it('has solvable challenges', () => {
-    expect(wheatAheadSolved({ light: 1500, co2: 420, temp: 15, water: 100 })).toBe(true);
+    expect(wheatAheadSolved({ light: 1500, co2: 420, temp: 18, water: 100 })).toBe(true);
+    expect(wheatAheadSolved({ light: 1500, co2: 420, temp: 15, water: 100 })).toBe(false);
     expect(wheatAheadSolved({ light: 1500, co2: 420, temp: 28, water: 100 })).toBe(false);
     expect(ninetySolved('corn', 3.9)).toBe(true);
     expect(ninetySolved('corn', 4.0)).toBe(false);
@@ -251,8 +252,9 @@ describe('chapter 1: yield formation (1.5)', () => {
     expect(Math.round(plains.yield)).toBe(27);
   });
   it('has a solvable challenge', () => {
-    expect(bumperSolved('bumper', 30000)).toBe(true);
-    expect(bumperSolved('bumper', 29000)).toBe(false);
+    expect(thinnerSolved('bumper', 29000)).toBe(true);
+    expect(thinnerSolved('bumper', 32000)).toBe(false);
+    expect(thinnerSolved('hotJuly', 29000)).toBe(false);
   });
   it('narrows the forecast as the season unfolds', () => {
     const at = (truth: number, cut: number) =>
@@ -323,9 +325,9 @@ describe('chapter 2: planting and land allocation (2.1)', () => {
     const wet = plantingRun(simulatedYear(3, 'prairie'), dayOf(4, 25), 1000, 90, dayOf(6, 20));
     expect(wet.finished).toBe(-1);
     expect(Math.round(1000 - wet.cumulative[wet.cumulative.length - 1])).toBe(280);
-    expect(Math.round(plantingStats(dayOf(4, 25), 90).meanLost)).toBe(676);
-    expect(Math.round(plantingStats(dayOf(4, 25), 270).meanLost)).toBe(212);
-    expect(Math.round(plantingStats(dayOf(4, 25), 90).worstLost)).toBe(13017);
+    expect(Math.round(plantingStats(dayOf(4, 25), 90).meanLost)).toBe(656);
+    expect(Math.round(plantingStats(dayOf(4, 25), 270).meanLost)).toBe(254);
+    expect(Math.round(plantingStats(dayOf(4, 25), 90).worstLost)).toBe(17602);
   });
 });
 
@@ -345,8 +347,8 @@ describe('chapter 2: inputs (2.2)', () => {
     expect(inputCurve('planter', 4.6, 1).best).toBe(0);
   });
   it('has a solvable challenge', () => {
-    expect(doubledNitrogenSolved('nitrogen', 5, 4.6, 1.2)).toBe(true);
-    expect(doubledNitrogenSolved('nitrogen', 6, 4.6, 1.2)).toBe(false);
+    expect(dearNitrogenSolved('nitrogen', 4, 4.6, 1.4)).toBe(true);
+    expect(dearNitrogenSolved('nitrogen', 5, 4.6, 1.4)).toBe(false);
   });
 });
 
@@ -375,8 +377,8 @@ describe('chapter 2: harvest (2.4)', () => {
     expect(dateLabel(best.day)).toBe('Oct 17');
     expect(dateLabel(bestStart({ perDay: 100, drying: 0.02, price: 4.6 }).day)).toBe('Oct 4');
     expect(dateLabel(bestStart({ perDay: 100, drying: 0.06, price: 4.6 }).day)).toBe('Nov 1');
-    expect(harvestSolved({ start: dayOf(10, 17), perDay: 100, drying: 0.035, price: 4.6 })).toBe(true);
-    expect(harvestSolved({ start: dayOf(9, 16), perDay: 100, drying: 0.035, price: 4.6 })).toBe(false);
+    expect(harvestSolved({ start: dayOf(11, 2), perDay: 100, drying: 0.07, price: 4.6 })).toBe(true);
+    expect(harvestSolved({ start: dayOf(10, 17), perDay: 100, drying: 0.07, price: 4.6 })).toBe(false);
     expect(Math.round(wheatValue(7).sprouted * 1000) / 10).toBe(2.7);
     expect(Math.round(wheatValue(28).discount * 100)).toBe(46);
   });
@@ -393,8 +395,8 @@ describe('chapter 2: farm economics (2.5)', () => {
     expect(farm.filter((x) => x < 0).length).toBe(50);
   });
   it('has a solvable challenge', () => {
-    expect(breakevenSolved('corn', 4.75, 176, 1, 265)).toBe(true);
-    expect(breakevenSolved('corn', 4.8, 176, 1, 265)).toBe(false);
+    expect(breakevenSolved('corn', 4.95, 176, 1, 300)).toBe(true);
+    expect(breakevenSolved('corn', 5.0, 176, 1, 300)).toBe(false);
   });
 });
 
@@ -412,8 +414,8 @@ describe('chapter 3: geography (3.1)', () => {
     expect(s.ridge.best).toBe('wheat');
     expect(Math.round(suitability({ rain: 0.8, temp: 0, soil: 1 }).north.corn)).toBe(122);
     expect(Math.round(suitability({ rain: 1, temp: 2, soil: 1 }).prairie.corn)).toBe(153);
-    expect(ridgeSoilSolved({ rain: 1, temp: 0, soil: 1.1 })).toBe(true);
-    expect(ridgeSoilSolved({ rain: 1, temp: 0, soil: 1.2 })).toBe(false);
+    expect(warmerSolved({ rain: 1, temp: 2, soil: 1 }, 'north')).toBe(true);
+    expect(warmerSolved({ rain: 1, temp: 2, soil: 1 }, 'ridge')).toBe(false);
   });
 });
 
@@ -441,8 +443,9 @@ describe('chapter 3: satellites (3.3)', () => {
     expect(Math.round(ndvi(canopyReflectance(1)) * 100) / 100).toBe(0.51);
     expect(Math.round(ndvi(canopyReflectance(5)) * 100) / 100).toBe(0.81);
     expect(Math.round(ndvi(canopyReflectance(5, 0.7)) * 100) / 100).toBe(0.64);
-    expect(ndviSolved(3.2, 1, 0)).toBe(true);
-    expect(ndviSolved(3.3, 1, 0)).toBe(false);
+    expect(lookalikeSolved(5, 0.75, 0)).toBe(true);
+    expect(lookalikeSolved(5, 0.7, 0)).toBe(false);
+    expect(lookalikeSolved(2, 1, 0)).toBe(false);
     const drought = seasonNdvi(fieldSeason(46, { district: 'prairie', crop: 'corn' }));
     expect(Math.round(drought[dayOf(8, 1)] * 100) / 100).toBe(0.72);
     expect(Math.round(drought[dayOf(8, 15)] * 100) / 100).toBe(0.37);
@@ -468,9 +471,8 @@ describe('chapter 3: Monte Carlo (3.5)', () => {
     expect(Math.round(d.q05)).toBe(390);
     expect(Math.round(d.min)).toBe(269);
     expect(Math.round(normalWeatherProduction().corn)).toBe(630);
-    expect(percentileSolved(200, 'corn', false, 420)).toBe(true);
-    expect(percentileSolved(200, 'corn', false, 410)).toBe(false);
-    expect(Math.round(describeSample(endings(46, dayOf(8, 1))).mean)).toBe(321);
+    expect(independentSolved(200, 'corn', true, 420)).toBe(true);
+    expect(independentSolved(200, 'corn', false, 420)).toBe(false);
   });
 });
 
@@ -478,8 +480,8 @@ describe('chapter 4: grain quality (4.1)', () => {
   it('grades and discounts as the prose says', () => {
     const load = { testWeight: 55, damaged: 2.5, bcfm: 1.5, moisture: 15 };
     expect(cornGrade(load).grade).toBe(2);
-    expect(moistureSolved({ ...load, moisture: 20.5 })).toBe(true);
-    expect(moistureSolved({ ...load, moisture: 20 })).toBe(false);
+    expect(gradeSolved({ ...load, testWeight: 53, damaged: 7 })).toBe(true);
+    expect(gradeSolved({ ...load, testWeight: 53, damaged: 7.5 })).toBe(false);
     expect(cornPrice({ ...load, moisture: 20 }, 4.4).netPerBushel).toBeLessThan(4.4);
   });
 });
@@ -488,8 +490,8 @@ describe('chapter 4: storage (4.2)', () => {
   const fill = dayOf(10, 20);
   const toJuly = 365 - fill + dayOf(7, 15);
   it('keeps and spoils corn as the prose says', () => {
-    expect(wettestSolved({ dryTo: 16, aeration: 'off', days: toJuly, where: 'farm' })).toBe(true);
-    expect(wettestSolved({ dryTo: 15.5, aeration: 'off', days: toJuly, where: 'farm' })).toBe(false);
+    expect(wettestSolved({ dryTo: 18, aeration: 'on', days: toJuly, where: 'farm' })).toBe(true);
+    expect(wettestSolved({ dryTo: 17.5, aeration: 'on', days: toJuly, where: 'farm' })).toBe(false);
     const held = simulateBin({ year: REFERENCE_YEAR, district: 'prairie', fillDay: fill, days: toJuly, harvestMoisture: 19, dryTo: 15, aeration: true, price: 4.4, interest: 0.07, perMonth: 0.02 });
     expect(held.spoiledAt).toBeLessThan(0);
     expect(Math.round(held.costs.total * 100)).toBe(54);
@@ -592,9 +594,9 @@ describe('chapter 4: the world balance (4.5)', () => {
     expect(Math.round(485 - drought.regions[4].use)).toBe(31);
     expect(Math.round(drought.carryIn - drought.carryOut)).toBe(23);
     expect(Math.round(balanceOf({ ...WORLD0, us: -10 }).price * 100) / 100).toBe(6.55);
-    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 125 })).toBe(true);
-    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 120 })).toBe(false);
-    expect(bufferSolved({ ...WORLD0, us: -10, carryIn: 130 })).toBe(false);
+    expect(dearShortfallSolved({ ...WORLD0, us: -10, carryIn: 90 })).toBe(true);
+    expect(dearShortfallSolved({ ...WORLD0, us: -10, carryIn: 85 })).toBe(false);
+    expect(dearShortfallSolved({ ...WORLD0, us: -10, carryIn: 95 })).toBe(false);
     const noExports = clearWorld({ crop: { blackSea: -0.65 } });
     expect(Math.abs(noExports.regions[2].net)).toBeLessThan(1);
     expect(Math.round(noExports.price * 100) / 100).toBe(6.37);
@@ -651,9 +653,9 @@ describe('chapter 5: the market engine', () => {
 describe('chapter 5: futures and delivery (5.1)', () => {
   it('delivers, converges and hedges as the prose says', () => {
     expect(dollars(expiryCash())).toBe(5.01);
-    expect(deliverySolved(503)).toBe(true);
-    expect(deliverySolved(502)).toBe(false);
-    expect(deliverySolved(504)).toBe(false);
+    expect(deliverySolved(504)).toBe(true);
+    expect(deliverySolved(503)).toBe(false);
+    expect(deliverySolved(505)).toBe(false);
     const gap = (d: number) => cents(decFutures(40, d) - portSpot(40, d));
     expect(gap(dayOf(10, 15))).toBe(11);
     expect(gap(dayOf(11, 10))).toBe(6);
@@ -866,7 +868,6 @@ describe('chapter 6: the season (6.2)', () => {
     const cal = calibration(CEDAR_DESIGN);
     expect(cal.map((c) => c.inside)).toEqual([35, 32, 33, 34]);
     expect([Math.round(cal[0].mae), Math.round(cal[3].mae)]).toEqual([21, 10]);
-    expect(bestCalibrated(CEDAR_DESIGN)).toBe(dayOf(7, 1));
     expect(NEW_SEASONS).toContain(worstAugustMiss(CEDAR_DESIGN));
   });
 });
@@ -905,14 +906,14 @@ describe('chapter 6: the merchant (6.4)', () => {
     const r46 = merchantYear(DEFAULT_MERCHANT, 46);
     expect([Math.round(r46.bought / 1e5) / 10, Math.round(r46.buying / 1e4) / 100]).toEqual([3.2, 0.86]);
     expect(bestSpread()).toBe(38);
-    expect(bestMinCarry(38)).toBe(0.5);
+    expect(bestMinCarry(38)).toBe(0.6);
     const storage = (p: MerchantPlan) => SIXTY.reduce((a, y) => a + merchantYear(p, y).storage, 0) / 60;
     expect(K(storage({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0, charterMillions: 0 }))).toBe(182);
-    expect(K(storage({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.5, charterMillions: 0 }))).toBe(197);
+    expect(K(storage({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.6, charterMillions: 0 }))).toBe(199);
     const charter = SIXTY.map((y) => merchantYear({ ...DEFAULT_MERCHANT, charterMillions: 1 }, y).charter);
     expect(K(charter.reduce((a, b) => a + b, 0) / 60)).toBe(280);
     expect(K(Math.min(...charter))).toBe(-150);
-    expect(largestSafeCharter({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.5, charterMillions: 0 })).toBe(5);
+    expect(largestSafeCharter({ spreadCents: 38, storeUntil: 'Jul', storeMinCarry: 0.6, charterMillions: 0 })).toBe(5);
     const avg = (ys: number[]) => ys.reduce((a, y) => a + merchantYear(DEFAULT_MERCHANT, y).total, 0) / ys.length;
     expect(avg(NEW_SEASONS)).toBeGreaterThan(avg(SIXTY));
   });
@@ -920,15 +921,15 @@ describe('chapter 6: the merchant (6.4)', () => {
 
 describe('chapter 6: the desk (6.5)', () => {
   it('steadies the business as the prose says', () => {
-    const run = (p: number, years: number[]) => stats(years.map((y) => deskYear(CEDAR_DESIGN, DEFAULT_MERCHANT, { hedgePct: p, hedgeWith: 'futures', forecastContracts: 0 }, y).total));
+    const run = (p: number, years: number[]) => stats(years.map((y) => deskYear(CEDAR_DESIGN, DEFAULT_MERCHANT, { hedgeContracts: p, hedgeWith: 'futures', forecastContracts: 0 }, y).total));
     const m = SIXTY.reduce((a, y) => a + merchantYear(DEFAULT_MERCHANT, y).total, 0) / 60;
     expect(Math.round(m / 1e4) / 100).toBe(1.56);
-    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, SIXTY)).toBe(-40);
-    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, NEW_SEASONS)).toBe(-20);
+    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, SIXTY)).toBe(-15);
+    expect(steadiestPosition(CEDAR_DESIGN, DEFAULT_MERCHANT, 0, NEW_SEASONS)).toBe(-10);
     expect(Math.round(run(0, SIXTY).worst / 1e4) / 100).toBe(0.81);
-    expect(Math.round(run(-40, SIXTY).worst / 1e4) / 100).toBe(1.04);
-    expect(run(-40, SIXTY).sd).toBeLessThan(run(0, SIXTY).sd);
-    expect(run(40, SIXTY).sd).toBeGreaterThan(run(0, SIXTY).sd);
+    expect(Math.round(run(-15, SIXTY).worst / 1e4) / 100).toBe(1.07);
+    expect(run(-15, SIXTY).sd).toBeLessThan(run(0, SIXTY).sd);
+    expect(run(15, SIXTY).sd).toBeGreaterThan(run(0, SIXTY).sd);
     const avg = (ys: number[]) => ys.reduce((a, y) => a + reportTrade(y), 0) / ys.length;
     expect(Math.round(avg(SIXTY) * 1000)).toBe(71);
     expect(Math.round(avg(NEW_SEASONS) * 1000)).toBe(70);

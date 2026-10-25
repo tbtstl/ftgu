@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
@@ -106,6 +106,17 @@ export function amdahlSolved(logShare: number): boolean {
   return amdahl(10 ** logShare, GPU_LANES) >= TARGET_SPEEDUP && (next > SHARE_LOG.max || amdahl(10 ** next, GPU_LANES) < TARGET_SPEEDUP);
 }
 
+/** The reader's prediction for the second challenge: with 1 − s taken as 1, s ≤ 1/1,000 − 1/16,896 (≈ 0.094%). */
+export const PREDICTED_SHARE = 1 / TARGET_SPEEDUP - 1 / GPU_LANES;
+
+/** At serial shares this small or smaller, the GPU's speedup is hidden until the second challenge is solved. */
+export const HIDE_AT_OR_BELOW = 0.002;
+
+/** Whether the chart hides the GPU's speedup: near the challenge's answer, until it has been solved. */
+export function gpuSpeedupHidden(logShare: number, revealed: boolean): boolean {
+  return !revealed && 10 ** logShare <= HIDE_AT_OR_BELOW * (1 + 1e-9);
+}
+
 // ---------------------------------------------------------------------------
 // Drawing.
 
@@ -211,7 +222,7 @@ const AX = scale(0, 5, 70, 610);
 const AY = scale(0, 5, 232, 26);
 const LOG_LANES = Array.from({ length: 101 }, (_, i) => i * 0.05);
 
-function AmdahlChart({ share }: { share: number }) {
+function AmdahlChart({ share, hideGpu }: { share: number; hideGpu: boolean }) {
   const curve = linePath(
     LOG_LANES.map(AX),
     LOG_LANES.map((l) => AY(Math.log10(amdahl(share, 10 ** l)))),
@@ -226,7 +237,9 @@ function AmdahlChart({ share }: { share: number }) {
       className="chart"
       viewBox="0 0 640 262"
       role="img"
-      aria-label={`Speedup against number of lanes with ${fmt(share * 100, share < 0.001 ? 3 : 2)}% of the work serial. ${fmt(CPU_LANES)} lanes give ${fmt(amdahl(share, CPU_LANES))}×; ${fmt(GPU_LANES)} lanes give ${fmt(amdahl(share, GPU_LANES))}×; no number of lanes can pass ${fmt(1 / share)}×.`}
+      aria-label={`Speedup against number of lanes with ${fmt(share * 100, share < 0.001 ? 3 : 2)}% of the work serial. ${fmt(CPU_LANES)} lanes give ${fmt(amdahl(share, CPU_LANES))}×; ${
+        hideGpu ? `the speedup on ${fmt(GPU_LANES)} lanes is hidden until the challenge is solved` : `${fmt(GPU_LANES)} lanes give ${fmt(amdahl(share, GPU_LANES))}×`
+      }; no number of lanes can pass ${fmt(1 / share)}×.`}
     >
       <text className="ax" x={70} y={14}>
         Speedup over one lane
@@ -267,7 +280,7 @@ function AmdahlChart({ share }: { share: number }) {
             <line className="cur" x1={x} x2={x} y1={AY(0)} y2={y} />
             <circle cx={x} cy={y} r={5.5} fill={GRAPHIC.orange} stroke="#fcfcfb" strokeWidth={2} />
             <text className="lab" x={x + (m.name === 'GPU' ? 8 : -8)} y={y + 18} textAnchor={m.name === 'GPU' ? 'start' : 'end'}>
-              {m.name}: {fmt(s)}×
+              {m.name}: {m.name === 'GPU' && hideGpu ? 'predict it' : `${fmt(s)}×`}
             </text>
           </g>
         );
@@ -295,6 +308,14 @@ export default function Lesson() {
   const s2 = useScenario('amdahl', AMDAHL_DEFAULTS);
   const share = 10 ** s2.state.logShare;
   const solvedB = amdahlSolved(s2.state.logShare);
+  // Once the second challenge is solved, the GPU's speedup stays visible.
+  const [revealedB, setRevealedB] = useState(false);
+  useEffect(() => {
+    if (solvedB) setRevealedB(true);
+  }, [solvedB]);
+  const hideGpu = gpuSpeedupHidden(s2.state.logShare, revealedB || solvedB);
+  const gpuSpeedup = amdahl(share, GPU_LANES);
+  const nextShare = 10 ** (Math.round((s2.state.logShare + SHARE_LOG.step) * 100) / 100);
 
   // Numbers quoted in the prose, all from the engine.
   const q = useMemo(() => {
@@ -361,18 +382,20 @@ export default function Lesson() {
         {fmt(CPU_LANES)} <K tone="orange">lanes</K> of 32-bit floating-point arithmetic, for a peak of {fmt(peakTflops(CPU), 1)} TFLOPS.
       </P>
       <P>
-        The <b>A-class 80 GB</b>, the workhorse accelerator of this course — fictional, with the specifications of a current data-center GPU — spends its
-        transistors the other way. It has {ACCELERATORS.A.sms} streaming multiprocessors, or SMs, the GPU’s equivalent of cores, each with 128 lanes:{' '}
-        {fmt(GPU_LANES)} in all, ticking at <K c="frequency">{fmt(ACCELERATORS.A.clockGHz, 2)} GHz</K>, for {fmt(peakTflops(GPU), 1)} TFLOPS. That is{' '}
-        {fmt(peakTflops(GPU) / peakTflops(CPU), 1)} times the CPU’s peak, from lanes that are each slower. And a single GPU thread working through a chain of
-        steps, each needing the result of the one before, manages about {fmt(GPU_SERIAL_GOPS, 1)} billion operations a second, against {HOST_CPU.serialGops}{' '}
-        billion for one CPU core: {fmt(HOST_CPU.serialGops / GPU_SERIAL_GOPS)} times slower. Which design wins depends entirely on the work.
+        The A-class 80 GB, the workhorse accelerator we met in <a href={lessonHref('compute/1.4')}>Lessons 1.4</a> and{' '}
+        <a href={lessonHref('compute/1.5')}>1.5</a>, spends its transistors the other way. The {ACCELERATORS.A.sms} units of 128 lanes that Lesson 1.5 counted
+        are called streaming multiprocessors, or SMs — the GPU’s equivalent of cores — and their {fmt(GPU_LANES)} lanes tick at{' '}
+        <K c="frequency">{fmt(ACCELERATORS.A.clockGHz, 2)} GHz</K>, for {fmt(peakTflops(GPU))} TFLOPS. That is {fmt(peakTflops(GPU) / peakTflops(CPU), 1)} times
+        the CPU’s peak, from lanes that are each slower. Each thread is slower too. On ordinary serial code — one step after another, with branches to follow — a
+        single GPU thread manages about {fmt(GPU_SERIAL_GOPS, 1)} billion operations a second. One CPU core manages about {HOST_CPU.serialGops} billion, because
+        its guessing and working ahead keep several independent instructions in progress at once; a GPU thread does neither, and is{' '}
+        {fmt(HOST_CPU.serialGops / GPU_SERIAL_GOPS)} times slower. Which design wins depends entirely on the work.
       </P>
       <P>
         In the next demonstration, both processors run the same task: some number of independent work items, each needing the same arithmetic — brightening every
         pixel of an image, say, or scoring every product in a catalog. The tiles are the CPU’s 64 cores and the GPU’s {ACCELERATORS.A.sms} SMs, shaded by how
         busy their lanes are, and the bars are each processor’s time from start to finish. Set the number of items and the arithmetic in each, how many items the
-        program works on at once, the share of the work that must run as one serial chain, and whether the data starts in the CPU’s memory and has to be copied
+        program works on at once, the share of the work that must run on a single thread, and whether the data starts in the CPU’s memory and has to be copied
         across:
       </P>
 
@@ -388,8 +411,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'host CPU', value: dur(cpu.totalS), tone: 'teal' },
-            { label: 'A-class GPU', value: dur(gpu.totalS), tone: 'teal' },
             { label: 'CPU lanes busy', value: `${fmt(cpu.utilization * 100, 1)}%`, tone: 'orange' },
             { label: 'GPU lanes busy', value: `${fmt(gpu.utilization * 100, 1)}%`, tone: 'orange' },
           ]}
@@ -458,7 +479,7 @@ export default function Lesson() {
       <P>
         Width helps only if the work is spread across it. Lower the items in flight to 1 and each processor works through the million items one at a time on a
         single lane. The CPU’s faster clock wins: {dur(q.single.c.totalS)} to {dur(q.single.g.totalS)}. Real programs are rarely written that badly, but many
-        have steps that can’t be split up at all, because each needs the result of the one before. Give the task a serial share of 1% and the CPU finishes in{' '}
+        have parts that can’t be split up at all and must run on a single thread, one step after another. Give the task a serial share of 1% and the CPU finishes in{' '}
         {dur(q.serial.c.totalS)}, while the GPU takes {dur(q.serial.g.totalS)}, {fmt(q.serial.g.totalS / q.serial.c.totalS)} times longer: its serial thread is{' '}
         {fmt(HOST_CPU.serialGops / GPU_SERIAL_GOPS)} times slower, and that 1% now dominates. In practice, a program runs its serial parts on the CPU and sends only
         the parallel parts to the GPU. That division of labor is why the two sit together in every server.
@@ -466,11 +487,14 @@ export default function Lesson() {
       <P>
         Now set the serial share back to 0% and tick the copy box. Each item’s {BYTES_PER_ITEM} bytes — 4 in, 4 back out — cross the link between the two
         processors at <K tone="violet">{GPU.copyGBs} GB/s</K>, and for a million items that takes {dur(q.copied.g.copyS)}, nearly as long as the CPU’s entire
-        job. The GPU now loses, {dur(q.copied.g.totalS)} to {dur(q.copied.c.totalS)}. In the time the link carries one byte, the CPU can do{' '}
-        {fmt(q.cpuFlopsPerByte)} FLOPs of arithmetic, so unless each byte sent to the GPU brings more arithmetic than that, the copy alone costs more than doing
-        the work at home. Raise the arithmetic to 20,000 FLOPs per item and the GPU is {fmt(q.copied20k.c.totalS / q.copied20k.g.totalS, 1)} times faster again.
-        Arithmetic per byte moved will return in <a href={lessonHref('compute/2.4')}>Lesson 2.4</a> as perhaps the most important number about any GPU
-        workload.
+        job. The GPU now loses, {dur(q.copied.g.totalS)} to {dur(q.copied.c.totalS)}. A rule of thumb says when a copy can pay: in the time the link carries one
+        byte, the CPU can do {fmt(q.cpuFlopsPerByte)} FLOPs of arithmetic, so each byte sent to the GPU must bring more arithmetic than that just for the copy to
+        take less time than doing the work at home. This task brings {fmt(CHALLENGE_FLOPS)} ÷ {BYTES_PER_ITEM} = {fmt(CHALLENGE_FLOPS / BYTES_PER_ITEM)} FLOPs per
+        byte, barely over the line, so the copy alone is a little shorter than the CPU’s job. What tips the result is the GPU’s own time on top of it:{' '}
+        {dur(q.copied.g.parallelS)} of arithmetic and {GPU.launchUs} µs to start the work. Raise the arithmetic to 20,000 FLOPs per item, or{' '}
+        {fmt(20000 / BYTES_PER_ITEM)} per byte, and the GPU is {fmt(q.copied20k.c.totalS / q.copied20k.g.totalS, 1)} times faster again. Arithmetic per byte moved
+        will return in <a href={lessonHref('compute/2.3')}>Lessons 2.3</a> and <a href={lessonHref('compute/2.4')}>2.4</a> as perhaps the most important number
+        about any GPU workload.
       </P>
 
       <H2>Amdahl’s law</H2>
@@ -490,14 +514,7 @@ export default function Lesson() {
       </P>
 
       <Figure name="Parallel Computing Lab · Amdahl’s law" scenario={s2}>
-        <AmdahlChart share={share} />
-        <Readouts
-          items={[
-            { label: `on the CPU’s ${fmt(CPU_LANES)} lanes`, value: `${fmt(amdahl(share, CPU_LANES))}×`, tone: 'orange' },
-            { label: `on the GPU’s ${fmt(GPU_LANES)} lanes`, value: `${fmt(amdahl(share, GPU_LANES))}×`, tone: 'orange' },
-            { label: 'limit with unlimited lanes', value: `${fmt(1 / share)}×` },
-          ]}
-        />
+        <AmdahlChart share={share} hideGpu={hideGpu} />
         <Slider
           label="Serial share"
           value={s2.state.logShare}
@@ -513,24 +530,28 @@ export default function Lesson() {
         At 1%, {fmt(CPU_LANES)} lanes give a speedup of {fmt(amdahl(0.01, CPU_LANES))} and {fmt(GPU_LANES)} lanes give {fmt(amdahl(0.01, GPU_LANES))}: eight times
         the hardware for {fmt((amdahl(0.01, GPU_LANES) / amdahl(0.01, CPU_LANES) - 1) * 100)}% more speed. The curve bends away from the dashed line long before it
         reaches the GPU, and everything past the bend is lanes waiting on the serial part. To make use of a GPU’s width, a program has to be almost perfectly
-        parallel: even at 0.1% serial, the GPU’s lanes reach only {fmt(amdahl(0.001, GPU_LANES))}.
+        parallel, and the equation says just how nearly.
       </P>
 
       <Challenge
         id="b"
-        question="Find the largest serial share at which the GPU’s 16,896 lanes still deliver a speedup of at least 1,000."
+        question={`Predict first: for the GPU’s ${fmt(GPU_LANES)} lanes to reach a speedup of ${fmt(TARGET_SPEEDUP)}, the bottom of the fraction, s + (1 − s)/${fmt(GPU_LANES)}, must be no more than 1/${fmt(TARGET_SPEEDUP)}. Taking 1 − s as 1, what is the largest serial share s that allows? Then set the slider to the largest serial share at which the GPU still reaches ${fmt(TARGET_SPEEDUP)}× — near the answer, the chart hides the GPU’s speedup until you find it.`}
         solved={solvedB}
-        status={`At ${sharePct(share)} serial, 16,896 lanes give ${fmt(amdahl(share, GPU_LANES))}×.`}
-        success={`Solved. At ${sharePct(share)} serial the speedup is ${fmt(amdahl(share, GPU_LANES))}×; at ${sharePct(10 ** (s2.state.logShare + SHARE_LOG.step))} it falls to ${fmt(amdahl(10 ** (s2.state.logShare + SHARE_LOG.step), GPU_LANES))}×. With this many lanes, a serial share of less than one part in a thousand already sets the limit.`}
+        status={
+          gpuSpeedup >= TARGET_SPEEDUP
+            ? `At ${sharePct(share)} serial, the GPU’s lanes clear ${fmt(TARGET_SPEEDUP)}× — and so would a slightly larger serial share.`
+            : `At ${sharePct(share)} serial, the GPU’s lanes fall short of ${fmt(TARGET_SPEEDUP)}×.`
+        }
+        success={`Solved. 1/${fmt(TARGET_SPEEDUP)} − 1/${fmt(GPU_LANES)} ≈ ${fmt(PREDICTED_SHARE * 100, 3)}%, and the largest setting on the slider below that is ${sharePct(share)}, where the GPU’s lanes give ${fmt(gpuSpeedup)}×. At ${sharePct(nextShare)} — exactly one part in a thousand — they give only ${fmt(amdahl(nextShare, GPU_LANES))}×, because the parallel part’s own 1/${fmt(GPU_LANES)} uses up part of the budget. With this many lanes, a serial share of less than one part in a thousand already sets the limit.`}
       />
 
       <H2>Work that suits a GPU</H2>
       <P>
-        That is a demanding standard, and most software doesn’t meet it: an operating system, a web server or a database spends much of its time on long,
+        A serial share under one part in a thousand is a demanding standard, and most software doesn’t meet it: an operating system, a web server or a database spends much of its time on long,
         branching chains of decisions, and belongs on the CPU. The arithmetic of neural networks does meet it. As Chapter 3 will show, almost all of it is the multiplication
         of large matrices — millions of multiply-adds that don’t depend on one another — and the A-class has dedicated matrix units for exactly that. At the 16-bit
         BF16 precision of <a href={lessonHref('compute/1.4')}>Lesson 1.4</a>, they reach {fmt(ACCELERATORS.A.bf16Tflops)} trillion operations a second, against the{' '}
-        {fmt(peakTflops(GPU), 1)} TFLOPS of the ordinary 32-bit lanes we’ve used here.
+        {fmt(peakTflops(GPU))} TFLOPS of the ordinary 32-bit lanes we’ve used here.
       </P>
       <P>
         Already the economics follow from the physics. An hour of the GPU is worth a great deal to work that keeps its lanes full and its data close by, and very

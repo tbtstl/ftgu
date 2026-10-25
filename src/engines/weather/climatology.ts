@@ -19,13 +19,13 @@ let base: Base | null = null;
 /** The parts of every day's weather that don't depend on the station's climate, computed once. */
 function getBase(): Base {
   if (base) return base;
-  const z = { calder: new Float64Array(DAYS), marlow: new Float64Array(DAYS), ridge: new Float64Array(DAYS) };
+  const z = { fenwick: new Float64Array(DAYS), marlow: new Float64Array(DAYS), ridge: new Float64Array(DAYS) };
   const enso = new Float64Array(DAYS);
   const years = new Float64Array(DAYS);
   const doy = new Int16Array(DAYS);
   for (let d = 0; d < DAYS; d++) {
     const info = dayInfo(d);
-    z.calder[d] = stationZ('calder', d);
+    z.fenwick[d] = stationZ('fenwick', d);
     z.marlow[d] = stationZ('marlow', d);
     z.ridge[d] = stationZ('ridge', d);
     enso[d] = ENSO_MONTH_WEIGHT[info.month] * ninoAt(d);
@@ -40,7 +40,7 @@ function getBase(): Base {
  * Every day of the archive at a station with climate `cl`, driven by the weather sequence of one
  * of the region's stations, °F. The same numbers as `tempForClimate`, computed in bulk.
  */
-export function climateSeries(cl: Climate, like: StationId = 'calder'): Float64Array {
+export function climateSeries(cl: Climate, like: StationId = 'fenwick'): Float64Array {
   const b = getBase();
   const normal = new Float64Array(365);
   const sd = new Float64Array(365);

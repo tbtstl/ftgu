@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import {
-  Caption,
   Challenge,
   Eq,
   FigRef,
@@ -23,10 +22,9 @@ import {
   niceDomain,
   niceTicks,
   scale,
-  signed,
   useScenario,
 } from '../../../framework';
-import { BASE_F, CITY_WIND_SHARE, UTILITY, cdd, demandFactor, hdd, indexFromMonthlyMean, monthIndexHistory, sendout } from '../../../engines/weather/degreeDays';
+import { BASE_F, CITY_WIND_SHARE, UTILITY, cdd, hdd, indexFromMonthlyMean, monthIndexHistory, sendout } from '../../../engines/weather/degreeDays';
 import { winterHdd } from '../../../engines/weather/exposure';
 import { YEARS, archive, expectedTemp, monthDays, tempF } from '../../../model/weather/archive';
 import { MONTH_NAMES } from '../../../model/weather/region';
@@ -36,7 +34,7 @@ const HDD_COLOR = GRAPHIC.orange;
 const CDD_COLOR = GRAPHIC.red;
 
 // ---------------------------------------------------------------------------
-// The first demonstration: a month at Calder Bay from the simulated archive.
+// The first demonstration: a month at Fenwick Bay from the simulated archive.
 
 export interface MonthChoice {
   year: number;
@@ -57,11 +55,9 @@ export interface MonthRecord {
   volume: number;
   /** Its margin on that gas, $. */
   margin: number;
-  /** Average electricity demand relative to a mild 60 °F day. */
-  demand: number;
 }
 
-/** A month at Calder Bay with every day shifted by `shift` °F: its degree days, the utility's gas and margin, and electricity demand. */
+/** A month at Fenwick Bay with every day shifted by `shift` °F: its degree days, and the utility's gas and margin. */
 export function monthRecord(st: MonthChoice): MonthRecord {
   const { start, days } = monthDays(st.year, st.month);
   const wind = archive().wind;
@@ -70,17 +66,15 @@ export function monthRecord(st: MonthChoice): MonthRecord {
   let h = 0;
   let c = 0;
   let volume = 0;
-  let demand = 0;
   for (let i = 0; i < days; i++) {
-    const t = tempF('calder', start + i) + st.shift;
+    const t = tempF('fenwick', start + i) + st.shift;
     temps.push(t);
-    normals.push(expectedTemp('calder', start + i));
+    normals.push(expectedTemp('fenwick', start + i));
     h += hdd(t);
     c += cdd(t);
     volume += sendout(hdd(t), CITY_WIND_SHARE * wind[start + i]);
-    demand += demandFactor(t) / days;
   }
-  return { temps, normals, hdd: h, cdd: c, volume, margin: UTILITY.margin * volume, demand };
+  return { temps, normals, hdd: h, cdd: c, volume, margin: UTILITY.margin * volume };
 }
 
 export interface MonthNormal {
@@ -102,7 +96,7 @@ export function monthNormal(month: number): MonthNormal {
   for (let y = 1; y <= YEARS; y++) {
     const { start } = monthDays(y, month);
     for (let i = 0; i < days; i++) {
-      const t = tempF('calder', start + i);
+      const t = tempF('fenwick', start + i);
       dailyHdd[i] += hdd(t) / YEARS;
       dailyCdd[i] += cdd(t) / YEARS;
     }
@@ -112,15 +106,28 @@ export function monthNormal(month: number): MonthNormal {
   return v;
 }
 
-/** The January with the most heating degree days in the archive. */
-export const COLDEST_JANUARY = (() => {
-  const h = monthIndexHistory('HDD', 0);
-  return h.indexOf(Math.max(...h)) + 1;
+export const SHIFT_STEP = 0.5;
+
+/**
+ * The first challenge's answer: the shift, on the slider's half-degree steps, that brings the
+ * starting January (year 20, a mild one) closest to a normal January. Every January day is below
+ * 65 °F, so each degree colder adds one heating degree day to each of its 31 days: the reader
+ * predicts it as (normal − actual) ÷ 31 ≈ 2.9 °F, so 3 °F colder.
+ */
+export const NORMAL_SHIFT = (() => {
+  const normal = monthNormal(MONTH_DEFAULTS.month).hdd;
+  let best = 0;
+  for (let k = -20; k <= 20; k++) {
+    const shift = k * SHIFT_STEP;
+    const miss = (x: number) => Math.abs(monthRecord({ ...MONTH_DEFAULTS, shift: x }).hdd - normal);
+    if (miss(shift) < miss(best)) best = shift;
+  }
+  return best;
 })();
 
-/** The first challenge: the archive's coldest January, as it happened (no shift). */
-export function coldestJanuarySolved(st: MonthChoice): boolean {
-  return st.month === 0 && st.shift === 0 && st.year === COLDEST_JANUARY;
+/** The first challenge: January of year 20, shifted to the step that makes it a normal January. */
+export function normalShiftSolved(st: MonthChoice): boolean {
+  return st.year === MONTH_DEFAULTS.year && st.month === MONTH_DEFAULTS.month && st.shift === NORMAL_SHIFT;
 }
 
 function millions(x: number, digits = 1): string {
@@ -163,7 +170,7 @@ function MonthChart({ rec, normal, label }: { rec: MonthRecord; normal: MonthNor
       className="chart"
       viewBox="0 0 640 344"
       role="img"
-      aria-label={`${label} at Calder Bay: daily means from ${fmt(Math.min(...rec.temps), 1)} to ${fmt(Math.max(...rec.temps), 1)} °F. The month collects ${fmt(rec.hdd)} heating and ${fmt(rec.cdd)} cooling degree days, against a normal of ${fmt(normal.hdd)} and ${fmt(normal.cdd)}.`}
+      aria-label={`${label} at Fenwick Bay: daily means from ${fmt(Math.min(...rec.temps), 1)} to ${fmt(Math.max(...rec.temps), 1)} °F. The month collects ${fmt(rec.hdd)} heating and ${fmt(rec.cdd)} cooling degree days, against a normal of ${fmt(normal.hdd)} and ${fmt(normal.cdd)}.`}
     >
       <text className="ax" x={MX0} y={14}>
         Daily mean temperature, °F
@@ -213,11 +220,11 @@ function MonthChart({ rec, normal, label }: { rec: MonthRecord; normal: MonthNor
 // ---------------------------------------------------------------------------
 // The second demonstration: one month's pattern of warm and cold days, re-centered and stretched.
 
-/** The pattern: Calder Bay's May of year 12, its departures from normal scaled to an average of 0 and a standard deviation of 1. */
+/** The pattern: Fenwick Bay's May of year 12, its departures from normal scaled to an average of 0 and a standard deviation of 1. */
 export const PATTERN = { year: 12, month: 4 };
 export const PATTERN_Z: number[] = (() => {
   const { start, days } = monthDays(PATTERN.year, PATTERN.month);
-  const an = Array.from({ length: days }, (_, i) => tempF('calder', start + i) - expectedTemp('calder', start + i));
+  const an = Array.from({ length: days }, (_, i) => tempF('fenwick', start + i) - expectedTemp('fenwick', start + i));
   const m = an.reduce((s, v) => s + v, 0) / days;
   const sd = Math.sqrt(an.reduce((s, v) => s + (v - m) ** 2, 0) / days);
   return an.map((v) => (v - m) / sd);
@@ -250,6 +257,8 @@ export function spreadIndex(st: SpreadChoice): { hdd: number; cdd: number; short
 
 /** The second challenge's target: 100 heating degree days in a month whose mean is exactly 65 °F. */
 export const SWING_TARGET = 100;
+/** The swing whose degree days the second challenge gives, so the reader can predict the target's from proportion. */
+export const SWING_HINT = 5;
 export function swingSolved(st: SpreadChoice): boolean {
   if (st.mean !== BASE_F) return false;
   return spreadIndex(st).hdd >= SWING_TARGET && spreadIndex({ ...st, swing: st.swing - SWING_STEP }).hdd < SWING_TARGET;
@@ -302,7 +311,7 @@ export default function Lesson() {
   const rec = useMemo(() => monthRecord(st), [st]);
   const normal = useMemo(() => monthNormal(st.month), [st.month]);
   const label = `${MONTH_NAMES[st.month]} of year ${st.year}`;
-  const solved = coldestJanuarySolved(st);
+  const solved = normalShiftSolved(st);
   const heating = rec.hdd >= rec.cdd;
 
   const sp = useScenario('spread', SPREAD_DEFAULTS);
@@ -317,7 +326,7 @@ export default function Lesson() {
     const sd = (xs: number[]) => Math.sqrt(mean(xs.map((x) => (x - mean(xs)) ** 2)));
     const start = monthRecord(MONTH_DEFAULTS);
     const colder = monthRecord({ ...MONTH_DEFAULTS, shift: -1 });
-    const midJan = expectedTemp('calder', monthDays(20, 0).start + 14);
+    const midJan = expectedTemp('fenwick', monthDays(20, 0).start + 14);
     const winters = Array.from({ length: YEARS - 1 }, (_, i) => winterHdd(i + 1));
     // May across the archive: day by day against the shortcut.
     let mayMean = 0;
@@ -326,7 +335,7 @@ export default function Lesson() {
     let mayShort = 0;
     for (let y = 1; y <= YEARS; y++) {
       const { start: d0, days } = monthDays(y, 4);
-      const t = Array.from({ length: days }, (_, i) => tempF('calder', d0 + i));
+      const t = Array.from({ length: days }, (_, i) => tempF('fenwick', d0 + i));
       const m = mean(t);
       mayMean += m / YEARS;
       mayH += t.reduce((a, v) => a + hdd(v), 0) / YEARS;
@@ -351,6 +360,7 @@ export default function Lesson() {
       mayShort,
       flat: spreadIndex({ ...SPREAD_DEFAULTS, swing: 0 }),
       dflt: spreadIndex(SPREAD_DEFAULTS),
+      hint: spreadIndex({ mean: BASE_F, swing: SWING_HINT }),
     };
   }, []);
   const midJanHdd = Math.round(hdd(q.midJan));
@@ -370,7 +380,7 @@ export default function Lesson() {
         day’s <K tone={WX.index}>heating degree days</K>, or HDD, computed from the official daily mean of <a href={lessonHref('weather/3.1')}>Lesson 3.1</a>, the
         average of the day’s maximum and minimum:
       </P>
-      <Eq label={`Heating degree days equal the larger of zero and 65 minus the day's mean temperature; on a normal mid-January day at Calder Bay, ${fmt(midJanHdd)}`}>
+      <Eq label={`Heating degree days equal the larger of zero and 65 minus the day's mean temperature; on a normal mid-January day at Fenwick Bay, ${fmt(midJanHdd)}`}>
         <K tone={WX.index}>HDD</K>
         <Op>=</Op>
         <span>max(0, 65 °F −</span>
@@ -393,16 +403,14 @@ export default function Lesson() {
         count exactly this: a daily mean of (max + min) ÷ 2 against 65 °F, summed over a month or a season.
       </P>
       <P>
-        Calder Bay’s gas utility, Calder Gas &amp; Light, is as simulated as the archive, but it behaves like a real one. It delivers{' '}
+        Fenwick Bay’s gas utility, Fenwick Gas &amp; Light, is as simulated as the archive, but it behaves like a real one. It delivers{' '}
         {fmt(UTILITY.baseLoad)} MMBtu of gas a day whatever the weather — for water heaters, stoves and industry — and {fmt(UTILITY.perHdd)} MMBtu more for every
         heating degree day, a little more on windy days, which strip heat from buildings faster. (An MMBtu is a million British thermal units, about the energy in
         a thousand cubic feet of natural gas.) A normal mid-January day, averaging {fmt(q.midJan)} °F, is {fmt(midJanHdd)} heating degree days and needs about{' '}
-        {fmt(sendout(midJanHdd))} MMBtu. The utility earns a margin of ${UTILITY.margin} on every MMBtu it delivers. Electricity follows the
-        thermometer too: in this course’s model, the region’s power demand rises 1.3% for every cooling degree day, as air conditioners switch on, and 0.4% for every
-        heating degree day beyond a mild day’s, since most of the city heats with gas.
+        {fmt(sendout(midJanHdd))} MMBtu. The utility earns a margin of ${UTILITY.margin} on every MMBtu it delivers.
       </P>
       <P>
-        In the next demonstration, choose a month at Calder Bay from the simulated archive. Each bar runs from the 65 °F line to the day’s mean: orange below it,
+        In the next demonstration, choose a month at Fenwick Bay from the simulated archive. Each bar runs from the 65 °F line to the day’s mean: orange below it,
         heating degree days, and red above it, cooling degree days. The dashed gray line is the normal for each date. The lower chart adds the degree days up
         through the month, with the archive’s average month dashed. The third slider shifts every day warmer or colder, as a what-if:
       </P>
@@ -422,7 +430,6 @@ export default function Lesson() {
             { label: 'normal for the month', value: fmt(heating ? normal.hdd : normal.cdd), tone: WX.index },
             { label: 'gas sent out, MMBtu', value: `${fmt(rec.volume / 1e6, 1)} million`, tone: WX.energy },
             { label: 'utility’s margin', value: millions(rec.margin), tone: WX.money },
-            { label: 'power demand vs a mild day', value: `${signed((rec.demand - 1) * 100, 1)}%` },
           ]}
         />
         <Slider label="Year" value={st.year} min={1} max={YEARS} onChange={(v) => s.set({ year: v })} display={`year ${st.year}`} />
@@ -437,15 +444,10 @@ export default function Lesson() {
           onChange={(v) => s.set({ shift: v })}
           display={st.shift === 0 ? 'as it happened' : `${fmt(Math.abs(st.shift), 1)} °F ${st.shift > 0 ? 'warmer' : 'colder'}`}
         />
-        <Caption>
-          {label} collected {fmt(rec.hdd)} heating and {fmt(rec.cdd)} cooling degree days
-          {st.shift !== 0 ? ` with every day ${fmt(Math.abs(st.shift), 1)} °F ${st.shift > 0 ? 'warmer' : 'colder'}` : ''}. The archive’s normal{' '}
-          {MONTH_NAMES[st.month]} has {fmt(normal.hdd)} and {fmt(normal.cdd)}.
-        </Caption>
       </Figure>
 
       <P>
-        The demonstration opens on January of year 20, a mild one: {fmt(q.start.hdd)} heating degree days against a normal of {fmt(q.janMean)}. Calder Gas &amp;
+        The demonstration opens on January of year 20, a mild one: {fmt(q.start.hdd)} heating degree days against a normal of {fmt(q.janMean)}. Fenwick Gas &amp;
         Light sent out {fmt(q.start.volume / 1e6, 1)} million MMBtu and earned {millions(q.start.margin)}. Step through the years and the Januaries differ by a lot:
         across the 41 simulated years they average {fmt(q.janMean)} heating degree days with a standard deviation of {fmt(q.janSd)}, from {fmt(q.janMin)} in year{' '}
         {q.janMinYear} to {fmt(q.janMax)} in the coldest. July’s cooling degree days average {fmt(q.julMean)}, with a standard deviation of {fmt(q.julSd)}: a
@@ -454,23 +456,23 @@ export default function Lesson() {
       <P>
         Now shift January of year 20 a degree colder. Every January day is below 65 °F, so each one gains exactly one heating degree day, and the month gains{' '}
         {fmt(q.colder.hdd - q.start.hdd)}. That costs the city about {fmt(Math.round((q.colder.volume - q.start.volume) / 1000) * 1000)} MMBtu of extra gas and
-        earns the utility {millions(q.colder.margin - q.start.margin, 2)} more. Over a whole heating season, November through March, Calder Bay averages{' '}
+        earns the utility {millions(q.colder.margin - q.start.margin, 2)} more. Over a whole heating season, November through March, Fenwick Bay averages{' '}
         {fmt(Math.round(q.winter / 10) * 10)} heating degree days, so a winter even a few percent warmer than normal takes millions of dollars off the utility’s
         margin. That is a risk it can measure in a single number, and in <a href={lessonHref('weather/4.5')}>Lesson 4.5</a> we’ll measure it.
       </P>
 
       <Challenge
         id="a"
-        question="Without shifting any days, find the January in the archive that collected the most heating degree days."
+        question={`January of year ${MONTH_DEFAULTS.year} collected ${fmt(q.start.hdd)} heating degree days, ${fmt(q.janMean - q.start.hdd)} short of a normal January. Predict first, from that rule of one degree day per degree per day: how many degrees colder would every one of its days have had to be to make it a normal January, to the slider’s half degree? Then shift the days to check.`}
         solved={solved}
         status={
-          st.month !== 0
-            ? 'Choose January first.'
-            : st.shift !== 0
-              ? 'Set the shift back to “as it happened”.'
-              : `January of year ${st.year} collected ${fmt(rec.hdd)} heating degree days. Is there a colder one?`
+          st.year !== MONTH_DEFAULTS.year || st.month !== MONTH_DEFAULTS.month
+            ? `Go back to January of year ${MONTH_DEFAULTS.year} first.`
+            : st.shift === 0
+              ? 'Make your prediction, then shift every day colder.'
+              : `With every day ${fmt(Math.abs(st.shift), 1)} °F ${st.shift > 0 ? 'warmer' : 'colder'}, the month collects ${fmt(rec.hdd)} heating degree days against a normal ${fmt(normal.hdd)}: ${fmt(Math.abs(rec.hdd - normal.hdd))} ${rec.hdd < normal.hdd ? 'short' : 'over'}.`
         }
-        success={`Solved. January of year ${COLDEST_JANUARY} collected ${fmt(rec.hdd)} heating degree days, ${fmt(rec.hdd - normal.hdd)} above normal — as if every day had been ${fmt((rec.hdd - normal.hdd) / 31, 1)} °F colder than normal. At about $${fmt(UTILITY.perHdd * UTILITY.margin)} of margin per degree day, that month was worth roughly ${millions(UTILITY.perHdd * UTILITY.margin * (rec.hdd - normal.hdd))} more to Calder Gas & Light than a normal January, paid for by its customers’ gas bills.`}
+        success={`Solved: ${fmt(Math.abs(NORMAL_SHIFT), 1)} °F colder. The month was ${fmt(q.janMean - q.start.hdd)} heating degree days short, and each degree colder adds one to each of its 31 days, so it needed ${fmt(q.janMean - q.start.hdd)} ÷ 31 = ${fmt((q.janMean - q.start.hdd) / 31, 1)} °F — ${fmt(Math.abs(NORMAL_SHIFT), 1)} on the slider, which gives ${fmt(rec.hdd)} against the normal ${fmt(normal.hdd)}. That is roughly what so mild a January cost Fenwick Gas & Light: about ${millions(rec.margin - q.start.margin)} of margin.`}
       />
 
       <H2>The averaging trap</H2>
@@ -481,7 +483,7 @@ export default function Lesson() {
         the monthly average, sitting near the hinge, says there were hardly any of either.
       </P>
       <P>
-        May at Calder Bay shows it. Across the archive, May averages {fmt(q.mayMean, 1)} °F. The shortcut would give it 31 × (65 − the monthly mean), about{' '}
+        May at Fenwick Bay shows it. Across the archive, May averages {fmt(q.mayMean, 1)} °F. The shortcut would give it 31 × (65 − the monthly mean), about{' '}
         {fmt(q.mayShort)} heating degree days, and no cooling degree days at all. Counted day by day, the average May has {fmt(q.mayH)} heating degree days and{' '}
         {fmt(q.mayC)} cooling degree days. In the next demonstration, one simulated May’s pattern of warm and cold days is re-centered on any monthly mean and
         stretched to any day-to-day swing (a standard deviation), so the two can be changed separately:
@@ -491,8 +493,6 @@ export default function Lesson() {
         <SpreadChart st={sp.state} />
         <Readouts
           items={[
-            { label: 'HDD, day by day', value: fmt(idx.hdd), tone: WX.index },
-            { label: 'HDD, from the monthly mean', value: fmt(idx.shortHdd), tone: WX.index },
             { label: 'CDD, day by day', value: fmt(idx.cdd), tone: WX.index },
             { label: 'CDD, from the monthly mean', value: fmt(idx.shortCdd), tone: WX.index },
           ]}
@@ -534,7 +534,7 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`Set the monthly mean to exactly 65 °F, where the shortcut says there is no heating or cooling to do. What is the smallest day-to-day swing, on the slider’s half-degree steps, that gives the month at least ${SWING_TARGET} heating degree days?`}
+        question={`Set the monthly mean to exactly 65 °F, where the shortcut says there is no heating or cooling to do. With the days swinging ±${SWING_HINT} °F around it, the month collects ${fmt(q.hint.hdd)} heating degree days, and with the mean on the hinge each cold day’s degree days grow in step with the swing. Predict first: what is the smallest swing, on the slider’s half-degree steps, that gives the month at least ${SWING_TARGET}? Then check.`}
         solved={solved2}
         status={
           sp.state.mean !== BASE_F
@@ -543,13 +543,14 @@ export default function Lesson() {
               ? `At ±${fmt(sp.state.swing, 1)} °F the month collects ${fmt(idx.hdd, 1)} heating degree days.`
               : `At ±${fmt(sp.state.swing, 1)} °F it collects ${fmt(idx.hdd, 1)}. Would a smaller swing do?`
         }
-        success={`Solved. At ±${fmt(sp.state.swing, 1)} °F the month collects ${fmt(idx.hdd, 1)} heating degree days — and exactly as many cooling degree days, ${fmt(idx.cdd, 1)}, because with the mean on the hinge every degree of cold is matched by a degree of warmth. Both grow in proportion to the swing. A forecaster who gets the month’s average exactly right but its variability wrong will still get its degree days wrong.`}
+        success={`Solved: ±${fmt(sp.state.swing, 1)} °F gives ${fmt(idx.hdd, 1)}. The degree days grow in proportion to the swing, so ${SWING_TARGET} needs ${SWING_HINT} × ${SWING_TARGET} ÷ ${fmt(q.hint.hdd)} ≈ ${fmt((SWING_HINT * SWING_TARGET) / q.hint.hdd, 1)} °F. The month also collects exactly as many cooling degree days, ${fmt(idx.cdd, 1)}, because with the mean on the hinge every degree of cold is matched by a degree of warmth. A forecaster who gets the month’s average exactly right but its variability wrong will still get its degree days wrong.`}
       />
 
       <P>
         That last point will matter a great deal. A contract that pays on a degree-day index is not a contract on the average temperature: its value depends on how
         the days are spread, not only on where they are centered, and most of all in the shoulder months. When <FigRef to="Degree Day Simulator · averaging">the
-        swing</FigRef> grows, the index’s expected value grows with it, even if the forecast mean doesn’t move. Chapter 5 will price contracts on these indices from
+        swing</FigRef> grows, the index’s <K tone={WX.probability}>expected value</K> — its average over all the ways the month could turn out, each weighted by
+        how likely it is — grows with it, even if the forecast mean doesn’t move. Chapter 5 will price contracts on these indices from
         the forecast distributions of Chapter 3, and it will have to count day by day.
       </P>
       <P>

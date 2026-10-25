@@ -29,6 +29,7 @@ import {
   usePlay,
   useScenario,
 } from '../../../framework';
+import { zFactor } from '../../../engines/gas/eos';
 import { pOverZ, simulateTank, wellCoefficient, wellRate, type TankResult, type TankWell } from '../../../engines/gas/reservoir';
 import { gaussian, rng } from '../../../model/random';
 import { SANDHILL_PI, SANDHILL_ROCK } from '../../../model/gas/production';
@@ -43,8 +44,8 @@ export const WELL_DEFAULTS = { k: 3, area: 640, pwf: 600, cap: 8 };
 type WellState = typeof WELL_DEFAULTS;
 const YEARS = 30;
 const MONTHS = YEARS * 12;
-/** The rate a contract wants held steady, and for how long, in the first challenge. */
-export const STEADY_MONTHS = 60;
+/** How long the first challenge's contract wants the rate held steady: four years. */
+export const STEADY_MONTHS = 48;
 const CAP_STEP = 0.5;
 
 /** The tank well the first demonstration's controls describe. */
@@ -74,8 +75,20 @@ export function runWell(s: WellState): TankResult {
 const atDefaults = (s: WellState) => s.k === WELL_DEFAULTS.k && s.area === WELL_DEFAULTS.area && s.pwf === WELL_DEFAULTS.pwf;
 
 /**
+ * The lowest reservoir pressure (psia, on a 10-psi grid) at which the rock can still deliver the
+ * well's rate cap: the plateau ends when the pressure falls past it. Null if the rock can't deliver
+ * the cap even at discovery.
+ */
+export function capPressure(s: WellState): number | null {
+  const rock = wellOf(s).rock;
+  if (wellRate(rock, SANDHILL_PI, s.pwf) < s.cap) return null;
+  for (let p = SANDHILL_PI - 10; p > s.pwf; p -= 10) if (wellRate(rock, p, s.pwf) < s.cap) return p + 10;
+  return s.pwf;
+}
+
+/**
  * The first challenge: with the starting rock, spacing and flowing pressure, the highest rate cap
- * (on the slider's half-MMcf/d grid) that holds the well at its cap for at least five years.
+ * (on the slider's half-MMcf/d grid) that holds the well at its cap for at least four years.
  */
 export function steadySolved(s: WellState): boolean {
   if (!atDefaults(s)) return false;
@@ -145,10 +158,7 @@ const BASE = runWell(WELL_DEFAULTS);
 const at = (r: TankResult, month: number) => r.months[Math.min(month, r.months.length) - 1];
 const POTENTIAL_0 = wellRate(wellOf(WELL_DEFAULTS).rock, SANDHILL_PI, WELL_DEFAULTS.pwf);
 /** Reservoir pressure at which the well's potential falls to its cap, psia (to the nearest 10). */
-const CAP_PRESSURE = (() => {
-  for (let p = SANDHILL_PI; p > WELL_DEFAULTS.pwf; p -= 10) if (wellRate(wellOf(WELL_DEFAULTS).rock, p, WELL_DEFAULTS.pwf) < WELL_DEFAULTS.cap) return p + 10;
-  return WELL_DEFAULTS.pwf;
-})();
+const CAP_PRESSURE = capPressure(WELL_DEFAULTS) ?? NaN;
 const PZ_PER_BCF = PZI / BASE.gipBcf;
 const PWF_LOW = runWell({ ...WELL_DEFAULTS, pwf: 200 });
 const PWF_HIGH = runWell({ ...WELL_DEFAULTS, pwf: 1000 });
@@ -157,14 +167,46 @@ const CAP_LOW = runWell({ ...WELL_DEFAULTS, cap: 4 });
 const K_HIGH = runWell({ ...WELL_DEFAULTS, k: 30 });
 const K_LOW = runWell({ ...WELL_DEFAULTS, k: 0.3 });
 const SMALL = runWell({ ...WELL_DEFAULTS, area: 160 });
-/** The first challenge's answer: the highest cap held for five years at the starting settings, MMcf/d. */
+/** The first challenge's answer: the highest cap held for four years at the starting settings, MMcf/d. */
 export function steadyCap(): number {
   let best = 0;
   for (let c = 2; c <= 20; c += CAP_STEP) if (runWell({ ...WELL_DEFAULTS, cap: c }).plateauMonths >= STEADY_MONTHS) best = c;
   return best;
 }
+/**
+ * The first challenge estimated by hand at its answer: the pressure where the rock can deliver only
+ * the cap, P/Z there, the gas produced by then (from material balance) and the months that takes.
+ */
+export const STEADY_ESTIMATE = (() => {
+  const cap = steadyCap();
+  const p = capPressure({ ...WELL_DEFAULTS, cap }) ?? NaN;
+  const pz = pOverZ(p, T);
+  const gp = (PZI - pz) / PZ_PER_BCF;
+  return { cap, p, pz, gp, months: (gp * 1000) / cap / (365.25 / 12) };
+})();
 const EST_1 = lineEstimate(1);
 const EST_8 = lineEstimate(SURVEYS.length);
+/** Pressure lost per Bcf in the first month, psi: faster than P/Z, because Z is falling too. */
+export const P_DROP_FIRST = (SANDHILL_PI - BASE.months[0].pressure) / BASE.months[0].cumBcf;
+/** Z at discovery, and its lowest value on the way down (with the pressure where it occurs, on a 10-psi grid). */
+export const Z_DISCOVERY = zFactor(SANDHILL_PI, T);
+export const Z_LOW = (() => {
+  let z = Infinity;
+  let p = SANDHILL_PI;
+  for (let q = SANDHILL_PI; q >= 200; q -= 10) {
+    const zq = zFactor(q, T);
+    if (zq < z) {
+      z = zq;
+      p = q;
+    }
+  }
+  return { z, p };
+})();
+/** The pressure (psia, on a 10-psi grid) below which the pressure falls more slowly than P/Z: where d(P/Z)/dP reaches 1. */
+export const PZ_CROSSOVER = (() => {
+  for (let q = SANDHILL_PI; q > 200; q -= 10) if ((pOverZ(q + 1, T) - pOverZ(q - 1, T)) / 2 >= 1) return q;
+  return NaN;
+})();
 
 // ---------------------------------------------------------------------------
 // Drawing.
@@ -287,12 +329,13 @@ export default function Lesson() {
   const rateTop = niceDomain(0, Math.max(st.cap, ...rates, 1), 4)[1];
   const lastMonth = res.months[last - 1];
 
+  const capP = capPressure(st);
   const steady = steadySolved(st);
   const steadyStatus = !atDefaults(st)
     ? 'Set the permeability back to 3 md, the spacing to 640 acres and the flowing pressure to 600 psia first; change only the rate cap.'
-    : res.plateauMonths >= STEADY_MONTHS
-      ? `At ${fmt(st.cap, 1)} MMcf/d the well holds its cap for ${fmt(res.plateauMonths)} months. Could it hold a higher rate that long?`
-      : `At ${fmt(st.cap, 1)} MMcf/d the well holds its cap for only ${fmt(res.plateauMonths)} months.`;
+    : capP === null
+      ? `The rock can’t deliver ${fmt(st.cap, 1)} MMcf/d even at discovery.`
+      : `At ${fmt(st.cap, 1)} MMcf/d the rock can deliver the cap until the reservoir pressure falls to ${fmt(capP)} psia. How long does the well take to get there?`;
 
   // ---- Figure 2: the fault block's P/Z line.
   const z = useScenario('pz', PZ_DEFAULTS);
@@ -313,17 +356,18 @@ export default function Lesson() {
     <LessonPage id="gas/2.2">
       <P>
         <a href={lessonHref('gas/2.1')}>Lesson 2.1</a> measured a well at a single moment. A vertical well drilled into Sandhill’s sandstone when the field was
-        discovered could flow {fmt(POTENTIAL_0, 1)} MMcf/d with the pressure at its bottom held at {fmt(WELL_DEFAULTS.pwf)} psia. But every cubic foot it produces
+        discovered could flow {fmt(POTENTIAL_0, 1)} MMcf/d with its flowing pressure held at {fmt(WELL_DEFAULTS.pwf)} psia. But every cubic foot it produces
         comes out of the rock around it, and the <K tone="blue">pressure</K> that pushes gas toward the well falls as the gas leaves. So the real question about a
         well is not how fast it can flow today but how its <K tone="orange">rate</K> changes over the years, and how much of the gas it will eventually bring up.
       </P>
       <P>
-        We’ll follow one well through its life. It drains a square mile — 640 acres — of Sandhill’s sandstone, which at discovery held{' '}
+        We’ll follow one well through its life. It drains a square mile — 640 acres — of Sandhill’s sandstone (the acreage each well drains is its{' '}
+        <b>spacing</b>), which at discovery held{' '}
         {fmt(BASE.gipBcf, 1)} Bcf at {fmt(SANDHILL_PI)} psia. We’ll treat that rock as a closed tank: the well is the only way out, and the pressure is the same
-        everywhere inside it. Two rules run the tank. The first is the flow equation of Lesson 2.1, in the form engineers use for a single well, q = C × (P̄² −
+        everywhere inside it. Two rules run the tank. The first is the flow equation of <a href={lessonHref('gas/2.1')}>Lesson 2.1</a>, in the form engineers use for a single well, q = C × (P̄² −
         P<Sub>wf</Sub>²): the rate depends on the difference between the squares of the reservoir’s average pressure P̄ and the flowing pressure at the bottom of the
-        well, P<Sub>wf</Sub>, and the coefficient C gathers up the rock’s permeability and thickness and the gas’s viscosity. (With C in standard cubic feet a
-        day per psi², as in the demonstration, q comes out in standard cubic feet a day.) The second rule is about the tank itself, and we’ll come to it in a
+        well, P<Sub>wf</Sub>, and the coefficient C gathers up the rock’s permeability and thickness and the gas’s viscosity. (In the demonstration, C is in standard
+        cubic feet a day per psi², and q is shown in millions of cubic feet a day.) The second rule is about the tank itself, and we’ll come to it in a
         moment.
       </P>
       <P>
@@ -372,18 +416,20 @@ export default function Lesson() {
           xLabel="years of production"
           height={160}
           series={[{ xs, ys: pressures, color: PRESS, width: 2.5 }]}
-          hLines={[{ at: st.pwf, color: '#8a8a8a', dash: '5 4', label: `flowing pressure ${fmt(st.pwf)} psia`, labelAt: 'start' }]}
+          hLines={[
+            { at: st.pwf, color: '#8a8a8a', dash: '5 4', label: `flowing pressure ${fmt(st.pwf)} psia`, labelAt: 'start' },
+            ...(capP !== null && capP > st.pwf ? [{ at: capP, color: RATE, dash: '5 4', label: `rock delivers the cap down to ${fmt(capP)} psia` }] : []),
+          ]}
           markers={[{ x: year, y: now.pressure, color: PRESS, r: 5 }]}
           cursor={year}
           onScrub={scrub}
           scrubStep={0.25}
           scrubLabel="Year of the well’s life"
-          ariaLabel={`Reservoir pressure over 30 years, from ${fmt(SANDHILL_PI)} psia to ${fmt(lastMonth.pressure)} psia. In year ${fmt(year, 1)} it is ${fmt(now.pressure)} psia.`}
+          ariaLabel={`Reservoir pressure over 30 years, from ${fmt(SANDHILL_PI)} psia to ${fmt(lastMonth.pressure)} psia. In year ${fmt(year, 1)} it is ${fmt(now.pressure)} psia.${capP !== null && capP > st.pwf ? ` The rock can deliver the ${fmt(st.cap, 1)} MMcf/d cap down to ${fmt(capP)} psia.` : ''}`}
         />
         <Readouts
           items={[
             { label: 'gas in place', value: `${fmt(res.gipBcf, 1)} Bcf`, tone: 'gold' },
-            { label: 'at its cap for', value: res.plateauMonths >= 12 ? `${fmt(res.plateauMonths / 12, 1)} years` : `${fmt(res.plateauMonths)} months`, tone: 'orange' },
             {
               label: last < MONTHS ? `recovered by abandonment, year ${fmt(last / 12, 1)}` : 'recovered in 30 years',
               value: `${fmt(res.eurBcf, 1)} Bcf · ${pct(res.recovery)}`,
@@ -427,7 +473,7 @@ export default function Lesson() {
 
       <P>
         For its first {fmt(BASE.plateauMonths)} months the well flows at its cap, and the rock could give more all the while. Then, with the reservoir pressure down to
-        about {fmt(CAP_PRESSURE)} psia, its potential falls below {fmt(WELL_DEFAULTS.cap)} MMcf/d and the rate starts to drop. By year 5 the well makes{' '}
+        about {fmt(CAP_PRESSURE)} psia — the dashed orange line on the pressure chart — its potential falls below {fmt(WELL_DEFAULTS.cap)} MMcf/d and the rate starts to drop. By year 5 the well makes{' '}
         {fmt(at(BASE, 60).rate, 1)} MMcf/d, by year 10 {fmt(at(BASE, 120).rate, 1)}, and after 30 years {fmt(at(BASE, 360).rate, 2)}. That shape, a{' '}
         <b>plateau</b> followed by a <b>decline</b>, is the life of most wells in permeable rock. Over the 30 years this one produces {fmt(BASE.eurBcf, 1)} Bcf,{' '}
         {pct(BASE.recovery)} of the gas that was in place.
@@ -465,8 +511,10 @@ export default function Lesson() {
       </Eq>
       <P>
         Here G is the gas initially in place and G<Sub>p</Sub> the gas produced so far. Sandhill’s P/Z starts at {fmt(PZI)} psia and loses{' '}
-        {fmt(PZ_PER_BCF)} psia for every Bcf the well brings up. The pressure itself falls a little faster at first than P/Z does, because Z rises toward 1 as the gas
-        expands.
+        {fmt(PZ_PER_BCF)} psia for every Bcf the well brings up. The pressure itself falls a little faster than that at first — {fmt(P_DROP_FIRST)} psi for the first
+        Bcf — because Z is falling too, from {fmt(Z_DISCOVERY, 3)} at discovery. Z’s fall slows, and it bottoms out at {fmt(Z_LOW.z, 3)} near{' '}
+        {fmt(Math.round(Z_LOW.p / 100) * 100)} psia before climbing back toward 1; below about {fmt(Math.round(PZ_CROSSOVER / 100) * 100)} psia, the pressure falls more
+        slowly than P/Z.
       </P>
 
       <H2>Squeezing out more</H2>
@@ -489,15 +537,17 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Suppose the gas is sold under a contract that pays a premium for a constant rate held for at least five years. With the starting rock, spacing and flowing pressure, what’s the highest rate cap, to the nearest half MMcf/d, that the well can hold for five years?"
+        figure="Gas Well Simulator"
+        question={`Suppose the gas is sold under a contract that pays a premium for a constant rate held for at least four years. With the starting rock, spacing and flowing pressure, what’s the highest rate cap, to the nearest half MMcf/d, that the well can hold that long? Estimate it before you check. The plateau lasts until the reservoir pressure falls to where the rock can deliver only the cap — the dashed orange line on the pressure chart moves with the cap — and P/Z falls ${fmt(PZ_PER_BCF)} psia for every Bcf the well produces on the way there. Then set the cap and read the plateau off the charts.`}
         solved={steady}
         status={steadyStatus}
-        success={`Solved. At ${fmt(st.cap, 1)} MMcf/d the well holds its rate for ${fmt(res.plateauMonths)} months; at ${fmt(st.cap + CAP_STEP, 1)} it would manage only ${fmt(runWell({ ...st, cap: st.cap + CAP_STEP }).plateauMonths)}. The plateau ends when the reservoir pressure falls to the level where the rock can no longer deliver the cap, so a higher cap gets there sooner twice over: it draws gas out faster, and it needs more pressure to sustain.`}
+        success={`Solved: ${fmt(st.cap, 1)} MMcf/d, held for ${fmt(res.plateauMonths)} months; at ${fmt(st.cap + CAP_STEP, 1)} the plateau would end after ${fmt(runWell({ ...st, cap: st.cap + CAP_STEP }).plateauMonths)}. The estimate gets there: the rock can deliver ${fmt(STEADY_ESTIMATE.cap, 1)} MMcf/d down to about ${fmt(STEADY_ESTIMATE.p)} psia, where P/Z is about ${fmt(STEADY_ESTIMATE.pz)}, so the well must first produce (${fmt(PZI)} − ${fmt(STEADY_ESTIMATE.pz)}) ÷ ${fmt(PZ_PER_BCF)} ≈ ${fmt(STEADY_ESTIMATE.gp, 1)} Bcf — ${fmt(STEADY_ESTIMATE.months)} months at its cap. A higher cap ends the plateau sooner twice over: it draws the gas out faster, and it needs more pressure to sustain.`}
       />
 
       <P>
         <K tone="violet">Permeability</K> sets how fast the rock gives up its gas. At 30 md the well recovers {pct(K_HIGH.recovery, 1)} and is abandoned after{' '}
-        {fmt(K_HIGH.lifeMonths / 12, 0)} years; at 0.3 md, after 30 years it has produced only {pct(K_LOW.recovery)}. Spacing works the other way round. On 160 acres
+        {fmt(K_HIGH.lifeMonths / 12, 0)} years; at 0.3 md, after 30 years it has produced only {pct(K_LOW.recovery)}. Closer spacing speeds things up too, by giving
+        each well less rock to drain. On 160 acres
         a well drains {fmt(SMALL.gipBcf, 1)} Bcf and recovers {pct(SMALL.recovery)} of it in about {fmt(SMALL.lifeMonths / 12, 0)} years, so four wells on the same
         square mile would bring up its gas in a third of the time — for four times the drilling. How many wells to drill, and when, is the subject of{' '}
         <a href={lessonHref('gas/2.4')}>Lesson 2.4</a>.
@@ -512,8 +562,10 @@ export default function Lesson() {
         lie on a straight line from the discovery P/Z that reaches zero at the block’s gas in place.
       </P>
       <P>
-        Pressure surveys aren’t perfect: the pressure never quite settles in a day or two, and these readings carry errors of about 1.5%. In the next demonstration,
-        choose how many surveys have been taken, and set your estimate of the block’s gas in place, which draws your line:
+        Pressure surveys aren’t perfect: the pressure never quite settles in a day or two, and these readings carry errors of about 1.5%. The same line also gives
+        the block’s <b>reserves</b>, the gas that will actually be produced. A well is abandoned once the reservoir pressure is too low to push out gas worth selling —
+        here, {fmt(ABANDON_PSIA)} psia, its <b>abandonment pressure</b> — so the reserves are the production at which the line reaches that pressure’s P/Z. In the
+        next demonstration, choose how many surveys have been taken, and set your estimate of the block’s gas in place, which draws your line:
       </P>
 
       <Figure name="Gas Well Simulator · P/Z" scenario={z}>
@@ -542,13 +594,7 @@ export default function Lesson() {
             { label: 'Your line', color: GRAPHIC.gold, kind: 'line' },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'surveys so far', value: `${shown.length}, over ${fmt(shown[shown.length - 1].month / 12, 1)} years` },
-            { label: 'your gas in place', value: `${fmt(estimate, 2)} Bcf`, tone: 'gold' },
-            { label: `recoverable down to ${fmt(ABANDON_PSIA)} psia`, value: `${fmt(recoverable, 1)} Bcf`, tone: 'gold' },
-          ]}
-        />
+        <Readouts items={[{ label: `recoverable by your line, down to ${fmt(ABANDON_PSIA)} psia`, value: `${fmt(recoverable, 1)} Bcf`, tone: 'gold' }]} />
         <Slider label="Surveys taken" value={surveys} min={1} max={SURVEYS.length} onChange={(v) => z.set({ surveys: v })} display={`${surveys} · every 6 months`} />
         <Slider label="Gas in place" tone="gold" value={estimate} min={5} max={35} step={0.25} onChange={(v) => z.set({ estimate: v })} display={`${fmt(estimate, 2)} Bcf`} />
       </Figure>
@@ -564,7 +610,7 @@ export default function Lesson() {
       <P>
         Try it with one survey and then with all eight. The best straight line through the first survey alone reaches zero at {fmt(EST_1, 1)} Bcf; through all eight,
         at {fmt(EST_8, 1)}. Early surveys sit in a short stretch near the start of the line, so a small error in a pressure swings its far end a long way. That’s why
-        estimates of a new field’s size keep changing for its first few years, and why the gas in place found by mapping the rock (Lesson 2.1) and the gas in place
+        estimates of a new field’s size keep changing for its first few years, and why the gas in place found by mapping the rock (<a href={lessonHref('gas/2.1')}>Lesson 2.1</a>) and the gas in place
         implied by its pressure are both watched until they agree.
       </P>
 

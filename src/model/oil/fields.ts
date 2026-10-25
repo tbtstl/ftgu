@@ -3,11 +3,11 @@
 // centipoise (cP), stock-tank barrels (STB, a barrel at surface conditions).
 //
 //   Northfield  — a conventional sandstone anticline, discovered decades ago. Good rock, medium oil.
-//   Ridgeback   — a shale ("tight oil") formation, developed with long horizontal wells.
+//   Pinyon   — a shale ("tight oil") formation, developed with long horizontal wells.
 //   Coldwater   — a shallow, unconsolidated heavy-oil sand: excellent rock, very thick oil.
 // The numbers are illustrative but sit in realistic ranges for fields of each kind.
 
-export type FieldId = 'northfield' | 'ridgeback' | 'coldwater';
+export type FieldId = 'northfield' | 'pinyon' | 'coldwater';
 
 export interface Field {
   id: FieldId;
@@ -54,9 +54,9 @@ export const FIELDS: Record<FieldId, Field> = {
     initialPressure: 3650,
     reservoirOilSG: 0.76,
   },
-  ridgeback: {
-    id: 'ridgeback',
-    name: 'Ridgeback',
+  pinyon: {
+    id: 'pinyon',
+    name: 'Pinyon',
     rock: 'shale',
     crestDepth: 9500,
     grossThickness: 150,

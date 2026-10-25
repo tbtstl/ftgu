@@ -24,6 +24,12 @@ export const SANDHILL_WELL: TankWell = { rock: SANDHILL_ROCK, piPsia: SANDHILL_P
 /** Ridgeback's shale: thick and full of gas, but almost impermeable (0.0003 md = 300 nanodarcies). */
 export const RIDGEBACK_ROCK: Rock = { areaAcres: 640, thicknessFt: 250, porosity: 0.07, waterSat: 0.25, permMd: 0.0003, tempF: 200 };
 export const RIDGEBACK_PI = 5500;
+/**
+ * How a Ridgeback horizontal well is fractured: a stage every 440 ft along the well (twelve a mile), each
+ * fracture reaching 500 ft into the shale on either side. At that spacing, the pressure drop spreading from
+ * neighboring fractures takes about three years to meet in the middle (Lesson 2.3's 36 months of linear flow).
+ */
+export const RIDGEBACK_FRACS = { stageSpacingFt: 440, halfLengthFt: 500 } as const;
 
 /** Drilling and completing one Ridgeback horizontal well, $. */
 export const WELL_COST = 9_000_000;

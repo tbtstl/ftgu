@@ -106,19 +106,27 @@ export interface TournamentResult {
   maxDrawdown: number;
 }
 
-function fleetDailyCost(ships: CompanyShip[], f: CompanyFinance): number {
+/** The owned ships' daily cash costs: operating costs and loan payments, $. */
+function ownedDailyCost(ships: CompanyShip[], f: CompanyFinance): number {
   return ships.reduce((a, s) => {
+    if (s.mode !== 'owned') return a;
     const c = shipCost(s, f);
-    return a + c.opex + c.debtService + c.hire;
+    return a + c.opex + c.debtService;
   }, 0);
 }
 
-/** Run one strategy for the fleet over the history. */
+/**
+ * Run one strategy for the fleet over the history. The run is a what-if: the fleet trades through
+ * the whole window on the terms it was given. Owned ships keep their price, loans and running
+ * costs throughout; ships chartered in are rechartered every twelve months at that year's period
+ * hire (a hire fixed in a slump can't be had for a boom).
+ */
 export function runStrategy(key: StrategyKey, ships: CompanyShip[], f: CompanyFinance, hist: History, d: TournamentDrivers, o: TournamentOptions): TournamentResult {
   const earn = drivenEarnings(hist, d);
   const base = { kmax: hist.cls.kmax.map((m) => m.tce), cape: hist.cls.cape.map((m) => m.tce) };
   const idx = { kmax: dailyIndex('kmax', undefined, hist.cls.kmax), cape: dailyIndex('cape', undefined, hist.cls.cape) };
-  const cost = fleetDailyCost(ships, f);
+  const ownedCost = ownedDailyCost(ships, f);
+  const chartered = ships.filter((s) => s.mode === 'chartered');
   const to = Math.min(o.to, hist.months);
   const monthly: number[] = [];
   // Period hires, fixed at the start of each twelve-month block: what the market expects for the
@@ -174,6 +182,7 @@ export function runStrategy(key: StrategyKey, ships: CompanyShip[], f: CompanyFi
         extra += (price - settle) * 30 * n * o.hedgeShare;
       }
     }
+    const cost = ownedCost + chartered.reduce((a, s) => a + hireFor(s.cls, t), 0);
     monthly.push(rev + extra - cost * MONTH);
   }
   const summary = summarize(monthly, 12);

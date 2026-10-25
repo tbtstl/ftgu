@@ -104,7 +104,7 @@ export function thresholdSolved(s: PacificState): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The second demonstration: 40 simulated winters at Calder Bay.
+// The second demonstration: 40 simulated winters at Fenwick Bay.
 
 export interface Winter {
   /** The winter that starts in December of this year. */
@@ -113,7 +113,7 @@ export interface Winter {
   nino: number;
   /** The same, as forecast at the end of October, °C. */
   forecast: number;
-  /** Calder Bay's December–February temperature anomaly with no ENSO influence (the weather alone), °F. */
+  /** Fenwick Bay's December–February temperature anomaly with no ENSO influence (the weather alone), °F. */
   weather: number;
   /** The anomaly added per °F/°C of teleconnection strength (the winter's mean Niño-3.4, weighted by month). */
   ensoUnit: number;
@@ -121,8 +121,8 @@ export interface Winter {
 
 let wintersCache: Winter[] | null = null;
 
-/** The archive's 40 winters at Calder Bay, split into the weather's part and ENSO's. */
-export function calderWinters(): Winter[] {
+/** The archive's 40 winters at Fenwick Bay, split into the weather's part and ENSO's. */
+export function fenwickWinters(): Winter[] {
   if (wintersCache) return wintersCache;
   const out: Winter[] = [];
   for (let y = 1; y <= 40; y++) {
@@ -136,9 +136,9 @@ export function calderWinters(): Winter[] {
     ]) {
       const { start, days } = monthDays(yy, mm);
       for (let i = 0; i < days; i++) {
-        const t0 = tempF('calder', start + i, { ensoF: 0 });
-        weather += t0 - expectedTemp('calder', start + i);
-        unit += tempF('calder', start + i, { ensoF: 1 }) - t0;
+        const t0 = tempF('fenwick', start + i, { ensoF: 0 });
+        weather += t0 - expectedTemp('fenwick', start + i);
+        unit += tempF('fenwick', start + i, { ensoF: 1 }) - t0;
         n++;
       }
     }
@@ -174,7 +174,7 @@ export interface Teleconnection {
 
 /** Regression of the winters' anomalies on Niño-3.4 (as it turned out, or as forecast), and the phases' averages. */
 export function teleconnection(ensoF: number, useForecast = false): Teleconnection {
-  const ws = calderWinters();
+  const ws = fenwickWinters();
   const xs = ws.map((w) => (useForecast ? w.forecast : w.nino));
   const ys = ws.map((w) => anomaly(w, ensoF));
   const n = ws.length;
@@ -203,6 +203,12 @@ export function teleconnection(ensoF: number, useForecast = false): Teleconnecti
     elNinoCount: en.length,
     laNinaCount: ln.length,
   };
+}
+
+/** The La Niña winter that comes out warmest at a given teleconnection strength. */
+export function warmestLaNinaWinter(ensoF: number): Winter {
+  const ln = fenwickWinters().filter((w) => w.nino <= -0.5);
+  return ln.reduce((a, w) => (anomaly(w, ensoF) > anomaly(a, ensoF) ? w : a), ln[0]);
 }
 
 export const ENSO_F_STEP = 0.1;
@@ -395,7 +401,7 @@ const SX = scale(-2.5, 2.5, 64, 616);
 const SY = scale(-8, 8, 262, 22);
 
 function WinterScatter({ ensoF, useForecast, stats }: { ensoF: number; useForecast: boolean; stats: Teleconnection }) {
-  const ws = calderWinters();
+  const ws = fenwickWinters();
   const ys = ws.map((w) => anomaly(w, ensoF));
   const xs = ws.map((w) => (useForecast ? w.forecast : w.nino));
   const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -406,10 +412,10 @@ function WinterScatter({ ensoF, useForecast, stats }: { ensoF: number; useForeca
       className="chart"
       viewBox="0 0 640 300"
       role="img"
-      aria-label={`Forty simulated winters at Calder Bay: December–February temperature anomaly against Niño-3.4 ${useForecast ? 'as forecast at the end of October' : 'as it turned out'}, with a teleconnection of ${fmt(ensoF, 1)} °F per °C. The fitted slope is ${fmt(stats.slope, 2)} °F per °C and the correlation ${fmt(stats.r, 2)}. El Niño winters average ${signed(stats.elNinoMean, 1)} °F, La Niña winters ${signed(stats.laNinaMean, 1)} °F.`}
+      aria-label={`Forty simulated winters at Fenwick Bay: December–February temperature anomaly against Niño-3.4 ${useForecast ? 'as forecast at the end of October' : 'as it turned out'}, with a teleconnection of ${fmt(ensoF, 1)} °F per °C. The fitted slope is ${fmt(stats.slope, 2)} °F per °C and the correlation ${fmt(stats.r, 2)}. El Niño winters average ${signed(stats.elNinoMean, 1)} °F, La Niña winters ${signed(stats.laNinaMean, 1)} °F.`}
     >
       <text className="ax" x={64} y={12}>
-        Calder Bay’s winter, °F from normal
+        Fenwick Bay’s winter, °F from normal
       </text>
       <rect x={SX(0.5)} y={22} width={SX(2.5) - SX(0.5)} height={240} fill={GRAPHIC.red} opacity={0.06} />
       <rect x={SX(-2.5)} y={22} width={SX(-0.5) - SX(-2.5)} height={240} fill={GRAPHIC.blue} opacity={0.07} />
@@ -465,20 +471,21 @@ export default function Lesson() {
     setMonth(v);
   };
 
-  const g = useScenario('teleconnection', { ensoF: STATIONS.calder.ensoF ?? 1, view: 'actual' as 'actual' | 'forecast' });
+  const g = useScenario('teleconnection', { ensoF: STATIONS.fenwick.ensoF ?? 1, view: 'actual' as 'actual' | 'forecast' });
   const ensoF = Math.round(g.state.ensoF * 10) / 10;
   const useForecast = g.state.view === 'forecast';
   const stats = useMemo(() => teleconnection(ensoF, useForecast), [ensoF, useForecast]);
   const actual = useMemo(() => teleconnection(ensoF), [ensoF]);
   const solved2 = laNinaSolved(ensoF);
+  const holdout = warmestLaNinaWinter(Math.round((ensoF - ENSO_F_STEP) * 10) / 10);
 
   // Numbers the prose quotes, from the same models.
   const base = useMemo(() => pacificRun(PACIFIC_DEFAULTS), []);
   const basePer = ensoPeriod(ENSO_DEFAULTS);
-  const calder = useMemo(() => teleconnection(1), []);
+  const fenwick = useMemo(() => teleconnection(1), []);
   const none = useMemo(() => teleconnection(0), []);
   const fromOctober = useMemo(() => teleconnection(1, true), []);
-  const ws = calderWinters();
+  const ws = fenwickWinters();
   const fcSkill = useMemo(() => {
     const a = ws.map((w) => w.nino);
     const f = ws.map((w) => w.forecast);
@@ -500,7 +507,7 @@ export default function Lesson() {
   const growthText =
     growth > 1
       ? `grows, doubling every ${fmt(doublingYears(growth), doublingYears(growth) < 10 ? 1 : 0)} years`
-      : `dies out, shrinking by a factor of e every ${fmt(-1 / Math.log(growth) / 12, 1)} years`;
+      : `dies out, shrinking to about a third of its size every ${fmt(-1 / Math.log(growth) / 12, 1)} years`;
 
   return (
     <LessonPage id="weather/2.4">
@@ -528,10 +535,13 @@ export default function Lesson() {
       </P>
       <P>
         Its pulse is measured by the <b>Niño-3.4 index</b>: the sea-surface temperature’s departure from normal in a box straddling the equator in the east-central
-        Pacific. The next demonstration runs a recharge oscillator for 40 years, one month at a time. It tracks just two numbers, the index and the heat stored along
-        the equator, and the cross-section draws the Pacific from them. Random weather — bursts of wind that no ocean model can foresee — kicks the index every
-        month. Change how strongly the ocean and atmosphere feed back on each other, how big the kicks are, and how fast the heat drains and recharges, and scrub
-        the timeline with the pointer or the arrow keys:
+        Pacific. A <K tone={WX.temperature}>normal</K> is the long-run average for a place and a time of year, which weather services compute over 30 years; the
+        official U.S. normals currently average 1991–2020. A departure from normal is called an <b>anomaly</b>, and from here on every anomaly in this course is
+        measured from a normal, as the weather contracts of later chapters will be priced against one. The next demonstration runs a recharge oscillator for 40
+        years, one month at a time. It tracks just two numbers, the index and the heat stored along the equator, and the cross-section draws the Pacific from
+        them. Random weather — bursts of wind that no ocean model can foresee — kicks the index every
+        month. Change the net feedback — how fast the Bjerknes feedback would grow an anomaly, minus how fast heat escaping to the air and mixing into the deeper
+        ocean wears it down — as well as how big the kicks are and how fast the heat drains and recharges, and scrub the timeline with the pointer or the arrow keys:
       </P>
 
       <Figure name="Ocean-Atmosphere Model" scenario={s} play={play}>
@@ -552,17 +562,12 @@ export default function Lesson() {
           items={[
             { label: `year ${Math.floor(m / 12) + 1}, ${MONTH_NAMES[m % 12]}`, value: `${signed(tNow, 1)} °C`, tone: WX.temperature },
             { label: 'natural period', value: per.periodMonths !== null ? `${fmt(per.periodMonths / 12, 1)} years` : 'none' },
-            {
-              label: growth > 1 ? `a disturbance doubles every ${fmt(doublingYears(growth), doublingYears(growth) < 10 ? 1 : 0)} years` : `a disturbance shrinks by e every ${fmt(-1 / Math.log(growth) / 12, 1)} years`,
-              value: growth > 1 ? 'grows' : 'fades',
-              tone: growth > 1 ? 'red' : 'ink',
-            },
             { label: 'spread of the index', value: `±${fmt(run.sd, 2)} °C` },
             { label: 'El Niño / La Niña winters of 40', value: `${run.elNino} / ${run.laNina}` },
           ]}
         />
         <Slider
-          label="Ocean–atmosphere coupling"
+          label="Net feedback (growth − damping)"
           tone={WX.temperature}
           value={st.coupling}
           min={-0.1}
@@ -576,31 +581,34 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At the starting settings the coupling is negative: the feedback is weaker than the damping, so on its own any disturbance would die away, shrinking by a
-        factor of e every {fmt((basePer.decayMonths ?? 0) / 12, 1)} years while swinging with a natural period of {fmt((basePer.periodMonths ?? 0) / 12, 1)} years.
-        It keeps going only because the weather keeps kicking it. That is why the record looks irregular rather than like a clean wave: over 40 years it holds{' '}
-        {base.elNino} El Niño winters and {base.laNina} La Niña winters, some strong, some barely over the line, and the index swings with a standard deviation of{' '}
-        {fmt(base.sd, 2)} °C. The real index behaves much the same way. El Niños recur every two to seven years, never on a schedule, and the strongest on record
-        have pushed the index past +2 °C. NOAA calls an episode El Niño once the index, averaged over three months, stays at +0.5 °C or more for several seasons in
-        a row; we’ll simply call a winter El Niño or La Niña when its December–February average crosses ±0.5 °C. (The simulated Pacific in this demonstration is the
-        one behind the course’s weather archive. Like every number in the archive, it is simulated, not observed.)
+        At the starting settings the net feedback is negative: the feedback is weaker than the damping, so on its own any disturbance would die away, shrinking to
+        about a third of its size every {fmt((basePer.decayMonths ?? 0) / 12, 1)} years while swinging with a natural period of{' '}
+        {fmt((basePer.periodMonths ?? 0) / 12, 1)} years. It keeps going only because the weather keeps kicking it. That is why the record looks irregular rather
+        than like a clean wave: over 40 years it holds {base.elNino} El Niño winters and {base.laNina} La Niña winters, some strong, some barely over the line, and
+        the index has a standard deviation — roughly, the typical size of its departures from average, which{' '}
+        <a href={lessonHref('weather/2.5')}>Lesson 2.5</a> defines properly — of {fmt(base.sd, 2)} °C. The real index behaves much the same way. El Niños recur
+        every two to seven years, never on a schedule, and the strongest on record have pushed the index past +2 °C. Forecasting agencies declare an El Niño once
+        the index, averaged over three months, stays at about +0.5 °C or more for several months in a row; we’ll simply call a winter El Niño or La Niña when its
+        December–February average crosses ±0.5 °C. (The simulated Pacific in this demonstration is the one behind the course’s weather archive. Like every number
+        in the archive, it is simulated, not observed.)
       </P>
       <P>
         Watch the cross-section as the timeline plays. As an El Niño builds, the trade winds slacken, the thermocline flattens and the rain clouds drift east
         with the warm water. Turn the kicks down and the index fades, because the oscillation is damped. Speed up the recharge and drain, and the cycle quickens:
-        the period depends on how fast the heat store responds.
+        the period depends on how fast the heat store responds. The store also seeps slowly away on its own, whatever the east is doing — one more damping, and
+        one that the net feedback leaves out.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the recharge at × 1.0. What’s the weakest coupling at which a disturbance grows instead of dying out, so the Pacific would keep oscillating even without the weather’s kicks?"
+        question="Predict first: a disturbance stops dying out once the feedback outruns every damping. Will that happen exactly where the net feedback reaches zero, a little below zero, or a little above? Then, with the recharge at × 1.0, find the weakest net feedback, on the slider’s steps, at which a disturbance grows instead of dying out, so the Pacific would keep oscillating even without the weather’s kicks."
         solved={solved}
         status={
           Math.abs(st.recharge - 1) > 1e-9
             ? 'Set the speed of recharge and drain back to × 1.0 first.'
             : `At ${signed(st.coupling, 3)} per month, a disturbance ${growthText}.`
         }
-        success={`Solved. Between +0.020 and +0.025 per month (at +${fmt(thresholdC, 4)}), the feedback starts to outrun the damping. Just past the line the growth is glacial — at +0.025 a disturbance doubles only every ${fmt(Math.log(2) / Math.log(growthPerMonth({ ...ENSO_DEFAULTS, coupling: 0.025 })) / 12)} years — and further out the cubic damping in the model caps the swings, so the oscillation becomes bigger and more regular. Researchers still debate which side of this line the real Pacific sits on.`}
+        success={`Solved. Between +0.020 and +0.025 per month (at +${fmt(thresholdC, 4)}), the feedback starts to outrun all the damping, including the slow leak of the stored heat, which the net feedback leaves out: that is why the line sits a little above zero. Just past it the growth is glacial — at +0.025 a disturbance doubles only every ${fmt(Math.log(2) / Math.log(growthPerMonth({ ...ENSO_DEFAULTS, coupling: 0.025 })) / 12)} years — and further out the model’s extra damping of large swings caps them, so the oscillation becomes bigger and more regular. Researchers still debate which side of this line the real Pacific sits on.`}
       />
 
       <H2>Teleconnections</H2>
@@ -611,11 +619,12 @@ export default function Lesson() {
         El Niño winters tend to run milder than normal, and La Niña winters colder.
       </P>
       <P>
-        Our region is built to behave the same way: each degree of Niño-3.4 adds {fmt(STATIONS.calder.ensoF ?? 1, 1)} °F to Calder Bay’s winter. From here on we’ll
+        Our region is built to behave the same way: each degree of Niño-3.4 adds {fmt(STATIONS.fenwick.ensoF ?? 1, 1)} °F to Fenwick Bay’s winter. From here on we’ll
         quote the region’s station temperatures in degrees Fahrenheit, as the weather contracts later in the course count them; a degree Fahrenheit is 5/9 of a
-        degree Celsius, so 1 °F is about 0.56 °C. The next demonstration plots the archive’s 40 winters at Calder Bay: each point is one December–February, placed
+        degree Celsius, so 1 °F is about 0.56 °C. The next demonstration plots the archive’s 40 winters at Fenwick Bay: each point is one December–February, placed
         by its Niño-3.4 index and by how much warmer or colder than normal the city was. El Niño winters are red circles and La Niña winters blue squares. Change the
-        strength of the teleconnection — the same 40 winters of weather, reshaped by a stronger or weaker link:
+        strength of the teleconnection — the same 40 winters of weather, reshaped by a stronger or weaker link — and leave the choice of Niño-3.4 on “as it
+        turned out” for now:
       </P>
 
       <Figure name="Ocean-Atmosphere Model · teleconnection" scenario={g}>
@@ -657,15 +666,15 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At Calder Bay’s own strength, El Niño winters average {signed(calder.elNinoMean, 1)} °F and La Niña winters {signed(calder.laNinaMean, 1)} °F — a gap of
-        about {fmt(calder.elNinoMean - calder.laNinaMean, 1)} °F, or {fmt(((calder.elNinoMean - calder.laNinaMean) * 5) / 9, 1)} °C, over a whole season. The
-        correlation is {fmt(calder.r, 2)}. But the scatter is wide. {calder.elNinoMild} of the {calder.elNinoCount} El Niño winters were milder than normal and{' '}
-        {calder.laNinaCold} of the {calder.laNinaCount} La Niña winters colder; the coldest El Niño winter came in {fmt(-calder.coldestElNino, 1)} °F below normal,
-        and the warmest La Niña winter {fmt(calder.warmestLaNina, 1)} °F above. The fronts and storms of the last two lessons still decide most of a winter. ENSO
+        At Fenwick Bay’s own strength, El Niño winters average {signed(fenwick.elNinoMean, 1)} °F and La Niña winters {signed(fenwick.laNinaMean, 1)} °F — a gap of
+        about {fmt(fenwick.elNinoMean - fenwick.laNinaMean, 1)} °F, or {fmt(((fenwick.elNinoMean - fenwick.laNinaMean) * 5) / 9, 1)} °C, over a whole season. The
+        correlation is {fmt(fenwick.r, 2)}. But the scatter is wide. {fenwick.elNinoMild} of the {fenwick.elNinoCount} El Niño winters were milder than normal and{' '}
+        {fenwick.laNinaCold} of the {fenwick.laNinaCount} La Niña winters colder; the coldest El Niño winter came in {fmt(-fenwick.coldestElNino, 1)} °F below normal,
+        and the warmest La Niña winter {fmt(fenwick.warmestLaNina, 1)} °F above. The fronts and storms of the last two lessons still decide most of a winter. ENSO
         tilts the odds.
       </P>
       <P>
-        Notice, too, that the fitted slope, {fmt(calder.slope, 2)} °F per °C, is steeper than the {fmt(STATIONS.calder.ensoF ?? 1, 1)} °F per °C that the model
+        Notice, too, that the fitted slope, {fmt(fenwick.slope, 2)} °F per °C, is steeper than the {fmt(STATIONS.fenwick.ensoF ?? 1, 1)} °F per °C that the model
         actually adds. Slide the strength to zero: with no link at all, these same 40 winters still show a slope of {fmt(none.slope, 2)} and a correlation of{' '}
         {fmt(none.r, 2)}, because by chance a few of the La Niña winters also had cold weather. Forty winters is not many. Any estimate of a teleconnection, or of
         anything else about a whole season, carries that kind of sampling error, and we’ll meet it again when we start pricing contracts on seasons.
@@ -673,10 +682,10 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="How strong would the teleconnection have to be for every La Niña winter in the archive to come out colder than normal?"
+        question={`Predict first: at Fenwick Bay’s ${fmt(STATIONS.fenwick.ensoF ?? 1, 1)} °F per °C, ${fenwick.laNinaCount - fenwick.laNinaCold} of the ${fenwick.laNinaCount} La Niña winters still came in milder than normal, the warmest by ${fmt(fenwick.warmestLaNina, 1)} °F, and each extra 1 °F per °C of link cools a La Niña winter by as many degrees Fahrenheit as its index lies below zero. Would doubling the link make every La Niña winter colder than normal? Then find the weakest link, to the nearest 0.1 °F per °C, that does it.`}
         solved={solved2}
         status={`At ${fmt(ensoF, 1)} °F per °C, the warmest La Niña winter is ${actual.warmestLaNina >= 0 ? `${fmt(actual.warmestLaNina, 2)} °F above` : `${fmt(-actual.warmestLaNina, 2)} °F below`} normal.${actual.warmestLaNina < 0 ? ' Could a weaker link do it?' : ''}`}
-        success={`Solved. It takes ${fmt(ensoF, 1)} °F per °C, almost twice Calder Bay’s own ${fmt(STATIONS.calder.ensoF ?? 1, 1)} — and even then the warmest La Niña winter is only ${fmt(-actual.warmestLaNina, 2)} °F below normal. For ENSO to decide the sign of every season, the link has to be strong enough to beat the winter’s own weather, which in this archive has a standard deviation of about ${fmt(weatherSd(), 1)} °F from one winter to the next.`}
+        success={`Solved. It takes ${fmt(ensoF, 1)} °F per °C, almost twice Fenwick Bay’s own ${fmt(STATIONS.fenwick.ensoF ?? 1, 1)} — so doubling would just do it — and even then the warmest La Niña winter is only ${fmt(-actual.warmestLaNina, 2)} °F below normal. The last to turn cold is a weak La Niña, with an index of ${signed(holdout.nino, 2)} °C, which each extra unit of link cools by only about half a degree. For ENSO to decide the sign of every season, the link has to be strong enough to beat the winter’s own weather, which in this archive has a standard deviation of about ${fmt(weatherSd(), 1)} °F from one winter to the next.`}
       />
 
       <H2>Predictable months ahead</H2>
@@ -685,8 +694,8 @@ export default function Lesson() {
         the weather more than two weeks away. But the Pacific’s heat content moves slowly, so by autumn the coming winter’s ENSO state is largely set. Switch{' '}
         <FigRef to="Ocean-Atmosphere Model · teleconnection">the scatter</FigRef> to the forecast made on November 1 — the oscillator’s own projection from the
         state at the end of October, with no knowledge of the kicks still to come. Its forecasts of the winter index correlate {fmt(fcSkill.r, 2)} with what
-        happened, and they put {fcSkill.hits} of the 40 winters in the right phase. Calder Bay’s winters correlate {fmt(fromOctober.r, 2)} with the forecast,
-        almost as well as the {fmt(calder.r, 2)} with the index as it turned out.
+        happened, and they put {fcSkill.hits} of the 40 winters in the right phase. Fenwick Bay’s winters correlate {fmt(fromOctober.r, 2)} with the forecast,
+        almost as well as the {fmt(fenwick.r, 2)} with the index as it turned out.
       </P>
       <P>
         That makes ENSO the largest single source of skill in seasonal forecasting. A forecaster who reads it in October knows which way the coming winter’s odds
@@ -694,7 +703,7 @@ export default function Lesson() {
         that information — and in Chapter 5 we’ll ask whether a market for winter weather does, and what it would be worth to someone who doesn’t.
       </P>
       <P>
-        ENSO is one reason a place’s weather differs from one year to the next. The next lesson turns to the differences that stay put: why Calder Bay on the coast,
+        ENSO is one reason a place’s weather differs from one year to the next. The next lesson turns to the differences that stay put: why Fenwick Bay on the coast,
         Marlow on the plains and Hollin Ridge in the hills have different climates, and how a station’s weather varies with the season.
       </P>
     </LessonPage>
@@ -718,9 +727,9 @@ function growthAtThreshold(): number {
   return (lo + hi) / 2;
 }
 
-/** Standard deviation of Calder Bay's winter anomaly from the weather alone, °F. */
+/** Standard deviation of Fenwick Bay's winter anomaly from the weather alone, °F. */
 function weatherSd(): number {
-  const ws = calderWinters();
+  const ws = fenwickWinters();
   const m = ws.reduce((a, w) => a + w.weather, 0) / ws.length;
   return Math.sqrt(ws.reduce((a, w) => a + (w.weather - m) ** 2, 0) / ws.length);
 }

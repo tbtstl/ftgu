@@ -44,9 +44,9 @@ import { gaussian, rng } from '../../../model/random';
 import { XYChart } from '../shared/charts';
 
 // ---------------------------------------------------------------------------
-// Figure 1: the standard Ridgeback well, as a field engineer would see it.
+// Figure 1: the standard Pinyon well, as a field engineer would see it.
 
-const WELL = wellProfile(STANDARD_WELL, rockOf('ridgeback'), 360);
+const WELL = wellProfile(STANDARD_WELL, rockOf('pinyon'), 360);
 /** The model well's 30-year cumulative production, bbl. */
 export const TRUE_EUR30 = WELL.cum[359];
 /** Months of "observed" data the reader fits. */
@@ -111,7 +111,49 @@ export function floodTimingSolved(drive: Drive, floodYear: number, price: number
   return floodRecovery(floodYear) > 0.4 && floodRecovery(floodYear + 1) < 0.4;
 }
 
-const DRIVE_LABEL: Record<Drive, string> = { flowing: 'Natural flow', pumps: 'Pumps', waterflood: 'Waterflood' };
+/** The latest whole-year flood start (0–20) that recovers more than 40% at a price, or −1 if none does. */
+export function latestFloodStart(price: number): number {
+  let last = -1;
+  for (let y = 0; y <= 20; y++) if (floodRecovery(y, price) > 0.4) last = y;
+  return last;
+}
+
+/** The most any flood start from 0 to 20 years recovers at a price. */
+export function bestFloodRecovery(price: number): number {
+  let best = 0;
+  for (let y = 0; y <= 20; y++) best = Math.max(best, floodRecovery(y, price));
+  return best;
+}
+
+/** How many years the field produces on pumps alone, with no flood, at a price. */
+export function pumpsLife(price: number): number {
+  return fieldOutcome(runField('pumps', 0, price)).life;
+}
+
+/** 13 → "13th". */
+export function ordinal(n: number): string {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${n}${suffix}`;
+}
+
+function startText(price: number): string {
+  const y = latestFloodStart(price);
+  return y < 0
+    ? `at ${usd(price)} no start reaches 40% (the best recovers ${pct(bestFloodRecovery(price), 1)})`
+    : `at ${usd(price)} the field lasts ${pumpsLife(price)} years on pumps, and the last start that does comes after ${y} year${y === 1 ? '' : 's'}`;
+}
+
+/** Challenge b's closing sentence: how the latest start moves with the price. */
+export function floodPriceNote(low = 40, high = 100): string {
+  const s = `${startText(low)}; ${startText(high)}.`;
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+/** Every fit within the tolerance on the sliders' grid has b in this range. */
+export const GOOD_B: [number, number] = [0.9, 1.25];
+
+const DRIVE_LABEL: Record<Drive, string> ={ flowing: 'Natural flow', pumps: 'Pumps', waterflood: 'Waterflood' };
 const OIL = '#d0702a';
 const WATER = '#8a9bb0';
 const PRESSURE = '#4590ce';
@@ -178,11 +220,6 @@ export default function Lesson() {
   // What lifting and handling water costs per barrel of oil at a 95% water cut.
   const cut = 0.95;
   const perOilBbl = m.liftPerBbl / (1 - cut) + (m.waterPerBbl * cut) / (1 - cut);
-  const latestAt = (p: number) => {
-    let last = -1;
-    for (let y = 0; y <= 20; y++) if (fieldOutcome(runField('waterflood', y, p)).recovery > 0.4) last = y;
-    return last;
-  };
 
   const yearsShown = 40;
   const xs = rows.slice(0, yearsShown).map((r) => r.year + 0.5);
@@ -190,7 +227,7 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/2.4">
       <P>
-        <a href={lessonHref('oil/2.3')}>Lesson 2.3</a> designed the standard Ridgeback well: a 10,000-foot lateral with 50 fracture stages, producing about{' '}
+        <a href={lessonHref('oil/2.3')}>Lesson 2.3</a> designed the standard Pinyon well: a 10,000-foot lateral with 50 fracture stages, producing about{' '}
         {bpd(roundTo(WELL.rate[0], 100))} in its first month. It doesn’t hold that rate. By its twelfth month it makes about {bpd(roundTo(WELL.rate[11], 10))}, and
         after thirty years about {bpd(Math.round(WELL.rate[359]))}. Every well declines, for the reasons the last two lessons laid out: as oil leaves the rock, the
         pressure that pushes the rest toward the well falls, and the disturbance spreading from the well reaches rock that’s farther away and slower to give up its oil.
@@ -227,7 +264,7 @@ export default function Lesson() {
         when declines are steep: an exponential well that loses 65% of its rate in a year has a nominal decline of {fmt(nominalFromEffective(0.65, 0), 2)} per year.
       </P>
       <P>
-        In the next demonstration, the dots are the first two years of the standard Ridgeback well as a field engineer would see them: monthly averages, with a few
+        In the next demonstration, the dots are the first two years of the standard Pinyon well as a field engineer would see them: monthly averages, with a few
         percent of measurement noise. Fit a curve to them:
       </P>
 
@@ -254,7 +291,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Monthly oil rate of the standard Ridgeback well, log scale, with an Arps curve: initial rate ${fmt(qi)} barrels a day, first-year decline ${pct(de)}, b ${fmt(b, 2)}. Fit error ${pct(err, 1)}. ${thirty ? `Over thirty years the curve forecasts ${bbl(eur30)}; the model well produces ${bbl(TRUE_EUR30)}.` : ''}`}
+          ariaLabel={`Monthly oil rate of the standard Pinyon well, log scale, with an Arps curve: initial rate ${fmt(qi)} barrels a day, first-year decline ${pct(de)}, b ${fmt(b, 2)}. Fit error ${pct(err, 1)}. ${thirty ? `Over thirty years the curve forecasts ${bbl(eur30)}; the model well produces ${bbl(TRUE_EUR30)}.` : ''}`}
           height={260}
           x={[0, thirty ? 360 : DATA_MONTHS]}
           y={thirty ? [1, 5000] : [60, 5000]}
@@ -307,15 +344,17 @@ export default function Lesson() {
         question={`Fit the curve to the two years of data: get the fit error to ${pct(FIT_TOLERANCE)} or less.`}
         solved={solvedA}
         status={`The fit error is ${pct(err, 1)}.${b < 0.5 ? ' Try a larger b.' : ''}`}
-        success={`Solved: an initial rate of ${bpd(qi)}, a first-year decline of ${Math.round(de * 100)}% and b = ${fmt(b, 2)} fit within ${pct(err, 1)}. Nearly every good fit needs b above 1.`}
+        success={`Solved: an initial rate of ${bpd(qi)}, a first-year decline of ${Math.round(de * 100)}% and b = ${fmt(b, 2)} fit within ${pct(err, 1)}. Every curve that fits has b near or above 1: on these sliders, between ${fmt(GOOD_B[0], 2)} and ${fmt(GOOD_B[1], 2)}.`}
       />
 
       <H2>From a fit to a forecast</H2>
       <P>
         The best fit the sliders allow — an initial rate of {bpd(BEST_FIT.qi)}, a first-year decline of {pct(BEST_FIT.de)} and b = {fmt(BEST_FIT.b, 1)} — has b above
-        1, and that is typical of shale wells. Arps’s curves were empirical, and for wells draining a bounded area b usually falls between 0 and 1. A fractured shale well spends
-        its first months in the linear flow of <a href={lessonHref('oil/2.2')}>Lesson 2.2</a>, oil streaming straight into the fracture faces, and pure linear flow
-        behaves like b = 2. The early data carry that signature.
+        1, and that is typical of shale wells. Its initial rate is far above the first-month average of about {bpd(roundTo(WELL.rate[0], 100))}, because q
+        <Sub>i</Sub> is the rate at the instant the well opens, and a steep decline takes the rate well below it within the first month. Arps’s curves were empirical,
+        and for wells draining a bounded area b usually falls between 0 and 1. A fractured shale well spends its first months in <b>linear flow</b>: oil crosses the
+        rock along parallel paths straight into the flat fracture faces, as in <a href={lessonHref('oil/2.3')}>Lesson 2.3</a>, instead of converging on a wellbore.
+        Pure linear flow behaves like b = 2. The early data carry that signature.
       </P>
       <P>
         Now switch the demonstration to thirty years. The fitted curve forecasts {bbl(best30)} over thirty years, and it never stops: with b above 1, the cumulative
@@ -409,14 +448,17 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with natural flow. Northfield’s wells flow on their own only while the reservoir can push a column of fluid to the surface — the margin of{' '}
+        Start with natural flow. Northfield’s wells flow on their own only while the reservoir can push a column of fluid to the surface — the threshold of{' '}
         <a href={lessonHref('oil/2.1')}>Lesson 2.1</a>, about {fmt(roundTo(flowingPwf(0), 10))} psi at the bottom of a well full of oil. The first year averages{' '}
-        {bpd(roundTo(runField('flowing', 0, DEFAULT_PRICE)[0].oil, 100))}, but undersaturated oil gives up its pressure quickly, and within {flowing.life} years the
-        wells stop: only {pct(flowing.recovery, 1)} of the oil has come out. Water makes it worse. Brine is heavier than oil, so a well whose fluid is 30% water needs
+        {bpd(roundTo(runField('flowing', 0, DEFAULT_PRICE)[0].oil, 100))}, but Northfield’s oil is <b>undersaturated</b>: it holds less gas than it could dissolve at
+        its pressure, so no gas has yet come out of it to expand and push. Liquid oil and rock barely expand as the pressure falls, so the pressure drops quickly as
+        oil is taken out, and within {flowing.life} years the wells stop: only {pct(flowing.recovery, 1)} of the oil has come out. Water makes it worse. Brine is heavier than oil, so a well whose fluid is 30% water needs
         about {fmt(roundTo(flowingPwf(0.3), 10))} psi to flow.
       </P>
       <P>
-        Pumps — <b>artificial lift</b> — take over where the reservoir’s own push gives out. With them the field produces for {pumps.life} years and recovers{' '}
+        Pumps — <b>artificial lift</b> — lift the fluid so the reservoir doesn’t have to, letting each well draw its bottom pressure far below what natural flow
+        needs. Run from the start, they make the first year average {bpd(roundTo(runField('pumps', 0, DEFAULT_PRICE)[0].oil, 100))} instead of{' '}
+        {bpd(roundTo(runField('flowing', 0, DEFAULT_PRICE)[0].oil, 100))}, and the field produces for {pumps.life} years and recovers{' '}
         {pct(pumps.recovery, 1)}, about what this kind of reservoir yields from its own energy. Most of the oil stays in the rock. A <b>waterflood</b> changes that:
         injection wells pump water into the reservoir, holding up the pressure and pushing oil toward the producers. Started after three years, it lifts recovery to{' '}
         {pct(flood3.recovery, 1)} over {flood3.life} years. But the water arrives at the producers too. The water cut climbs, and by the final year{' '}
@@ -431,14 +473,14 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`At ${usd(DEFAULT_PRICE)} oil, what is the latest a waterflood can start — after how many whole years of production — and still recover more than 40% of Northfield’s oil?`}
+        question={`At ${usd(DEFAULT_PRICE)} oil, what is the latest a waterflood can start — after how many whole years of production — and still recover more than 40% of Northfield’s oil? Predict it first: on pumps alone, the field reaches its economic limit during its ${ordinal(pumps.life)} year. Then choose the waterflood and check.`}
         solved={solvedB}
         status={
           drive !== 'waterflood' || price !== DEFAULT_PRICE
             ? `Choose the waterflood, at ${usd(DEFAULT_PRICE)} oil.`
             : `Starting after ${floodYear} years, the field recovers ${pct(floodRecovery(floodYear), 1)}.`
         }
-        success={`Solved: ${floodYear} years. Any earlier start recovers about the same oil — the flood sweeps the same rock — only sooner. Wait one more year and the field on pumps has already reached its economic limit and shut in before the water arrives. At $40 the last chance comes after ${latestAt(40)} years; at $100, after ${latestAt(100)}.`}
+        success={`Solved: ${floodYear} years. On pumps alone the field shuts in during its ${ordinal(pumps.life)} year, so a flood that waits ${pumps.life} years finds it already closed, while one that starts after ${pumps.life - 1} catches it still running. Any earlier start recovers about the same oil — the flood sweeps the same rock — only sooner. ${floodPriceNote()}`}
       />
 
       <P>

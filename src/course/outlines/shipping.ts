@@ -27,7 +27,7 @@ const chapters: ChapterMeta[] = [
     ['Port infrastructure and queues', 'Port Congestion Lab'],
     ['Maritime chokepoints', 'Canal and Strait Simulator'],
     ['Fleet positioning and ballast voyages', 'Fleet Positioning Simulator'],
-    ['Ton-mile demand', 'Global Trade Flow Model'],
+    ['Tonne-mile demand', 'Global Trade Flow Model'],
   ]),
   ch(4, 'Freight markets & price formation', 'How does a fleet of mobile assets become a market for transportation?', 'orange', [
     ['Spot freight supply and demand', 'Freight Clearing Engine'],

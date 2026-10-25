@@ -38,7 +38,7 @@ import { BASE_OIL, FLOW_NEEDS, doubleSolved, flowStopSolved } from '../src/lesso
 import { NORTHFIELD_PI, TIME_STEP, fieldDefaults, halfwaySolved, heavyOilSolved, reach } from '../src/lessons/oil/ch2/L2_2';
 import { cheapestSolved, cheapestYearOneWell, contactArea, fewestStagesSolved as fewestFracStagesSolved, firstMonthRate } from '../src/lessons/oil/ch2/L2_3';
 import { BEST_FIT, DATA, TRUE_EUR30, fitError, fitSolved, floodTimingSolved } from '../src/lessons/oil/ch2/L2_4';
-import { allProjectsSolved, breakevenSolved, volumeCleared } from '../src/lessons/oil/ch2/L2_5';
+import { breakevenSolved, demandSolved, volumeCleared } from '../src/lessons/oil/ch2/L2_5';
 import {
   BLEND_STREAMS,
   SUMMER,
@@ -58,8 +58,8 @@ import {
   rangeProps,
 } from '../src/engines/oil/refining';
 import { crudeBreakeven, marginPerBarrel, planRefinery, shadowPrices } from '../src/engines/oil/refinery';
-import { CALDER } from '../src/model/oil/refinery';
-import { TOWER_DEFAULTS, jetRate, maxJetSolved, pressureOf, vacuumSolved } from '../src/lessons/oil/ch3/L3_1';
+import { CORRAN } from '../src/model/oil/refinery';
+import { TOWER_DEFAULTS, airlineSolved, jetRate, pressureOf, vacuumSolved } from '../src/lessons/oil/ch3/L3_1';
 import { DEFAULT_PRICES as FCC_DEFAULTS, bestTempSolved, bestTemperature, hydrogenLimitSolved, marginAt } from '../src/lessons/oil/ch3/L3_2';
 import { CHEAPEST_15, DHT_M3_PER_HOUR, feedOf, getSlates, hydrogenPlantSolved, productPpm, throughputSolved, treatingCost } from '../src/lessons/oil/ch3/L3_3';
 import { butaneAt, butaneFiveSolved, handBlendSolved, optimumCost } from '../src/lessons/oil/ch3/L3_4';
@@ -69,7 +69,7 @@ import { cheapestSpeed, voyage } from '../src/engines/oil/tanker';
 import { expectedBuffer, planStorage, priceStrip, simulateBuffer } from '../src/engines/oil/storage';
 import { NETWORK_DEFAULTS, nodePrices, solveNetwork } from '../src/engines/oil/network';
 import { arbitrage, closingFreight, crudeNetback, qualityDifferentials } from '../src/engines/oil/arbitrage';
-import { COLDWATER_LINE, KESSLER_CALDER, TYPICAL_CRUDE } from '../src/model/oil/logistics';
+import { COLDWATER_LINE, KESSLER_CORRAN, TYPICAL_CRUDE } from '../src/model/oil/logistics';
 import { FLUIDS, northfieldMaxSolved, operatingProfile, tariffSolved } from '../src/lessons/oil/ch4/L4_1';
 import { VOYAGE_DEFAULTS, cheapestSpeedSolved, lighteringSolved, scaleCost } from '../src/lessons/oil/ch4/L4_2';
 import { TERMINAL_DEFAULTS, bestBuffer, bufferCurve, bufferSolved, highestRateSolved, terminalPlan } from '../src/lessons/oil/ch4/L4_3';
@@ -88,7 +88,7 @@ import {
   backtest,
   basisRule,
   calendarRule,
-  calderMargin,
+  corranMargin,
   cashAndCarry,
   combine,
   correlation as pnlCorrelation,
@@ -99,9 +99,9 @@ import {
   walkForwardRule,
 } from '../src/engines/oil/trading';
 import { OUTAGE_DEFAULTS, SHOCK_STATE_DEFAULTS, crackRise, crudeBackedUp, gasolineSolved as crackRiseSolved, lowestPrice, peakPrice, releaseSolved, runShock } from '../src/lessons/oil/ch5/L5_5';
-import { CARRY_STATE_DEFAULTS, TRADER_DEFAULTS, largestCarryHub, largestHubSolved, runCarry, runTrader, smallestHubSolved, smallestProfitableHub } from '../src/lessons/oil/ch6/L6_1';
+import { CARRY_STATE_DEFAULTS, TRADER_DEFAULTS, largestCarryHub, largestHubSolved, predictedHubSolved, runCarry, runTrader, smallestProfitableHub } from '../src/lessons/oil/ch6/L6_1';
 import { BASIS_DEFAULTS, QUALITY_DEFAULTS, idleGrowth, idleGrowthSolved, losingShiftSolved, runBasis, runQuality, smallestLosingShift } from '../src/lessons/oil/ch6/L6_2';
-import { CRACK_STATE_DEFAULTS, calendarWinsSolved, runCrack, splitFor, stillTradesSolved } from '../src/lessons/oil/ch6/L6_3';
+import { CRACK_STATE_DEFAULTS, halfSeasonsSolved, runCrack, splitFor, stillTradesSolved } from '../src/lessons/oil/ch6/L6_3';
 import { HEDGE_DEFAULTS, QUARTER_DEFAULTS, bestHedge, fastestWtiGrowth, hedgeFor, quartersFor, standardCrackSolved, summarizeQuarters, wtiGrowthSolved } from '../src/lessons/oil/ch6/L6_4';
 import { LAB_DEFAULTS, TUNED_BOOK, calendarBeforeCosts, crackShift, crackSolved, runLab, sizingSolved } from '../src/lessons/oil/ch6/L6_5';
 import { DECK_DEFAULTS, WORLD_DEFAULTS, cheapestPlanSolved, cheapestTargetPlan, fanValuations, luckAnswer, luckSolved, worldParams } from '../src/lessons/oil/ch7/L7_1';
@@ -166,7 +166,8 @@ describe('molecules', () => {
       const [lo, hi] = FAMILY_RANGE[f];
       return Array.from({ length: hi - lo + 1 }, (_, i) => buildMolecule(f, lo + i)).filter(gasolineSolved).map((m) => m.name);
     });
-    expect(qualifying.sort()).toEqual(['Benzene', 'Cyclopentane', 'Ethylbenzene', 'Iso-octane', 'Propylbenzene', 'Toluene']);
+    // Challenge b asks for a ring that isn't aromatic, so only cyclopentane qualifies.
+    expect(qualifying.sort()).toEqual(['Cyclopentane']);
   });
 });
 
@@ -177,7 +178,7 @@ describe('assay', () => {
     expect(sgFromAPI(apiFromSG(0.85))).toBeCloseTo(0.85);
   });
   it('gives the four crudes realistic properties', () => {
-    const rb = crude('ridgeback');
+    const rb = crude('pinyon');
     const sb = crude('seaboard');
     const nf = crude('northfield');
     const cw = crude('coldwater');
@@ -200,7 +201,7 @@ describe('assay', () => {
   it('matches the numbers in Lesson 1.2', () => {
     const nf = crude('northfield');
     const cw = crude('coldwater');
-    const rb = crude('ridgeback');
+    const rb = crude('pinyon');
     expect(Math.round(cumulativeYield(nf, 350) * 100)).toBe(51);
     expect(Math.round(cumulativeYield(cw, 350) * 100)).toBe(37);
     expect(Math.round(cw.yields[6] * 100)).toBe(35);
@@ -226,7 +227,7 @@ describe('assay', () => {
     expect(residueCapSolved({ ...st, sulfur: 0.23 })).toBe(false);
   });
   it('matches the viscosity and blending numbers in Lesson 1.3', () => {
-    const rb = crude('ridgeback');
+    const rb = crude('pinyon');
     const nf = crude('northfield');
     const cw = crude('coldwater');
     expect(viscosity(rb, 20)).toBeCloseTo(3.5, 1);
@@ -255,12 +256,12 @@ describe('assay', () => {
     const t = Array.from({ length: 61 }, (_, i) => i).find(heatSolved);
     expect(t).toBe(56);
     expect(heatSolved(20)).toBe(false);
-    // Diluent: 20% Ridgeback Light; 19% isn't enough.
-    expect(diluentSolved('coldwater', 'ridgeback', 20)).toBe(true);
-    expect(diluentSolved('coldwater', 'ridgeback', 10)).toBe(false);
+    // Diluent: 20% Pinyon Light; 19% isn't enough.
+    expect(diluentSolved('coldwater', 'pinyon', 20)).toBe(true);
+    expect(diluentSolved('coldwater', 'pinyon', 10)).toBe(false);
     // The WTI blend: at most 14% Northfield Sour; 1% already brings the blend under 42°.
-    expect(wtiSolved('ridgeback', 'northfield', 14)).toBe(true);
-    expect(wtiSolved('ridgeback', 'northfield', 13)).toBe(false);
+    expect(wtiSolved('pinyon', 'northfield', 14)).toBe(true);
+    expect(wtiSolved('pinyon', 'northfield', 13)).toBe(false);
     expect(
       blend([
         { crude: rb, share: 99 },
@@ -371,7 +372,7 @@ describe('reservoir', () => {
   it('computes radial inflow and reach', () => {
     expect(productivityIndex(fieldWell('northfield'))).toBeCloseTo(1.804, 3);
     expect(radialRate(fieldWell('coldwater'), 400)).toBeCloseTo(73.3, 1);
-    expect(productivityIndex(fieldWell('ridgeback'))).toBeLessThan(0.001);
+    expect(productivityIndex(fieldWell('pinyon'))).toBeLessThan(0.001);
     const w = fieldWell('northfield');
     expect(radialPressure(w, w.rw, 1000, 2000)).toBe(1000);
     expect(radialPressure(w, w.re, 1000, 2000)).toBe(2000);
@@ -382,7 +383,7 @@ describe('reservoir', () => {
 });
 
 describe('wells', () => {
-  const rb = rockOf('ridgeback');
+  const rb = rockOf('pinyon');
   it('gives realistic shale and conventional wells', () => {
     const f = wellSummary(STANDARD_WELL, rb);
     expect(f.ip30).toBeGreaterThan(1400);
@@ -441,7 +442,7 @@ describe('field economics', () => {
     expect(npv([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 110], 0.1)).toBeCloseTo(100, 6);
     expect(irr([-100, ...Array<number>(11).fill(0), 110])).toBeCloseTo(0.1, 4);
   });
-  it('values a Ridgeback well', () => {
+  it('values a Pinyon well', () => {
     expect(wellBreakeven()).toBeCloseTo(55.77, 1);
     expect(wellEconomics(70).npv / 1e6).toBeCloseTo(3.15, 1);
     expect(wellEconomics(70).payback).toBe(17);
@@ -460,7 +461,8 @@ describe('chapter 2 lessons', () => {
     expect(Math.round(BASE_OIL / 1e6)).toBe(322);
     expect(doubleSolved(8000, 22, 25)).toBe(false);
     expect(doubleSolved(8140, 22, 25)).toBe(true);
-    expect(doubleSolved(8145, 22, 25)).toBe(false);
+    expect(doubleSolved(8145, 22, 25)).toBe(true);
+    expect(doubleSolved(8150, 22, 25)).toBe(false);
     expect(doubleSolved(8140, 23, 25)).toBe(false);
     expect(trapVolume(FIELDS.northfield, 8140).column).toBe(340);
     expect(Math.round(trapVolume(FIELDS.northfield, 8140).areaAcres)).toBe(12207);
@@ -480,30 +482,31 @@ describe('chapter 2 lessons', () => {
     expect(heavyOilSolved({ ...cw, muExp: 1.7 })).toBe(false);
     expect(halfwaySolved(1.38)).toBe(false);
     expect(halfwaySolved(3.3)).toBe(true);
-    expect(halfwaySolved(3.29)).toBe(false);
-    expect(halfwaySolved(3.31)).toBe(false);
+    expect(halfwaySolved(3.2)).toBe(false);
+    expect(halfwaySolved(3.39)).toBe(false);
     expect(TIME_STEP).toBe(0.01);
-    expect(reach('ridgeback', 1)).toBeCloseTo(1.1, 1);
-    expect(reach('ridgeback', 24)).toBeCloseTo(5.5, 1);
-    expect(Math.round(reach('ridgeback', 8766))).toBe(105);
-    expect(Math.round(reach('ridgeback', 30 * 365.25 * 24))).toBe(575);
+    expect(reach('pinyon', 1)).toBeCloseTo(1.1, 1);
+    expect(reach('pinyon', 24)).toBeCloseTo(5.5, 1);
+    expect(Math.round(reach('pinyon', 8766))).toBe(105);
+    expect(Math.round(reach('pinyon', 30 * 365.25 * 24))).toBe(575);
   });
   it('2.3: the well designer', () => {
     const v = { type: 'vertical' as const, lateral: 10000, stages: 50 };
     expect(cheapestYearOneWell().design).toEqual({ type: 'fractured', lateral: 9000, stages: 41 });
     expect(cheapestYearOneWell().cost / 1e6).toBeCloseTo(7.51, 2);
-    expect(cheapestSolved('ridgeback', v)).toBe(false);
-    expect(cheapestSolved('ridgeback', { type: 'fractured', lateral: 9000, stages: 41 })).toBe(true);
-    expect(cheapestSolved('ridgeback', { type: 'fractured', lateral: 8500, stages: 42 })).toBe(false);
+    expect(cheapestSolved('pinyon', v)).toBe(false);
+    expect(cheapestSolved('pinyon', { type: 'fractured', lateral: 9000, stages: 41 })).toBe(true);
+    expect(cheapestSolved('pinyon', { type: 'fractured', lateral: 8500, stages: 42 })).toBe(true);
+    expect(cheapestSolved('pinyon', { type: 'fractured', lateral: 8500, stages: 43 })).toBe(false);
     expect(cheapestSolved('northfield', { type: 'fractured', lateral: 9000, stages: 41 })).toBe(false);
-    expect(fewestFracStagesSolved('ridgeback', v)).toBe(false);
-    expect(fewestFracStagesSolved('ridgeback', { type: 'fractured', lateral: 10000, stages: 30 })).toBe(true);
-    expect(fewestFracStagesSolved('ridgeback', { type: 'fractured', lateral: 10000, stages: 31 })).toBe(false);
+    expect(fewestFracStagesSolved('pinyon', v)).toBe(false);
+    expect(fewestFracStagesSolved('pinyon', { type: 'fractured', lateral: 10000, stages: 30 })).toBe(true);
+    expect(fewestFracStagesSolved('pinyon', { type: 'fractured', lateral: 10000, stages: 31 })).toBe(false);
     expect(firstMonthRate({ type: 'fractured', lateral: 10000, stages: 29 })).toBeLessThan(1000);
-    expect(Math.round(contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'ridgeback'))).toBe(273);
-    expect(Math.round(contactArea({ type: 'horizontal', lateral: 10000, stages: 0 }, 'ridgeback'))).toBe(18221);
+    expect(Math.round(contactArea({ type: 'vertical', lateral: 0, stages: 0 }, 'pinyon'))).toBe(273);
+    expect(Math.round(contactArea({ type: 'horizontal', lateral: 10000, stages: 0 }, 'pinyon'))).toBe(18221);
     expect(Math.round(fractureArea(STANDARD_WELL) / 273.3 / 1000)).toBe(22);
-    const rb = rockOf('ridgeback');
+    const rb = rockOf('pinyon');
     const f = wellSummary(STANDARD_WELL, rb);
     const h = wellSummary({ type: 'horizontal', lateral: 10000, stages: 0 }, rb);
     expect(Math.round(f.ip30 / h.ip30)).toBe(23);
@@ -527,7 +530,7 @@ describe('chapter 2 lessons', () => {
     ])
       expect(fitError({ qi: BEST_FIT.qi + dq, de: BEST_FIT.de + dd, b: BEST_FIT.b + db })).toBeGreaterThan(fitError(BEST_FIT));
     expect(Math.round(TRUE_EUR30 / 1000)).toBe(385);
-    expect(Math.round(wellProfile(STANDARD_WELL, rockOf('ridgeback'), 360).cum[359] / 1000)).toBe(385);
+    expect(Math.round(wellProfile(STANDARD_WELL, rockOf('pinyon'), 360).cum[359] / 1000)).toBe(385);
     const di = nominalFromEffective(BEST_FIT.de, BEST_FIT.b);
     expect(Math.round(arpsCum(BEST_FIT.qi, di, BEST_FIT.b, 30) / 1000)).toBe(465);
     expect(Math.round(arpsCum(BEST_FIT.qi, di, BEST_FIT.b, 100) / 1000)).toBe(591);
@@ -553,10 +556,10 @@ describe('chapter 2 lessons', () => {
     expect(breakevenSolved(70)).toBe(false);
     expect(breakevenSolved(56)).toBe(true);
     expect(breakevenSolved(55.5)).toBe(false);
-    expect(allProjectsSolved('full', 50)).toBe(false);
-    expect(allProjectsSolved('full', 78.5)).toBe(true);
-    expect(allProjectsSolved('full', 78)).toBe(false);
-    expect(allProjectsSolved('half', 78.5)).toBe(false);
+    expect(demandSolved('full', 50)).toBe(false);
+    expect(demandSolved('full', 64)).toBe(true);
+    expect(demandSolved('full', 63.5)).toBe(false);
+    expect(demandSolved('half', 64)).toBe(false);
   });
 });
 
@@ -565,7 +568,7 @@ describe('chapter 2 lessons', () => {
 
 describe('refining processes', () => {
   it('distills with movable cut points and closes the balance', () => {
-    for (const id of ['ridgeback', 'seaboard', 'northfield', 'coldwater'] as const) {
+    for (const id of ['pinyon', 'seaboard', 'northfield', 'coldwater'] as const) {
       const c = crude(id);
       const d = distill(c);
       expect(Object.values(d).reduce((s, r) => s + r.volume, 0)).toBeCloseTo(1, 9);
@@ -574,7 +577,7 @@ describe('refining processes', () => {
       expect(Object.values(d).reduce((s, r) => s + r.volume * r.sg * r.sulfur, 0) / mass).toBeCloseTo(c.sulfur, 9);
     }
     // A wider kerosene cut takes from its neighbors.
-    expect(rangeProps(crude('ridgeback'), 150, 280).volume).toBeCloseTo(0.2443, 4);
+    expect(rangeProps(crude('pinyon'), 150, 280).volume).toBeCloseTo(0.2443, 4);
   });
   it('converts vacuum conditions to atmospheric-equivalent cut points', () => {
     expect(atmosphericEquivalent(400, 760)).toBeCloseTo(400, 9);
@@ -622,13 +625,13 @@ describe('refinery LP', () => {
   it('plans the reference day', () => {
     const p = planRefinery();
     expect(p.status).toBe('optimal');
-    expect(p.crude.ridgeback).toBeCloseTo(58.0, 1);
+    expect(p.crude.pinyon).toBeCloseTo(58.0, 1);
     expect(p.crude.coldwater).toBeCloseTo(92.0, 1);
     expect(p.crude.northfield).toBeCloseTo(0, 6);
     expect(p.crude.seaboard).toBeCloseTo(0, 6);
-    expect(p.unitFeed.cdu).toBeCloseTo(CALDER.capacity.cdu, 6);
-    expect(p.unitFeed.coker).toBeCloseTo(CALDER.capacity.coker, 6);
-    expect(p.unitFeed.dht).toBeCloseTo(CALDER.capacity.dht, 6);
+    expect(p.unitFeed.cdu).toBeCloseTo(CORRAN.capacity.cdu, 6);
+    expect(p.unitFeed.coker).toBeCloseTo(CORRAN.capacity.coker, 6);
+    expect(p.unitFeed.dht).toBeCloseTo(CORRAN.capacity.dht, 6);
     expect(marginPerBarrel(p)).toBeCloseTo(17.09, 2);
     expect(p.fuelOilSulfur).toBeLessThanOrEqual(3.5 + 1e-6);
     expect(p.hydrogen.used).toBeLessThanOrEqual(p.hydrogen.reformer + p.hydrogen.plant + 1e-6);
@@ -639,8 +642,8 @@ describe('refinery LP', () => {
   it('values crudes', () => {
     expect(crudeBreakeven('coldwater')).toBeCloseTo(68.7, 1);
     expect(crudeBreakeven('northfield')).toBeCloseTo(69.77, 1);
-    for (const id of ['ridgeback', 'seaboard', 'northfield', 'coldwater'] as const) {
-      const only = planRefinery({ crudeAvailable: { ridgeback: 0, seaboard: 0, northfield: 0, coldwater: 0, [id]: 150 } });
+    for (const id of ['pinyon', 'seaboard', 'northfield', 'coldwater'] as const) {
+      const only = planRefinery({ crudeAvailable: { pinyon: 0, seaboard: 0, northfield: 0, coldwater: 0, [id]: 150 } });
       expect(only.status).toBe('optimal');
       expect(only.crude[id]).toBeCloseTo(150, 6);
     }
@@ -649,12 +652,12 @@ describe('refinery LP', () => {
 
 describe('chapter 3 lessons', () => {
   it('3.1: distillation tower and vacuum', () => {
-    expect(maxJetSolved(TOWER_DEFAULTS)).toBe(false);
-    expect(maxJetSolved({ crude: 'ridgeback', nk: 150, kd: 280, dg: 350 })).toBe(true);
-    expect(maxJetSolved({ crude: 'ridgeback', nk: 150, kd: 280, dg: 365 })).toBe(false);
-    expect(maxJetSolved({ crude: 'seaboard', nk: 150, kd: 280, dg: 350 })).toBe(false);
+    expect(airlineSolved(TOWER_DEFAULTS)).toBe(false);
+    expect(airlineSolved({ crude: 'pinyon', nk: 150, kd: 260, dg: 360 })).toBe(true);
+    expect(airlineSolved({ crude: 'pinyon', nk: 150, kd: 260, dg: 365 })).toBe(false);
+    expect(airlineSolved({ crude: 'seaboard', nk: 150, kd: 260, dg: 360 })).toBe(false);
     expect(jetRate(TOWER_DEFAULTS)).toBeCloseTo(24.0, 1);
-    expect(jetRate({ crude: 'ridgeback', nk: 150, kd: 280, dg: 350 })).toBeCloseTo(36.64, 2);
+    expect(jetRate({ crude: 'pinyon', nk: 150, kd: 280, dg: 350 })).toBeCloseTo(36.64, 2);
     expect(vacuumSolved(380, 2.9)).toBe(false);
     expect(vacuumSolved(400, 1.66)).toBe(true);
     expect(vacuumSolved(400, 1.65)).toBe(false);
@@ -664,19 +667,19 @@ describe('chapter 3 lessons', () => {
     expect(1 - cumulativeYield(crude('coldwater'), atmosphericEquivalent(400, 25))).toBeCloseTo(0.305, 3);
   });
   it('3.2: cracking and hydrogen', () => {
-    expect(bestTemperature('ridgeback')).toBe(506);
+    expect(bestTemperature('pinyon')).toBe(506);
     expect(bestTemperature('northfield')).toBe(516);
     expect(bestTemperature('coldwater')).toBe(521);
     expect(marginAt('northfield', 516)).toBeCloseTo(7.9, 2);
     expect(bestTempSolved('northfield', 530, 96, 88)).toBe(false);
-    expect(bestTempSolved('northfield', 516, 96, 88)).toBe(true);
-    expect(bestTempSolved('northfield', 516, 100, 88)).toBe(false);
-    expect(bestTemperature('ridgeback', { ...FCC_DEFAULTS, lco: 100 })).toBe(503);
-    expect(bestTemperature('ridgeback', { ...FCC_DEFAULTS, lco: 70 })).toBe(512);
-    expect(hydrogenLimitSolved('add', 'gasOil', 1.58)).toBe(true);
-    expect(hydrogenLimitSolved('add', 'gasOil', 1.57)).toBe(false);
-    expect(hydrogenLimitSolved('add', 'gasOil', 1.59)).toBe(false);
-    expect(hydrogenLimitSolved('reject', 'gasOil', 1.58)).toBe(false);
+    expect(bestTempSolved('coldwater', 521, 96, 88)).toBe(true);
+    expect(bestTempSolved('coldwater', 521, 100, 88)).toBe(false);
+    expect(bestTemperature('pinyon', { ...FCC_DEFAULTS, lco: 100 })).toBe(503);
+    expect(bestTemperature('pinyon', { ...FCC_DEFAULTS, lco: 70 })).toBe(512);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.63)).toBe(true);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.62)).toBe(false);
+    expect(hydrogenLimitSolved('add', 'gasOil', 1.64)).toBe(false);
+    expect(hydrogenLimitSolved('reject', 'gasOil', 1.63)).toBe(false);
     expect(Math.round(hydrogenToUpgrade(1.5, 1.0))).toBe(1965);
     expect(carbonRejected(1.5)).toBeCloseTo(0.286, 3);
   });
@@ -736,7 +739,7 @@ describe('chapter 3 lessons', () => {
     expect(expansionGain('coker', 10) / 1000).toBeCloseTo(112.5, 0);
     expect(expansionGain('cdu', 10) / 1000).toBeCloseTo(84.7, 0);
     expect(expansionGain('fcc', 10)).toBeCloseTo(0, 0);
-    const cfg = (c: number) => ({ ...CALDER, capacity: { ...CALDER.capacity, coker: c } });
+    const cfg = (c: number) => ({ ...CORRAN, capacity: { ...CORRAN.capacity, coker: c } });
     expect(shadowPrices({ config: cfg(37) }).coker).toBeGreaterThan(1000);
     expect(shadowPrices({ config: cfg(38) }).coker).toBeCloseTo(0, 0);
     expect(crudeBreakeven('coldwater', { config: cfg(0) })).toBeCloseTo(62.54, 1);
@@ -749,18 +752,18 @@ describe('chapter 3 lessons', () => {
 describe('logistics', () => {
   it('computes pipeline hydraulics', () => {
     expect(frictionFactor(1000, 0)).toBeCloseTo(0.064, 6);
-    const rb = { name: 'Ridgeback', sg: crude('ridgeback').sg, viscosity: viscosity(crude('ridgeback'), 15) };
-    const h = hydraulics(KESSLER_CALDER, rb, 300000);
+    const rb = { name: 'Pinyon', sg: crude('pinyon').sg, viscosity: viscosity(crude('pinyon'), 15) };
+    const h = hydraulics(KESSLER_CORRAN, rb, 300000);
     expect(h.regime).toBe('turbulent');
     expect(h.elevationPsi).toBeLessThan(0);
     // Friction grows faster than flow; the maximum with the line's stations is about 520 kb/d of light crude.
-    expect(hydraulics(KESSLER_CALDER, rb, 400000).psiPerMile / h.psiPerMile).toBeGreaterThan(1.6);
-    expect(Math.round(maxFlow(KESSLER_CALDER, rb) / 1000)).toBe(520);
-    expect(Math.round(maxFlow(KESSLER_CALDER, TYPICAL_CRUDE) / 1000)).toBe(483);
+    expect(hydraulics(KESSLER_CORRAN, rb, 400000).psiPerMile / h.psiPerMile).toBeGreaterThan(1.6);
+    expect(Math.round(maxFlow(KESSLER_CORRAN, rb) / 1000)).toBe(520);
+    expect(Math.round(maxFlow(KESSLER_CORRAN, TYPICAL_CRUDE) / 1000)).toBe(483);
     expect(Math.round(maxFlow(COLDWATER_LINE, { name: 'blend', sg: 0.9068, viscosity: 328.4 }) / 1000)).toBe(360);
-    const c = costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 400000);
+    const c = costPerBarrel(KESSLER_CORRAN, TYPICAL_CRUDE, 400000);
     expect(c.total).toBeCloseTo(1.77, 2);
-    expect(costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 200000).total).toBeGreaterThan(c.total);
+    expect(costPerBarrel(KESSLER_CORRAN, TYPICAL_CRUDE, 200000).total).toBeGreaterThan(c.total);
   });
   it('prices tanker voyages', () => {
     const v = voyage({ vessel: 'vlcc', route: 'eastbay', speed: 13 });
@@ -793,7 +796,7 @@ describe('logistics', () => {
     expect(s.status).toBe('optimal');
     const p = nodePrices();
     expect(p.kessler).toBeCloseTo(76.2, 6);
-    expect(p.calder).toBeCloseTo(78.2, 6);
+    expect(p.corran).toBeCloseTo(78.2, 6);
     expect(p.basin).toBeCloseTo(75.2, 6);
     expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 300 }).kessler).toBeCloseTo(79.5, 6);
     expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 550 }).kessler).toBeCloseTo(68.2, 6);
@@ -804,7 +807,7 @@ describe('logistics', () => {
     const a = { originPrice: 74.5, pipelineTariff: 2, terminalFees: 0.4, freight: 2.573, insurance: 0.0005, losses: 0.002, destinationPrice: 79, transitDays: 16, financingRate: 0.06 };
     expect(arbitrage(a).margin).toBeCloseTo(-0.872, 2);
     expect(arbitrage({ ...a, freight: closingFreight(a) }).margin).toBeCloseTo(0, 9);
-    expect(crudeNetback('ridgeback')).toBeCloseTo(88.32, 2);
+    expect(crudeNetback('pinyon')).toBeCloseTo(88.32, 2);
     expect(crudeNetback('coldwater')).toBeCloseTo(75.3, 1);
     const q = qualityDifferentials();
     expect(q.coldwater).toBeCloseTo(-13.03, 1);
@@ -822,22 +825,22 @@ describe('chapter 4 lessons', () => {
     expect(tariffSolved(300, 1.8)).toBe(false);
     expect(tariffSolved(350, 1.8)).toBe(true);
     expect(tariffSolved(355, 1.8)).toBe(false);
-    expect(Math.round(maxFlow(KESSLER_CALDER, FLUIDS.northfield) / 1000)).toBe(383);
-    expect(Math.round(maxFlow(KESSLER_CALDER, TYPICAL_CRUDE, 4) / 1000)).toBe(559);
-    expect(hydraulics(KESSLER_CALDER, TYPICAL_CRUDE, 400000).psiPerMile).toBeCloseTo(6.37, 2);
-    expect(hydraulics(KESSLER_CALDER, TYPICAL_CRUDE, 400000).electricMW).toBeCloseTo(19.4, 1);
-    expect(hydraulics(KESSLER_CALDER, FLUIDS.coldwater, 200000).regime).toBe('laminar');
-    expect(hydraulics(KESSLER_CALDER, FLUIDS.coldwater, 250000).regime).toBe('turbulent');
-    expect(costPerBarrel(KESSLER_CALDER, TYPICAL_CRUDE, 200000).total).toBeCloseTo(3.39, 2);
+    expect(Math.round(maxFlow(KESSLER_CORRAN, FLUIDS.northfield) / 1000)).toBe(383);
+    expect(Math.round(maxFlow(KESSLER_CORRAN, TYPICAL_CRUDE, 4) / 1000)).toBe(559);
+    expect(hydraulics(KESSLER_CORRAN, TYPICAL_CRUDE, 400000).psiPerMile).toBeCloseTo(6.37, 2);
+    expect(hydraulics(KESSLER_CORRAN, TYPICAL_CRUDE, 400000).electricMW).toBeCloseTo(19.4, 1);
+    expect(hydraulics(KESSLER_CORRAN, FLUIDS.coldwater, 200000).regime).toBe('laminar');
+    expect(hydraulics(KESSLER_CORRAN, FLUIDS.coldwater, 250000).regime).toBe('turbulent');
+    expect(costPerBarrel(KESSLER_CORRAN, TYPICAL_CRUDE, 200000).total).toBeCloseTo(3.39, 2);
     expect(operatingProfile(FLUIDS.mix, 400000, 3).feasible).toBe(true);
     expect(operatingProfile(FLUIDS.northfield, 385000, 3).feasible).toBe(false);
   });
   it('4.2: tankers', () => {
-    const v = { ...VOYAGE_DEFAULTS, vessel: 'vlcc' as const, route: 'eastbay' as const, hire: 45000 };
+    const v = { ...VOYAGE_DEFAULTS, vessel: 'vlcc' as const, route: 'eastbay' as const, hire: 100000, bunker: 800 };
     expect(cheapestSpeedSolved(VOYAGE_DEFAULTS)).toBe(false);
-    expect(cheapestSpeedSolved({ ...v, speed: 11.6 })).toBe(true);
-    expect(cheapestSpeedSolved({ ...v, speed: 11.7 })).toBe(true);
-    expect(cheapestSpeedSolved({ ...v, speed: 11.5 })).toBe(false);
+    expect(cheapestSpeedSolved({ ...v, speed: 13.8 })).toBe(true);
+    expect(cheapestSpeedSolved({ ...v, speed: 13.7 })).toBe(false);
+    expect(cheapestSpeedSolved({ ...v, speed: 13.9 })).toBe(false);
     expect(lighteringSolved(0.6, false)).toBe(false);
     expect(lighteringSolved(1.7, false)).toBe(true);
     expect(lighteringSolved(1.65, false)).toBe(false);
@@ -868,17 +871,18 @@ describe('chapter 4 lessons', () => {
     expect(pipelineSolved({ basin: 700, pipeline: 720, rail: 150 })).toBe(false);
     expect(spreadAt(700, 710)).toBeCloseTo(3.7, 6);
     expect(spreadAt(700, 600)).toBeCloseTo(11.7, 6);
-    expect(trappedSolved(400)).toBe(false);
-    expect(trappedSolved(630)).toBe(true);
-    expect(trappedSolved(640)).toBe(false);
+    expect(trappedSolved({ basin: 400, pipeline: 480, rail: 150 })).toBe(false);
+    expect(trappedSolved({ basin: 780, pipeline: 480, rail: 300 })).toBe(true);
+    expect(trappedSolved({ basin: 770, pipeline: 480, rail: 300 })).toBe(false);
     expect(spreadAt(300)).toBeCloseTo(-0.5, 6);
     expect(nodePrices({ ...NETWORK_DEFAULTS, basinSupply: 880 }).kessler).toBeCloseTo(51, 6);
   });
   it('4.5: arbitrage and quality differentials', () => {
-    expect(arbSolved('aframax', 74.5, 79)).toBe(false);
-    expect(arbSolved('vlcc', 74.4, 79)).toBe(true);
-    expect(arbSolved('vlcc', 74.3, 79)).toBe(false);
-    expect(arbFor('aframax', 74.5, 79).margin).toBeCloseTo(-0.872, 2);
+    const rail = { leg: 'rail' as const, dredged: false };
+    expect(arbSolved('aframax', 74.5, 79, rail)).toBe(false);
+    expect(arbSolved('vlcc', 66.4, 79, rail)).toBe(true);
+    expect(arbSolved('vlcc', 66.3, 79, rail)).toBe(false);
+    expect(arbFor('aframax', 74.5, 79).margin).toBeCloseTo(-0.876, 3);
     expect(highestOpen('aframax')).toBe(73.6);
     expect(highestOpen('vlcc')).toBe(74.4);
     expect(qualitySolved(62, 106)).toBe(false);
@@ -940,7 +944,7 @@ describe('market model', () => {
         const lp = nodePrices(inp);
         const f = hubPricesFast(inp);
         expect(f.kessler).toBeCloseTo(lp.kessler, 6);
-        expect(f.calder).toBeCloseTo(lp.calder, 6);
+        expect(f.corran).toBeCloseTo(lp.corran, 6);
       }
     }
   });
@@ -949,7 +953,7 @@ describe('market model', () => {
     expect(h.length).toBe(260);
     expect(oilHistory()).toBe(h);
     const sp = h.map((w) => w.brent - w.wti);
-    // The Kessler–Calder line fills in the second year and the expansion relieves it in the fourth.
+    // The Kessler–Corran line fills in the second year and the expansion relieves it in the fourth.
     expect(Math.max(...sp.slice(90, 150))).toBeGreaterThan(10);
     expect(Math.max(...sp.slice(165, 260))).toBeLessThan(6);
     expect(Math.max(...oilHistory({ expansion: null }).map((w) => w.brent - w.wti))).toBeGreaterThan(25);
@@ -981,7 +985,8 @@ describe('chapter 5 lessons', () => {
     const s = EXPLORER_DEFAULTS;
     expect(smallestExpansionSolved(s)).toBe(false);
     expect(smallestExpansion()).toBe(275);
-    expect(smallestExpansionSolved({ ...s, add: 275 })).toBe(true);
+    expect(smallestExpansionSolved({ ...s, add: 275 })).toBe(false); // challenge a is set at 100 kb/d a year of growth
+    expect(smallestExpansionSolved({ ...s, growth: 100, add: 425 })).toBe(true);
     expect(smallestExpansionSolved({ ...s, add: 250 })).toBe(false);
     expect(widestAfterOpening(250)).toBeCloseTo(11.94, 2);
     expect(widestAfterOpening(275)).toBeCloseTo(4.43, 2);
@@ -1001,7 +1006,7 @@ describe('chapter 5 lessons', () => {
     expect(g.indexOf(Math.min(...g))).toBe(8);
     expect(ref[8].gasolineCrack).toBeCloseTo(23.29, 2);
     expect(distillateFloorSolved(MARKET_DEFAULTS)).toBe(false);
-    expect(distillateFloorSolved({ runs: 83, distillate: 0.4225, outage: 'none' })).toBe(true);
+    expect(distillateFloorSolved({ runs: 83, distillate: 0.4275, outage: 'none' })).toBe(true);
     expect(distillateFloorSolved({ runs: 83, distillate: 0.425, outage: 'none' })).toBe(false);
     expect(moreDieselSolved(106)).toBe(false);
     expect(moreDieselSolved(88)).toBe(true);
@@ -1012,28 +1017,28 @@ describe('chapter 5 lessons', () => {
   });
   it('5.4: futures curve and tank tops', () => {
     expect(turnSolved(CURVE_STATE_DEFAULTS)).toBe(false);
-    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fill: 33 })).toBe(true);
-    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fill: 34 })).toBe(false);
-    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 32 })).toBeLessThan(0);
-    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 55 })).toBeCloseTo(0.57, 2);
+    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fee: 0.7, fill: 29 })).toBe(true);
+    expect(turnSolved({ ...CURVE_STATE_DEFAULTS, fee: 0.7, fill: 30 })).toBe(false);
+    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 33 })).toBeLessThan(0);
+    expect(frontSpread({ ...CURVE_STATE_DEFAULTS, fill: 55 })).toBeCloseTo(0.56, 2);
     expect(tankTopsSolved(TANK_DEFAULTS)).toBe(false);
-    expect(tankTopsSolved({ fill: 97.5, floating: 1.2 })).toBe(true);
-    expect(tankTopsSolved({ fill: 98, floating: 1.2 })).toBe(false);
+    expect(tankTopsSolved({ fill: 100, floating: 1.5 })).toBe(true);
+    expect(tankTopsSolved({ fill: 100, floating: 1.2 })).toBe(false);
     expect(tankTops({ fill: 100, floating: 1.2 }).spread).toBeCloseTo(1.19, 2);
     expect(Math.round(impliedDayRate(1.2))).toBe(78947);
   });
   it('5.5: shocks', () => {
     expect(releaseSolved(SHOCK_STATE_DEFAULTS)).toBe(false);
-    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 1 })).toBe(true);
-    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 0.9 })).toBe(false);
+    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 1.2 })).toBe(true);
+    expect(releaseSolved({ ...SHOCK_STATE_DEFAULTS, release: 1.1 })).toBe(false);
     expect(peakPrice(runShock(SHOCK_STATE_DEFAULTS))).toBeCloseTo(101.85, 2);
     expect(lowestPrice(runShock(SHOCK_STATE_DEFAULTS))).toBeCloseTo(66.42, 2);
     expect(peakPrice(runShock({ ...SHOCK_STATE_DEFAULTS, group: true }))).toBeCloseTo(86.25, 2);
     expect(peakPrice(runShock({ ...SHOCK_STATE_DEFAULTS, release: 1 }))).toBeCloseTo(89.66, 2);
     expect(lowestPrice(runShock({ ...SHOCK_STATE_DEFAULTS, kind: 'demand', size: 3 }))).toBeCloseTo(54.39, 2);
     expect(crackRiseSolved(OUTAGE_DEFAULTS)).toBe(false);
-    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 2.9 })).toBe(true);
-    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 2.8 })).toBe(false);
+    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 3.4 })).toBe(true);
+    expect(crackRiseSolved({ ...OUTAGE_DEFAULTS, size: 3.3 })).toBe(false);
     expect(crackRise(OUTAGE_DEFAULTS).gasoline).toBeCloseTo(3.567, 2);
     expect(crudeBackedUp(OUTAGE_DEFAULTS)).toBeCloseTo(121.6, 6);
   });
@@ -1092,16 +1097,16 @@ describe('trading strategies', () => {
     expect(small.trades).toBeGreaterThan(0);
     expect(small.profit).toBeGreaterThan(0);
   });
-  it('hedges Calder best with a crack that matches its yields, against Brent', () => {
-    expect(calderMargin(h[0]) / 1e6).toBeCloseTo(2.6, 1);
-    const matched = hedgeRefinery(h, 0.8, 'brent', CRACK_RATIOS.calder);
+  it('hedges Corran best with a crack that matches its yields, against Brent', () => {
+    expect(corranMargin(h[0]) / 1e6).toBeCloseTo(2.6, 1);
+    const matched = hedgeRefinery(h, 0.8, 'brent', CRACK_RATIOS.corran);
     const gasHeavy = hedgeRefinery(h, 0.8, 'brent', CRACK_RATIOS['3:2:1']);
-    const wti = hedgeRefinery(h, 0.8, 'wti', CRACK_RATIOS.calder);
+    const wti = hedgeRefinery(h, 0.8, 'wti', CRACK_RATIOS.corran);
     expect(matched.effectiveness).toBeGreaterThan(0.65);
     expect(gasHeavy.effectiveness).toBeLessThan(0);
     expect(wti.effectiveness).toBeLessThan(matched.effectiveness);
     expect(hedgeRefinery(oilHistory({ seasonality: 0 }), 0.8, 'brent', CRACK_RATIOS['3:2:1']).effectiveness).toBeGreaterThan(0.5);
-    expect(hedgeRefinery(h, 0, 'brent', CRACK_RATIOS.calder).bestRatio).toBeCloseTo(0.883, 2);
+    expect(hedgeRefinery(h, 0, 'brent', CRACK_RATIOS.corran).bestRatio).toBeCloseTo(0.883, 2);
   });
   it('combines and walks forward', () => {
     expect(pnlCorrelation([1, 2, 3], [2, 4, 6])).toBeCloseTo(1, 9);
@@ -1120,9 +1125,9 @@ describe('chapter 6 lessons', () => {
     expect(runTrader(TRADER_DEFAULTS).stats.total).toBeCloseTo(25821, -2);
     expect(runTrader({ ...TRADER_DEFAULTS, capacity: 4 }).stats.total).toBeLessThan(0);
     expect(smallestProfitableHub()).toBe(7);
-    expect(smallestHubSolved(TRADER_DEFAULTS)).toBe(false);
-    expect(smallestHubSolved({ ...TRADER_DEFAULTS, capacity: 7 })).toBe(true);
-    expect(smallestHubSolved({ ...TRADER_DEFAULTS, capacity: 8 })).toBe(false);
+    expect(predictedHubSolved(TRADER_DEFAULTS)).toBe(false);
+    expect(predictedHubSolved({ ...TRADER_DEFAULTS, capacity: 6 })).toBe(true);
+    expect(predictedHubSolved({ ...TRADER_DEFAULTS, capacity: 7 })).toBe(false);
     expect(runCarry(CARRY_STATE_DEFAULTS).trades).toBe(0);
     expect(runCarry({ ...CARRY_STATE_DEFAULTS, capacity: 4 }).trades).toBe(4);
     expect(largestCarryHub(2)).toBe(14);
@@ -1152,19 +1157,19 @@ describe('chapter 6 lessons', () => {
     expect(stillTradesSolved(st)).toBe(false);
     expect(stillTradesSolved({ ...st, outages: 0, seasonality: 0.6 })).toBe(true);
     expect(stillTradesSolved({ ...st, outages: 0, seasonality: 0.5 })).toBe(false);
-    expect(calendarWinsSolved(st)).toBe(false);
-    expect(calendarWinsSolved({ ...st, seasonality: 0.7 })).toBe(true);
+    expect(halfSeasonsSolved(st)).toBe(false);
+    expect(halfSeasonsSolved({ ...st, seasonality: 0.5 })).toBe(true);
   });
-  it('6.4: a hedge that matches the refinery works; the textbook crack does not', () => {
-    const best = bestHedge({ ...HEDGE_DEFAULTS, mix: 'calder' });
-    expect(best.ratio).toBeCloseTo(0.883, 2);
-    expect(best.effectiveness).toBeGreaterThan(0.7);
-    expect(hedgeFor(HEDGE_DEFAULTS).effectiveness).toBeLessThan(-0.9);
+  it('6.4: at a seasonal forward, any blended crack against Brent works; a WTI crack depends on the pipe', () => {
+    const best = bestHedge({ ...HEDGE_DEFAULTS, mix: 'corran' });
+    expect(best.ratio).toBeCloseTo(0.911, 2);
+    expect(best.effectiveness).toBeGreaterThan(0.6);
+    expect(hedgeFor(HEDGE_DEFAULTS).effectiveness).toBeCloseTo(0.63, 2);
     expect(standardCrackSolved(HEDGE_DEFAULTS)).toBe(false);
-    expect(standardCrackSolved({ ...HEDGE_DEFAULTS, seasonality: 0 })).toBe(true);
+    expect(standardCrackSolved({ ...HEDGE_DEFAULTS, seasonality: 2 })).toBe(true);
     expect(fastestWtiGrowth()).toBe(30);
     expect(wtiGrowthSolved(HEDGE_DEFAULTS)).toBe(false);
-    expect(wtiGrowthSolved({ ...HEDGE_DEFAULTS, mix: 'calder', bench: 'wti', growth: 30 })).toBe(true);
+    expect(wtiGrowthSolved({ ...HEDGE_DEFAULTS, mix: 'corran', bench: 'wti', growth: 30 })).toBe(true);
     const q = summarizeQuarters(quartersFor(QUARTER_DEFAULTS));
     expect(q.rmsHedged).toBeLessThan(q.rmsUnhedged / 1.5);
   });
@@ -1198,11 +1203,11 @@ describe('integrated business', () => {
     // A drilling threshold above every year's starting price drills nothing.
     expect(productionOnPath({ ...BUSINESS_DEFAULTS.production, drillAbove: 100 }, h).wellsDrilled).toBe(0);
   });
-  it('runs Calder at its reference day exactly as Lesson 6.4 did', () => {
-    const d = refineryDay(CALDER);
-    for (const i of [0, 100, 200]) expect(refineryMargin(h[i], d)).toBeCloseTo(calderMargin(h[i]), -3);
-    expect(refineryCapital(CALDER)).toBe(0);
-    const bigger = { ...CALDER, capacity: { ...CALDER.capacity, coker: 35 } };
+  it('runs Corran at its reference day exactly as Lesson 6.4 did', () => {
+    const d = refineryDay(CORRAN);
+    for (const i of [0, 100, 200]) expect(refineryMargin(h[i], d)).toBeCloseTo(corranMargin(h[i]), -3);
+    expect(refineryCapital(CORRAN)).toBe(0);
+    const bigger = { ...CORRAN, capacity: { ...CORRAN.capacity, coker: 35 } };
     expect(refineryCapital(bigger)).toBe(300e6);
     expect(refineryDay(bigger).margin).toBeGreaterThan(d.margin);
   });
@@ -1236,7 +1241,7 @@ describe('integrated business', () => {
     expect(s.production.waterflood).toBe(true);
     expect(s.refinery.capacity.coker).toBe(35);
     expect(s.refinery.capacity.cdu).toBe(150);
-    expect(s.hedges.mix).toBe('calder');
+    expect(s.hedges.mix).toBe('corran');
     expect(s.hedges.crack).toBe(0);
     expect(sanitizeBusiness(null)).toEqual(BUSINESS_DEFAULTS);
   });
@@ -1269,16 +1274,16 @@ describe('chapter 7 lessons', () => {
     expect(best.config.capacity.cdu).toBe(170);
     expect(best.config.capacity.dht).toBe(65);
     expect(budgetSolved(best.config)).toBe(true);
-    expect(budgetSolved(CALDER)).toBe(false);
+    expect(budgetSolved(CORRAN)).toBe(false);
     expect(smallestShift()).toBe(12);
     expect(shiftSolved({ ...HISTORY_STATE_DEFAULTS, shift: 12 })).toBe(true);
     expect(shiftSolved({ ...HISTORY_STATE_DEFAULTS, shift: 11 })).toBe(false);
   });
   it('7.3: firm space pays when the basin outgrows the line, and about 40 kb/d steadies the basis', () => {
     expect(slowestPayingGrowth()).toBe(50);
-    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50 }, 10)).toBe(true);
-    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 40 }, 10)).toBe(false);
-    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50 }, 0)).toBe(false);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50 })).toBe(true);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 40 })).toBe(false);
+    expect(slowestPayingSolved({ ...CHAIN_DEFAULTS, growth: 50, rail: 0 })).toBe(false);
     expect(steadiestFirmSpace(plan, SWEEP_DEFAULTS)).toBe(40);
     expect(steadiestSolved(40, plan, SWEEP_DEFAULTS)).toBe(true);
     expect(steadiestSolved(30, plan, SWEEP_DEFAULTS)).toBe(false);
@@ -1292,13 +1297,14 @@ describe('chapter 7 lessons', () => {
   });
   it('7.5: the company hedges best as one, with a crack that matches its refinery', () => {
     const best = bestAnyHedges(BUSINESS_DEFAULTS);
-    expect(best.mix).toBe('calder');
+    expect(best.mix).toBe('corran');
     expect(best.bench).toBe('brent');
-    expect(best.effectiveness).toBeGreaterThan(0.9);
-    expect(hedgesSolved(BUSINESS_DEFAULTS, TRADER_DRIVERS)).toBe(false);
-    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, 'calder', 'brent'), TRADER_DRIVERS)).toBe(true);
-    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, '3:2:1', 'brent'), TRADER_DRIVERS)).toBe(false);
-    expect(harderWorldSolved(BUSINESS_DEFAULTS, { ...TRADER_DRIVERS, seasonality: 0 })).toBe(true);
+    expect(best.effectiveness).toBeGreaterThan(0.85);
+    expect(hedgesSolved(BUSINESS_DEFAULTS)).toBe(false);
+    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, 'corran', 'brent'))).toBe(true);
+    expect(hedgesSolved(withHedges(BUSINESS_DEFAULTS, 0.5, 0.75, '3:2:1', 'brent'))).toBe(false);
+    expect(harderWorldSolved(BUSINESS_DEFAULTS, { ...TRADER_DRIVERS, fuelOil: 10 })).toBe(true);
+    expect(harderWorldSolved(BUSINESS_DEFAULTS, { ...TRADER_DRIVERS, seasonality: 0 })).toBe(false);
     expect(harderWorldSolved(BUSINESS_DEFAULTS, TRADER_DRIVERS)).toBe(false);
   });
 });

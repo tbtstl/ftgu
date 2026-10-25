@@ -4,9 +4,10 @@
 // hire for every day, fuel for every day at sea (scaling with the cube of speed, since a hull's
 // resistance rises steeply with speed) and in port, and port charges. Dividing by the cargo gives
 // freight per barrel. Because hire falls with speed and fuel rises with its square, there is a
-// cheapest speed: v* = (hire · 14³ / (2 · fuel₁₄ · bunker price))^(1/3) knots.
+// cheapest speed: v* = (hire · 14³ / (2 · fuel₁₄ · bunker price))^(1/3) knots. A ship loading or
+// discharging at Port Corran pays to lighter whatever it carries above the dock limit.
 
-import { BUNKER_PRICE, CALDER_DOCK_LIMIT, LIGHTERING_COST, PORT_DAYS, ROUTES, VESSELS, type RouteId, type Vessel, type VesselId } from '../../model/oil/logistics';
+import { BUNKER_PRICE, CORRAN_DOCK_LIMIT, LIGHTERING_COST, PORT_DAYS, ROUTES, VESSELS, type RouteId, type Vessel, type VesselId } from '../../model/oil/logistics';
 
 export interface VoyageInputs {
   vessel: VesselId;
@@ -17,8 +18,12 @@ export interface VoyageInputs {
   hire?: number;
   /** Bunker fuel, $/tonne. */
   bunker?: number;
-  /** Load at Port Calder (applies the dock limit and lightering). */
-  loadsAtCalder?: boolean;
+  /**
+   * Whether the voyage loads or discharges at Port Corran, whose dock limit means any cargo above it
+   * is moved to or from smaller ships offshore (lightering). Default: when the route starts or ends
+   * at Port Corran.
+   */
+  atCorran?: boolean;
 }
 
 export interface Voyage {
@@ -50,8 +55,8 @@ export function voyage(inp: VoyageInputs): Voyage {
   const fuelTonnes = fuelPerDay(v, speed) * seaDays + v.fuelInPort * PORT_DAYS;
   const hireCost = hire * days;
   const fuelCost = fuelTonnes * bunker;
-  const loadsAtCalder = inp.loadsAtCalder ?? r.from === 'Port Calder';
-  const lightering = loadsAtCalder ? Math.max(0, v.cargo - CALDER_DOCK_LIMIT) * LIGHTERING_COST : 0;
+  const atCorran = inp.atCorran ?? (r.from === 'Port Corran' || r.to === 'Port Corran');
+  const lightering = atCorran ? Math.max(0, v.cargo - CORRAN_DOCK_LIMIT) * LIGHTERING_COST : 0;
   const total = hireCost + fuelCost + v.portCharges + lightering;
   return { seaDays, portDays: PORT_DAYS, days, fuelTonnes, hireCost, fuelCost, portCost: v.portCharges, lightering, total, cargo: v.cargo, perBbl: total / v.cargo };
 }

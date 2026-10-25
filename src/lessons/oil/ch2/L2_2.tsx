@@ -19,18 +19,20 @@ import {
   fmt,
   lessonHref,
   mix,
+  pct,
   useScenario,
 } from '../../../framework';
+import { useProgress } from '../../../course/progress';
 import { fieldWell, hoursToReach, productivityIndex, radialPressure, radialRate, radiusOfInvestigation, type RadialWell } from '../../../engines/oil/reservoir';
 import { FIELDS, type FieldId } from '../../../model/oil/fields';
 import { CRUDE_COLOR } from '../../../model/oil/crudes';
 import { XYChart } from '../shared/charts';
 
-const FIELD_IDS: FieldId[] = ['northfield', 'coldwater', 'ridgeback'];
-const FIELD_LABEL: Record<FieldId, string> = { northfield: 'Northfield sandstone', coldwater: 'Coldwater heavy-oil sand', ridgeback: 'Ridgeback shale' };
-const FIELD_COLOR: Record<FieldId, string> = { northfield: CRUDE_COLOR.northfield, coldwater: CRUDE_COLOR.coldwater, ridgeback: CRUDE_COLOR.ridgeback };
+const FIELD_IDS: FieldId[] = ['northfield', 'coldwater', 'pinyon'];
+const FIELD_LABEL: Record<FieldId, string> = { northfield: 'Northfield sandstone', coldwater: 'Coldwater heavy-oil sand', pinyon: 'Pinyon shale' };
+const FIELD_COLOR: Record<FieldId, string> = { northfield: CRUDE_COLOR.northfield, coldwater: CRUDE_COLOR.coldwater, pinyon: CRUDE_COLOR.pinyon };
 /** The drawdown each field is produced at elsewhere in the course, psi. */
-const DRAWDOWN: Record<FieldId, number> = { northfield: 1000, coldwater: 400, ridgeback: 4200 };
+const DRAWDOWN: Record<FieldId, number> = { northfield: 1000, coldwater: 400, pinyon: 4200 };
 
 export interface FlowState {
   field: FieldId;
@@ -57,19 +59,24 @@ export function maxDrawdown(id: FieldId): number {
   return Math.min(4500, FIELDS[id].initialPressure - 100);
 }
 
-/** Northfield's productivity index with its own rock and oil, b/d per psi. */
+/** Northfield's productivity index with its own rock and oil, STB/day per psi. */
 export const NORTHFIELD_PI = productivityIndex(fieldWell('northfield'));
 export const MU_STEP = 0.05;
+/** How close to Northfield's productivity index challenge a accepts: the two slider steps either side of the match. */
+export const PI_TOLERANCE = 0.1;
+/** The viscosity at which a Coldwater well (2,000 md, no skin) is exactly as productive as a Northfield well, cP (about 61). */
+export const MU_MATCH = (productivityIndex(fieldWell('coldwater')) * FIELDS.coldwater.oilViscosity) / NORTHFIELD_PI;
+/** The reader's first estimate: Coldwater's rock is 25 times as permeable, so 25 times Northfield's 2 cP. */
+export const MU_ESTIMATE = (FIELDS.coldwater.permeability / FIELDS.northfield.permeability) * FIELDS.northfield.oilViscosity;
 
 /**
- * Challenge a: with Coldwater's 2,000 md rock and no skin, the highest viscosity on the slider at
- * which its productivity index is at least Northfield's.
+ * Challenge a: with Coldwater's 2,000 md rock and no skin, a viscosity at which its productivity index
+ * is within 10% of Northfield's.
  */
 export function heavyOilSolved(st: FlowState): boolean {
   if (st.field !== 'coldwater' || st.skin !== 0) return false;
   if (Math.abs(10 ** st.kExp / FIELDS.coldwater.permeability - 1) > 0.02) return false;
-  const pi = (muExp: number) => productivityIndex(wellOf({ ...st, muExp }));
-  return pi(st.muExp) >= NORTHFIELD_PI && pi(st.muExp + MU_STEP) < NORTHFIELD_PI;
+  return Math.abs(productivityIndex(wellOf(st)) / NORTHFIELD_PI - 1) <= PI_TOLERANCE;
 }
 
 /** How far a field's pressure disturbance has spread after `hours`, ft. */
@@ -80,10 +87,21 @@ export function reach(id: FieldId, hours: number): number {
 
 export const TIME_STEP = 0.01;
 export const HALFWAY_FT = 50;
+/** How close to 50 ft challenge b accepts: within 10%, so 45–55 ft (about 68–100 days). */
+export const REACH_TOLERANCE = 0.1;
+/** Hours in a year, and the reader's estimate of the time to reach 50 ft: (50 / reach after a year)² of a year, hours. */
+export const HOURS_PER_YEAR = 8766;
+export const HALFWAY_ESTIMATE_HOURS = (HALFWAY_FT / reach('pinyon', HOURS_PER_YEAR)) ** 2 * HOURS_PER_YEAR;
 
-/** Challenge b: the first time on the slider when a Ridgeback well's disturbance has reached 50 ft. */
+/** Challenge b: a time on the slider when a Pinyon well's disturbance has reached about 50 ft (within 10%). */
 export function halfwaySolved(tExp: number): boolean {
-  return reach('ridgeback', 10 ** tExp) >= HALFWAY_FT && reach('ridgeback', 10 ** (tExp - TIME_STEP)) < HALFWAY_FT;
+  return Math.abs(reach('pinyon', 10 ** tExp) / HALFWAY_FT - 1) <= REACH_TOLERANCE;
+}
+
+/** Whether a challenge of this lesson is solved now or was on an earlier visit: marks that would give it away appear once it is. */
+function useRevealed(challenge: string, solved: boolean): boolean {
+  const done = useProgress()['oil/2.2']?.includes(challenge) ?? false;
+  return solved || done;
 }
 
 /** Two significant figures for small numbers, whole numbers for large ones. */
@@ -225,14 +243,14 @@ export default function Lesson() {
 
   const nf = fieldWell('northfield');
   const cw = fieldWell('coldwater');
-  const rb = fieldWell('ridgeback');
+  const rb = fieldWell('pinyon');
   const nfQ = radialRate(nf, DRAWDOWN.northfield);
   const cwQ = radialRate(cw, DRAWDOWN.coldwater);
-  const rbQ = radialRate(rb, DRAWDOWN.ridgeback);
+  const rbQ = radialRate(rb, DRAWDOWN.pinyon);
   const halfDist = Math.sqrt(nf.re * nf.rw);
   const lnRatio = Math.log(nf.re / nf.rw);
   const stimulated = radialRate({ ...nf, skin: -3 }, DRAWDOWN.northfield);
-  const muMatch = (productivityIndex(cw) * FIELDS.coldwater.oilViscosity) / NORTHFIELD_PI;
+  const piGap = pi / NORTHFIELD_PI - 1;
 
   const choose = (id: FieldId) => s.set(fieldDefaults(id));
   const solvedA = heavyOilSolved(st);
@@ -240,6 +258,7 @@ export default function Lesson() {
   const s2 = useScenario('reach', { tExp: 1.38 });
   const hours = 10 ** s2.state.tExp;
   const solvedB = halfwaySolved(s2.state.tExp);
+  const revealB = useRevealed('b', solvedB);
   const H30 = 30 * 365.25 * 24;
   const lines = useMemo(
     () => FIELD_IDS.map((id) => ({ id, points: [1, H30].map((h) => [h, reach(id, h)] as [number, number]) })),
@@ -256,9 +275,11 @@ export default function Lesson() {
       <P>
         The law that governs that journey was found by a French engineer, Henry Darcy, who measured water seeping through columns of sand and published the result in
         1856, in a report on the public fountains of Dijon. The flow through a slab of porous material is proportional to its area and to the drop in <K tone="blue">pressure</K> across
-        it per unit length, and inversely proportional to the fluid’s <K tone="violet">viscosity</K>. The constant of proportionality belongs to the rock alone. It’s
-        called <K tone="violet">permeability</K> and measured in darcies: one darcy lets a fluid as viscous as water pass at one cubic centimeter per second through each
-        square centimeter, under a pressure gradient of one atmosphere per centimeter. Reservoir rocks are usually quoted in millidarcies. Good sandstones run from tens
+        it per unit length, and inversely proportional to the fluid’s <K tone="violet">viscosity</K>. Here that’s the dynamic viscosity, measured in centipoise (cP):
+        the kinematic viscosity in centistokes of <a href={lessonHref('oil/1.3')}>Lesson 1.3</a> multiplied by the fluid’s density in grams per cubic centimeter.
+        Water is about 1 cP. The constant of proportionality belongs to the rock alone. It’s called <K tone="violet">permeability</K> and measured in darcies. One
+        darcy lets a fluid as viscous as water pass at one cubic centimeter per second through each square centimeter of rock, under a pressure gradient of one
+        atmosphere per centimeter. Reservoir rocks are usually quoted in millidarcies. Good sandstones run from tens
         of millidarcies to several darcies; shales are measured in nanodarcies, billionths of a darcy.
       </P>
       <P>
@@ -267,9 +288,7 @@ export default function Lesson() {
         r<Sub>e</Sub>, to the wellbore, at r<Sub>w</Sub>, gives the rate in stock-tank barrels per day for a <K tone="blue">drawdown</K> Δp, the difference between the
         pressure out in the rock and the pressure in the well:
       </P>
-      <Eq
-        label={`Rate equals 0.00708 times ${sig(k)} md times ${fmt(w.h)} ft times ${fmt(dd)} psi, divided by ${sig(mu)} cP times ${fmt(w.bo, 2)} times the sum of ${fmt(Math.log(w.re / w.rw), 2)} and a skin of ${fmt(w.skin, 1)}: ${sig(q)} STB per day`}
-      >
+      <Eq label="Rate equals 0.00708 times permeability times thickness times drawdown, divided by viscosity times the formation volume factor times the sum of the log of the drainage radius over the wellbore radius and the skin">
         <K tone="orange">q</K>
         <Op>=</Op>
         <Frac
@@ -284,27 +303,13 @@ export default function Lesson() {
             </>
           }
         />
-        <Op>=</Op>
-        <Frac
-          top={
-            <>
-              0.00708 · <K tone="violet">{sig(k)}</K> · {fmt(w.h)} · <K tone="blue">{fmt(dd)}</K>
-            </>
-          }
-          bottom={
-            <>
-              <K tone="violet">{sig(mu)}</K> · {fmt(w.bo, 2)} · ({fmt(Math.log(w.re / w.rw), 2)} {w.skin < 0 ? '−' : '+'} {fmt(Math.abs(w.skin), 1)})
-            </>
-          }
-        />
-        <Op>=</Op>
-        <K tone="orange">{sig(q)} STB/day</K>
       </Eq>
       <P>
         Here h is the thickness of oil-bearing rock, B<Sub>o</Sub> converts reservoir barrels to the smaller stock-tank barrels of <a href={lessonHref('oil/2.1')}>Lesson
         2.1</a>, the 0.00708 takes care of the field units, and S, the skin, we’ll come to shortly. In the next demonstration, a vertical well sits at the center of the
         circle of rock it drains, {fmt(nf.re)} ft in radius. The rings are spaced by powers of ten in distance, so the few feet around the well get as much room as the
-        hundreds of feet beyond. Choose a field, then change the rock, the oil, and the drawdown:
+        hundreds of feet beyond, and the demonstration repeats the equation with its numbers filled in. Choose a field, then change the rock, the oil, and the
+        drawdown:
       </P>
 
       <Figure name="Reservoir Flow Simulator" scenario={s}>
@@ -324,10 +329,29 @@ export default function Lesson() {
           series={[{ points: profile, color: GRAPHIC.blue, width: 3 }]}
           refs={rHalf > w.rw ? [{ axis: 'x', at: rHalf, color: '#c4382f', label: 'half the drop' }] : []}
         />
+        <Eq
+          label={`Rate equals 0.00708 times ${sig(k)} md times ${fmt(w.h)} ft times ${fmt(dd)} psi, divided by ${sig(mu)} cP times ${fmt(w.bo, 2)} times the sum of ${fmt(Math.log(w.re / w.rw), 2)} and a skin of ${fmt(w.skin, 1)}: ${sig(q)} STB per day`}
+        >
+          <K tone="orange">q</K>
+          <Op>=</Op>
+          <Frac
+            top={
+              <>
+                0.00708 · <K tone="violet">{sig(k)}</K> · {fmt(w.h)} · <K tone="blue">{fmt(dd)}</K>
+              </>
+            }
+            bottom={
+              <>
+                <K tone="violet">{sig(mu)}</K> · {fmt(w.bo, 2)} · ({fmt(Math.log(w.re / w.rw), 2)} {w.skin < 0 ? '−' : '+'} {fmt(Math.abs(w.skin), 1)})
+              </>
+            }
+          />
+          <Op>=</Op>
+          <K tone="orange">{sig(q)} STB/day</K>
+        </Eq>
         <Readouts
           items={[
-            { label: <K tone="orange">rate</K>, value: `${sig(q)} STB/day`, tone: 'orange' },
-            { label: 'productivity index', value: `${sig(pi)} b/d per psi` },
+            { label: 'productivity index', value: `${sig(pi)} STB/day per psi` },
             { label: 'half the drop is spent within', value: rHalf > w.rw ? ft(rHalf) : 'the damaged zone' },
           ]}
         />
@@ -360,10 +384,10 @@ export default function Lesson() {
         {fmt(FIELDS.northfield.oilViscosity, 1)} centipoise, a little thicker than water. At a drawdown of {fmt(DRAWDOWN.northfield)} psi the well makes{' '}
         {fmt(nfQ)} barrels a day; its <b>productivity index</b>, the rate per psi of drawdown, is {fmt(NORTHFIELD_PI, 2)}. Coldwater’s loose sand is{' '}
         {fmt(FIELDS.coldwater.permeability / FIELDS.northfield.permeability)} times as permeable, but its oil is {fmt(FIELDS.coldwater.oilViscosity / FIELDS.northfield.oilViscosity)}{' '}
-        times as viscous, and the well manages just {fmt(cwQ)} barrels a day at the {fmt(DRAWDOWN.coldwater)} psi such a shallow reservoir can spare. Ridgeback is the
-        extreme: Northfield’s sandstone is {fmt(FIELDS.northfield.permeability / FIELDS.ridgeback.permeability)} times as permeable as Ridgeback’s shale, and even a{' '}
-        {fmt(DRAWDOWN.ridgeback)} psi drawdown pulls only about {fmt(rbQ, 1)} barrels a day into a vertical well. Rate depends on the ratio of permeability to
-        viscosity, and Ridgeback’s ratio is tiny.
+        times as viscous, and the well manages just {fmt(cwQ)} barrels a day at the {fmt(DRAWDOWN.coldwater)} psi such a shallow reservoir can spare. Pinyon is the
+        extreme: Northfield’s sandstone is {fmt(FIELDS.northfield.permeability / FIELDS.pinyon.permeability)} times as permeable as Pinyon’s shale, and even a{' '}
+        {fmt(DRAWDOWN.pinyon)} psi drawdown pulls only about {fmt(rbQ, 1)} barrels a day into a vertical well. Rate depends on the ratio of permeability to
+        viscosity, and Pinyon’s ratio is tiny.
       </P>
 
       <H2>Where the pressure goes</H2>
@@ -384,16 +408,24 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Reservoir Flow Simulator"
-        question={`Heavy oil is often heated with steam to thin it. Choose Coldwater, keep its 2,000 md rock and a skin of 0, and find the highest oil viscosity on the slider at which a Coldwater well is at least as productive as a Northfield well — ${fmt(NORTHFIELD_PI, 2)} b/d per psi.`}
+        question={`Heavy oil is often heated with steam to thin it. How thin would Coldwater’s oil have to be for its wells to keep up with Northfield’s? Estimate first: its rock is ${fmt(FIELDS.coldwater.permeability / FIELDS.northfield.permeability)} times as permeable, and Northfield’s oil is ${fmt(FIELDS.northfield.oilViscosity)} cP. Then choose Coldwater, keep its 2,000 md rock and a skin of 0, set the viscosity to your estimate, and adjust it until the productivity index is within 10% of Northfield’s ${fmt(NORTHFIELD_PI, 2)} STB/day per psi.`}
         solved={solvedA}
         status={
           st.field !== 'coldwater'
             ? 'Choose Coldwater first.'
             : st.skin !== 0 || Math.abs(k / FIELDS.coldwater.permeability - 1) > 0.02
               ? 'Keep Coldwater’s 2,000 md rock, and set the skin to 0.'
-              : `At ${sig(mu)} cP, a Coldwater well’s productivity index is ${sig(pi)} b/d per psi, against Northfield’s ${fmt(NORTHFIELD_PI, 2)}.`
+              : `At ${sig(mu)} cP, a Coldwater well’s productivity index is ${sig(pi)} STB/day per psi, ${pct(Math.abs(piGap))} ${piGap > 0 ? 'above' : 'below'} Northfield’s ${fmt(NORTHFIELD_PI, 2)}.`
         }
-        success={`Solved: ${sig(mu)} cP. Coldwater’s rock is ${fmt(FIELDS.coldwater.permeability / FIELDS.northfield.permeability)} times as permeable as Northfield’s, so its oil needs to be only about ${fmt(muMatch)} cP — a tenth of its natural ${fmt(FIELDS.coldwater.oilViscosity)} cP — for its wells to keep up. As Lesson 1.3 showed, heavy oil thins dramatically as it warms, which is why many heavy-oil fields inject steam.`}
+        success={
+          <>
+            Solved: {sig(mu)} cP. Matching the ratio of permeability to viscosity gives {fmt(FIELDS.coldwater.permeability / FIELDS.northfield.permeability)} ×{' '}
+            {fmt(FIELDS.northfield.oilViscosity)} = {fmt(MU_ESTIMATE)} cP; the exact match is about {fmt(MU_MATCH)} cP, a little thicker, because Coldwater’s layer
+            holds more good rock ({fmt(cw.h)} ft against {fmt(nf.h)}) and its oil shrinks less on the way up (B<Sub>o</Sub> {fmt(cw.bo, 2)} against {fmt(nf.bo, 1)}).
+            Either way it is about a tenth of its natural {fmt(FIELDS.coldwater.oilViscosity)} cP. As <a href={lessonHref('oil/1.3')}>Lesson 1.3</a> showed, heavy oil
+            thins dramatically as it warms, which is why many heavy-oil fields inject steam.
+          </>
+        }
       />
 
       <H2>How far a well can feel</H2>
@@ -444,7 +476,7 @@ export default function Lesson() {
           series={lines.map((l) => ({ points: l.points, color: FIELD_COLOR[l.id], width: 2.5 }))}
           refs={[
             { axis: 'y', at: nf.re, color: '#5f5f5f', label: `edge of a vertical well’s drainage, ${fmt(nf.re)} ft` },
-            { axis: 'y', at: HALFWAY_FT, color: '#c4382f', label: `halfway between Ridgeback fractures, ${HALFWAY_FT} ft` },
+            ...(revealB ? [{ axis: 'y' as const, at: HALFWAY_FT, color: '#c4382f', label: `halfway between Pinyon fractures, ${HALFWAY_FT} ft` }] : []),
             { axis: 'x', at: hours, cursor: true },
           ]}
           markers={FIELD_IDS.map((id) => ({ x: hours, y: reach(id, hours), color: FIELD_COLOR[id], r: 6 }))}
@@ -464,24 +496,24 @@ export default function Lesson() {
       <P>
         A Northfield well feels its whole drainage area within about {fmt(hoursToReach(nf.re, FIELDS.northfield.permeability, FIELDS.northfield.porosity, FIELDS.northfield.oilViscosity, FIELDS.northfield.compressibility))} hours; after that, the steady picture of{' '}
         <FigRef to="Reservoir Flow Simulator">the first demonstration</FigRef> is a good description of it. Coldwater’s viscous oil slows the spread, and it takes
-        about {fmt(hoursToReach(cw.re, FIELDS.coldwater.permeability, FIELDS.coldwater.porosity, FIELDS.coldwater.oilViscosity, FIELDS.coldwater.compressibility) / 24)} days to get as far. Ridgeback is in another world. After an hour its disturbance has moved{' '}
-        {fmt(reach('ridgeback', 1), 1)} feet into the rock, after a day {fmt(reach('ridgeback', 24), 1)} feet, after a year about {fmt(reach('ridgeback', 8766))} feet,
-        and after 30 years only about {fmt(reach('ridgeback', H30))} — still short of the edge of an ordinary well spacing. A Ridgeback well never settles down: as long
+        about {fmt(hoursToReach(cw.re, FIELDS.coldwater.permeability, FIELDS.coldwater.porosity, FIELDS.coldwater.oilViscosity, FIELDS.coldwater.compressibility) / 24)} days to get as far. Pinyon is in another world. After an hour its disturbance has moved{' '}
+        {fmt(reach('pinyon', 1), 1)} feet into the rock, after a day {fmt(reach('pinyon', 24), 1)} feet, after a year about {fmt(reach('pinyon', 8766))} feet,
+        and after 30 years only about {fmt(reach('pinyon', H30))} — still short of the edge of an ordinary well spacing. A Pinyon well never settles down: as long
         as it produces, it is draining a slowly widening zone around itself, and its rate keeps falling.
       </P>
 
       <Challenge
         id="b"
-        question={`Suppose a Ridgeback well is cracked open with fractures about 100 ft apart, so each fracture face drains the rock up to ${HALFWAY_FT} ft away. How long until the pressure disturbance reaches that far? Find the first time on the slider when Ridgeback’s reach is at least ${HALFWAY_FT} ft.`}
+        question={`Suppose a Pinyon well is cracked open with fractures about 100 ft apart, so each fracture face drains the rock up to ${HALFWAY_FT} ft away. How long until the pressure disturbance reaches that far? Estimate first: the reach grows with the square root of time, and in a year it gets about ${fmt(reach('pinyon', HOURS_PER_YEAR))} ft. Then set the time to your estimate and check that Pinyon’s reach is within 10% of ${HALFWAY_FT} ft.`}
         solved={solvedB}
-        status={`After ${humanTime(hours)}, a Ridgeback well’s disturbance has reached ${ft(reach('ridgeback', hours))}.`}
-        success={`Solved: about ${humanTime(hours)}. Within three months, the rock between neighboring fractures is all feeling the well — and from then on the fractures compete for the same oil, so the rate falls faster. Space them farther apart and each takes longer to drain its share.`}
+        status={`After ${humanTime(hours)}, a Pinyon well’s disturbance has reached ${ft(reach('pinyon', hours))}.`}
+        success={`Solved: after ${humanTime(hours)} it has reached ${ft(reach('pinyon', hours))}. Because the reach grows with the square root of time, roughly half the distance takes a quarter of the time: (${HALFWAY_FT} ÷ ${fmt(reach('pinyon', HOURS_PER_YEAR))})² of a year is about ${fmt(HALFWAY_ESTIMATE_HOURS / 24)} days. Within three months, the rock between neighboring fractures is all feeling the well — and from then on the fractures compete for the same oil, so the rate falls faster. Space them farther apart and each takes longer to drain its share.`}
       />
 
       <P>
         That challenge holds the key to shale oil. If oil can’t travel far through the rock, the well has to travel through the rock instead: turn sideways and run
-        horizontally for a mile or two inside the oil-bearing layer, then crack the rock open every few dozen feet so that oil never has to move more than a short
-        distance to reach a path to the well. Those two techniques — horizontal drilling and multistage hydraulic fracturing — made rocks like Ridgeback’s the biggest
+        horizontally for a mile or two inside the oil-bearing layer, then crack the rock open along it — a fracture every hundred feet or so in our model — so that
+        oil never has to move more than a short distance to reach a path to the well. Those two techniques — horizontal drilling and multistage hydraulic fracturing — made rocks like Pinyon’s the biggest
         source of growth in the world’s oil supply during the 2010s. The <a href={lessonHref('oil/2.3')}>next lesson</a> designs such a well, and puts a price on it.
       </P>
     </LessonPage>

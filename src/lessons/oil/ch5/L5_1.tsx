@@ -60,10 +60,30 @@ export function flatGroup(demandGrowth: number, nonGroupGrowth: number): number[
   return GROUP_GRID.filter((_, i) => dev[i] <= best + 1e-6);
 }
 
-/** Challenge a: stocks end the first year where they began, as nearly as the slider allows. */
+/** The starting growth rates are in place (challenge a is set at them, so the prose's draw applies). */
+export function startingGrowth(s: BalanceState): boolean {
+  return Math.abs(s.demandGrowth - DEMAND_GROWTH_DEFAULT) < 1e-9 && Math.abs(s.nonGroupGrowth - NON_GROUP_GROWTH_DEFAULT) < 1e-9;
+}
+
+/**
+ * Challenge a: at the starting growth rates, the group production on the slider grid that leaves
+ * stocks at the end of the first year where they began. The reader predicts it from the year's
+ * average draw: group production adds one for one to the stock change.
+ */
 export function flatStocksSolved(s: BalanceState): boolean {
+  if (!startingGrowth(s)) return false;
   const g = Math.round(s.group * 100) / 100;
   return flatGroup(s.demandGrowth, s.nonGroupGrowth).some((x) => Math.abs(x - g) < 1e-9);
+}
+
+/**
+ * Stocks at the end of each quarter, never below empty. The balance sheet has no price response, so
+ * at extreme settings its stocks would run negative; real tanks stop at empty (and long before, a
+ * soaring price would cut demand).
+ */
+export function stockPath(rows: BalanceRow[], start: number = WORLD.normalStocks): number[] {
+  let s = start;
+  return rows.map((r) => (s = Math.max(0, s + r.balance * 91.25)));
 }
 
 // ---------------------------------------------------------------------------
@@ -105,8 +125,23 @@ export function flatBoost(depth: number): number[] {
   return BOOST_GRID.filter((_, i) => dev[i] <= best + 1e-6);
 }
 
-/** Challenge b: the summer run rate that leaves product stocks flat over the year. */
+/** The maintenance depth challenge b is set at, mb/d (the starting depth, which the prose quotes). */
+export const DEPTH_DEFAULT = 2;
+/** Days in June, July and August, as the model counts them. */
+export const SUMMER_DAYS = SUMMER_MONTHS.length * 30.4;
+
+/** Crude left unrun by maintenance over the year, million barrels. */
+export function unrunByMaintenance(depth: number): number {
+  return depth * MAINTENANCE_SHAPE.reduce((a, w) => a + w, 0) * 30.4;
+}
+
+/**
+ * Challenge b: at the starting maintenance depth, the summer run rate (on the slider grid) that leaves
+ * product stocks flat over the year. The reader predicts it by spreading the barrels maintenance left
+ * unrun over the summer's days.
+ */
 export function flatProductsSolved(depth: number, boost: number): boolean {
+  if (Math.abs(depth - DEPTH_DEFAULT) > 1e-9) return false;
   const b = Math.round(boost * 10) / 10;
   return flatBoost(depth).some((x) => Math.abs(x - b) < 1e-9);
 }
@@ -138,14 +173,16 @@ export default function Lesson() {
   const s1 = useScenario<BalanceState>('balance', BALANCE_DEFAULTS);
   const st = s1.state;
   const rows = rowsOf(st);
-  const y1 = rows[3];
-  const y2 = rows[7];
+  const stocks = stockPath(rows);
+  const y1Stocks = stocks[3];
+  const y2Stocks = stocks[7];
+  const dryAt = stocks.findIndex((x) => x <= 0);
   const y1Avg = rows.slice(0, 4).reduce((a, r) => a + r.balance, 0) / 4;
   const y2Avg = rows.slice(4, 8).reduce((a, r) => a + r.balance, 0) / 4;
   const solvedA = flatStocksSolved(st);
 
-  const stockPts: Array<[number, number]> = [[0, WORLD.normalStocks], ...rows.map((r, i) => [i + 1, r.stocks] as [number, number])];
-  const [s0, s1Max] = niceDomain(Math.min(WORLD.normalStocks - 200, ...rows.map((r) => r.stocks)), Math.max(WORLD.normalStocks + 200, ...rows.map((r) => r.stocks)), 4);
+  const stockPts: Array<[number, number]> = [[0, WORLD.normalStocks], ...stocks.map((x, i) => [i + 1, x] as [number, number])];
+  const [s0, s1Max] = niceDomain(Math.min(WORLD.normalStocks - 200, ...stocks), Math.max(WORLD.normalStocks + 200, ...stocks), 4);
   const pricePts: Array<[number, number]> = stockPts.map(([q, s]) => [q, Math.min(400, inventoryPrice(s))]);
   const pMax = Math.min(200, Math.max(100, ...pricePts.map((p) => p[1])));
   const [p0, p1] = niceDomain(Math.max(0, Math.min(60, ...pricePts.map((p) => p[1]))), pMax, 4);
@@ -158,7 +195,7 @@ export default function Lesson() {
   const short5 = WORLD.normalStocks * 0.95;
   const long5 = WORLD.normalStocks * 1.05;
 
-  const s2 = useScenario('crude-products', { depth: 2, boost: 0 });
+  const s2 = useScenario('crude-products', { depth: DEPTH_DEFAULT, boost: 0 });
   const { depth, boost } = s2.state;
   const year = yearOfStocks(depth, boost);
   const end = year[11];
@@ -169,11 +206,12 @@ export default function Lesson() {
   const allStock = [...crudePts, ...productPts, ...totalPts].map((p) => p[1]);
   const [c0, c1] = niceDomain(Math.min(-50, ...allStock), Math.max(50, ...allStock), 4);
   const solvedB = flatProductsSolved(depth, boost);
-  const refYear = yearOfStocks(2, 0);
+  const refYear = yearOfStocks(DEPTH_DEFAULT, 0);
   const aprilProduct = refYear[4].productStock - refYear[1].productStock;
   const aprilCrude = refYear[4].crudeStock - refYear[1].crudeStock;
-  const refFlatBoost = flatBoost(2)[0];
-  const refFlatYear = yearOfStocks(2, refFlatBoost)[11];
+  const refFlatBoost = flatBoost(DEPTH_DEFAULT)[0];
+  const refFlatYear = yearOfStocks(DEPTH_DEFAULT, refFlatBoost)[11];
+  const unrun = unrunByMaintenance(DEPTH_DEFAULT);
 
   const tableRows = [
     { key: 'nonGroup', label: 'Non-group supply', vals: rows.map((r) => r.nonGroup), cls: '' as const },
@@ -194,10 +232,11 @@ export default function Lesson() {
       </P>
       <P>
         The world uses roughly 100 million barrels of oil a day. In our model, demand is {fmt(WORLD.demand, 1)} million barrels a day (mb/d) at the reference price.
-        Supply comes from two kinds of producer. Most of it comes from producers outside any group, each pumping as much as pays: shale basins like Ridgeback, offshore
+        Supply comes from two kinds of producer. Most of it comes from producers outside any group, each pumping as much as pays: shale basins like Pinyon, offshore
         fields like Seaboard, heavy-oil fields like Coldwater. The rest comes from a <b>producer group</b> that coordinates its output and keeps some capacity idle, ready
         to use. Its real-world counterpart is OPEC+, the members of OPEC working together, since 2016, with allies such as Russia. Refineries add a little more: their
-        products take up more room than the crude they were made from (<a href={lessonHref('oil/3.2')}>Lesson 3.2</a>), and those <b>processing gains</b> count as supply.
+        products take up more room than the crude they were made from — the volume gain of <a href={lessonHref('oil/3.2')}>Lesson 3.2</a> — and those{' '}
+        <b>processing gains</b> count as supply.
       </P>
       <P>
         The difference between supply and demand has to go somewhere. Oil that’s produced and not used goes into tanks; oil that’s used and not produced comes out of them.
@@ -229,8 +268,8 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Commercial stocks over two years: ${fmt(WORLD.normalStocks)} million barrels at the start, ${fmt(y1.stocks)} after the first year and ${fmt(y2.stocks)} after the second, against ${fmt(WORLD.normalStocks)} normal.`}
-          height={190}
+          ariaLabel={`Commercial stocks over two years: ${fmt(WORLD.normalStocks)} million barrels at the start, ${fmt(y1Stocks)} after the first year and ${fmt(y2Stocks)} after the second, against ${fmt(WORLD.normalStocks)} normal.`}
+          height={170}
           x={[0, 8]}
           y={[s0, s1Max]}
           xTicks={[0, 2, 4, 6, 8]}
@@ -243,8 +282,8 @@ export default function Lesson() {
           markers={stockPts.slice(1).map(([q, s]) => ({ x: q, y: s, color: STOCKS, r: 3.5 }))}
         />
         <XYChart
-          ariaLabel={`Price implied by stocks: $79 at the start, ${priceText(y1.stocks)} after the first year and ${priceText(y2.stocks)} after the second.`}
-          height={140}
+          ariaLabel={`Price implied by stocks: $79 at the start, ${priceText(y1Stocks)} after the first year and ${priceText(y2Stocks)} after the second.`}
+          height={120}
           x={[0, 8]}
           y={[p0, p1]}
           xTicks={[0, 4, 8]}
@@ -258,9 +297,8 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: <K tone="orange">year 1 stock change</K>, value: `${signed(y1Avg, 2)} mb/d`, tone: 'orange' },
-            { label: 'stocks after year 1', value: `${fmt(y1.stocks)} M bbl` },
-            { label: <K c="price">price after year 1</K>, value: priceText(y1.stocks), tone: 'green' },
-            { label: <K c="price">price after year 2</K>, value: priceText(y2.stocks), tone: 'green' },
+            { label: <K c="price">price after year 1</K>, value: priceText(y1Stocks), tone: 'green' },
+            { label: <K c="price">price after year 2</K>, value: priceText(y2Stocks), tone: 'green' },
           ]}
         />
         <Slider
@@ -281,11 +319,13 @@ export default function Lesson() {
           max={0.3}
           step={0.01}
           onChange={(v) => s1.set({ nonGroupGrowth: Math.round(v * 100) / 100 })}
-          display={`${fmt(st.nonGroupGrowth, 2)} mb/d a quarter`}
+          display={`${fmt(st.nonGroupGrowth * 4, 2)} mb/d a year`}
         />
         <Caption>
-          {y1Avg >= 0 ? 'Over the first year supply runs ahead of demand and stocks build' : 'Over the first year demand runs ahead of supply and stocks draw'}; in the second
-          they {y2Avg >= 0 ? 'build' : 'draw'} at {fmt(Math.abs(y2Avg), 2)} mb/d. All figures are the model’s, not market data.
+          {dryAt >= 0
+            ? `At these settings the tanks would run dry in ${QUARTER(dryAt)}; long before that, a soaring price would cut demand, which a balance sheet leaves out.`
+            : `In the second year stocks ${y2Avg >= 0 ? 'build' : 'draw'} at ${fmt(Math.abs(y2Avg), 2)} mb/d.`}{' '}
+          All figures are the model’s, not market data.
         </Caption>
       </Figure>
 
@@ -293,8 +333,8 @@ export default function Lesson() {
         At the starting settings the group produces {fmt(WORLD.group, 1)} mb/d. In the first quarter, with demand at its seasonal low, supply exceeds demand by{' '}
         {mbd(ref[0].balance)} mb/d and stocks build to {fmt(ref[0].stocks)} million barrels. In the third quarter — the northern summer, when people drive and fly most —
         demand climbs and the balance turns to {signed(ref[2].balance, 2)} mb/d. Over the whole year stocks draw at an average {mbd(-refY1Avg)} mb/d and end at{' '}
-        {fmt(ref[3].stocks)} million barrels. In the second year demand keeps growing by {fmt(DEMAND_GROWTH_DEFAULT, 1)} mb/d a year, faster than other producers add
-        supply, and the draw deepens to {mbd(-refY2Avg)} mb/d.
+        {fmt(ref[3].stocks)} million barrels. In the second year demand keeps growing by {fmt(DEMAND_GROWTH_DEFAULT, 1)} mb/d a year, faster than the{' '}
+        {fmt(NON_GROUP_GROWTH_DEFAULT * 4, 1)} mb/d a year that other producers add, and the draw deepens to {mbd(-refY2Avg)} mb/d.
       </P>
       <P>
         Those look like small numbers against a hundred million barrels a day, but stocks add them up. A gap of 1 mb/d kept up for a year moves 365 million barrels — about
@@ -328,10 +368,14 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="The group wants stocks to end the first year exactly where they started. Set its production, to the nearest 0.05 mb/d, so they do — for whatever growth you’ve set."
+        question={`The group wants stocks to end the first year exactly where they started. Predict first: its output is part of supply, so each extra 1 mb/d it pumps adds 1 mb/d to the stock change, and at the starting settings the first year draws ${mbd(-refY1Avg)} mb/d. What production does it need? Then set it, to the nearest 0.05 mb/d, with the growth rates at their starting values.`}
         solved={solvedA}
-        status={`At ${fmt(st.group, 2)} mb/d, stocks end the first year ${yearOneChange(st) >= 0 ? 'up' : 'down'} ${fmt(Math.abs(yearOneChange(st)))} million barrels.`}
-        success={`Solved: ${fmt(st.group, 2)} mb/d leaves first-year stocks within ${fmt(Math.abs(yearOneChange(st)))} million barrels of where they began. At the starting growth rates the answer is ${fmt(refFlat, 2)} mb/d — and notice that even then the second year draws, because demand keeps outgrowing the other producers. Holding stocks steady means adjusting output every year; that is what the group’s spare capacity is for.`}
+        status={
+          startingGrowth(st)
+            ? `At ${fmt(st.group, 2)} mb/d, stocks end the first year ${yearOneChange(st) >= 0 ? 'up' : 'down'} ${fmt(Math.abs(yearOneChange(st)))} million barrels.`
+            : `Set demand growth back to ${fmt(DEMAND_GROWTH_DEFAULT, 1)} mb/d a year and non-group growth to ${fmt(NON_GROUP_GROWTH_DEFAULT * 4, 2)}.`
+        }
+        success={`Solved: ${fmt(refFlat, 2)} mb/d, the starting ${fmt(WORLD.group, 2)} plus the ${mbd(-refY1Avg)} mb/d the first year was short. Yet the second year still draws, at ${mbd(-y2Avg)} mb/d, because demand keeps outgrowing the other producers. Holding stocks steady means adjusting output every year; that is what the group’s spare capacity is for.`}
       />
 
       <H2>Crude stocks and product stocks</H2>
@@ -412,17 +456,21 @@ export default function Lesson() {
         stocks build by {fmt(aprilCrude)} million barrels — the oil arrives but the units aren’t taking it — while product stocks fall by {fmt(-aprilProduct)} million as
         demand keeps drawing on them. The summer’s higher demand drains products further. Yet the dashed line, all oil stocks, barely moves: by December the two halves have shifted{' '}
         {fmt(refYear[11].crudeStock)} million barrels between them, and the total has changed by only {signed(refYear[11].crudeStock + refYear[11].productStock, 1)} million,
-        the processing gain the idle units didn’t make. Runs don’t create or destroy oil. They decide whether it waits as crude or as products — and so whether crude or
-        products are scarce. That distinction will matter in <a href={lessonHref('oil/5.3')}>Lesson 5.3</a>, where product stocks set the price of gasoline and diesel
+        the processing gain the idle units didn’t make. Runs create only that sliver of oil, and destroy none. What they decide is whether oil waits as crude or as
+        products — and so whether crude or products are scarce. That distinction will matter in <a href={lessonHref('oil/5.3')}>Lesson 5.3</a>, where product stocks set the price of gasoline and diesel
         relative to crude.
       </P>
 
       <Challenge
         id="b"
-        question="Refiners make up for maintenance by running harder in June, July and August. With the maintenance depth you’ve set, find the extra summer runs, to the nearest 0.1 mb/d, that leave product stocks where they started the year."
+        question={`Refiners make up for maintenance by running harder in June, July and August. Predict first: at the starting depth of ${fmt(DEPTH_DEFAULT)} mb/d, maintenance leaves ${fmt(unrun)} million barrels of crude unrun over the year. Made up over the summer’s ${fmt(SUMMER_DAYS)} days, how much harder must refiners run to leave product stocks where they started the year? Then set it, to the nearest 0.1 mb/d.`}
         solved={solvedB}
-        status={`With ${fmt(boost, 1)} mb/d of extra summer runs, product stocks end the year ${end.productStock >= 0 ? 'up' : 'down'} ${fmt(Math.abs(end.productStock))} million barrels.`}
-        success={`Solved: ${fmt(boost, 1)} mb/d. Over three summer months that replaces what maintenance took out of runs in five — and the crude it uses comes out of crude stocks, which end the year ${signed(end.crudeStock)} million barrels from where they began. At the starting depth of 2 mb/d the answer is ${fmt(refFlatBoost, 1)} mb/d, which leaves products ${signed(refFlatYear.productStock, 1)} million barrels from flat.`}
+        status={
+          Math.abs(depth - DEPTH_DEFAULT) > 1e-9
+            ? `Set the maintenance depth back to ${fmt(DEPTH_DEFAULT, 1)} mb/d.`
+            : `With ${fmt(boost, 1)} mb/d of extra summer runs, product stocks end the year ${end.productStock >= 0 ? 'up' : 'down'} ${fmt(Math.abs(end.productStock))} million barrels.`
+        }
+        success={`Solved: ${fmt(refFlatBoost, 1)} mb/d. ${fmt(unrun)} million barrels over ${fmt(SUMMER_DAYS)} days is ${fmt(unrun / SUMMER_DAYS, 2)} mb/d, and the slider’s nearest step leaves products ${signed(refFlatYear.productStock, 1)} million barrels from flat. Three months of harder running replace what maintenance took out in five, and the crude they use comes out of the crude that built up meanwhile: crude stocks end the year ${signed(refFlatYear.crudeStock)} million barrels from where they began.`}
       />
 
       <P>

@@ -13,6 +13,7 @@ import {
   Readouts,
   Segmented,
   Slider,
+  areaPath,
   fmt,
   lessonHref,
   linePath,
@@ -23,11 +24,60 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { CONTRACT_BUSHELS, FINAL_REPORT, MARKET_YEARS, analystView, cropYear, decFutures, marketView, type View } from '../../../engines/agriculture/market';
-import { dateLabel, dayOf } from '../../../model/agriculture/region';
+import {
+  CONTRACT_BUSHELS,
+  FINAL_REPORT,
+  HARVEST_START,
+  MARKET_YEARS,
+  REPORTS,
+  SEASON_START,
+  analystView,
+  cropYear,
+  decFutures,
+  marketView,
+  type View,
+} from '../../../engines/agriculture/market';
+import { MONTHS, MONTH_START, dateLabel, dayOf } from '../../../model/agriculture/region';
 import { PriceChart, daysBetween } from '../shared/PriceChart';
 import { centsPlain } from '../shared/format';
 import { MARKET_LINE } from '../shared/tones';
+
+/** One day of what the market knows: its forecast of the valley's harvest and December futures. */
+export interface Learned {
+  day: number;
+  view: View;
+  futures: number;
+}
+
+const seasonCache = new Map<number, Learned[]>();
+/** What the market knows from May 1 to the November report of a simulated year, every other day and on each side of each report. */
+export function seasonPath(year: number): Learned[] {
+  let path = seasonCache.get(year);
+  if (!path) {
+    const days = new Set<number>();
+    for (let d = SEASON_START; d < FINAL_REPORT; d += 2) days.add(d);
+    for (const r of REPORTS) days.add(r.day - 1).add(r.day);
+    days.add(FINAL_REPORT);
+    path = [...days].sort((a, b) => a - b).map((day) => ({ day, view: marketView(year, day), futures: decFutures(year, day) }));
+    seasonCache.set(year, path);
+  }
+  return path;
+}
+
+/** The market's forecast the evening before, and the morning of, a report. */
+export function reportJump(year: number, report: number): { before: Learned; after: Learned } {
+  const at = (day: number): Learned => ({ day, view: marketView(year, day), futures: decFutures(year, day) });
+  return { before: at(report - 1), after: at(report) };
+}
+
+/** The years the lesson's prose walks through: a report that surprised the market, and the drought of Lesson 4.5. */
+export const EXAMPLE_YEAR = 26;
+export const DROUGHT_YEAR = 46;
+/** The season figure's starting state: the example year, on May 1. */
+export const SEASON0 = { year: EXAMPLE_YEAR, day: SEASON_START };
+
+/** The season figure's fixed scale for the valley's harvest, million bushels: every year's band fits. */
+export const VIEW_DOMAIN: [number, number] = [250, 700];
 
 export type Decision = 'aug' | 'sep';
 export const DECISION: Record<Decision, { day: number; report: number }> = {
@@ -91,6 +141,60 @@ export function shareSolved(st: { decision: Decision; exit: 'report' | 'harvest'
   if (st.decision !== 'sep' || st.exit !== 'report' || st.threshold !== 0) return false;
   const loses = (s: number) => backtest('sep', 'report', s / 100, 0).total < 0;
   return loses(st.share) && (st.share === 0 || !loses(st.share - 25));
+}
+
+function SeasonChart({ year, day }: { year: number; day: number }) {
+  const path = useMemo(() => seasonPath(year), [year]);
+  const actual = cropYear(year).valley;
+  const x = scale(SEASON_START, FINAL_REPORT, 60, 620);
+  const vy = scale(VIEW_DOMAIN[0], VIEW_DOMAIN[1], 180, 34);
+  const fs = path.map((p) => p.futures);
+  const [flo, fhi] = niceDomain(Math.min(...fs), Math.max(...fs), 3);
+  const fy = scale(flo, fhi, 304, 222);
+  const xs = path.map((p) => x(p.day));
+  const v = marketView(year, day);
+  const f = decFutures(year, day);
+  const months = MONTH_START.map((d, i) => ({ d, m: MONTHS[i] })).filter((m) => m.d >= SEASON_START && m.d + 14 <= FINAL_REPORT);
+  return (
+    <svg
+      className="chart"
+      viewBox="0 0 640 336"
+      role="img"
+      aria-label={`Year ${year}: on ${dateLabel(day)} the market expects ${fmt(v.mean)} million bushels, give or take ${fmt(v.sd)}, and December futures are ${usd(f, 2)}. The valley grew ${fmt(actual)} million bushels.`}
+    >
+      <text className="ax" x={60} y={12}>
+        The market’s forecast of the valley’s corn harvest, million bushels
+      </text>
+      <GridY y={vy} ticks={[300, 400, 500, 600, 700]} x0={60} x1={620} format={(t) => fmt(t)} />
+      {[...REPORTS.map((r) => ({ d: r.day, label: 'report' })), { d: HARVEST_START, label: 'harvest' }].map((l) => (
+        <g key={l.d}>
+          <line x1={x(l.d)} x2={x(l.d)} y1={30} y2={304} stroke="#999" strokeDasharray="3 3" />
+          <text className="ax ax-m" x={x(l.d)} y={26} style={{ fontSize: 10.5 }}>
+            {l.label}
+          </text>
+        </g>
+      ))}
+      <path d={areaPath(xs, path.map((p) => vy(p.view.mean + p.view.sd)), path.map((p) => vy(p.view.mean - p.view.sd)))} fill={mix('#fcfcfb', MARKET_LINE.futures, 0.22)} />
+      <path d={linePath(xs, path.map((p) => vy(p.view.mean)))} fill="none" stroke={MARKET_LINE.futures} strokeWidth={2} />
+      <line x1={60} x2={620} y1={vy(actual)} y2={vy(actual)} stroke={MARKET_LINE.cash} strokeWidth={2} strokeDasharray="6 4" />
+      <text className="ax ax-e" x={618} y={vy(actual) + (actual < 300 ? -6 : 14)} style={{ fill: '#333' }}>
+        harvest that came, {fmt(actual)}
+      </text>
+      <text className="ax" x={60} y={208}>
+        December futures, $ a bushel
+      </text>
+      <GridY y={fy} ticks={niceTicks(flo, fhi, 2)} x0={60} x1={620} format={(t) => usd(t, 2)} />
+      <path d={linePath(xs, fs.map(fy))} fill="none" stroke={MARKET_LINE.futures} strokeWidth={2.2} />
+      <line x1={x(day)} x2={x(day)} y1={30} y2={304} stroke="#333" />
+      <circle cx={x(day)} cy={vy(v.mean)} r={5} fill={MARKET_LINE.futures} stroke="#fcfcfb" strokeWidth={1.5} />
+      <circle cx={x(day)} cy={fy(f)} r={5} fill={MARKET_LINE.futures} stroke="#fcfcfb" strokeWidth={1.5} />
+      {months.map((m) => (
+        <text key={m.d} className="ax ax-m" x={x(m.d + 14)} y={326}>
+          {m.m}
+        </text>
+      ))}
+    </svg>
+  );
 }
 
 function ForecastCurves({ t, actual }: { t: Trade; actual: number }) {
@@ -157,7 +261,7 @@ function PnlBars({ pnls }: { pnls: number[] }) {
   return (
     <svg className="chart" viewBox="0 0 640 210" role="img" aria-label={`Profit per bushel in each of sixty simulated years, adding up to ${usd(cum[cum.length - 1], 2)} a bushel.`}>
       <text className="ax" x={60} y={14}>
-        Profit per bushel, each year (bars) and added up (line, right scale)
+        Profit per bushel, each year (bars) and added up (line, its own scale, total at its end)
       </text>
       <GridY y={y} ticks={niceTicks(lo, hi, 4)} x0={60} x1={620} format={(v) => usd(v, 2)} baseline={0} />
       {pnls.map((v, i) => (
@@ -177,7 +281,21 @@ function PnlBars({ pnls }: { pnls: number[] }) {
 }
 
 export default function Lesson() {
-  const s = useScenario('surprise', { year: 26, decision: 'sep' as Decision });
+  const m = useScenario('season', SEASON0);
+  const mv = marketView(m.state.year, m.state.day);
+  const mf = decFutures(m.state.year, m.state.day);
+  const ex = useMemo(
+    () => ({
+      start: marketView(EXAMPLE_YEAR, SEASON_START),
+      sep: reportJump(EXAMPLE_YEAR, REPORTS[1].day),
+      sep1: decFutures(EXAMPLE_YEAR, REPORTS[1].data),
+      dry0: decFutures(DROUGHT_YEAR, SEASON_START),
+      dry: reportJump(DROUGHT_YEAR, REPORTS[0].day).after,
+    }),
+    [],
+  );
+
+  const s = useScenario('surprise', { year: EXAMPLE_YEAR, decision: 'sep' as Decision });
   const t = useMemo(() => trade(s.state.year, s.state.decision), [s.state]);
   const actual = cropYear(s.state.year).valley;
   const solved1 = s.state.decision === 'sep' && rightButLost(s.state.year);
@@ -185,6 +303,7 @@ export default function Lesson() {
   const b = useScenario('backtest', { decision: 'sep' as Decision, exit: 'report' as 'report' | 'harvest', share: 0, threshold: 0 });
   const rec = useMemo(() => backtest(b.state.decision, b.state.exit, b.state.share / 100, b.state.threshold / 100), [b.state]);
   const solved2 = useMemo(() => shareSolved(b.state), [b.state]);
+  const choosy = useMemo(() => ({ every: backtest('sep', 'report', 0, 0), five: backtest('sep', 'report', 0, 0.05), fifteen: backtest('sep', 'report', 0, 0.15) }), []);
 
   return (
     <LessonPage id="agriculture/5.4">
@@ -196,16 +315,56 @@ export default function Lesson() {
       <P>
         In our market, everyone sees the weather. Once a month the government publishes a crop report, as the U.S. Department of Agriculture does around the
         tenth of each month from August, and in our model the report carries what a full survey would: the forecast of{' '}
-        <a href={lessonHref('agriculture/3.4')}>Lesson 3.4</a> from temperature, rain, satellite NDVI and crop condition, as of the first of the month. A{' '}
-        <K tone="teal">crop analyst</K> who buys satellite images and sends out its own scouts — as private firms and the August crop tours of the American Corn
-        Belt do — has the same information on the first, eleven days before the report. That is the edge we will test: the report’s news, early. The analyst’s forecast is a probability distribution, not a number: a most likely harvest and a spread around it, the
-        test-season error of the forecast. Averaging the December price over that whole distribution gives the analyst’s own <K tone="teal">fair price</K>. If it is
-        over the futures price, the analyst buys; if under, sells; and closes the trade after the report. In the next demonstration the curves are the market’s and
-        the analyst’s forecasts of the valley’s harvest, the dashed line the harvest that came, and the chart under them December futures through the trade.
+        <a href={lessonHref('agriculture/3.4')}>Lesson 3.4</a> from temperature, rain, satellite NDVI and crop condition, as of the first of the month. So the
+        market’s forecast of the valley’s harvest — and with it December futures — moves in two ways: a little at a time with the weather, and in a jump on each
+        report day. In the next demonstration the band is the market’s forecast of the valley’s harvest through one simulated season, its most likely harvest and
+        one standard deviation either side; the dashed line is the harvest that came, and the line under them December futures. Choose a year and move through
+        the season:
+      </P>
+
+      <Figure name="Harvest Surprise Trader" scenario={m}>
+        <SeasonChart year={m.state.year} day={m.state.day} />
+        <Legend
+          items={[
+            { label: 'Market’s forecast ± one standard deviation', color: mix('#fcfcfb', MARKET_LINE.futures, 0.22) },
+            { label: 'Harvest that came', color: MARKET_LINE.cash, kind: 'line', dashed: true },
+          ]}
+        />
+        <Readouts
+          items={[
+            { label: `market expects, ${dateLabel(m.state.day)}`, value: `${fmt(mv.mean)} ± ${fmt(mv.sd)} million bu`, tone: 'violet' },
+            { label: `December futures, ${dateLabel(m.state.day)}`, value: usd(mf, 2), tone: 'violet' },
+          ]}
+        />
+        <Slider label="Year" value={m.state.year} min={1} max={MARKET_YEARS} onChange={(v) => m.set({ year: v })} display={String(m.state.year)} />
+        <Slider label="Date" value={m.state.day} min={SEASON_START} max={FINAL_REPORT} onChange={(v) => m.set({ day: v })} display={dateLabel(m.state.day)} />
+      </Figure>
+
+      <P>
+        On May 1 nobody knows anything about this year’s crop beyond the average: the market expects {fmt(ex.start.mean)} million bushels, give or take{' '}
+        {fmt(ex.start.sd)}. The weather narrows that through the summer, and each report narrows it again and moves it. In year {EXAMPLE_YEAR} the market expected{' '}
+        {fmt(ex.sep.before.view.mean)} million bushels, give or take {fmt(ex.sep.before.view.sd)}, on the eve of the September report; on September 12 the report cut
+        that to {fmt(ex.sep.after.view.mean)}, and December futures jumped from {usd(ex.sep.before.futures, 2)} to {usd(ex.sep.after.futures, 2)} in a day. Through
+        the harvest the combines close what is left of the gap, and by the November report the band is gone. Not every move in the price comes from the valley:
+        news of everyone else’s harvests arrives through the season as well, which is why futures rose from {usd(ex.sep1, 2)} to {usd(ex.sep.before.futures, 2)}{' '}
+        in the first eleven days of that September while the market’s view of the valley stood still. Choose year {DROUGHT_YEAR} to watch a drought arrive: by the
+        August report the market expected only {fmt(ex.dry.view.mean)} million bushels, and December futures had climbed from {usd(ex.dry0, 2)} to{' '}
+        {usd(ex.dry.futures, 2)} — the climb that drained Cedar Bend’s margin account in <a href={lessonHref('agriculture/5.1')}>Lesson 5.1</a>.
+      </P>
+      <P>
+        That is the price a crop forecast has to beat: the market’s view of the harvest, updated as fast as the news arrives. A <K tone="teal">crop analyst</K>{' '}
+        who buys satellite images and sends out its own scouts — as private firms and the August crop tours of the American Corn Belt do — has the report’s
+        information on the first of the month, eleven days before the report. That is the edge we will test: the report’s news, early.
+      </P>
+      <P>
+        The analyst’s forecast is a probability distribution, not a number: a most likely harvest and a spread around it, the test-season error of the forecast.
+        Averaging the December price over that whole distribution gives the analyst’s own <K tone="teal">fair price</K>. If it is over the futures price, the
+        analyst buys; if under, sells; and closes the trade after the report. In the next demonstration the curves are the market’s and the analyst’s forecasts of
+        the valley’s harvest on the day of the decision, the dashed line the harvest that came, and the chart under them December futures through the trade.
         Choose the year and the day of the decision:
       </P>
 
-      <Figure name="Harvest Surprise Trader" scenario={s}>
+      <Figure name="Harvest Surprise Trader · the analyst" scenario={s}>
         <ForecastCurves t={t} actual={actual} />
         <Legend
           items={[
@@ -232,11 +391,11 @@ export default function Lesson() {
             { value: 'sep', label: 'September 1' },
           ]}
         />
-        <Slider label="Simulated year" value={s.state.year} min={1} max={MARKET_YEARS} onChange={(v) => s.set({ year: v })} display={String(s.state.year)} />
+        <Slider label="Year" value={s.state.year} min={1} max={MARKET_YEARS} onChange={(v) => s.set({ year: v })} display={String(s.state.year)} />
       </Figure>
 
       <P>
-        Year 26 shows the idea working. On September 1 the weather pointed to a harvest of 493 million bushels, but the satellites and the scouts saw a crop running
+        Year 26 shows the idea working. On September 1 the market expected a harvest of 493 million bushels, but the satellites and the scouts saw a crop running
         short of water, and the analyst expected 460. Averaged over that forecast, December corn was worth $6.08 to the analyst, against $5.82 in the market. The analyst
         bought; on September 12 the report showed what the analyst had seen, futures jumped to $6.30, and the trade made 47 cents a bushel, about $2,360 a contract.
         The valley grew 452. What the analyst had seen in August is what <a href={lessonHref('agriculture/3.3')}>Lesson 3.3</a> measured: a canopy losing its
@@ -305,35 +464,49 @@ export default function Lesson() {
         because early in August the satellites and scouts add little to what the weather already says: the forecast of Lesson 3.4 is barely better with them
         then. Holding
         to harvest swaps a small, steady edge for a big bet: the year-to-year swing of the profit grows from 16 cents a bushel to 49 cents or more, because the
-        edge was the report, and after it the trade is only a bet on everyone else’s weather. In these sixty years that bet paid from August and not from
-        September, which is what a bet does.
+        edge was the report, and after it the trade is only a bet on everyone else’s weather. In these sixty years holding on past the report added 4.6 cents a
+        bushel a year to the trade decided on August 1 and took 5.1 cents from the one decided on September 1, which is what a bet does.
+      </P>
+      <P>
+        The gap control makes the analyst choosy. Trade only when the fair price is more than 5 cents from the futures price and the years when the two nearly
+        agree drop out: {choosy.five.trades} trades instead of {choosy.every.trades}, earning {fmt((choosy.five.total / choosy.five.trades) * 100, 1)} cents a
+        bushel each and {usd(Math.round((choosy.five.total * CONTRACT_BUSHELS) / 100) * 100)} in all, a little more than trading every year. The trades it skips
+        earned nothing before costs. At 15 cents only {choosy.fifteen.trades} trades are left; each earns {fmt((choosy.fifteen.total / choosy.fifteen.trades) * 100)} cents, but the total
+        falls to{' '}
+        {usd(Math.round((choosy.fifteen.total * CONTRACT_BUSHELS) / 100) * 100)}. Too choosy, and the analyst gives up good trades with the bad.
       </P>
       <P>
         Then the uncomfortable control. None of this is secret: companies sell exactly this analysis, and every trader who buys it moves the price toward
-        the analyst’s before the report. When a quarter of the market sees what the analyst sees, the profit falls to 4.6 cents a bushel; at half, to 2.2 cents. An
-        edge from public data lasts only as long as few people use it, and it is competed away to the cost of trading. (Trading on the report itself before its
-        release would be another matter: the U.S. Department of Agriculture prepares its crop reports in a locked room and releases them to everyone at once.)
+        the analyst’s before the report. When a quarter of the market sees what the analyst sees, the profit falls from 7.1 cents a bushel to 4.6.
       </P>
 
       <Challenge
         id="b"
-        question="Decide on September 1, close after the report, and trade every year. How large a share of the market, in steps of 25%, must already have the analyst’s data before the strategy loses money over the sixty years?"
+        question="Decide on September 1, close after the report, and trade every year. Each quarter of the market that gets the analyst’s data takes about the same bite out of the profit. Predict first, from the 7.1 cents with nobody else seeing it and the 4.6 with a quarter: how large a share, in steps of 25%, must have the data before sixty years of trading lose money? Then set it to check."
         solved={solved2}
         status={
           b.state.decision !== 'sep' || b.state.exit !== 'report' || b.state.threshold !== 0
             ? 'Decide on September 1, close after the report, and set the gap to 0¢.'
-            : rec.total >= 0
-              ? `With ${b.state.share}% of the market seeing it, the strategy still makes ${centsPlain(rec.total / Math.max(1, rec.trades), 1)} a bushel a year.`
-              : `With ${b.state.share}% seeing it, the strategy loses money. Is this the smallest such share?`
+            : rec.trades === 0
+              ? 'With the whole market seeing it, the price already says what the analyst would, and there is never a trade. Is there a smaller share at which trading loses?'
+              : rec.total >= 0
+                ? `With ${b.state.share}% of the market seeing it, the strategy still makes ${centsPlain(rec.total / rec.trades, 1)} a bushel a year.`
+                : `With ${b.state.share}% seeing it, the strategy loses money. Is this the smallest such share?`
         }
         success={`Solved: with ${b.state.share}% of the market seeing the same data, what is left of the edge no longer pays the cent a bushel of costs, and sixty years of trading lose ${usd(-rec.total * CONTRACT_BUSHELS)} a contract. The forecast is just as good as before; it is just no longer news.`}
       />
 
       <P>
-        <FigRef to="Harvest Surprise Trader">The forecasts</FigRef> answer the lesson’s question with a qualified yes. A probabilistic yield forecast can anticipate
-        futures moves, when it is earlier or better than what the price contains, and only by as much as it is. The last lesson of the chapter puts the pieces
-        together — the hedge, the curve, the basis and the forecast — and tests them the way a trader must: on years the strategy has never seen, with every cost
-        counted.
+        At half the market the profit was down to 2.2 cents; at three-quarters it is gone. An edge from public data lasts only as long as few people use it, and it
+        is competed away to the cost of trading. (Trading on the report itself before its release would be another matter: the U.S. Department of Agriculture
+        prepares its crop reports in a locked room and releases them to everyone at once.)
+      </P>
+
+      <P>
+        <FigRef to="Harvest Surprise Trader · the analyst">The forecasts</FigRef> answer the lesson’s question with a qualified yes. A probabilistic yield forecast can anticipate
+        futures moves, when it is earlier or better than what the price contains, and only by as much as it is. The last lesson of the chapter returns to the
+        piece every farm uses, the hedge of <a href={lessonHref('agriculture/5.1')}>Lesson 5.1</a>, and tests it the way a trader must: on years the strategy has
+        never seen, with every cost counted.
       </P>
     </LessonPage>
   );

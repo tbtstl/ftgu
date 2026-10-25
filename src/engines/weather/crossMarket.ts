@@ -1,5 +1,5 @@
 // One weather view, three markets. A forecast that next week will be colder than the market
-// expects can be expressed in Calder Bay HDD futures, in next week's city-gate gas, or in next
+// expects can be expressed in Fenwick Bay HDD futures, in next week's city-gate gas, or in next
 // week's power — and each responds to the same degrees differently. Degree days respond
 // linearly (below 65 °F); gas responds hardly at all until the pipelines fill and then
 // violently; power follows gas and demand. Each market also has its own costs and limits.
@@ -77,7 +77,7 @@ export interface Instrument {
 }
 
 export const INSTRUMENTS: Record<InstrumentId, Instrument> = {
-  hdd: { id: 'hdd', name: 'Calder Bay HDD future', unit: '$20 per degree day', quantity: 20, halfSpread: 5, maxSize: 50 },
+  hdd: { id: 'hdd', name: 'Fenwick Bay HDD future', unit: '$20 per degree day', quantity: 20, halfSpread: 5, maxSize: 50 },
   gas: { id: 'gas', name: 'City-gate gas, next week', unit: '10,000 MMBtu a day for 7 days', quantity: 70_000, halfSpread: 0.15, maxSize: 40 },
   power: { id: 'power', name: 'Power, next week, all hours', unit: '25 MW for 168 hours', quantity: 4_200, halfSpread: 1.5, maxSize: 40 },
 };

@@ -1,4 +1,4 @@
-// The Calder refinery as a linear program (Lesson 3.5, and the capstone's refinery).
+// The Corran refinery as a linear program (Lesson 3.5, and the capstone's refinery).
 //
 // Refiners plan with linear programs: choose crude runs and the routing of every intermediate
 // stream through the units to maximize the day's margin — product revenue minus crude and
@@ -13,7 +13,7 @@ import { solveLP, type Sense } from '../market/lp';
 import { crude as crudeOf, type Crude } from './assay';
 import { COKER, DEFAULT_CUTS, REFORMER, distill, fccYields, hdsHydrogen, type CutPoints } from './refining';
 import { CRUDE_IDS, type CrudeId } from '../../model/oil/crudes';
-import { CALDER, CRUDE_PRICE, HYDROGEN_COST, PRODUCT_PRICE, UNIT_OPEX, type ProductId, type RefineryConfig, type UnitId } from '../../model/oil/refinery';
+import { CORRAN, CRUDE_PRICE, HYDROGEN_COST, PRODUCT_PRICE, UNIT_OPEX, type ProductId, type RefineryConfig, type UnitId } from '../../model/oil/refinery';
 
 /** Anti-knock index of each gasoline component, (R+M)/2. */
 export const COMPONENT_AKI = { lightNaphtha: 68.5, reformate: 93, fccGasoline: 86, cokerNaphtha: 65, butane: 92 };
@@ -85,7 +85,7 @@ const POOLED = ['lnG', 'lnN', 'hnR', 'hnN', 'lcoD', 'lcoF', 'cgoF', 'cgoD', 'cnG
 
 /** Solves the day's plan. */
 export function planRefinery(inp: RefineryInputs = {}): RefineryPlan {
-  const cfg = inp.config ?? CALDER;
+  const cfg = inp.config ?? CORRAN;
   const cp = { ...CRUDE_PRICE, ...inp.crudePrice };
   const pp = { ...PRODUCT_PRICE, ...inp.productPrice };
   const cuts = inp.cuts ?? DEFAULT_CUTS;
@@ -322,7 +322,7 @@ export function marginPerBarrel(p: RefineryPlan): number {
  * solving again with that capacity raised.
  */
 export function shadowPrices(inp: RefineryInputs = {}, step = 1): Record<UnitId, number> {
-  const cfg = inp.config ?? CALDER;
+  const cfg = inp.config ?? CORRAN;
   const base = planRefinery(inp).margin;
   const units: UnitId[] = ['cdu', 'reformer', 'fcc', 'coker', 'dht'];
   return Object.fromEntries(

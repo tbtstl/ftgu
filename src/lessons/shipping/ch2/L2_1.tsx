@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
-  DataTable,
   FigRef,
   Figure,
   GRAPHIC,
@@ -70,13 +69,27 @@ export const NEO_BEST = (() => {
   return { loa: neo.maxLoa, beam: neo.maxBeam, draft, dwt: d.dwt };
 })();
 
-/** True for a bulk carrier that passes the Neopanamax locks fully laden with the most deadweight the sliders allow. */
+/** How close to the best the challenge asks for: half a percent of its deadweight, about 1,050 t. */
+export const NEO_TOLERANCE = 0.005;
+
+/** True for a bulk carrier that passes the Neopanamax locks fully laden within half a percent of the most deadweight the sliders allow. */
 export function neopanamaxSolved(s: DesignerState): boolean {
   if (s.kind !== 'bulk') return false;
   const d = designShip(s);
   const neo = checkPassages(d).find((c) => c.passage.id === 'neopanamax')!;
-  return neo.laden && d.dwt >= NEO_BEST.dwt - 10;
+  return neo.laden && d.dwt >= NEO_BEST.dwt * (1 - NEO_TOLERANCE);
 }
+
+/** The dimensions in which a design still has room under the Neopanamax limits, for the challenge's hint. */
+export function neopanamaxSlack(s: DesignerState): Array<'longer' | 'wider' | 'deeper'> {
+  const out: Array<'longer' | 'wider' | 'deeper'> = [];
+  if (s.loa < NEO_BEST.loa - 0.05) out.push('longer');
+  if (s.beam < NEO_BEST.beam - 0.005) out.push('wider');
+  if (s.draft < NEO_BEST.draft - 0.005) out.push('deeper');
+  return out;
+}
+
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 function resultText(c: PassageCheck, d: Design): string {
   if (!c.fits) return d.loa > c.passage.maxLoa + 1e-9 ? 'too long' : 'too wide';
@@ -85,11 +98,8 @@ function resultText(c: PassageCheck, d: Design): string {
   return `part-laden ${pct(c.cargoThrough / d.cargoTonnes)}`;
 }
 
-function limitText(p: (typeof PASSAGES)[number], beam: number): string {
-  const size = p.maxLoa < 400 ? `${fmt(p.maxLoa, 0)} × ${fmt(p.maxBeam, 1)}, ` : '';
-  const water = p.rho === RHO_FRESH ? ' fresh' : '';
-  return `${size}${fmt(allowedDraft(p, beam), 1)}${water}`;
-}
+/** A lock's chamber limits as drawn in the plan view's row label. */
+const sizeText = (p: (typeof PASSAGES)[number]) => `${fmt(p.maxLoa, Number.isInteger(p.maxLoa) ? 0 : 2)} × ${fmt(p.maxBeam, 2)} m`;
 
 /** Plan-view hull outline, stern at x, bow at x + len. */
 function planHull(x: number, cy: number, len: number, half: number, fine: boolean): string {
@@ -136,6 +146,10 @@ function family(k: number): Design {
 }
 const FAMILY = Array.from({ length: 41 }, (_, i) => family(i / 40));
 const ORE_SHIP = designShip({ kind: 'bulk', ...ORE });
+/** Top of the speed slider: Petrel, the smallest of the three, reaches her engine's MCR at about 14.7 knots. */
+export const SPEED_MAX = 14.5;
+/** The speeds on the slider, for the prose's range of savings. */
+const SPEEDS = Array.from({ length: Math.round((SPEED_MAX - 10) / 0.5) + 1 }, (_, i) => 10 + i * 0.5);
 /** A real ship as a design, with its own deadweight, cargo intake and engine. */
 const asDesign = (v: VesselClass): Design => ({ ...v, kind: 'bulk', cargoTonnes: v.dwt - v.consumables, capacity: v.dwt - v.consumables, capacityUnit: 't' });
 const NAMED = [
@@ -151,6 +165,16 @@ const VLCC_SUEZ = checkPassages(VLCC_SKETCH).find((c) => c.passage.id === 'suez'
 const CAPE_NEO = checkPassages(designShip({ kind: 'bulk', loa: ALBATROSS.loa, beam: ALBATROSS.beam, draft: ALBATROSS.designDraft })).find((c) => c.passage.id === 'neopanamax')!;
 const F13 = (d: Design) => fuelPerKiloTonneMile(d, 13);
 const HANDY13 = F13(asDesign(HANDYSIZE));
+/** How much less fuel per tonne-mile than Kestrel, at each speed on the slider: [lowest, highest]. */
+export const SAVING_RANGE = (() => {
+  const k = SPEEDS.map((v) => fuelPerKiloTonneMile(NAMED[1].d, v));
+  const span = (f: (v: number) => number) => {
+    const xs = SPEEDS.map((v, i) => 1 - f(v) / k[i]);
+    return [Math.min(...xs), Math.max(...xs)];
+  };
+  return { albatross: span((v) => fuelPerKiloTonneMile(NAMED[2].d, v)), ore: span((v) => fuelPerKiloTonneMile(ORE_SHIP, v)) };
+})();
+const pctRange = ([lo, hi]: number[]) => (pct(lo) === pct(hi) ? pct(lo) : `${fmt(lo * 100)}–${pct(hi)}`);
 
 export default function Lesson() {
   const ds = useScenario('designer', DESIGNER_DEFAULTS);
@@ -167,15 +191,18 @@ export default function Lesson() {
   const half = (s.beam / 2) * SS;
   const keelY = SWL + s.draft * SS;
   const deckY = SWL - (d.depth - s.draft) * SS;
+  // Suez and Malacca aren't drawn from above, so their verdicts sit on their draft lines.
   const limits = spread(
     [
       { id: 'panama', name: 'Panama, original', z: (12.04 * RHO_FRESH) / RHO_SEA },
       { id: 'neopanamax', name: 'Neopanamax', z: (15.24 * RHO_FRESH) / RHO_SEA },
       { id: 'suez', name: 'Suez', z: allowedDraft(PASSAGES[2], s.beam) },
       { id: 'malacca', name: 'Malacca', z: 20.5 },
-    ].map((l) => ({ ...l, y: SWL + l.z * SS, lineY: SWL + l.z * SS })),
+    ].map((l) => ({ ...l, y: SWL + l.z * SS, lineY: SWL + l.z * SS, check: l.id === 'suez' || l.id === 'malacca' ? checks.find((c) => c.passage.id === l.id) : undefined })),
     11,
   );
+  const verdictColor = (c: PassageCheck) => (!c.fits ? TEXT.red : c.laden ? TEXT.green : TEXT.orange);
+  const slack = neopanamaxSlack(s);
 
   const sc = useScenario('scale', { speed: 13 });
   const curve = useMemo(() => FAMILY.map((f) => fuelPerKiloTonneMile(f, sc.state.speed)), [sc.state.speed]);
@@ -198,9 +225,10 @@ export default function Lesson() {
       <P>
         Part of the answer is in the names. Many class names record a limit: the largest ship that fits a lock, a canal or a berth. The next demonstration
         sketches a ship from three numbers — its overall length, its <K tone="blue">beam</K> and its summer <K tone="blue">draft</K> — using proportions taken
-        from real ships of each kind: a block coefficient, a depth in proportion to the draft, and an empty weight in proportion to the hull’s volume. On the left
-        the design is drawn from above, to scale, inside the lock chambers of the Panama Canal; on the right is its midship section with the draft each passage
-        allows. Choose a kind of ship and one of its classes, or drag the dimensions yourself:
+        from real ships of each kind: a block coefficient, a depth in proportion to the draft, and an empty weight in proportion to the hull’s volume. At the top
+        the design is drawn from above, to scale, inside the lock chambers of the Panama Canal; at the lower right is its midship section with the draft each
+        passage allows. Beside each passage is its verdict: whether the design gets through fully laden, part-laden or not at all. Choose a kind of ship and
+        one of its classes, or drag the dimensions yourself:
       </P>
 
       <Figure name="Vessel Designer" scenario={ds}>
@@ -237,7 +265,7 @@ export default function Lesson() {
             return (
               <g key={r.id}>
                 <text x={PX} y={r.cy - 34} className="ax">
-                  {r.label}
+                  {r.label}: {sizeText(p)}
                 </text>
                 <text x={PX + 427 * PS} y={r.cy - 34} textAnchor="end" style={{ fontSize: 12, fontWeight: 600, fill: color }}>
                   {resultText(c, d)}
@@ -271,7 +299,7 @@ export default function Lesson() {
           </text>
           {/* midship section and draft limits */}
           <text x={LINES_X0 - 4} y={240} textAnchor="end" className="ax">
-            Midship section · draft limits as sea-water drafts
+            Midship section · draft limits in sea water
           </text>
           <rect x={LINES_X0} y={SWL} width={LINES_X1 - LINES_X0} height={316 - SWL} fill={SEA_FILL} opacity={0.7} />
           <path
@@ -287,6 +315,12 @@ export default function Lesson() {
               <line x1={LINES_X0} x2={LINES_X1} y1={l.lineY} y2={l.lineY} stroke="#5f5f5f" strokeDasharray="3 3" />
               <text x={LINES_X0 - 4} y={l.y + 4} textAnchor="end" className="ax">
                 {l.name} {fmt(l.z, 1)} m
+                {l.check && (
+                  <tspan style={{ fontWeight: 600, fill: verdictColor(l.check) }}>
+                    {' · '}
+                    {resultText(l.check, d)}
+                  </tspan>
+                )}
               </text>
             </g>
           ))}
@@ -304,21 +338,11 @@ export default function Lesson() {
         <Slider label="Length overall" tone="blue" value={s.loa} min={SLIDER.loa.min} max={SLIDER.loa.max} step={SLIDER.loa.step} onChange={(v) => ds.set({ loa: v })} display={m(s.loa, 1)} />
         <Slider label="Beam" tone="blue" value={s.beam} min={SLIDER.beam.min} max={SLIDER.beam.max} step={SLIDER.beam.step} onChange={(v) => ds.set({ beam: v })} display={m(s.beam)} />
         <Slider label="Summer draft" tone="blue" value={s.draft} min={SLIDER.draft.min} max={SLIDER.draft.max} step={SLIDER.draft.step} onChange={(v) => ds.set({ draft: v })} display={m(s.draft)} />
-        <DataTable
-          caption="Whether the design can pass each canal and strait, and how much of a full cargo it could carry through"
-          rows={checks}
-          rowKey={(c) => c.passage.id}
-          columns={[
-            { label: 'Passage', cell: (c) => c.passage.name.replace('Panama Canal, ', 'Panama, ') },
-            { label: 'Limits, m: length × beam, draft', cell: (c) => limitText(c.passage, s.beam), align: 'left' },
-            { label: 'This design', cell: (c) => resultText(c, d), align: 'right' },
-          ]}
-        />
       </Figure>
 
       <P>
         The designer starts with Kestrel’s dimensions. It estimates her deadweight at {t(KESTREL_SKETCH.dwt)}, within {pct(Math.abs(KESTREL_SKETCH.dwt / KESTREL.dwt - 1), 0)}{' '}
-        of her real {t(KESTREL.dwt)}: close enough to compare designs, though no substitute for a naval architect. She is {fmt(KESTREL.beam, 2)} meters wide, a
+        of her actual {t(KESTREL.dwt)}: close enough to compare designs, though no substitute for a naval architect. She is {fmt(KESTREL.beam, 2)} meters wide, a
         few centimeters inside the {m(32.31)} that the original Panama Canal locks allow, and at {fmt(KESTREL.loa)} meters she is far shorter than their limit of{' '}
         {m(294.13)}. Ships built to that beam were called <b>Panamax</b>, and for decades the number shaped ships in trade after trade.
       </P>
@@ -337,8 +361,8 @@ export default function Lesson() {
         <b>Neopanamax</b>. Choose Albatross’s class, the Capesize: she now fits by length and beam, but her {m(ALBATROSS.designDraft, 1)} draft is far too deep, so
         she could carry only {pct(CAPE_NEO.cargoThrough / designShip({ kind: 'bulk', loa: ALBATROSS.loa, beam: ALBATROSS.beam, draft: ALBATROSS.designDraft }).cargoTonnes)} of a
         full cargo through. Capesizes are named for the route they were built to take: too big for the Panama Canal and, when the name stuck, for a laden transit of
-        Suez, they sailed round the Cape of Good Hope or Cape Horn. Suez has since been deepened, and the designer lets a laden Capesize through, but the great
-        Capesize trade, iron ore from Brazil to China, still rounds the Cape of Good Hope because that is the shorter way.
+        Suez, they sailed round the Cape of Good Hope or Cape Horn. Suez has since been deepened, and the designer lets a laden Capesize through, but the
+        long-haul Capesize trade, iron ore from Brazil to China, still rounds the Cape of Good Hope because that is the shorter way.
       </P>
       <P>
         Switch to tankers. The <b>Suezmax</b> is the largest tanker that can transit the Suez Canal fully laden. The canal has no locks, so its limit is the depth
@@ -358,27 +382,32 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Vessel Designer"
-        question="Design the bulk carrier with the most deadweight that can pass through the Neopanamax locks fully laden."
+        question={`Design the bulk carrier with the most deadweight that can pass through the Neopanamax locks fully laden, to within half a percent. Before you drag, predict which of the locks’ three limits — length, beam and draft — she will touch.`}
         solved={solved}
         status={
           s.kind !== 'bulk'
-            ? 'Switch the kind of ship to a bulk carrier first.'
-            : !neo.fits
-              ? `At ${m(s.loa, 1)} by ${m(s.beam)}, the design doesn’t fit the Neopanamax locks.`
-              : !neo.laden
-                ? `It fits, but at ${m(s.draft)} it would draw ${m((s.draft * RHO_SEA) / RHO_FRESH)} in the locks’ fresh water, over the 15.24 m limit.`
-                : `It passes fully laden with ${t(d.dwt)} of deadweight. Can it carry more?`
+            ? 'Make your prediction, then switch the kind of ship to a bulk carrier.'
+            : s.loa === DESIGNER_DEFAULTS.loa && s.beam === DESIGNER_DEFAULTS.beam && s.draft === DESIGNER_DEFAULTS.draft
+              ? 'Make your prediction, then start from Kestrel’s dimensions and drag.'
+              : !neo.fits
+                ? s.loa > NEO_BEST.loa + 1e-9
+                  ? `At ${m(s.loa, 1)} she is too long: the locks take ships up to ${m(NEO_BEST.loa, 0)}.`
+                  : `At ${m(s.beam)} she is too wide: the locks take ships up to ${m(NEO_BEST.beam)}.`
+                : !neo.laden
+                  ? `She fits, but at ${m(s.draft)} she would draw ${m((s.draft * RHO_SEA) / RHO_FRESH)} in the locks’ fresh water, over the 15.24 m limit.`
+                  : `She passes fully laden with ${t(d.dwt)} of deadweight, but she could still be ${andList(slack)}.`
         }
-        success={`Solved. Deadweight grows with length, beam and draft alike, so the answer sits on every limit at once: ${m(NEO_BEST.loa, 0)} long, ${m(NEO_BEST.beam)} wide and a summer draft of ${m(NEO_BEST.draft)}, which becomes ${m(NEO_BEST.draft * RHO_SEA)} in the locks’ fresh water. One centimeter deeper and she would be over. She would carry ${t(NEO_BEST.dwt)} of deadweight, more than Albatross. Notice that the lock’s fresh water costs her ${fmt((15.24 - NEO_BEST.draft) * 100)} centimeters: at sea she floats well short of 15.24 m.`}
+        success={`Solved: ${t(d.dwt)}, within half a percent of the most the locks allow. Deadweight grows with length, beam and draft alike, so the biggest ship touches all three limits at once: ${m(NEO_BEST.loa, 0)} long, ${m(NEO_BEST.beam)} wide and a summer draft of ${m(NEO_BEST.draft)}, which becomes ${m(NEO_BEST.draft * RHO_SEA)} in the locks’ fresh water — one centimeter deeper and she would be over. She would carry ${t(NEO_BEST.dwt)}, more than Albatross. Notice that the fresh water costs her ${fmt((15.24 - NEO_BEST.draft) * 100)} centimeters: at sea she floats well short of 15.24 m.`}
       />
 
       <H2>What size buys</H2>
       <P>
         Why build ships so big that they press against every limit? Mostly because a big ship moves each tonne of cargo for less fuel. The water drags on a hull’s
         wetted surface, which grows with the square of its size, while the cargo it carries grows with the cube. In the next demonstration the curve is the
-        designer’s family of bulk carriers, from a Handysize of {fmt(SMALL.loa)} meters to an ore carrier {fmt(ORE.loa)} meters long, {fmt(ORE.beam)} wide and
-        drawing {fmt(ORE.draft)} meters — about the size of the 400,000-tonne ore carriers built for the Brazilian miner Vale, among the largest bulk carriers afloat.
-        The dots are Northwind’s three ships. The height is the fuel each burns, laden, to carry one tonne of cargo a thousand nautical miles. Change the speed:
+        designer’s family of bulk carriers, from a hull of a Handysize’s dimensions, {fmt(SMALL.loa)} meters long, to an ore carrier {fmt(ORE.loa)} meters
+        long, {fmt(ORE.beam)} wide and drawing {fmt(ORE.draft)} meters — about the size of the 400,000-tonne ore carriers built for the Brazilian miner Vale,
+        among the largest bulk carriers afloat. The dots are Northwind’s three ships. The height is the fuel each burns, laden, to carry one tonne of cargo a
+        thousand nautical miles. Change the speed:
       </P>
 
       <Figure name="Vessel Designer · economies of scale" scenario={sc}>
@@ -396,19 +425,12 @@ export default function Lesson() {
           xLabel="Deadweight, tonnes"
           yLabel="Fuel, kg per tonne of cargo per 1,000 nautical miles"
           markers={[
-            ...named.map((n, i) => ({ x: n.v.dwt, y: n.f, color: TEXT.gold, label: n.name, anchor: i === 0 ? ('end' as const) : ('start' as const), labelDy: -10 })),
-            { x: ORE_SHIP.dwt, y: oreF, color: TEXT.gray, label: 'ore carrier', anchor: 'end' as const, labelDy: -12 },
+            ...named.map((n, i) => ({ x: n.v.dwt, y: n.f, color: TEXT.gold, label: `${n.name} ${fmt(n.f, 2)}`, anchor: i === 0 ? ('end' as const) : ('start' as const), labelDy: -10 })),
+            { x: ORE_SHIP.dwt, y: oreF, color: TEXT.gray, label: `ore carrier ${fmt(oreF, 2)}`, anchor: 'end' as const, labelDy: -12 },
           ]}
           height={240}
         />
-        <Readouts
-          items={[
-            { label: 'Petrel, kg per 1,000 tonne-miles', value: fmt(named[0].f, 2), tone: 'gold' },
-            { label: 'Kestrel', value: fmt(named[1].f, 2), tone: 'gold' },
-            { label: 'Albatross', value: fmt(named[2].f, 2), tone: 'gold' },
-          ]}
-        />
-        <Slider label="Speed" tone="teal" value={sc.state.speed} min={10} max={15} step={0.5} onChange={(v) => sc.set({ speed: v })} display={`${fmt(sc.state.speed, 1)} kn`} />
+        <Slider label="Speed" tone="teal" value={sc.state.speed} min={10} max={SPEED_MAX} step={0.5} onChange={(v) => sc.set({ speed: v })} display={`${fmt(sc.state.speed, 1)} kn`} />
         <Caption>
           At {fmt(sc.state.speed, 1)} knots Albatross burns {pct(1 - named[2].f / named[1].f)} less fuel per tonne-mile than Kestrel, and the ore carrier{' '}
           {pct(1 - oreF / named[1].f)} less.
@@ -417,9 +439,12 @@ export default function Lesson() {
 
       <P>
         At 13 knots Kestrel burns {fmt(F13(NAMED[1].d), 2)} kilograms of fuel to move a tonne of cargo a thousand miles, Albatross {fmt(F13(NAMED[2].d), 2)} and the
-        ore carrier {fmt(F13(ORE_SHIP), 2)}. A real Handysize of {t(HANDYSIZE.dwt)} needs {fmt(HANDY13, 2)}, {fmt(HANDY13 / F13(NAMED[2].d), 1)} times as much as
-        Albatross. Speed matters in the same way it did for Kestrel alone: every ship’s fuel per tonne-mile rises steeply as it goes faster, but the big ones stay
-        cheaper at every speed. The other costs of a ship scale down too. A Capesize sails with roughly the same crew as a Handysize, about twenty people, and a
+        ore carrier {fmt(F13(ORE_SHIP), 2)}. Our Handysize class, at {t(HANDYSIZE.dwt)}, needs {fmt(HANDY13, 2)}, {fmt(HANDY13 / F13(NAMED[2].d), 1)} times as
+        much as Albatross. (The curve starts from a hull of her dimensions, but the designer, whose proportions come from bigger ships, credits it with{' '}
+        {t(FAMILY[0].dwt)}.) Speed matters in the same way it did for Kestrel alone: every ship’s fuel per tonne-mile rises steeply as it goes faster, but the
+        big ones stay cheaper at every speed, and by much the same share. From 10 to {fmt(SPEED_MAX, 1)} knots Albatross burns{' '}
+        {pctRange(SAVING_RANGE.albatross)} less than Kestrel and the ore carrier {pctRange(SAVING_RANGE.ore)} less: size takes a fixed fraction off the fuel
+        bill, whatever the speed. The other costs of a ship scale down too. A Capesize sails with roughly the same crew as a Handysize, about twenty people, and a
         bigger hull costs less to build per tonne it carries; we’ll put prices on a ship’s day in <a href={lessonHref('shipping/2.4')}>Lesson 2.4</a>.
       </P>
       <P>

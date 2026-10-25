@@ -37,15 +37,15 @@ const HIST = standardHistory().cls.kmax;
 const EARN_DAYS_PER_MONTH = (365 - OFF_HIRE_DAYS) / 12;
 
 const perDay = (x: number) => `${usd(x)}/day`;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** "April of Year 3" for a month of the history. */
+const when = (t: number) => `${MONTH_NAMES[t % 12]} of Year ${Math.floor(t / 12) + 1}`;
 const signedUsd = (x: number) => (x >= 0 ? `+${usd(x)}` : usd(x));
 const $m = (x: number) => `${x < 0 ? '−' : ''}$${fmt(Math.abs(x) / 1e6, 2)}m`;
 
 export interface LabState {
   /** Month of the history at whose end the charter is agreed. */
   start: number;
-  months: number;
-  /** Hire against the forward strip, %: −5 means 5% below it. */
-  margin: number;
   /** Extra ships delivered beyond what the market expected, %. */
   fleet: number;
   /** Cargo above or below what the market expected, %. */
@@ -55,10 +55,12 @@ export interface LabState {
   panama: boolean;
 }
 
-export const START: LabState = { start: 24, months: 12, margin: 0, fleet: 0, demand: 0, wait: 0, panama: false };
+export const START: LabState = { start: 24, fleet: 0, demand: 0, wait: 0, panama: false };
+/** Every charter here runs a year, at the forward strip's hire. */
+export const CHARTER_MONTHS = 12;
 
 /** Last start month that leaves room for a charter of this length inside the history. */
-export function lastStart(months: number): number {
+export function lastStart(months = CHARTER_MONTHS): number {
   return HISTORY_MONTHS - 1 - months;
 }
 
@@ -82,11 +84,12 @@ export function spotWith(month: number, d: Drivers | null): number {
 
 /** Northwind charters a Kamsarmax in and trades her spot: the period's result under the lab's settings. */
 export function charterIn(s: LabState) {
-  const start = Math.min(s.start, lastStart(s.months));
+  const months = CHARTER_MONTHS;
+  const start = Math.min(s.start, lastStart());
   const d = driversOf(s);
-  const spot = Array.from({ length: s.months }, (_, k) => spotWith(start + 1 + k, d));
-  const r = periodCharter('kmax', INDEX, start, s.months, -s.margin / 100, spot);
-  const actual = d ? Array.from({ length: s.months }, (_, k) => monthAverage(INDEX, start + 1 + k)) : r.spot;
+  const spot = Array.from({ length: months }, (_, k) => spotWith(start + 1 + k, d));
+  const r = periodCharter('kmax', INDEX, start, months, 0, spot);
+  const actual = d ? Array.from({ length: months }, (_, k) => monthAverage(INDEX, start + 1 + k)) : r.spot;
   return { ...r, start, actual, avgSpot: r.spot.reduce((a, b) => a + b, 0) / r.spot.length };
 }
 
@@ -98,13 +101,13 @@ export const FLEET_SURPRISE = 5;
  * 12-month charter-in at the forward strip's hire that still makes at least $1.5 million.
  */
 export function fleetSurpriseSolved(s: LabState): boolean {
-  if (s.months !== 12 || s.margin !== 0 || s.fleet !== FLEET_SURPRISE || s.demand !== 0 || s.wait !== 0 || s.panama) return false;
-  if (s.start > lastStart(12)) return false;
+  if (s.fleet !== FLEET_SURPRISE || s.demand !== 0 || s.wait !== 0 || s.panama) return false;
+  if (s.start > lastStart()) return false;
   return charterIn(s).total >= PROFIT_TARGET - 1e-6;
 }
 
 /** Every start month that solves the challenge. */
-export const SOLUTIONS = Array.from({ length: lastStart(12) + 1 }, (_, t) => t).filter((t) => fleetSurpriseSolved({ ...START, start: t, fleet: FLEET_SURPRISE }));
+export const SOLUTIONS = Array.from({ length: lastStart() + 1 }, (_, t) => t).filter((t) => fleetSurpriseSolved({ ...START, start: t, fleet: FLEET_SURPRISE }));
 
 // Numbers the prose quotes.
 const BASE = charterIn(START);
@@ -112,9 +115,22 @@ const BASE_FLEET5 = charterIn({ ...START, fleet: FLEET_SURPRISE });
 const RATIO_FLEET5 = HIST.map((_, t) => spotWith(t, { fleet: 1.05 }) / monthAverage(INDEX, t));
 const AVG_FLEET5 = RATIO_FLEET5.reduce((a, b) => a + b, 0) / RATIO_FLEET5.length;
 const FIRST = SOLUTIONS[0];
-const BOOK_AT_FIRST = HIST[FIRST].orderbook / HIST[FIRST].fleet;
-const DEMAND_GROWTH_FIRST = HIST[FIRST + 12].demand / HIST[FIRST].demand - 1;
-const FLEET_GROWTH_FIRST = HIST[FIRST + 12].fleet / HIST[FIRST].fleet - 1;
+/** Share of the fleet due from the shipyards within twelve months, at the end of a month. */
+export const dueWithinYear = (t: number) => HIST[t].bookByYear[0] / HIST[t].fleet;
+/** Cargo and fleet growth over the twelve months after a month. */
+export const growthAfter = (t: number) => ({ cargo: HIST[t + 12].demand / HIST[t].demand - 1, fleet: HIST[t + 12].fleet / HIST[t].fleet - 1 });
+const DUE_AT_FIRST = dueWithinYear(FIRST);
+const GROWTH_FIRST = growthAfter(FIRST);
+export const DUE_WINNERS = SOLUTIONS.map(dueWithinYear);
+export const DUE_AVERAGE = HIST.reduce((a, _, t) => a + dueWithinYear(t), 0) / HIST.length;
+/** The whole orderbook, as a share of the fleet. */
+const bookShare = (t: number) => HIST[t].orderbook / HIST[t].fleet;
+export const BOOK_WINNERS = SOLUTIONS.map(bookShare);
+export const BOOK_AVERAGE = HIST.reduce((a, _, t) => a + bookShare(t), 0) / HIST.length;
+/** The stretch around Year 8 when fewer than 1% of the fleet was due within a year (as the readout rounds it). */
+export const LOW_DUE_Y8 = Array.from({ length: 36 }, (_, k) => 66 + k).filter((t) => Math.round(dueWithinYear(t) * 1000) < 10);
+/** What a charter-in started in each of those months made as it happened, with no surprise at all. */
+export const LOW_DUE_Y8_RESULTS = LOW_DUE_Y8.map((t) => charterIn({ ...START, start: t }).total);
 
 // ---------------------------------------------------------------------------
 // Demonstration 2: chartering out at every start month.
@@ -140,11 +156,7 @@ const OUT_FLEET = charterOutSeries('fleet');
 const share = (a: number[]) => a.filter((x) => x > 0).length / a.length;
 const BEST_OUT = OUT_ACTUAL.indexOf(Math.max(...OUT_ACTUAL));
 const WORST_OUT = OUT_ACTUAL.indexOf(Math.min(...OUT_ACTUAL));
-const trailingSpot = (t: number) => {
-  const xs = Array.from({ length: 12 }, (_, j) => monthAverage(INDEX, Math.max(0, t - 11 + j)));
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-};
-const BOOM_FIX = 36;
+const BOOM_FIX = 27;
 const SLUMP_FIX = 96;
 const HIRE_BOOM = periodCharter('kmax', INDEX, BOOM_FIX, 12, 0).hire;
 const HIRE_SLUMP = periodCharter('kmax', INDEX, SLUMP_FIX, 12, 0).hire;
@@ -154,11 +166,14 @@ export default function Lesson() {
   const lab = useScenario('charter-in', START);
   const s = lab.state;
   const r = useMemo(() => charterIn(s), [s]);
-  const months = s.months;
+  const months = CHARTER_MONTHS;
   const changed = driversOf(s) !== null;
   const solved = fleetSurpriseSolved(s);
   const earnDays = months * EARN_DAYS_PER_MONTH;
   const above = r.spot.filter((x) => x > r.hire).length;
+  const due = dueWithinYear(r.start);
+  const grew = growthAfter(r.start);
+  const signedPct = (x: number) => `${x >= 0 ? '+' : '−'}${pct(Math.abs(x), 1)}`;
 
   // Demonstration 1's chart.
   const X0 = 64;
@@ -204,14 +219,15 @@ export default function Lesson() {
       <P>
         This lesson asks when chartering in pays, and what physical change would make it fail. The hire isn’t a guess pulled from the air. It comes from what the
         market expects, and in our model that is the forward curve of <a href={lessonHref('shipping/4.5')}>Lesson 4.5</a>: Northwind is offered the average of the
-        coming months’ forward prices, give or take a margin it negotiates. So chartering in is much like buying a strip of FFAs, with a real ship attached: Northwind
+        coming twelve months’ forward prices, the <b>forward strip</b>. So chartering in is much like buying a strip of FFAs, with a real ship attached: Northwind
         must actually trade her, and it pays the hire every day she isn’t off hire, whether or not she finds a cargo. All money here is simulated.
       </P>
       <P>
-        In the next demonstration, Northwind charters in a Kamsarmax at the end of a month of the simulated history and trades her on the spot market, earning the
-        Kamsarmax index each month. Choose when, for how long and at what hire. Then change the world the forward curve didn’t see coming: more ships delivered than
-        the market expected, more or less cargo, a queue at Qingdao, or the Panama Canal closed. Each month’s market is re-solved with the change, as in{' '}
-        <a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>, while the hire stays fixed:
+        In the next demonstration, Northwind charters in a Kamsarmax for a year at the end of a month of the simulated history and trades her on the spot market,
+        earning the Kamsarmax index each month. Choose when. The readouts show what the shipyards and the trades were about to do: the share of the fleet due from
+        the yards within the year, and how the cargo and the fleet actually grew over it. Then change the world the forward curve didn’t see coming: more ships
+        delivered than the market expected, more or less cargo, a queue at Qingdao, or the Panama Canal closed. Each month’s market is re-solved with the change,
+        as in <a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>, while the hire stays fixed:
       </P>
 
       <Figure name="Time Charter Arbitrage Lab" scenario={lab}>
@@ -264,26 +280,23 @@ export default function Lesson() {
           ))}
           {r.spot.map((_, k) => {
             const t = r.start + 1 + k;
-            const show = months <= 12 || k % 3 === 0;
-            return show ? (
+            return (
               <text key={k} className="ax ax-m" x={xc(k)} y={298}>
                 {MONTH_SHORT[t % 12]}
                 {t % 12 === 0 ? ` Y${Math.floor(t / 12) + 1}` : ''}
               </text>
-            ) : null;
+            );
           })}
         </svg>
         <Readouts
           items={[
-            { label: 'hire, fixed for the period', value: perDay(r.hire), tone: 'green' },
-            { label: 'spot, on average', value: perDay(r.avgSpot), tone: 'green' },
             { label: 'months spot beat the hire', value: `${above} of ${months}` },
-            { label: 'Northwind’s profit', value: signedUsd(r.total), tone: r.total >= 0 ? 'green' : 'red' },
+            { label: `of the fleet due from the yards within the year (average ${pct(DUE_AVERAGE, 1)})`, value: pct(due, 1), tone: 'teal' },
+            { label: 'cargo growth over the year, as it happened', value: signedPct(grew.cargo), tone: 'orange' },
+            { label: 'fleet growth over the year, as it happened', value: signedPct(grew.fleet), tone: 'teal' },
           ]}
         />
-        <Slider label="Charter agreed at the end of" tone="teal" value={Math.min(s.start, lastStart(months))} min={0} max={lastStart(months)} onChange={(v) => lab.set({ start: v })} display={monthLabel(Math.min(s.start, lastStart(months)))} />
-        <Slider label="Length of the charter" tone="teal" value={months} min={6} max={24} onChange={(v) => lab.set({ months: v })} display={`${months} months`} />
-        <Slider label="Hire against the forward strip" tone="green" value={s.margin} min={-10} max={10} onChange={(v) => lab.set({ margin: v })} display={`${s.margin > 0 ? '+' : s.margin < 0 ? '−' : ''}${Math.abs(s.margin)}%`} />
+        <Slider label="Charter agreed at the end of" tone="teal" value={r.start} min={0} max={lastStart()} onChange={(v) => lab.set({ start: v })} display={monthLabel(r.start)} />
         <Slider label="Extra ships delivered" value={s.fleet} min={0} max={10} onChange={(v) => lab.set({ fleet: v })} display={`+${s.fleet}% of the fleet`} />
         <Slider label="Cargo against expectations" tone="orange" value={s.demand} min={-10} max={10} onChange={(v) => lab.set({ demand: v })} display={`${s.demand > 0 ? '+' : s.demand < 0 ? '−' : ''}${Math.abs(s.demand)}%`} />
         <Slider label="Extra waiting at Qingdao" tone="teal" value={s.wait} min={0} max={5} step={0.5} onChange={(v) => lab.set({ wait: v })} display={`${fmt(s.wait, 1)} days a call`} />
@@ -304,7 +317,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At the start, Northwind charters in at the end of {monthLabel(START.start)} for a year. The Kamsarmax index is at {perDay(monthAverage(INDEX, START.start))}, and
+        At the start, Northwind charters in for a year at the end of {when(START.start)}. The Kamsarmax index is at {perDay(monthAverage(INDEX, START.start))}, and
         the forward strip offers a year’s hire at {perDay(BASE.hire)}: the curve expects the season’s swings and some drift back toward the long-run level. What
         actually comes is the boom of Year 3. Spot averages {perDay(BASE.avgSpot)}, and the charter makes {$m(BASE.total)}. The profit equation is as simple as an
         FFA’s: the average spot minus the hire, times the days she earns — {fmt(12 * EARN_DAYS_PER_MONTH)} in a year, once the {OFF_HIRE_DAYS} days a year she
@@ -323,36 +336,43 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Suppose ${FLEET_SURPRISE}% more ships arrive than the market expected, whenever Northwind charters in. With every other driver at zero and the hire at the forward strip, find a start month for a 12-month charter-in that still makes at least ${$m(PROFIT_TARGET)}.`}
+        question={`Suppose ${FLEET_SURPRISE}% more ships arrive than the market expected, whenever Northwind charters in. A charter-in survives that only if the market was about to tighten anyway. Predict first what the readouts should show at such a start — how much of the fleet is due from the yards within the year, and how the cargo grows against the fleet — then use them to find a start month that still makes at least ${$m(PROFIT_TARGET)}, with every other driver at zero.`}
         solved={solved}
         status={
-          s.months !== 12 || s.margin !== 0 || s.fleet !== FLEET_SURPRISE || s.demand !== 0 || s.wait !== 0 || s.panama
-            ? `Set a 12-month charter at the forward strip, ${FLEET_SURPRISE}% extra ships, and every other driver to zero.`
-            : `Chartered in at the end of ${monthLabel(r.start)}, she makes ${signedUsd(r.total)} with ${FLEET_SURPRISE}% more ships.`
+          s.fleet !== FLEET_SURPRISE || s.demand !== 0 || s.wait !== 0 || s.panama
+            ? `Set ${FLEET_SURPRISE}% extra ships, and every other driver to zero.`
+            : `Chartered in at the end of ${monthLabel(r.start)}, with ${pct(due, 1)} of the fleet due within the year, she makes ${signedUsd(r.total)} with ${FLEET_SURPRISE}% more ships.`
         }
-        success={`Solved. Only ${SOLUTIONS.length} start months survive the surprise: ${SOLUTIONS.map((t) => monthLabel(t)).join('; ')}. Each comes just before demand ran ahead of the fleet. At the end of ${monthLabel(FIRST)} the orderbook was only ${pct(BOOK_AT_FIRST)} of the fleet, so over the next year the fleet grew ${pct(FLEET_GROWTH_FIRST)} while the cargo grew ${pct(DEMAND_GROWTH_FIRST)}: the ships that could have spoiled the bet hadn’t been ordered.`}
+        success={`Solved. Only ${SOLUTIONS.length} start months survive the surprise: ${SOLUTIONS.map((t) => monthLabel(t)).join('; ')}. Each comes just before demand ran ahead of the fleet. At the end of ${when(FIRST)} only ${pct(DUE_AT_FIRST, 1)} of the fleet was due from the shipyards within a year, so over the next year the fleet grew ${pct(GROWTH_FIRST.fleet, 1)} while the cargo grew ${pct(GROWTH_FIRST.cargo, 1)}: the ships that could have spoiled the bet weren’t due in time.`}
       />
 
       <H2>Where the edge comes from</H2>
       <P>
         A charter-in made at the forward strip earns nothing on average if the strip is right. It pays only when the spot market beats what the market expected, so a
-        chartering strategy needs a physical reason the market is wrong: an orderbook too small to answer a rise in demand, a trade shifting to longer hauls, a port
-        or canal about to tighten. The challenge’s winners all sit where the orderbook was thin. That is the reasoning an operator has to be able to give before
-        taking a ship in, and <FigRef to="Time Charter Arbitrage Lab">the first demonstration</FigRef> lets you check it: if the reason is real, switching the
-        driver off should make the profit vanish.
+        chartering strategy needs a physical reason the market is wrong: too few ships due from the yards to answer a rise in demand, a trade shifting to longer
+        hauls, a port or canal about to tighten. The challenge’s winners share two things. Few ships were due within the year — between{' '}
+        {pct(Math.min(...DUE_WINNERS), 1)} and {pct(Math.max(...DUE_WINNERS), 1)} of the fleet, against {pct(DUE_AVERAGE, 1)} in an average month of the history — and
+        over that year the cargo grew faster than the fleet. The whole orderbook, with the ships due in later years, was not especially thin — between{' '}
+        {pct(Math.min(...BOOK_WINNERS), 1)} and {pct(Math.max(...BOOK_WINNERS), 1)} of the fleet, against {pct(BOOK_AVERAGE, 1)} on average. What matters to a
+        one-year charter is what arrives within the year. Few ships due is not enough on its own, though. From the end of {when(LOW_DUE_Y8[0])} to the end of{' '}
+        {when(LOW_DUE_Y8[LOW_DUE_Y8.length - 1])}, fewer than 1% of the fleet was due within a year, yet a charter-in started in any of those months lost money
+        even without the surprise — between {$m(-Math.max(...LOW_DUE_Y8_RESULTS))} and {$m(-Math.min(...LOW_DUE_Y8_RESULTS))} — because the cargo wasn’t
+        growing either. That is the reasoning an operator has to be able to give before taking a ship in, and <FigRef to="Time Charter Arbitrage Lab">the first demonstration</FigRef>{' '}
+        lets you check it: if the reason is real, switching the driver off should make the profit vanish.
       </P>
       <P>
         Two cautions. Our model’s forward curve is naive: it knows today’s rate and the season, and expects everything else to drift back toward a long-run level. It
         ignores the orderbook entirely. Real period rates are set by people who read the orderbook and the trade outlook, so the easy profits in this history would
-        be harder to find. And a charter-in is leveraged. Northwind commits a year of hire without owning a ship, so a bad year is paid in cash, month after month,
-        while the ship sails.
+        be harder to find — and the capstone in <a href={lessonHref('shipping/6.1')}>Chapter 6</a> prices period hire that way, from a fundamentals forecast that
+        counts the orderbook, as in <a href={lessonHref('shipping/5.1')}>Lesson 5.1</a>, rather than from the forward strip. And a charter-in is leveraged.
+        Northwind commits a year of hire without owning a ship, so a bad year is paid in cash, month after month, while the ship sails.
       </P>
 
       <H2>The owner’s side</H2>
       <P>
         For Northwind’s own Kestrel the question runs the other way: charter her out for a year, or keep trading her spot? In the next demonstration, each bar is what
-        chartering her out for twelve months from that month would have earned, compared with trading spot — the mirror image of a charter-in. The line above is the
-        Kamsarmax index. Change the world in the same ways and watch the bars move:
+        chartering her out for twelve months from that month would have earned, compared with trading spot — the mirror image of a charter-in. The line in the top
+        panel is the Kamsarmax index. Change the world in the same ways and watch the bars move:
       </P>
 
       <Figure name="Time Charter Arbitrage Lab · when to charter out" scenario={out}>
@@ -407,12 +427,12 @@ export default function Lesson() {
         disappoint, which is when ships ordered in the last boom are still arriving.
       </P>
       <P>
-        Notice, too, what the period market pays relative to spot. A year’s hire agreed at the end of {monthLabel(BOOM_FIX)}, near the top, was{' '}
-        {perDay(HIRE_BOOM)}, against {perDay(trailingSpot(BOOM_FIX))} for the previous twelve months’ spot; at the end of {monthLabel(SLUMP_FIX)}, deep in the slump,
-        it was {perDay(HIRE_SLUMP)} against {perDay(trailingSpot(SLUMP_FIX))}. Period charters pay less than recent spot in a boom and more in a slump, because the
-        curve expects both to pass. Switch to <b>5% more ships</b>: chartering out now beats spot from {pct(share(OUT_FLEET))} of the start months, because every year
-        is weaker than the curve expected. An owner who knows the fleet will grow faster than the market thinks should charter out; one who sees the orderbook thin
-        and the cargo growing should keep the ship on spot, or charter more in.
+        Notice, too, what the period market pays relative to spot. A year’s hire agreed at the end of {when(BOOM_FIX)}, at the top of that year’s boom, was{' '}
+        {perDay(HIRE_BOOM)}, while the index paid {perDay(MONTHLY[BOOM_FIX])} that month; at the end of {when(SLUMP_FIX)}, deep in the slump, it was{' '}
+        {perDay(HIRE_SLUMP)} against {perDay(MONTHLY[SLUMP_FIX])}. Period charters pay less than spot in a boom and more in a slump, because the curve expects both
+        to pass. Switch to <b>5% more ships</b>: chartering out now beats spot from {pct(share(OUT_FLEET))} of the start months, because every year
+        is weaker than the curve expected. An owner who knows the fleet will grow faster than the market thinks should charter out; one who sees few ships due and
+        the cargo growing should keep the ship on spot, or charter more in.
       </P>
       <P>
         So far every choice has been about time: when to commit, and for how long. The next lesson is about place. An empty ship in Qingdao can take a short cargo

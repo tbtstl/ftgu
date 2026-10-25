@@ -29,6 +29,7 @@ import {
 import { COPPER_OHM_CM, SI_ATOMS, carriers, currentDensity, diodeCurrent, driftVelocity, type DopantKind } from '../../../engines/compute/semiconductor';
 import { builtInPotential, depletionWidthUm } from '../../../engines/compute/junction';
 import { rng } from '../../../model/random';
+import { useRevealed } from './reveal';
 
 // ---------------------------------------------------------------------------
 // Number formatting for quantities that span twenty orders of magnitude.
@@ -106,7 +107,7 @@ export function conductivityGain(kind: DopantKind, logDoping: number): number {
   return carriers(kind, kind === 'none' ? 0 : 10 ** logDoping).sigma / PURE.sigma;
 }
 
-/** The challenge: holes carry the current, and the sample conducts at least a million times better than pure silicon. */
+/** Holes carry the current, and the sample conducts at least a million times better than pure silicon. */
 export function holesMillionSolved(kind: DopantKind, logDoping: number): boolean {
   if (kind !== 'p') return false;
   const c = carriers('p', 10 ** logDoping);
@@ -116,6 +117,18 @@ export function holesMillionSolved(kind: DopantKind, logDoping: number): boolean
 /** The least doping on the slider's grid that makes a sample of this kind conduct a million times better than pure silicon. */
 export function leastDopingForMillion(kind: 'n' | 'p'): number {
   return DOPING_GRID.find((e) => conductivityGain(kind, e) >= 1e6) ?? DOPING_MAX;
+}
+
+/** The first demonstration starts with pure silicon, its slider at 10¹⁶ and a field of 100 V/cm. */
+export const CRYSTAL_DEFAULTS = { kind: 'none' as DopantKind, logDoping: 16, field: 100 };
+
+/**
+ * The challenge: the least boron, on the slider's grid, that makes silicon conduct a million times
+ * better than pure silicon. Phosphorus gets there at 2 × 10¹⁶; holes are about a third as mobile
+ * as electrons, so boron needs about three times as much.
+ */
+export function leastBoronSolved(kind: DopantKind, logDoping: number): boolean {
+  return holesMillionSolved(kind, logDoping) && Math.abs(logDoping - leastDopingForMillion('p')) < 1e-6;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +222,7 @@ const JN_SPOTS = Array.from({ length: 40 }, (_, i) => ({ x: 52 + i * 13, y: 72 +
 
 export default function Lesson() {
   const play = usePlay(true);
-  const s = useScenario('crystal', { kind: 'none' as DopantKind, logDoping: 16, field: 100 });
+  const s = useScenario('crystal', CRYSTAL_DEFAULTS);
   const { kind, logDoping, field } = s.state;
   const doping = kind === 'none' ? 0 : 10 ** logDoping;
   const c = carriers(kind, doping);
@@ -227,22 +240,29 @@ export default function Lesson() {
   const dopantSites = useMemo(() => new Set(DOPANT_ORDER.slice(0, nDopants)), [nDopants]);
   const nE = dotCount(c.n);
   const nH = dotCount(c.p);
-  const solved = holesMillionSolved(kind, logDoping);
+  const solved = leastBoronSolved(kind, logDoping);
+  // Boron's gain stays out of the caption until the challenge has been solved.
+  const revealed = useRevealed('compute/1.1', 'a', solved);
   const leastP = leastDopingForMillion('p');
   const leastN = leastDopingForMillion('n');
 
   const majority = c.majority === 'electrons' ? 'electrons' : c.majority === 'holes' ? 'holes' : null;
+  const showGain = kind === 'n' || revealed;
   const caption =
     kind === 'none'
       ? `Pure silicon: heat frees one electron, and leaves one hole, for every ${fmt(round2(SI_ATOMS / c.n) / 1e12)} trillion atoms. Resistivity ${rhoText(c.rho)} Ω·cm.`
-      : `${kind === 'n' ? 'Phosphorus' : 'Boron'} at ${oneIn(SI_ATOMS / doping)} atoms: ${majority === 'electrons' ? 'free electrons' : 'holes'} outnumber ${majority === 'electrons' ? 'holes' : 'free electrons'} ${sci(Math.max(c.n, c.p) / Math.min(c.n, c.p))} to one, and the crystal conducts ${times(gain)} times better than pure silicon.`;
+      : `${kind === 'n' ? 'Phosphorus' : 'Boron'} at ${oneIn(SI_ATOMS / doping)} atoms: ${majority === 'electrons' ? 'free electrons' : 'holes'} outnumber ${majority === 'electrons' ? 'holes' : 'free electrons'} ${sci(Math.max(c.n, c.p) / Math.min(c.n, c.p))} to one${
+          showGain ? `, and the crystal conducts ${times(gain)} times better than pure silicon` : ''
+        }.`;
 
   const status =
     kind !== 'p'
       ? kind === 'n'
         ? 'Phosphorus gives free electrons, so electrons carry this current. Which impurity makes holes?'
         : 'Pure silicon carries current on equal numbers of electrons and holes. Add an impurity.'
-      : `Boron at ${sci(doping)} per cm³ conducts ${times(gain)} times better than pure silicon.`;
+      : gain < 1e6
+        ? `Boron at ${sci(doping)} per cm³ doesn’t reach a millionfold yet.`
+        : `Boron at ${sci(doping)} per cm³ reaches a millionfold. Would less still do?`;
 
   // ---- The junction.
   const jn = useScenario('junction', { bias: 0 });
@@ -282,14 +302,17 @@ export default function Lesson() {
         crystal together, drawn as lines in the next demonstration, and an electron locked in a bond can’t carry current. Heat shakes the crystal, though, and now and
         then it shakes an electron loose. The <K c="current">free electron</K> can wander through the crystal, and so can the gap it leaves behind: an electron from a
         neighboring bond can hop into the gap, which moves the gap the other way. That gap, a <K c="current">hole</K>, behaves like a mobile positive charge. Freeing
-        an electron takes 1.12 electron-volts of energy — silicon’s <b>band gap</b> — and at room temperature so few electrons get that much that pure silicon holds
+        an electron takes 1.12 electron-volts of energy — silicon’s <b>band gap</b>, where an electron-volt is the energy one electron gains crossing a voltage of one
+        volt — and at room temperature so few electrons get that much that pure silicon holds
         only about {sci(PURE.n)} free electrons per cubic centimeter, and as many holes. A cubic centimeter of silicon contains {sci(SI_ATOMS)} atoms, so that is one free electron for every {fmt(SI_ATOMS / PURE.n / 1e12)} trillion atoms.
       </P>
       <P>
         In the next demonstration, a small patch of the crystal sits between two metal plates. Free electrons are filled dots and holes are open circles. No drawing
         can show one carrier per five trillion atoms, so the dots use a logarithmic scale: two of each kind stand for {sci(PURE.n)} per cubic centimeter, and every two
-        more mean ten times as many. Choose an impurity to add, set how much of it, and apply an <K c="voltage">electric field</K> — the voltage across the plates for
-        every centimeter between them:
+        more mean ten times as many. Impurity atoms are drawn into the lattice on the same scale, so the drawing exaggerates them too: at {sci(1e19)} per cubic
+        centimeter, {dotCount(1e19)} of the {ATOMS.length} atoms drawn are impurities, though in the real crystal only {oneIn(SI_ATOMS / 1e19)} would be. The
+        equation under the controls multiplies the two concentrations per cubic centimeter: n of free electrons and p of holes. Choose an impurity to add, set how
+        much of it, and apply an <K c="voltage">electric field</K> — the voltage across the plates for every centimeter between them:
       </P>
 
       <Figure name="Silicon Physics Explorer" scenario={s} play={play}>
@@ -371,9 +394,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'free electrons per cm³', value: sci(c.n) },
-            { label: 'holes per cm³', value: sci(c.p) },
             { label: 'resistivity', value: `${rhoText(c.rho)} Ω·cm`, tone: 'violet' },
+            { label: 'mobility, electrons · holes', value: `${fmt(c.mobilityN)} · ${fmt(c.mobilityP)} cm²/V·s` },
             { label: 'current through each cm²', value: J > 0 ? si(J, 'A') : '0 A', tone: 'orange' },
           ]}
         />
@@ -408,7 +430,8 @@ export default function Lesson() {
         Start with pure silicon. The field drifts the few carriers it has: electrons toward the positive plate, against the field, and holes toward the negative plate,
         with it. Opposite charges moving in opposite directions make current in the same direction, so both kinds add to it. There just aren’t many of them. The{' '}
         <K c="resistance">resistivity</K> of pure silicon — the resistance of a one-centimeter cube of it — is about {rhoText(PURE.rho)} Ω·cm. Copper’s is{' '}
-        {COPPER_OHM_CM.toFixed(7)} Ω·cm.
+        {sci(COPPER_OHM_CM)} Ω·cm. Double the field and the current through each square centimeter very nearly doubles too: that is Ohm’s law, with resistivity
+        playing the part of resistance.
       </P>
       <P>
         Now choose phosphorus. A phosphorus atom has five outer electrons. Four go into bonds with its silicon neighbors, and the fifth is held so loosely that at room
@@ -423,11 +446,12 @@ export default function Lesson() {
         Watch the holes as you add phosphorus. Rather than staying at {sci(PURE.p)}, they all but disappear: with {sci(1e16)} phosphorus atoms per cubic centimeter,
         only {sci(carriers('n', 1e16).p)} holes remain. With so many free electrons about, any hole that heat creates is soon filled, and the balance between heat making
         pairs and electrons filling holes keeps the product of the concentrations fixed at n<Sub>i</Sub>² = {sci(PURE.n * PURE.p)} per cm⁶, whatever the doping. This is the <b>law of mass action</b>. The
-        carrier the impurity supplies is the <b>majority carrier</b>; the other is reduced to a trace.
+        carrier the impurity supplies is the <b>majority carrier</b>; the other, reduced to a trace, is the <b>minority carrier</b> — holes in n-type silicon,
+        free electrons in p-type.
       </P>
       <P>
         Doping has a cost. The ions it leaves behind are charged, and they deflect passing carriers, so the more impurity there is, the more slowly carriers drift. A
-        carrier’s drift speed per unit of field is its <b>mobility</b>. In lightly doped silicon an electron’s is about {fmt(round2(PURE.mobilityN))} cm²/V·s, so a
+        carrier’s drift speed per unit of field is its <b>mobility</b>, which the demonstration shows for both carriers. In lightly doped silicon an electron’s is about {fmt(round2(PURE.mobilityN))} cm²/V·s, so a
         field of 100 V/cm moves it at about {(driftVelocity(PURE.mobilityN, 100) / 1e5).toFixed(1)} kilometers per second; at {sci(1e19)} phosphorus atoms per cubic
         centimeter, it falls to {fmt(carriers('n', 1e19).mobilityN)}. Holes are slower than electrons at any doping — about {fmt(round2(PURE.mobilityP))} cm²/V·s in
         lightly doped silicon. A hole’s motion is really a relay of bound electrons, and in silicon that relay behaves like a heavier particle than a free electron. And even heavily doped silicon is a poor conductor next to copper: at{' '}
@@ -437,10 +461,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Make silicon in which holes carry the current and which conducts at least a million times better than pure silicon."
+        question={`Phosphorus makes silicon conduct a million times better than pure silicon from ${sci(10 ** leastN)} atoms per cm³. Predict first, from the two mobilities: will boron need more or less to do the same, and about how much? Then choose boron and find the least of it, on the slider, that conducts a millionfold better. Boron’s gain stays out of the caption until you do.`}
         solved={solved}
         status={status}
-        success={`Solved. Boron supplies holes, and on this slider it takes at least ${sci(10 ** leastP)} atoms per cm³ — ${oneIn(SI_ATOMS / 10 ** leastP)} — to reach a millionfold. Phosphorus gets there with less, from ${sci(10 ** leastN)} per cm³, because electrons are more mobile than holes: p-type silicon needs more impurity for the same conductivity.`}
+        success={`Solved. Boron needs ${sci(10 ** leastP)} atoms per cm³ — ${oneIn(SI_ATOMS / 10 ** leastP)} — about three times as much as phosphorus, and conducts ${times(conductivityGain('p', leastP))} times better than pure silicon. A hole carries the same charge as a free electron but drifts about a third as fast (${fmt(carriers('p', 10 ** leastP).mobilityP)} against ${fmt(carriers('n', 10 ** leastN).mobilityN)} cm²/V·s at these dopings), so it takes about three times as many holes to carry the same current.`}
       />
 
       <H2>Two kinds of silicon, joined</H2>
@@ -541,13 +565,7 @@ export default function Lesson() {
             bias
           </text>
         </svg>
-        <Readouts
-          items={[
-            { label: 'current', value: amps(I), tone: 'orange' },
-            { label: 'barrier left', value: `${barrier.toFixed(2)} V`, tone: 'blue' },
-            { label: 'depletion region', value: `${W.toFixed(2)} µm` },
-          ]}
-        />
+        <Readouts items={[{ label: 'barrier left', value: `${barrier.toFixed(2)} V`, tone: 'blue' }]} />
         <Slider
           label="Bias on the p side"
           tone="blue"

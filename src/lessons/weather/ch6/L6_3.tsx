@@ -25,6 +25,7 @@ import {
   scale,
   signed,
   tint,
+  usd,
   useScenario,
 } from '../../../framework';
 import { dayInfo, ninoForecast, type WorldKnobs } from '../../../model/weather/archive';
@@ -34,7 +35,8 @@ import { farmYears, summarize, windYears, type Summary } from '../../../engines/
 import { exposureSeries, hedgeFit, hedgedSpread, type BusinessKind, type ExposureSeries } from '../../../engines/weather/exposureFit';
 import { expectedIndex } from '../../../engines/weather/market';
 import { CME_TICK, WINTER_SEASON, contractSpan, indexDistribution, monthContract, quantile, settledIndex, type ContractSpec } from '../../../engines/weather/pricing';
-import { REGION_DEFAULTS, isCalder, regionKnobs, resetCapstone, updateCapstone, useWeatherCapstone, type RegionSettings } from '../shared/capstone';
+import { DESK_RANGE, REGION_DEFAULTS, confirmResetPart, isFenwick, regionKnobs, updateCapstone, useWeatherCapstone, type RegionSettings } from '../shared/capstone';
+import { CapstoneStrip } from '../shared/CapstoneStrip';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -119,26 +121,35 @@ export function planMargin(o: Outlook, scaleFactor: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// The first challenge: the largest utility whose 1-in-20 season, judged on October 31, falls
-// no more than $10 million short of plan.
+// The first challenge: in winter 20, the largest utility whose 1-in-20 season, judged at the close
+// of October 31, falls no more than $10 million short of plan. The reader predicts it from the
+// shortfall at × 1, then checks.
 
 export const BOARD_LIMIT = 10_000_000;
 export const SCALE_MIN = 0.25;
 export const SCALE_MAX = 2;
 export const SCALE_STEP = 0.05;
+/** The valuation date of the board's limit: the close of October 31, the day before the season. */
+export const BOARD_OFFSET = -1;
 
 /** The 1-in-20 shortfall against plan at scale 1, $ (negative if even the 1-in-20 beats the plan). */
 export function shortfallAtUnit(o: Outlook): number {
   return -missOf(o, o.p5, 1);
 }
 
-export function boardSolved(st: { kind: BusinessKind; scale: number; period: Period; offset: number }, o: Outlook): boolean {
-  if (st.kind !== 'utility' || st.period !== 'season' || st.offset !== -1) return false;
+/** The largest size on the slider's grid whose 1-in-20 shortfall stays within the limit (NaN if even the smallest breaks it). */
+export function boardAnswer(unit: number): number {
+  if (unit <= 0) return SCALE_MAX;
+  const k = Math.floor((BOARD_LIMIT / unit) / SCALE_STEP + 1e-9) * SCALE_STEP;
+  if (k < SCALE_MIN - 1e-9) return NaN;
+  return Math.min(SCALE_MAX, Math.round(k * 100) / 100);
+}
+
+export function boardSolved(st: { kind: BusinessKind; scale: number; period: Period; winter: number; offset: number }, o: Outlook): boolean {
+  if (st.kind !== 'utility' || st.period !== 'season' || st.winter !== STORY_WINTER || st.offset !== BOARD_OFFSET) return false;
   const unit = shortfallAtUnit(o);
   if (unit <= 0) return false;
-  const within = st.scale * unit <= BOARD_LIMIT + 1e-6;
-  const nextOver = st.scale + SCALE_STEP > SCALE_MAX + 1e-9 || (st.scale + SCALE_STEP) * unit > BOARD_LIMIT;
-  return within && nextOver;
+  return Math.abs(st.scale - boardAnswer(unit)) < 1e-9;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +169,8 @@ export function archiveResults(kind: 'wind' | 'farm', region: RegionSettings): n
 // ---------------------------------------------------------------------------
 // The second challenge: the number of strips, to the nearest hundred, with the smallest spread.
 
-export const STRIPS_MAX = 6000;
-export const STRIPS_STEP = 100;
+export const STRIPS_MAX = DESK_RANGE.strips.max;
+export const STRIPS_STEP = DESK_RANGE.strips.step;
 
 export function bestStripsOnGrid(s: ExposureSeries): number {
   let best = 0;
@@ -182,7 +193,7 @@ export function stripsSolved(kind: BusinessKind, strips: number, s: ExposureSeri
 // Drawing.
 
 const BUSINESS_LABEL: Record<BusinessKind, string> = {
-  utility: 'Calder Gas & Light',
+  utility: 'Fenwick Gas & Light',
   wind: 'Hollin Ridge wind farm',
   farm: 'Marlow corn farm',
 };
@@ -340,7 +351,7 @@ function ArchiveChart({ results, label }: { results: number[]; label: string }) 
   );
 }
 
-function HedgeChart({ s, strips, best, label }: { s: ExposureSeries; strips: number; best: number; label: string }) {
+function HedgeChart({ s, strips, best, label }: { s: ExposureSeries; strips: number; best: number | null; label: string }) {
   const fit = hedgeFit(s);
   const meanC = s.cash.reduce((a, b) => a + b, 0) / s.cash.length;
   const meanH = s.hdd.reduce((a, b) => a + b, 0) / s.hdd.length;
@@ -390,20 +401,20 @@ function HedgeChart({ s, strips, best, label }: { s: ExposureSeries; strips: num
         </text>
       ))}
       <text className="ax ax-e" x={HX1} y={361}>
-        strips · least spread at {fmt(best)}
+        {best === null ? 'strips sold' : `strips · least spread at ${fmt(best)}`}
       </text>
     </svg>
   );
 }
 
 function regionText(r: RegionSettings): string {
-  if (isCalder(r)) return 'Calder Bay’s own climate, the starting region';
+  if (isFenwick(r)) return 'Fenwick Bay’s own climate, the starting region';
   return `your region from Lesson 6.1: ${fmt(r.latitude, 1)}° N, continentality ${fmt(r.continentality, 2)}, ${fmt(r.elevation)} m up, ENSO’s pull ${fmt(r.ensoF, 1)} °F per °C, variability × ${fmt(r.variability, 2)}, warming ${fmt(r.trend, 2)} °F a year`;
 }
 
-// Numbers the prose quotes: always Calder Bay's own climate, winter 20.
-const CALDER_KEY = JSON.stringify(REGION_DEFAULTS);
-const CALDER_KNOBS = regionKnobs(REGION_DEFAULTS);
+// Numbers the prose quotes: always Fenwick Bay's own climate, winter 20.
+const FENWICK_KEY = JSON.stringify(REGION_DEFAULTS);
+const FENWICK_KNOBS = regionKnobs(REGION_DEFAULTS);
 export const STORY_WINTER = 20;
 
 export default function Lesson() {
@@ -423,8 +434,12 @@ export default function Lesson() {
   const dOffset = useDeferredValue(offset);
   const dKey = useDeferredValue(regionKey);
   const o = useMemo(() => outlook(dPeriod, dWinter, Math.min(dOffset, periodDays(dPeriod) - 1), dKey === regionKey ? knobs : regionKnobs(JSON.parse(dKey)), dKey), [dPeriod, dWinter, dOffset, dKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const solved = boardSolved({ kind, scale: k, period: dPeriod, offset: dOffset }, o);
-  const unitShort = shortfallAtUnit(o);
+  const solved = boardSolved({ kind, scale: k, period: dPeriod, winter: dWinter, offset: dOffset }, o);
+  // The board's view, whatever the figure shows: winter 20, the close of October 31, at × 1.
+  const board = useMemo(() => outlook('season', STORY_WINTER, BOARD_OFFSET, knobs, regionKey), [knobs, regionKey]);
+  const unitShort = shortfallAtUnit(board);
+  const answer = boardAnswer(unitShort);
+  const onBoardView = dPeriod === 'season' && dWinter === STORY_WINTER && dOffset === BOARD_OFFSET;
 
   const archiveRes = kind === 'utility' ? [] : archiveResults(kind, region);
   const archiveSum: Summary | null = kind === 'utility' ? null : summarize(archiveRes.map((r) => r * k));
@@ -436,10 +451,12 @@ export default function Lesson() {
   const best = useMemo(() => bestStripsOnGrid(series), [series]);
   const spreadNow = hedgedSpread(series, strips);
   const solved2 = stripsSolved(kind, strips, series);
+  // The minimum-variance answer stays hidden until the second challenge is solved.
+  const reveal = solved2;
 
-  // The story: Calder Bay's own climate, winter 20, at scale 1.
+  // The story: Fenwick Bay's own climate, winter 20, at scale 1.
   const story = useMemo(() => {
-    const at = (off: number) => outlook('season', STORY_WINTER, off, CALDER_KNOBS, CALDER_KEY);
+    const at = (off: number) => outlook('season', STORY_WINTER, off, FENWICK_KNOBS, FENWICK_KEY);
     const early = at(-LEAD_DAYS);
     const eve = at(-1);
     const dec1 = at(30);
@@ -448,9 +465,9 @@ export default function Lesson() {
     const issue = dayInfo(start - LEAD_DAYS);
     const janAhead = (STORY_WINTER + 1 - issue.year) * 12 - issue.month;
     const nino = ninoForecast(issue.year, issue.month, janAhead);
-    const util = exposureSeries('utility', 1, CALDER_KNOBS, `utility|${CALDER_KEY}`);
-    const wind = exposureSeries('wind', 1, CALDER_KNOBS, `wind|${CALDER_KEY}`);
-    const farm = exposureSeries('farm', 1, CALDER_KNOBS, `farm|${CALDER_KEY}`);
+    const util = exposureSeries('utility', 1, FENWICK_KNOBS, `utility|${FENWICK_KEY}`);
+    const wind = exposureSeries('wind', 1, FENWICK_KNOBS, `wind|${FENWICK_KEY}`);
+    const farm = exposureSeries('farm', 1, FENWICK_KNOBS, `farm|${FENWICK_KEY}`);
     const north = exposureSeries('utility', 1, regionKnobs({ ...REGION_DEFAULTS, latitude: 47, continentality: 1, elevation: 300 }), 'utility|story-north');
     const south = exposureSeries('utility', 1, regionKnobs({ ...REGION_DEFAULTS, latitude: 30, continentality: 0.3 }), 'utility|story-south');
     return {
@@ -479,7 +496,7 @@ export default function Lesson() {
       value={kind}
       onChange={setKind}
       options={[
-        { value: 'utility', label: 'Calder Gas & Light' },
+        { value: 'utility', label: 'Fenwick Gas & Light' },
         { value: 'wind', label: 'Hollin Ridge wind' },
         { value: 'farm', label: 'Marlow corn' },
       ]}
@@ -495,6 +512,7 @@ export default function Lesson() {
 
   return (
     <LessonPage id="weather/6.3">
+      <CapstoneStrip parts={['region', 'business']} />
       <P>
         <a href={lessonHref('weather/6.1')}>Lesson 6.1</a> built a region and <a href={lessonHref('weather/6.2')}>Lesson 6.2</a> forecast its weather. A forecast is
         only half of what a business needs. The other half is the answer to the question a finance department asks every autumn: what will this winter do to us?{' '}
@@ -503,16 +521,18 @@ export default function Lesson() {
         a contract.
       </P>
       <P>
-        Nothing in it is new. The region in play is {regionText(region)}; change it in Lesson 6.1 and every number here follows. The weather comes from the course’s
-        simulated archive, and the businesses are simulated too. The one choice that belongs to this lesson is the business itself: which of the region’s three to
+        Nothing in it is new. The region in play is {regionText(region)}; change it in Lesson 6.1 and every number here follows. Every forecast in this lesson, and
+        in the rest of the capstone, is the calibrated model’s — the forecaster Lesson 6.2 found worth trusting — wherever you left your own forecaster’s sliders.
+        The weather comes from the course’s simulated archive, and the businesses are simulated too. The one choice that belongs to this lesson is the business itself: which of the region’s three to
         follow, and how big it is. The capstone keeps that choice, and the trading desk of the next lesson will hedge whatever you leave here.
       </P>
       <P>
-        Start with Calder Gas &amp; Light. <a href={lessonHref('weather/4.1')}>Lesson 4.1</a> gave its rule: it delivers {fmt(UTILITY.baseLoad)} MMBtu of gas a day
+        Start with Fenwick Gas &amp; Light. <a href={lessonHref('weather/4.1')}>Lesson 4.1</a> gave its rule: it delivers {fmt(UTILITY.baseLoad)} MMBtu of gas a day
         plus {fmt(UTILITY.perHdd)} MMBtu for every <K tone={WX.index}>heating degree day</K>, and keeps ${UTILITY.margin} on each. So every degree day is worth{' '}
         ${fmt(DOLLARS_PER_HDD)} of <K tone={WX.money}>margin</K>, and the distribution of the winter’s margin is the distribution of its degree-day index, rescaled.
         (The windy days of Lesson 4.5 add a little that the index can’t see; we’ll come back to them.) The utility plans its winter on the climate alone — the
-        degree days the region’s normal would bring, before any forecast — and what it risks is the miss against that plan. In the next demonstration, each bar is
+        degree days the region’s normal and its warming trend would bring, with no forecast and no view of the Pacific — and what it risks is the miss against
+        that <b>plan</b>. In the next demonstration, each bar is
         a share of the simulated outcomes for the utility’s margin as known on the chosen date, measured from the plan; the red bars are the worst twentieth. The
         strip underneath says where the period’s days come from on that date: settled already, forecast, or still climate. Choose the business, its size, the
         period, the winter and the date:
@@ -521,8 +541,8 @@ export default function Lesson() {
       <Figure
         name="Weather Exposure Engine"
         onReset={() => {
-          resetCapstone('business');
-          v.reset();
+          // The lesson's own part, the business, asks first if it has been changed.
+          if (confirmResetPart('business')) v.reset();
         }}
       >
         {kindSegment}
@@ -565,8 +585,7 @@ export default function Lesson() {
             <Slider label="Size of the utility" tone={WX.money} value={k} min={SCALE_MIN} max={SCALE_MAX} step={SCALE_STEP} onChange={setScale} display={`× ${fmt(k, 2)}`} />
             <Checkbox label="Show how it settled" checked={show} onChange={(c) => v.set({ show: c })} />
             <Caption>
-              On {date}, {o.daysRealized} of the {o.days} days are settled, the forecast reaches {o.daysForecast}, and {o.daysClimate} are still climate. The plan is{' '}
-              {fmt(o.plan)} degree days; the outlook is {fmt(o.mean)} ± {fmt(o.sd)}.
+              The plan is {fmt(o.plan)} degree days; on {date} the outlook is {fmt(o.mean)} ± {fmt(o.sd)}.
             </Caption>
           </>
         ) : (
@@ -594,7 +613,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        In Calder Bay’s own climate, follow winter {STORY_WINTER}–{STORY_WINTER + 1}. Its plan is {fmt(story.early.plan)} degree days, a margin of{' '}
+        In Fenwick Bay’s own climate, follow winter {STORY_WINTER}–{STORY_WINTER + 1}. Its plan is {fmt(story.early.plan)} degree days, a margin of{' '}
         {millions(planMargin(story.early, 1))}. Sixty days before November no forecast reaches the season, yet the outlook already sits{' '}
         {signedMillions(missOf(story.early, story.early.mean, 1))} from plan: that autumn the Pacific was heading for a La Niña, about {fmt(story.nino, 1)} °C, and{' '}
         <a href={lessonHref('weather/2.4')}>Lesson 2.4</a> showed what that does to the region’s winters. The spread is {millions(DOLLARS_PER_HDD * story.early.sd)}, and
@@ -613,18 +632,18 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`The utility’s board will accept a 1-in-20 heating season no more than $10 million short of plan, judged at the close of October 31. Pick a winter where that limit binds, and find the largest size of the utility, in steps of ${SCALE_STEP}, that meets it.`}
+        question={`The utility’s board will accept a 1-in-20 heating season no more than $10 million short of plan, judged at the close of October 31. In winter ${STORY_WINTER}–${STORY_WINTER + 1}${isFenwick(region) ? '' : ' in your region'}, at × 1, that day’s 1-in-20 season falls ${millions(unitShort)} short. Predict the largest size of the utility, in steps of ${SCALE_STEP}, that meets the limit; then set the date to October 31 and the size to your answer, and check.`}
         solved={solved}
         status={
           kind !== 'utility'
-            ? 'Choose Calder Gas & Light first.'
-            : dPeriod !== 'season' || dOffset !== -1
-              ? 'Set the period to the heating season and the date to the close of October 31.'
-              : unitShort <= 0
-                ? `In this winter even the 1-in-20 outcome beats the plan on October 31, so no size breaks the limit. Try another winter.`
-                : `At × ${fmt(k, 2)} the 1-in-20 season falls ${millions(k * unitShort, 2)} short of plan.`
+            ? 'Choose Fenwick Gas & Light first.'
+            : unitShort <= 0 || Number.isNaN(answer)
+              ? `In your region the limit ${unitShort <= 0 ? 'never binds that day' : 'rules out even the smallest utility'}. Return to Fenwick Bay at the top of the lesson to play this one.`
+              : !onBoardView
+                ? `Set the period to the heating season, the winter to ${STORY_WINTER}–${STORY_WINTER + 1} and the date to the close of October 31.`
+                : `Make your prediction, then set the size. At × ${fmt(k, 2)} the 1-in-20 season falls ${millions(k * unitShort, 2)} short of plan.`
         }
-        success={`Solved. At × ${fmt(k, 2)} the 1-in-20 season falls ${millions(k * unitShort, 2)} short; at × ${fmt(k + SCALE_STEP, 2)} it would fall ${millions((k + SCALE_STEP) * unitShort, 2)} short. The risk grows in proportion to the business, so a risk limit is also a limit on size — unless the risk can be handed to someone else.`}
+        success={`Solved: × ${fmt(k, 2)}. The limit allows ${fmt(BOARD_LIMIT / 1e6)} ÷ ${fmt(unitShort / 1e6, 1)} = ${fmt(BOARD_LIMIT / unitShort, 2)} times the utility, and the slider rounds down: at × ${fmt(k, 2)} the 1-in-20 season falls ${millions(k * unitShort, 2)} short; at × ${fmt(k + SCALE_STEP, 2)} it would fall ${millions((k + SCALE_STEP) * unitShort, 2)} short. The risk grows in proportion to the business, so a risk limit is also a limit on size — unless the risk can be handed to someone else. The capstone keeps the size you leave here, and the desk of Lesson 6.4 hedges a utility that size; the text goes on quoting × 1, and the box at the top of each lesson puts it back.`}
       />
 
       <P>
@@ -632,7 +651,8 @@ export default function Lesson() {
         wind farm of <a href={lessonHref('weather/4.4')}>Lesson 4.4</a> plans on the climate of its wind: across the archive its revenue averages{' '}
         {millions(story.windSum.mean)} with a spread of {millions(story.windSum.sd)}, and its 1-in-20 year comes in {millions(story.windSum.mean - story.windSum.p5)}{' '}
         short. The Marlow corn farm of <a href={lessonHref('weather/4.3')}>Lesson 4.3</a> is decided by July and August heat and rain, far beyond any forecast here:
-        its profit averages {money(story.farmSum.mean)} with a spread of {money(story.farmSum.sd)}, and its 1-in-20 year loses {money(-story.farmSum.p5)}. The farm keeps
+        its profit averages {money(story.farmSum.mean)} with a spread of {money(story.farmSum.sd)}, and its 1-in-20 year comes in{' '}
+        {money(story.farmSum.mean - story.farmSum.p5)} below that average. The farm keeps
         Marlow’s own climate in every region; it shares only the region’s variability and trend.
       </P>
 
@@ -643,7 +663,8 @@ export default function Lesson() {
         degree day off the slope, and the share of the variation the index explains off R². A seasonal strip pays ${CME_TICK} a degree day, so selling slope ÷ $
         {CME_TICK} strips cancels the slope exactly. In the next demonstration, the dots are the archive’s winters for the business chosen in{' '}
         <FigRef to="Weather Exposure Engine">the first demonstration</FigRef>, at its size, and the lower curve is how widely the cash would still vary after
-        selling a given number of strips at a fixed level. Choose the business and the number of strips:
+        selling a given number of strips at a fixed level. Choose the business, its size — the same control as in the first demonstration — and the number of
+        strips:
       </P>
 
       <Figure name="Weather Exposure Engine · what to hedge" scenario={h}>
@@ -651,26 +672,40 @@ export default function Lesson() {
         <HedgeChart
           s={series}
           strips={strips}
-          best={best}
-          label={`${BUSINESS_LABEL[kind]} at ${fmt(k, 2)} times its size against the region's winter HDD: ${money(fit.slope)} per degree day, R² ${pct(fit.r2)}. Unhedged spread ${money(fit.cashSd)}; with ${fmt(strips)} strips, ${money(spreadNow)}; least at ${fmt(best)} strips.`}
+          best={reveal ? best : null}
+          label={`${BUSINESS_LABEL[kind]} at ${fmt(k, 2)} times its size against the region's winter HDD: ${money(fit.slope)} per degree day, R² ${pct(fit.r2)}. Unhedged spread ${money(fit.cashSd)}; with ${fmt(strips)} strips, ${money(spreadNow)}${reveal ? `; least at ${fmt(best)} strips` : ''}.`}
         />
         <Readouts
           items={[
             { label: 'cash per degree day', value: money(fit.slope), tone: WX.money },
             { label: 'R², explained by the index', value: pct(fit.r2), tone: WX.index },
-            { label: 'strips, slope ÷ $20', value: fmt(Math.max(0, fit.strips)), tone: WX.index },
+            ...(reveal ? [{ label: 'strips, slope ÷ $20', value: fmt(Math.max(0, fit.strips)), tone: WX.index }] : []),
             { label: `spread with ${fmt(strips)} strips`, value: money(spreadNow), tone: WX.probability },
           ]}
         />
         <Slider label="Seasonal strips sold" tone={WX.index} value={strips} min={0} max={STRIPS_MAX} step={STRIPS_STEP} onChange={(n) => h.set({ strips: n })} display={fmt(strips)} />
+        <Slider label={`Size of the ${kind === 'utility' ? 'utility' : kind === 'wind' ? 'wind farm' : 'farm'}`} tone={WX.money} value={k} min={SCALE_MIN} max={SCALE_MAX} step={SCALE_STEP} onChange={setScale} display={`× ${fmt(k, 2)}`} />
       </Figure>
 
+      <Challenge
+        id="b"
+        question={`Predict first, for Fenwick Gas & Light at the size you’ve chosen (× ${fmt(k, 2)}): a strip pays $${CME_TICK} a degree day, and the readouts give the utility’s cash per degree day. How many seasonal strips, to the nearest hundred, leave its winters varying the least? Set the strips to your answer and check.`}
+        solved={solved2}
+        status={
+          kind !== 'utility'
+            ? 'Choose Fenwick Gas & Light: the other businesses barely follow this index.'
+            : `With ${fmt(strips)} strips the utility’s winters vary by ${money(spreadNow)}, against ${money(fit.cashSd)} unhedged.`
+        }
+        success={`Solved: ${fmt(strips)} strips leave ${money(spreadNow)}, ${pct(1 - (spreadNow * spreadNow) / (fit.cashSd * fit.cashSd))} of the variance removed. That is ${money(fit.slope)} per degree day divided by the strip’s $${CME_TICK}, ${fmt(fit.strips)}, to the nearest hundred, and it scales with the size of the business. The next lesson’s desk starts from this number.`}
+      />
+
       <P>
-        For Calder Gas &amp; Light in Calder Bay’s climate the fit is close: {money(story.utilFit.slope)} per degree day, an R² of {pct(story.utilFit.r2)}, and a
-        minimum-variance hedge of about {fmt(story.utilFit.strips)} strips, {fmt(story.utilBest)} to the nearest hundred, which takes the winter-to-winter spread from{' '}
+        For Fenwick Gas &amp; Light at × 1, in Fenwick Bay’s climate, the fit is close: {usd(story.utilFit.slope)} per degree day — a little more than the rule’s $
+        {fmt(DOLLARS_PER_HDD)}, because windy days raise the gas sent out per degree day — an R² of {pct(story.utilFit.r2)}, and a minimum-variance hedge of about{' '}
+        {fmt(story.utilFit.strips)} strips, {fmt(story.utilBest)} to the nearest hundred, which takes the winter-to-winter spread from{' '}
         {millions(story.utilFit.cashSd)} to {millions(story.utilFit.residualSd)}. What is left is the wind, the basis risk no degree-day contract can touch. The
-        number of strips comes from the business, not the climate. Move the region to a colder, more continental city at 47° north and the spread grows to{' '}
-        {millions(story.northFit.cashSd)}, while the hedge barely moves, to {fmt(story.northFit.strips)} strips; in a mild city at 30° the spread is{' '}
+        number of strips comes from the business, not the climate. Move the region to a colder city at 47° north, deep inland and 300 m up, and the spread grows to{' '}
+        {millions(story.northFit.cashSd)}, while the hedge barely moves, to {fmt(story.northFit.strips)} strips; in a mild city at 30°, near a windward sea, the spread is{' '}
         {millions(story.southFit.cashSd)} and the hedge is still {fmt(story.southFit.strips)}. The climate decides how much is at stake; the gas sent out per degree
         day decides how many contracts cover it.
       </P>
@@ -681,22 +716,10 @@ export default function Lesson() {
         <a href={lessonHref('weather/5.1')}>Lesson 5.1</a>.
       </P>
 
-      <Challenge
-        id="b"
-        question="For Calder Gas & Light, at the size you’ve chosen and in your region, how many seasonal strips — to the nearest hundred — leave its winters varying the least?"
-        solved={solved2}
-        status={
-          kind !== 'utility'
-            ? 'Choose Calder Gas & Light: the other businesses barely follow this index.'
-            : `With ${fmt(strips)} strips the utility’s winters vary by ${money(spreadNow)}, against ${money(fit.cashSd)} unhedged.`
-        }
-        success={`Solved: ${fmt(strips)} strips leave ${money(spreadNow)}, ${pct(1 - (spreadNow * spreadNow) / (fit.cashSd * fit.cashSd))} of the variance removed. That is ${money(fit.slope)} per degree day divided by the strip’s $${CME_TICK}, and it scales with the size of the business. The next lesson’s desk starts from this number.`}
-      />
-
       <P>
         An exposure and a hedge ratio are not yet a trade. The strips have a price, set by a market that may see the winter differently from the forecast of{' '}
-        <FigRef to="Weather Exposure Engine">the outlook</FigRef>, and the desk has more than one contract to choose from — the season, single months, options
-        with a strike. <a href={lessonHref('weather/6.4')}>The next lesson</a> opens the trading desk: it prices the contracts on offer against your region’s
+        <FigRef to="Weather Exposure Engine">the outlook</FigRef>, and the desk has more than one contract to choose from — the season and its single months.{' '}
+        <a href={lessonHref('weather/6.4')}>The next lesson</a> opens the trading desk: it prices the contracts on offer against your region’s
         forecast distribution, and chooses which to sell to cover the business and which, if any, to trade.
       </P>
     </LessonPage>

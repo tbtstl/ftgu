@@ -25,7 +25,7 @@ import {
 } from '../../../framework';
 import { forwardPass, type OpKind, type PassSummary } from '../../../engines/compute/transformer';
 import { memoryPlan } from '../../../engines/compute/inference';
-import { trainFlopsPerToken } from '../../../engines/compute/training';
+import { STATE_BYTES } from '../../../engines/compute/training';
 import { ACCELERATORS } from '../../../model/compute/hardware';
 import { MODELS, kvBytesPerToken, kvDim, matmulParams, paramCount, type ModelId } from '../../../model/compute/models';
 
@@ -76,21 +76,6 @@ export function feedForwardComputeBound(p: PassSummary): boolean {
   return p.ops.filter((o) => o.id === 'up' || o.id === 'down').every((o) => o.bound === 'compute');
 }
 
-/** Challenge a: the fewest tokens on the slider at which both feed-forward multiplies stop waiting on memory. */
-export function feedForwardSolved(tk: number, ek: number): boolean {
-  if (!feedForwardComputeBound(explore(tk, ek).pass)) return false;
-  return tk === 0 || !feedForwardComputeBound(explore(tk - 1, ek).pass);
-}
-
-/** The answer to challenge a on the slider, and the exact threshold. */
-export function feedForwardThreshold(): { k: number; tokens: number; exact: number } {
-  let k = 0;
-  while (k < TOKEN_MAX_K && !feedForwardComputeBound(explore(k, 0).pass)) k++;
-  let exact = 1;
-  while (exact < 4096 && !feedForwardComputeBound(forwardPass(M8, exact, exact, GPU))) exact++;
-  return { k, tokens: tokensAt(k), exact };
-}
-
 /** Time of the attention operation, and of the whole feed-forward block, s. */
 export function attentionVsFeedForward(p: PassSummary): { attention: number; feedForward: number } {
   const attention = p.ops.find((o) => o.id === 'attn')!.totalS;
@@ -98,10 +83,25 @@ export function attentionVsFeedForward(p: PassSummary): { attention: number; fee
   return { attention, feedForward };
 }
 
-/** Challenge b: attention takes longer than the whole feed-forward block. */
+/** Attention takes longer than the whole feed-forward block. */
 export function attentionSolved(tk: number, ek: number): boolean {
   const a = attentionVsFeedForward(explore(tk, ek).pass);
   return a.attention > a.feedForward;
+}
+
+/** FLOPs attention does in each layer, per new token, for every token of context: a multiply and an add per number of the query, and again per number of the value. */
+export const ATTENTION_FLOPS_PER_CONTEXT = 4 * M8.d;
+/** FLOPs the feed-forward block does per token: a multiply and an add per weight. */
+export const FEED_FORWARD_FLOPS = 2 * 3 * M8.d * M8.ffn;
+/** Context at which attention's arithmetic equals the feed-forward block's. */
+export const BALANCE_CONTEXT = FEED_FORWARD_FLOPS / ATTENTION_FLOPS_PER_CONTEXT;
+
+/** Challenge b reads a document in chunks of this many tokens (slider position). */
+export const CHUNK_K = 10 * TOKEN_STEPS;
+
+/** Challenge b: a 1,024-token chunk with the least earlier text at which attention takes longer than the feed-forward block. */
+export function chunkSolved(tk: number, ek: number): boolean {
+  return tk === CHUNK_K && ek > 0 && attentionSolved(tk, ek) && !attentionSolved(tk, ek - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +124,20 @@ export function memoryUse(model: ModelId, convs: number, length: number) {
   const plan = memoryPlan({ model, gpu: 'A', tp: 1, precision: 'bf16' });
   const capacity = GPU.memoryGB * 1e9;
   return { weights, perToken, cache, total: weights + cache, usable: plan.usableBytes, capacity, fits: weights + cache <= plan.usableBytes, kvTokens: plan.kvTokens };
+}
+
+/** The memory challenge's conversation length, tokens. */
+export const CHALLENGE_LENGTH = 8192;
+
+/** Most conversations of `length` tokens whose cache fits beside the model's weights on one A-class. */
+export function mostConversations(model: ModelId, length: number): number {
+  return Math.floor(memoryUse(model, 0, length).kvTokens / length);
+}
+
+/** Challenge c: the 8B model holding as many 8,192-token conversations as one A-class has room for. */
+export function memorySolved(s: { model: ModelId; convs: number; lk: number }): boolean {
+  const length = lengthAt(s.lk);
+  return s.model === '8B' && length === CHALLENGE_LENGTH && memoryUse(s.model, s.convs, length).fits && s.convs === mostConversations('8B', CHALLENGE_LENGTH);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +165,8 @@ export function bytesText(b: number): string {
   if (b >= 1e6) return `${fmt(b / 1e6, b >= 100e6 ? 0 : 1)} MB`;
   return `${fmt(b / 1e3)} kB`;
 }
+
+const SMALL_NUMBERS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
 
 function pctText(x: number): string {
   return `${fmt(x * 100, x < 0.1 && x > 0 ? 1 : 0)}%`;
@@ -323,9 +339,7 @@ export default function Lesson() {
   const s = useScenario('layer', EXPLORER_DEFAULTS);
   const { tk, ek } = s.state;
   const e = useMemo(() => explore(tk, ek), [tk, ek]);
-  const solvedA = useMemo(() => feedForwardSolved(tk, ek), [tk, ek]);
-  const solvedB = useMemo(() => attentionSolved(tk, ek), [tk, ek]);
-  const ffBound = feedForwardComputeBound(e.pass);
+  const solvedB = useMemo(() => chunkSolved(tk, ek), [tk, ek]);
   const av = attentionVsFeedForward(e.pass);
 
   const play = usePlay(true);
@@ -334,11 +348,11 @@ export default function Lesson() {
   const { model, convs, lk } = mem.state;
   const length = lengthAt(lk);
   const u = memoryUse(model, convs, length);
+  const solvedC = memorySolved(mem.state);
 
   // Numbers for the prose.
   const decode = explore(EXPLORER_DEFAULTS.tk, EXPLORER_DEFAULTS.ek);
   const prompt = explore(10 * TOKEN_STEPS, 0);
-  const ffT = useMemo(() => feedForwardThreshold(), []);
   const longDecode = explore(0, EARLIER_MAX_K);
   const longAv = attentionVsFeedForward(longDecode.pass);
   const decodeOps = Object.fromEntries(decode.pass.ops.map((o) => [o.id, o]));
@@ -346,17 +360,31 @@ export default function Lesson() {
   const layerWeights = decode.pass.ops.reduce((acc, o) => acc + o.weightBytes, 0);
   const weightsPerToken = matmulParams(M8) * 2;
   const decodeTflops = decode.pass.totalFlops / decode.pass.totalS / 1e12;
-  const u8 = memoryUse('8B', 64, 4096);
+  const u8Convs = 64;
+  const u8Length = 4096;
+  const u8 = memoryUse('8B', u8Convs, u8Length);
   const u70 = memoryUse('70B', 0, 4096);
-  const room4k = Math.floor(u8.kvTokens / 4096);
-  const train = trainFlopsPerToken('8B', 4096);
-  const fwd = 2 * matmulParams(M8) + 4 * M8.layers * 4096 * M8.d;
-  const trainDays = (train * 1e12) / (GPU.bf16Tflops * 1e12) / 86400;
+  const room4k = mostConversations('8B', 4096);
+  const roomChallenge = mostConversations('8B', CHALLENGE_LENGTH);
+  /** Training keeps this many times the bytes per weight that serving in BF16 does (Lesson 3.3). */
+  const trainStateRatio = (STATE_BYTES.replicated + STATE_BYTES.shardable) / 2;
 
-  const statusA = ffBound
-    ? `${fmt(e.tokens)} tokens: the feed-forward multiplies are limited by arithmetic. Is that the fewest?`
-    : `${fmt(e.tokens)} token${e.tokens === 1 ? '' : 's'} at a time: the feed-forward multiplies still wait on memory.`;
-  const statusB = `Right now attention takes ${us(av.attention)} and the feed-forward block ${us(av.feedForward)}.`;
+  const statusC =
+    model !== '8B'
+      ? 'Choose the 8B model.'
+      : length !== CHALLENGE_LENGTH
+        ? `Each conversation is ${fmt(length)} tokens. Set it to ${fmt(CHALLENGE_LENGTH)}.`
+        : !u.fits
+          ? `${fmt(convs)} conversations of ${fmt(length)} tokens need ${bytesText(u.total)} with the weights: more than the ${fmt(u.usable / 1e9)} GB usable.`
+          : `${fmt(convs)} conversation${convs === 1 ? '' : 's'} of ${fmt(length)} tokens fit, using ${bytesText(u.total)} of the ${fmt(u.usable / 1e9)} GB usable. Is that the most?`;
+  const chunk = tokensAt(CHUNK_K);
+  const actS = e.pass.ops.find((o) => o.id === 'act')!.totalS;
+  const statusB =
+    tk !== CHUNK_K
+      ? `Set the tokens processed together to ${fmt(chunk)}; ${fmt(e.tokens)} now.`
+      : av.attention > av.feedForward
+        ? `Attention takes longer, ${us(av.attention)} against ${us(av.feedForward)}. Is ${fmt(e.earlier)} tokens the least earlier text that does it?`
+        : `With ${fmt(e.earlier)} tokens of earlier text, attention takes ${us(av.attention)} and the feed-forward block ${us(av.feedForward)}.`;
 
   return (
     <LessonPage id="compute/3.1">
@@ -379,9 +407,13 @@ export default function Lesson() {
         <K tone="violet">key/value cache</K>. Reading a prompt is different: all its tokens are known at once, so they can pass through the layers together.
       </P>
       <P>
-        In the next demonstration, one layer of the 8B model runs on an A-class 80 GB. Its eight operations run top to bottom. Beside each, two bars on one scale
-        show the time its <K tone="orange">arithmetic</K> would take at the A-class’s {fmt(GPU.bf16Tflops)} TFLOPS and the time its <K tone="violet">data</K> —
-        weights, activations and cached keys and values — would take to move at {GPU.bandwidthTBs} TB/s. As in <a href={lessonHref('compute/2.4')}>Lesson 2.4</a>,
+        In the next demonstration, one layer of the 8B model runs on an A-class 80 GB. Its eight operations run top to bottom. Attention is three of them: a
+        matrix multiply that turns each token’s vector into a <b>query</b> (what it looks for) and the key and value it offers later tokens, the attention step
+        itself, and an output projection, another matrix multiply that maps the result back into the token’s vector. The small elementwise steps around them
+        rescale each vector (“normalize”), add each block’s result back into it, and apply the activation function, a fixed curve, to every number between the
+        feed-forward block’s two multiplies. Beside each operation, two bars on one scale show the time its <K tone="orange">arithmetic</K> would
+        take at the A-class’s {fmt(GPU.bf16Tflops)} TFLOPS and the time its <K tone="violet">data</K> — weights, <K>activations</K> (the vectors passing from
+        one operation to the next) and cached keys and values — would take to move at {GPU.bandwidthTBs} TB/s. As in <a href={lessonHref('compute/2.4')}>Lesson 2.4</a>,
         the longer bar sets the operation’s time, and the highlight lingers on each operation for its share of the layer’s time. Set how many tokens pass through
         together and how much earlier text is already in the cache:
       </P>
@@ -401,8 +433,7 @@ export default function Lesson() {
           items={[
             { label: 'arithmetic per layer', value: gflop(e.pass.layerFlops), tone: 'orange' },
             { label: 'data moved per layer', value: bytesText(e.pass.layerBytes), tone: 'violet' },
-            { label: 'whole model, one pass', value: ms(e.pass.totalS), tone: 'teal' },
-            { label: 'arithmetic in matrix multiplies', value: pctText(e.pass.matmulShare) },
+            { label: 'arithmetic multiplying by weights', value: pctText(e.pass.matmulShare) },
             { label: 'time waiting on memory', value: pctText(e.pass.memoryBoundShare), tone: 'violet' },
           ]}
         />
@@ -432,54 +463,55 @@ export default function Lesson() {
         show. The layer has to read {bytesText(layerWeights)} of weights to do {gflop(decode.pass.layerFlops)} of arithmetic: each two-byte weight is used for one
         multiply and one add, the matrix-times-one-vector of <a href={lessonHref('compute/2.3')}>Lesson 2.3</a>. The two feed-forward multiplies alone read{' '}
         {bytesText(ffWeights)} and take {fmt((decodeOps.up.totalS + decodeOps.down.totalS) / decode.pass.layerS * 100)}% of the layer’s {us(decode.pass.layerS)}. Across{' '}
-        {M8.layers} layers and the vocabulary projection, every new token means reading {bytesText(weightsPerToken)} of weights, and the pass takes{' '}
+        {M8.layers} layers and the vocabulary projection, every new token means reading {bytesText(weightsPerToken)} of weights — all of them except the table
+        that gives each token its first vector, which is looked up a row at a time rather than read whole — and the pass takes{' '}
         {ms(decode.pass.totalS)}. One conversation could get about {fmt(1 / decode.pass.totalS)} tokens a second this way — even in this idealized model, where
         every operation runs exactly at its roofline — while the A-class’s arithmetic runs at {fmt(decodeTflops, 1)} TFLOPS, about a third of one percent of its peak.
       </P>
       <P>
         Now read a prompt instead: take the earlier text to 0 and the tokens to {fmt(prompt.tokens)}. A single pass carries all {fmt(prompt.tokens)} tokens through
-        each layer, so every weight read from memory is used {fmt(prompt.tokens)} times. The matrix multiplies are now limited by arithmetic, the whole model takes{' '}
+        each layer, so every weight read from memory is used {fmt(prompt.tokens)} times — well past the few hundred vectors at which, as{' '}
+        <a href={lessonHref('compute/2.4')}>Lesson 2.4</a> found, a matrix multiply stops waiting on memory. The matrix multiplies are now limited by arithmetic, the whole model takes{' '}
         {ms(prompt.pass.totalS)} — {fmt(prompt.pass.totalS / decode.pass.totalS, 1)} times as long as one token, for {fmt(prompt.tokens)} times the tokens — and
-        only the small elementwise steps still wait on memory, {pctText(prompt.pass.memoryBoundShare)} of the time. In both cases, matrix multiplication accounts for
-        about {fmt(Math.round(decode.pass.matmulShare * 100))}% of the arithmetic. The same model on the same chip is two different workloads: reading is
+        only the small elementwise steps still wait on memory, {pctText(prompt.pass.memoryBoundShare)} of the time. In both cases, multiplying by the weights accounts
+        for about {fmt(Math.round(decode.pass.matmulShare * 100))}% of the arithmetic. The same model on the same chip is two different workloads: reading is
         compute-bound and writing is memory-bound.
       </P>
-
-      <Challenge
-        id="a"
-        question="Find the fewest tokens processed together at which both feed-forward matrix multiplies stop waiting on memory."
-        solved={solvedA}
-        status={statusA}
-        success={`Solved: on this slider, ${fmt(ffT.tokens)} tokens; the exact threshold is ${fmt(ffT.exact)}. Each token adds two FLOPs per weight, so the multiplies’ intensity is about the number of tokens, and they cross the A-class’s ridge point of about 295 a little later because the tokens’ own vectors cost bytes too — the batch of Lesson 2.3, arriving from a different direction. The earlier text makes no difference to the feed-forward block, which never looks at it.`}
-      />
 
       <H2>Attention and the length of the text</H2>
       <P>
         Every operation in the layer except one does the same work for a token however much text came before it. Attention is the exception. To decide what to take
         from earlier tokens, each new token compares itself with every one of them and then forms a weighted sum of their values, so its arithmetic grows with the
         length of the context, and so does the cache it must read: the 8B model keeps {fmt(kvBytesPerToken(M8))} bytes of keys and values for every token — two
-        vectors of {fmt(kvDim(M8))} numbers in each of {M8.layers} layers, at two bytes each.
+        vectors of {fmt(kvDim(M8))} numbers in each of {M8.layers} layers, at two bytes each. Comparing a new token with one token of context takes a multiply and
+        an add for each of the {fmt(M8.d)} numbers of its query, and adding in that token’s value as many again: {fmt(ATTENTION_FLOPS_PER_CONTEXT)} FLOPs in each
+        layer for every token of context. The feed-forward block’s arithmetic is fixed: in each layer, a multiply and an add for each of its{' '}
+        {fmt(FEED_FORWARD_FLOPS / 2e6)} million weights, {fmt(FEED_FORWARD_FLOPS / 1e6)} million FLOPs a token.
       </P>
       <P>
         Take the earlier text in <FigRef to="Neural Network Execution Explorer">the demonstration</FigRef> all the way to {fmt(longDecode.earlier)} tokens while
         writing one token at a time. Attention now reads {bytesText(longDecode.pass.ops.find((o) => o.id === 'attn')!.kvBytes)} of cache per layer and takes{' '}
         {us(longAv.attention)}, but the feed-forward block, reading its weights, still takes {us(longAv.feedForward)}. Both are waiting on memory, and the weights are
-        still the bigger read. The balance tips only when attention’s arithmetic grows large too: when many tokens are processed together against a long context.
+        still the bigger read. Attention overtakes only when its arithmetic grows large too: when many tokens are processed together, as when a long document is
+        read {fmt(chunk)} tokens at a time. Then both are limited by arithmetic, and it comes down to the two counts of FLOPs.
       </P>
 
       <Challenge
         id="b"
-        question="Make attention take longer than the whole feed-forward block."
+        question={`Predict first: at ${fmt(ATTENTION_FLOPS_PER_CONTEXT)} FLOPs per token of context against the feed-forward block’s ${fmt(FEED_FORWARD_FLOPS / 1e6)} million, how much context makes the two equal? Then check: with ${fmt(chunk)} tokens processed together, find the least earlier text at which attention takes longer than the whole feed-forward block.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: attention takes ${us(av.attention)} against the feed-forward block’s ${us(av.feedForward)}. With ${fmt(e.tokens)} tokens each comparing itself with ${fmt(
-          e.context,
-        )} tokens of context, attention’s arithmetic has outgrown the feed-forward block’s, which doesn’t depend on the context at all. This is what reading a long document in one pass looks like, and why long contexts are expensive.`}
+        success={`Solved: ${fmt(e.earlier)} tokens of earlier text, ${fmt(e.context)} tokens of context counting the chunk itself. The arithmetic alone balances at ${fmt(
+          FEED_FORWARD_FLOPS / 1e6,
+        )} million ÷ ${fmt(ATTENTION_FLOPS_PER_CONTEXT)} ≈ ${fmt(BALANCE_CONTEXT)} tokens of context; the feed-forward block’s activation step also waits ${us(
+          actS,
+        )} on memory, so attention needs a little more to overtake it. Past that point attention is the biggest operation in the layer, and it keeps growing with the context while everything else stays fixed. This is what reading a long document chunk by chunk looks like, each chunk on top of everything already read, and why long contexts are expensive.`}
       />
 
       <H2>What has to stay in memory</H2>
       <P>
-        The cache is also where a running model’s memory goes. The weights are fixed: {bytesText(u8.weights)} for the 8B model in BF16. The cache grows with every
+        The cache is also where a running model’s memory goes. The weights are fixed: {bytesText(u8.weights)} for the 8B model in BF16, the lookup table included.
+        The cache grows with every
         token of every conversation being served at once. In the next demonstration, choose a model and how many conversations it is holding, and how long each one
         is, and compare what they need with the 80 GB of one A-class. About a tenth is kept free for the working space a running model needs, so the dashed line
         marks what is left for weights and cache:
@@ -517,25 +549,26 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Sixty-four conversations of 4,096 tokens hold {bytesText(u8.cache)} of keys and values for the 8B model: more than twice the weights. Beside its weights,
-        one A-class has room for {fmt(u8.kvTokens)} tokens of cache, about {fmt(room4k)} such conversations, and serving more of them at once is exactly what the
-        batching of Lesson 2.3 needs to make each pass over the weights pay. Memory, not arithmetic, sets that limit. Switch to the 70B model and the weights alone,{' '}
+        Set {fmt(u8Convs)} conversations of {fmt(u8Length)} tokens: they hold {bytesText(u8.cache)} of keys and values for the 8B model, more than twice the weights.
+        Beside its weights, one A-class has room for {fmt(u8.kvTokens)} tokens of cache, about {fmt(room4k)} such conversations, and serving more of them at once is
+        exactly what the batching of <a href={lessonHref('compute/2.3')}>Lesson 2.3</a> needs to make each pass over the weights pay. Memory, not arithmetic, sets that limit. Switch to the 70B model and the weights alone,{' '}
         {bytesText(u70.weights)}, are too big for one A-class before a single conversation starts; each of its tokens also needs {fmt(kvBytesPerToken(MODELS['70B']))}{' '}
         bytes of cache. A model that size has to be split across several GPUs, which brings back the links of <a href={lessonHref('compute/2.5')}>Lesson 2.5</a>.
       </P>
 
-      <H2>Learning costs three times as much</H2>
+      <Challenge
+        id="c"
+        question={`Predict first, then check: how many conversations of ${fmt(CHALLENGE_LENGTH)} tokens can one A-class hold beside the 8B model? Set the length, then the most conversations that still fit.`}
+        solved={solvedC}
+        status={statusC}
+        success={`Solved: ${fmt(roomChallenge)} conversations, half the ${fmt(room4k)} of ${fmt(4096)} tokens. The room for the cache is ${fmt(u8.kvTokens)} tokens however they are shared out, so doubling the length of each conversation halves how many fit — and how many requests a GPU can batch to share each read of the weights, which is one reason long contexts cost more to serve.`}
+      />
+
       <P>
-        Everything so far runs a model that has already been trained. Training runs the same layers forward on known text, measures how far each prediction was from
-        the real next token, and then works backward through every layer to find how each weight should change. The backward pass needs about twice the arithmetic
-        of the forward one, so a token of training costs about six FLOPs per parameter instead of two: for the 8B model with 4,096 tokens of context,{' '}
-        {gflop(train)} per token, against {gflop(fwd)} for the forward pass alone. Training it on a trillion tokens would keep one A-class busy at its full peak for{' '}
-        {fmt(trainDays)} days. It needs far more memory, too. Besides every layer’s intermediate results, kept for the backward pass, the usual recipe stores about 16
-        bytes for every parameter — the weights, their gradients, a full-precision copy and the optimizer’s running statistics — which comes to well over 100 GB for
-        the 8B model. So training is split across many GPUs from the start, as <a href={lessonHref('compute/3.3')}>Lesson 3.3</a> will show.
-      </P>
-      <P>
-        So a single model already makes three different demands. Reading a prompt wants arithmetic. Writing a reply wants memory bandwidth, and room for a cache that
+        Everything so far runs a model that has already been trained. Training runs the same layers forward on known text and then works backward through every one
+        of them to find how each weight should change, which takes about three times the arithmetic of the forward pass alone and{' '}
+        {SMALL_NUMBERS[trainStateRatio] ?? fmt(trainStateRatio)} times the memory for each weight; <a href={lessonHref('compute/3.3')}>Lesson 3.3</a> works out what that means for a whole run. So a single model already makes
+        three different demands. Reading a prompt wants arithmetic. Writing a reply wants memory bandwidth, and room for a cache that
         grows with every conversation. Training wants arithmetic, memory and fast links all at once, for weeks. A GPU-hour spent on each buys a different thing. In
         the <a href={lessonHref('compute/3.2')}>next lesson</a> we put a model into service and see what it takes to make writing replies efficient.
       </P>

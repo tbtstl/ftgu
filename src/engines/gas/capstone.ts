@@ -19,7 +19,7 @@ import { forecastTemps } from './forecast';
 import { premiums } from './futures';
 import { marketDay, monthlyRates, seasonalPlan, simulateYear, type ExtraPipe, type MarketDay, type SeasonalPlan, type StorageState, type YearDay } from './market';
 import { COMPRESSION_COST_PER_HP, corridorDesign, type CorridorDesign } from './network';
-import { lakesideMargin, leasedStorage, marginRates, monthlyStorageOptimum } from './strategies';
+import { HEATING_MONTHS, lakesideMargin, leasedStorage, marginRates, monthlyStorageOptimum } from './strategies';
 
 /** The capstone's year of the region's growth (0-based index 8: "Year 9"). */
 export const CAPSTONE_YEAR = 8;
@@ -323,10 +323,13 @@ export function designDay(s: GasSystem): MarketDay {
   return marketDay({ tempF: m.tempF, production: o.production, capacity: o.capacity, extraPipelines: o.extraPipelines, storage: m.storage, waterValue: m.waterValue, demand: o.demand, fast: true });
 }
 
-/** How much colder than normal a winter (Nov–Mar) was, in degree-days (negative = milder). */
+/**
+ * How much colder than normal a winter (Nov–Mar) was: its heating degree days less a normal
+ * winter's, as Lesson 6.5 measures it (negative = milder).
+ */
 export function winterColder(w: WeatherYear): number {
   let s = 0;
-  for (let d = GAS_MONTH_START[7]; d < GAS_YEAR_DAYS; d++) s += w.normal[d] - w.temp[d];
+  for (let d = GAS_MONTH_START[7]; d < GAS_YEAR_DAYS; d++) s += hdd(w.temp[d]) - hdd(w.normal[d]);
   return s;
 }
 
@@ -415,7 +418,7 @@ export interface PortfolioSettings {
   firmMMBtuD: number;
   /** Lakeside toll held for the year. */
   toll: boolean;
-  /** Weather trades: prompt-month index gas, lots per trade (0 = none), forecast skill and the threshold, °F. */
+  /** Weather trades: prompt-month index gas in the heating months (October–April, as in Lesson 6.1), lots per trade (0 = none), forecast skill and the threshold, °F. */
   weatherLots: number;
   skill: number;
   weatherThresholdF: number;
@@ -561,12 +564,13 @@ export function portfolioYear(s: GasSystem, seed: number, p: PortfolioSettings):
   const firm = firmPart(y, s, p.firmLine, p.firmMMBtuD);
   const toll = tollPart(y, p.toll);
   const signals = p.weatherLots > 0 || (p.metroSellMMBtuD > 0 && p.metroSkipColderF !== null) ? monthForecasts(y, p.skill) : Array<number>(12).fill(0);
-  // Weather: buy (sell) the month's gas at its first-day futures price when the forecast is colder (warmer), sell (buy) it back day by day.
+  // Weather: in the heating months (Lesson 6.1's October–April), buy (sell) the month's gas at its
+  // first-day futures price when the forecast is colder (warmer), and sell (buy) it back day by day.
   const wMonthly = empty();
   const marginByMonth = empty();
   let wTrades = 0;
   if (p.weatherLots > 0 && p.skill > 0) {
-    for (let m = 0; m < 12; m++) {
+    for (const m of HEATING_MONTHS) {
       if (Math.abs(signals[m]) <= p.weatherThresholdF) continue;
       const size = Math.sign(signals[m]) * p.weatherLots * FUTURES_CONTRACT_MMBTU;
       wMonthly[m] += size * (y.monthly.calder[m] - y.curves[m].calder[m]) - Math.abs(size) * CAPSTONE_FEES.futures;

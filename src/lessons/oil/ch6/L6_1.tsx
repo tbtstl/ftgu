@@ -3,14 +3,13 @@ import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Reado
 import { fullCarry } from '../../../engines/oil/market';
 import { CARRY_DEFAULTS, COST_PER_BBL, RULE_DEFAULTS, backtest, calendarRule, cashAndCarry, type BacktestResult, type CarryResult } from '../../../engines/oil/trading';
 import { HISTORY_DEFAULTS, oilHistory, type HistoryWeek } from '../../../model/oil/history';
-import { XYChart, type XYBand, type XYMarker } from '../shared/charts';
+import { XYChart, type XYMarker } from '../shared/charts';
+import { LONG_SWATCH, RISK_TONE, SHORT_SWATCH, YEAR_TICKS, money, pnlTone, positionBands, yearTick } from './style';
 
 const GREEN = '#6d9c37';
 const ORANGE = '#d0702a';
 const GRAY = '#9a9a9a';
 const INK = '#333333';
-const LONG_TINT = 'rgba(109, 156, 55, 0.18)';
-const SHORT_TINT = 'rgba(231, 91, 85, 0.16)';
 /** Above this fill, the engine's futures curve starts paying for storage at sea (Lesson 5.4). */
 const TANK_TOPS = 0.97;
 
@@ -66,17 +65,27 @@ function atStart(st: TraderState): boolean {
   return st.shocks === d.shocks && st.group === d.group && st.lookback === d.lookback && st.threshold === d.threshold;
 }
 
+/** Challenge a: the hub the reader predicts for, which closes about two-thirds of the gap a week. */
+export const PREDICT_HUB = 6;
+
 /**
- * Challenge a: with the outages, the producer group and the rule at their starting settings, the
- * smallest hub (to the nearest million barrels) in which the calendar rule makes money.
+ * The share of the gap between Kessler's stock and where the market is pushing it that a hub of
+ * `capacity` million barrels closes in a week: the history's fill moves 1/τ of the gap a week, with
+ * τ = capacity / 4 weeks (at least one).
  */
-export function smallestHubSolved(st: TraderState): boolean {
-  if (!atStart(st)) return false;
-  if (runTrader(st).stats.total <= 0) return false;
-  return st.capacity <= CAPACITY_MIN || runTrader({ ...st, capacity: st.capacity - 1 }).stats.total <= 0;
+export function weeklyCatchUp(capacity: number): number {
+  return 1 / Math.max(1, capacity / 4);
 }
 
-/** The answer to challenge a. */
+/**
+ * Challenge a: with the outages, the producer group and the rule at their starting settings, the
+ * reader predicts whether the calendar rule makes money in a 6-million-barrel hub, then sets it to check.
+ */
+export function predictedHubSolved(st: TraderState): boolean {
+  return atStart(st) && st.capacity === PREDICT_HUB;
+}
+
+/** The smallest hub, to the nearest million barrels, in which the rule makes money at its starting settings. */
 export function smallestProfitableHub(): number {
   for (let cap = CAPACITY_MIN; cap <= CAPACITY_MAX; cap++) if (runTrader({ ...TRADER_DEFAULTS, capacity: cap }).stats.total > 0) return cap;
   return NaN;
@@ -137,13 +146,16 @@ export function largestCarryHub(months: number = CARRY_STATE_DEFAULTS.months): n
   return NaN;
 }
 
-// ---------------------------------------------------------------------------
-// Formatting and chart helpers.
-
-/** Money rounded to the nearest $100, e.g. $25,800. */
-function money(x: number): string {
-  return usd(Math.round(x / 100) * 100);
+/** Every setting of the rule the first demonstration's sliders offer, at the starting physical world: the range of five-year results. */
+export function ruleSettingsRange(): { min: number; max: number; profitable: number; count: number } {
+  const totals: number[] = [];
+  for (let lookback = 1; lookback <= 8; lookback++)
+    for (let i = 0; i <= 10; i++) totals.push(runTrader({ ...TRADER_DEFAULTS, lookback, threshold: i / 2 }).stats.total);
+  return { min: Math.min(...totals), max: Math.max(...totals), profitable: totals.filter((x) => x > 0).length, count: totals.length };
 }
+
+// ---------------------------------------------------------------------------
+// Formatting.
 
 function kusd(v: number): string {
   if (Math.round(v) === 0) return '$0';
@@ -155,26 +167,6 @@ function cents(x: number): string {
   return `${fmt(Math.abs(x) * 100)} cents`;
 }
 
-function millions(x: number): string {
-  return `$${fmt(x / 1e6, 2)} million`;
-}
-
-/** Shaded runs of weeks where the rule is long (green) or short (red). */
-function positionBands(positions: number[]): XYBand[] {
-  const out: XYBand[] = [];
-  let i = 0;
-  while (i < positions.length) {
-    const s = Math.sign(positions[i]);
-    let j = i;
-    while (j + 1 < positions.length && Math.sign(positions[j + 1]) === s) j++;
-    if (s !== 0) out.push({ from: i / 52, to: (j + 1) / 52, color: s > 0 ? LONG_TINT : SHORT_TINT });
-    i = j + 1;
-  }
-  return out;
-}
-
-const YEAR_TICKS = [0, 1, 2, 3, 4, 5];
-
 export default function Lesson() {
   // Reference results quoted in the prose (starting settings unless noted).
   const ref = useMemo(() => {
@@ -185,11 +177,11 @@ export default function Lesson() {
     const base = runTrader(D);
     const loose = traderHistory({ ...D, group: 'free' });
     const smallH = oilHistory({ kesslerCapacity: CAPACITY_MIN });
+    const firstHub = smallestProfitableHub();
     return {
       base,
       free: runTrader(D, 0),
-      inMarket: base.positions.filter((p) => p !== 0).length,
-      weeks: base.positions.length,
+      rules: ruleSettingsRange(),
       spreadMin: Math.min(...spreads),
       spreadMax: Math.max(...spreads),
       fillMin: Math.min(...fills),
@@ -197,14 +189,17 @@ export default function Lesson() {
       small: runTrader({ ...D, capacity: CAPACITY_MIN }),
       smallFree: runTrader({ ...D, capacity: CAPACITY_MIN }, 0),
       big: runTrader({ ...D, capacity: CAPACITY_MAX }),
+      firstHub,
+      first: runTrader({ ...D, capacity: firstHub }),
       calm: runTrader({ ...D, shocks: 0 }),
       calmMaxSpread: Math.max(...traderHistory({ ...D, shocks: 0 }).map(calendarSpread)),
       loose: runTrader({ ...D, group: 'free' }),
       looseFillMin: Math.min(...loose.map((w) => w.kesslerFill)),
       looseFillMax: Math.max(...loose.map((w) => w.kesslerFill)),
-      tau: HISTORY_DEFAULTS.kesslerCapacity / 4,
       carryClosest: closestCarry(CARRY_STATE_DEFAULTS),
       carrySmall: runCarry({ ...CARRY_STATE_DEFAULTS, capacity: CAPACITY_MIN }),
+      carrySmall1: runCarry({ ...CARRY_STATE_DEFAULTS, capacity: CAPACITY_MIN, months: 1 }),
+      carrySmall3: runCarry({ ...CARRY_STATE_DEFAULTS, capacity: CAPACITY_MIN, months: 3 }),
       topsSmall: smallH.filter((w) => w.kesslerFill >= TANK_TOPS).length,
       topsBase: hd.filter((w) => w.kesslerFill >= TANK_TOPS).length,
       fee30: runCarry({ ...CARRY_STATE_DEFAULTS, fee: 0.3 }),
@@ -234,9 +229,7 @@ export default function Lesson() {
   const [py0, py1] = niceDomain(Math.min(0, ...cumVals), Math.max(1000, ...cumVals), 4);
   const fillLo = Math.min(...h.map((w) => w.kesslerFill));
   const fillHi = Math.max(...h.map((w) => w.kesslerFill));
-  const solvedA = smallestHubSolved(st);
-  const prevTotal = useMemo(() => (st.capacity > CAPACITY_MIN ? runTrader({ ...st, capacity: st.capacity - 1 }).stats.total : NaN), [st]);
-  const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
+  const solvedA = predictedHubSolved(st);
 
   // --- Second demonstration.
   const s2 = useScenario<CarryState>('cash-and-carry', CARRY_STATE_DEFAULTS);
@@ -261,33 +254,41 @@ export default function Lesson() {
     <LessonPage id="oil/6.1">
       <P>
         Chapter 5 ended with a list of the spreads that physical mechanisms leave behind: between delivery months, between places, between crudes, and between crude and
-        the products made from it. This chapter takes them one at a time and asks a trader’s question of each. Can we earn from it — and what in the physical world
+        the products made from it. This chapter takes them one at a time and asks a trader’s question of each: can we earn from it, and what in the physical world
         makes that possible? We start with the spread closest to the tanks.
       </P>
       <P>
         In <a href={lessonHref('oil/5.4')}>Lesson 5.4</a>, the futures curve turned out to be a reading of stocks. When Kessler’s tanks are scarce, the first delivery
-        month trades over the second: backwardation. When they are ample, it trades under it: contango. The difference between the two, month 1 minus month 2, is
-        the <K c="price">calendar spread</K>. In our simulated history it runs from {cents(ref.spreadMin)} of contango to {usd(ref.spreadMax, 2)} of backwardation as
-        Kessler’s fill swings between {pct(ref.fillMin)} and {pct(ref.fillMax)}. WTI is a real benchmark, delivered at Cushing, Oklahoma; in our world it is the price
-        at Kessler, and every price in this chapter is simulated from the course’s physical model.
+        month trades over the second: backwardation. When they are ample, it trades under it: contango. The difference, month 1 minus month 2, is the{' '}
+        <K c="price">calendar spread</K>. Mind the sign: Lesson 5.4 read the curve the other way round, so here a positive spread means backwardation. In our
+        simulated history it runs from {cents(ref.spreadMin)} of contango to {usd(ref.spreadMax, 2)} of backwardation as Kessler’s fill swings between{' '}
+        {pct(ref.fillMin)} and {pct(ref.fillMax)}. WTI is a real benchmark, delivered at Cushing, Oklahoma; ours is simulated at Kessler, like every price in this
+        chapter.
       </P>
       <P>
-        A spread that follows stocks can only be traded if stocks are somewhat predictable, and here the tanks themselves help. A hub can’t fill or empty overnight. Oil
-        arrives and leaves through pipelines and refineries at limited rates, so the hub’s <K tone="orange">fill</K> moves toward wherever the market is pushing it over
-        weeks. If the tanks have been draining for a fortnight, they will probably keep draining next week, and the front month will keep gaining on the second. That
-        suggests a rule. Each week, look at how Kessler’s fill has changed over the last {D.lookback} weeks. If it has fallen by more than {fmt(D.threshold)}% of
-        capacity, buy the calendar spread — buy a month-1 contract and sell a month-2 contract. If it has risen by more than that, sell the spread. Otherwise, stay out.
+        A spread that follows stocks can be traded only if stocks are somewhat predictable, and the tanks help. Oil arrives and leaves through pipelines and
+        refineries at limited rates, so the hub’s <K tone="orange">fill</K> moves toward wherever the market is pushing it over weeks, not overnight. If the tanks
+        have drained for a fortnight, they will probably keep draining next week, and the front month will keep gaining on the second. That suggests a rule. Each
+        week, look at how Kessler’s fill has changed over the last {D.lookback} weeks. If it has fallen by more than {fmt(D.threshold)}% of capacity, buy the
+        calendar spread: buy a month-1 contract and sell a month-2 contract. If it has risen by more than that, sell the spread. Otherwise, stay out.
       </P>
       <P>
-        To score the rule we need some vocabulary. A <b>unit</b> of the spread is one contract of each month, 1,000 barrels apiece — the size of the real NYMEX WTI
+        A <b>unit</b> of the spread is one contract of each month, 1,000 barrels apiece — the size of the real NYMEX WTI
         contract — so every dollar the spread gains earns $1,000 for each unit held long. We trade {UNITS} units. Each contract bought or sold costs{' '}
         {cents(COST_PER_BBL)} a barrel in commission and the bid–ask spread, an illustrative figure. The running total of the weekly gains and losses is the{' '}
         <K c="price">cumulative P&amp;L</K>. Running a rule over past data like this, deciding each week from only what was known that week, is a <b>backtest</b>.
       </P>
       <P>
+        Two more numbers describe how a backtest got there. The first rests on the <K tone="violet">standard deviation</K>, which measures how far numbers stray
+        from their average: square each week’s distance from the average week, average the squares, and take the square root. The{' '}
+        <K tone="violet">Sharpe ratio</K> divides the average weekly P&amp;L by that standard deviation and scales the result to a year, multiplying by √52; at 1,
+        the average year’s profit is about as large as a year’s typical swing. The <K tone="violet">maximum drawdown</K> is the largest fall of the cumulative
+        P&amp;L from an earlier peak, the worst stretch anyone running the strategy would have lived through. (In <a href={lessonHref('oil/2.2')}>Lesson 2.2</a>
+        drawdown was a reservoir’s pressure difference; here it always means a fall in money.)
+      </P>
+      <P>
         In the next demonstration, the rule trades five simulated years at Kessler. The first chart is the hub’s fill, shaded where the rule holds the spread long or
-        short; the second is the spread itself; the third is the cumulative P&amp;L. The first three controls change the physical world, and the history with it; the
-        last two change the rule:
+        short; the second is the spread itself; the third is the cumulative P&amp;L. The first three controls change the physical world; the last two change the rule:
       </P>
 
       <Figure name="Oil Time-Spread Trader" scenario={s1}>
@@ -296,16 +297,17 @@ export default function Lesson() {
             { label: 'Kessler’s fill', color: ORANGE, kind: 'line' },
             { label: 'Calendar spread', color: GREEN, kind: 'line' },
             { label: 'Cumulative P&L', color: INK, kind: 'line' },
-            { label: 'Long the spread', color: LONG_TINT },
-            { label: 'Short the spread', color: SHORT_TINT },
+            { label: 'Long the spread', color: LONG_SWATCH },
+            { label: 'Short the spread', color: SHORT_SWATCH },
           ]}
         />
         <XYChart
           ariaLabel={`Kessler’s fill over five simulated years, between ${pct(fillLo)} and ${pct(fillHi)} full, shaded where the rule holds the calendar spread long (${longWeeks} weeks) or short (${shortWeeks} weeks).`}
-          height={150}
+          height={140}
           x={[0, 5]}
           y={[0, 100]}
           xTicks={YEAR_TICKS}
+          xFormat={yearTick}
           yTicks={[0, 50, 100]}
           yFormat={(v) => `${v}%`}
           yLabel="Kessler’s tanks, % full"
@@ -314,10 +316,11 @@ export default function Lesson() {
         />
         <XYChart
           ariaLabel={`WTI month 1 minus month 2 over five simulated years, from ${usd(sMin, 2)} to ${usd(sMax, 2)} a barrel.`}
-          height={140}
+          height={130}
           x={[0, 5]}
           y={[sy0, sy1]}
           xTicks={YEAR_TICKS}
+          xFormat={yearTick}
           yTicks={niceTicks(sy0, sy1, 3)}
           yFormat={(v) => `$${fmt(v, 1)}`}
           yLabel="Month 1 − month 2, $ per barrel"
@@ -337,24 +340,23 @@ export default function Lesson() {
           )}
         </XYChart>
         <XYChart
-          ariaLabel={`Cumulative P&L of ${UNITS} units over five simulated years: ${usd(stats.total)} at the end, with a maximum drawdown of ${usd(stats.maxDrawdown)}.`}
-          height={150}
+          ariaLabel={`Cumulative P&L of ${UNITS} units over five simulated years: ${money(stats.total)} at the end, with a maximum drawdown of ${money(stats.maxDrawdown)}.`}
+          height={140}
           x={[0, 5]}
           y={[py0, py1]}
           xTicks={YEAR_TICKS}
+          xFormat={yearTick}
           yTicks={niceTicks(py0, py1, 3)}
           yFormat={kusd}
-          xLabel="years"
           yLabel="Cumulative P&L"
           series={[{ points: cum, color: INK, width: 2.5, fillTo: 0, fillOpacity: 0.1 }]}
         />
         <Readouts
           items={[
-            { label: <K c="price">total P&amp;L</K>, value: money(stats.total), tone: tone(stats.total) },
-            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(stats.sharpe, 2), tone: 'violet' },
-            { label: <K tone="violet">maximum drawdown</K>, value: money(stats.maxDrawdown), tone: 'violet' },
+            { label: <K c="price">total P&amp;L</K>, value: money(stats.total), tone: pnlTone(stats.total) },
+            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(stats.sharpe, 2), tone: RISK_TONE },
+            { label: <K tone="violet">maximum drawdown</K>, value: money(stats.maxDrawdown), tone: RISK_TONE },
             { label: 'trading costs', value: money(res.costs) },
-            { label: 'weeks in the market', value: `${longWeeks + shortWeeks} of ${res.positions.length}` },
           ]}
         />
         <Slider
@@ -397,24 +399,21 @@ export default function Lesson() {
           display={`${fmt(st.threshold, 1)}% of capacity`}
         />
         <Caption>
-          The rule was long the spread for {longWeeks} weeks and short for {shortWeeks}, and {stats.total >= 0 ? 'made' : 'lost'} {money(Math.abs(stats.total))} after{' '}
-          {money(res.costs)} of trading costs.
+          The rule was long the spread for {longWeeks} weeks and short for {shortWeeks}, and out of the market for {res.positions.length - longWeeks - shortWeeks}.
         </Caption>
       </Figure>
 
       <P>
-        At the start, the rule makes {money(b.total)} in five years. It is in the market {ref.inMarket} of the {ref.weeks} weeks, long while the tanks drain and short
-        while they fill. Two more numbers describe how it got there. The <K tone="violet">Sharpe ratio</K>{' '}
-        divides the average weekly P&amp;L by its standard deviation and scales the result to a year, multiplying by √52; here it is {fmt(b.sharpe, 2)}, meaning the
-        average year’s profit is about {fmt(b.sharpe, 1)} times its standard deviation. The <K tone="violet">maximum drawdown</K> is the largest
-        fall of the cumulative P&amp;L from an earlier peak, {money(b.maxDrawdown)} — the worst stretch anyone running the strategy would have lived through. Notice the
-        costs, too: {money(ref.base.costs)}. Trading for free, the rule would have made {money(ref.free.stats.total)}; costs take about half its edge.
+        At the start, the rule makes {money(b.total)} in five years, long while the tanks drain and short while they fill. Its Sharpe ratio is {fmt(b.sharpe, 2)} and its maximum drawdown {money(b.maxDrawdown)}. Notice the costs, too: {money(ref.base.costs)}.
+        Trading for free, the rule would have made {money(ref.free.stats.total)}; costs take about half its edge. Try the rule’s settings too: on this history, {ref.rules.profitable === ref.rules.count ? 'every lookback and threshold the sliders offer makes money' : `${ref.rules.profitable} of the ${ref.rules.count} settings the sliders offer make money`},
+        from {money(ref.rules.min)} to {money(ref.rules.max)}. That looks reassuring, but it is one history; <a href={lessonHref('oil/6.5')}>Lesson 6.5</a> asks
+        how much of it another five years would keep.
       </P>
 
       <H2>What the trade needs</H2>
       <P>
         The rule leans on two physical facts, and the controls let us remove each one. The first is that stocks swing widely and for months at a time. Kessler’s fill
-        follows the world’s stocks, and in our world the big swings come from supply outages and the producer group’s response to them (
+        follows the world’s stocks, whose big swings come from supply outages and the producer group’s response to them (
         <a href={lessonHref('oil/5.1')}>Lesson 5.1</a>, <a href={lessonHref('oil/5.5')}>Lesson 5.5</a>). Set the outages to zero and the hub never runs low: the spread
         stays in contango for all five years, with month 1 always at least {cents(ref.calmMaxSpread)} under month 2. Its moves are too small to pay for trading, and
         the rule loses {money(-ref.calm.stats.total)}. Restore the outages and let the producer group stop steadying prices. Stocks swing further, the hub runs from{' '}
@@ -422,43 +421,43 @@ export default function Lesson() {
         {fmt(ref.loose.stats.sharpe, 2)}.
       </P>
       <P>
-        The second fact is that the hub moves slowly. How fast its fill can change is set by the flows in and out — the basin’s pipelines, the line to the coast, the
-        refineries — not by the size of the tanks. In our model, a {HISTORY_DEFAULTS.kesslerCapacity}-million-barrel hub closes about a fifth of the gap between its
-        stock and where the market is pushing it each week, so a fall this week foretells more of the same. Shrink the hub to {CAPACITY_MIN} million barrels and the
-        same flows close the gap within a week: the fill jumps to wherever the market is, and its changes from one week to the next are mostly noise. The rule flips
-        back and forth, its costs climb to {money(ref.small.costs)}, and it loses {money(-ref.small.stats.total)}; it would have lost{' '}
+        The second fact is that the hub moves slowly. The flows in and out, through pipelines and refineries, set how many barrels a week can move, so the bigger the tanks, the more slowly they fill and empty. In our model, a {HISTORY_DEFAULTS.kesslerCapacity}-million-barrel hub closes
+        about a fifth of the gap between its stock and where the market is pushing it each week, so a fall this week foretells more of the same. Shrink the hub to{' '}
+        {CAPACITY_MIN} million barrels and the same flows close the gap within a week: the fill jumps to wherever the market is, and its weekly changes are mostly
+        noise. The rule flips back and forth, its costs climb to {money(ref.small.costs)}, and it loses {money(-ref.small.stats.total)}; it would have lost{' '}
         {money(-ref.smallFree.stats.total)} even trading for free. Make the hub {CAPACITY_MAX} million barrels and the opposite happens: the trend is steadier than
         ever, but so gradual that the spread hardly moves, and the rule makes only {money(ref.big.stats.total)}.
       </P>
 
       <Challenge
         id="a"
-        question="With the outages, the producer group and the rule at their starting settings, find the smallest Kessler hub, to the nearest million barrels, in which the calendar rule makes money over the five years."
+        question={`Predict first, then check: with the outages, the producer group and the rule at their starting settings, does the calendar rule make money in a ${PREDICT_HUB}-million-barrel hub, which closes about two-thirds of the gap each week? Set Kessler’s storage to ${PREDICT_HUB} million barrels to see.`}
         solved={solvedA}
         status={
           !atStart(st)
             ? `Set the outages back to ${fmt(D.shocks, 1)} a year, the producer group to steadying prices, and the rule to ${D.lookback} weeks and ${fmt(D.threshold)}% of capacity.`
-            : `In a ${st.capacity}-million-barrel hub, the rule ${stats.total > 0 ? 'makes' : 'loses'} ${money(Math.abs(stats.total))}.`
+            : `Make your prediction, then set Kessler’s storage to ${PREDICT_HUB} million barrels.`
         }
-        success={`Solved: ${st.capacity} million barrels, where the rule makes ${money(stats.total)}${Number.isFinite(prevTotal) ? `; one million barrels smaller, it ${prevTotal > 0 ? 'makes' : 'loses'} ${money(Math.abs(prevTotal))}` : ''}. In a smaller hub the fill follows the market too quickly for its past to say much about its future, and trading costs win.`}
+        success={`Solved: in a ${PREDICT_HUB}-million-barrel hub the rule ${stats.total > 0 ? 'makes' : 'loses'} ${money(Math.abs(stats.total))}. Before costs it makes ${money(stats.total + res.costs)} — the fill’s recent past still says something about its future — but not enough to cover ${money(res.costs)} of trading costs. The rule first pays at ${ref.firstHub} million barrels, where it makes ${money(ref.first.stats.total)}.`}
       />
 
       <P>
-        A caution applies to every backtest in this chapter. In our model, the shape of the futures curve is set by this week’s stocks, so the market ignores the
-        direction the tanks are heading, even when it is plain to see. Real traders don’t. The U.S. Energy Information Administration publishes crude stocks at Cushing every week, and a pattern
-        this simple would be partly priced in before anyone could trade it. What a backtest like this shows is the mechanism, and the
-        physical facts it depends on.
+        A caution applies to every backtest in this chapter. Our futures curve reads only this week’s stocks, ignoring where the tanks are heading even when that is
+        plain to see. Real traders see it: the U.S. Energy Information Administration publishes Cushing’s stocks every week, and a pattern this simple would be
+        partly priced in. A backtest like this shows the mechanism and the physical facts it depends on.
       </P>
 
       <H2>Earning the contango</H2>
       <P>
-        The calendar rule bets on the spread’s direction. The terminal in <a href={lessonHref('oil/4.3')}>Lesson 4.3</a> earned from its level instead, with cash
-        and carry: buy crude now, store it, and sell it forward whenever the forward price beats spot by more than the cost of carrying. The theory of storage in
-        Lesson 5.4 said this should almost never pay, because anyone with tank space would run the trade until the forward premium fell back to{' '}
-        <K c="price">full carry</K>. In the next demonstration, we lease {fmt(CARRY_DEFAULTS.lease / 1e6)} million barrels of tanks at Kessler and test that over the
-        five years. In any week the tank is empty, if the future a set number of months out exceeds spot by more than that many months of full carry plus{' '}
-        {cents(CARRY_DEFAULTS.handling)} a barrel to pump in and again to pump out, we fill the tank and sell the oil forward, locking in the difference. The first
-        chart compares the forward premium with that cost; the second is Kessler’s fill:
+        The calendar rule bets on the spread’s direction. Cash and carry, the terminal’s trade in <a href={lessonHref('oil/4.3')}>Lesson 4.3</a>, earns from its
+        level: buy crude now, store it, and sell it forward whenever the forward price beats spot by more than the cost of carrying. The theory of storage said this
+        should almost never pay, because anyone with tank space would run the trade until the forward premium fell back to{' '}
+        <K c="price">full carry</K>. In the next demonstration we can store up to {fmt(CARRY_DEFAULTS.lease / 1e6)} million barrels at Kessler, paying the storage
+        fee only for the barrel-months we fill. (A tank leased outright costs its rent full or empty,{' '}
+        {usd((CARRY_DEFAULTS.lease * CARRY_DEFAULTS.fee * 12 * HISTORY_DEFAULTS.years) / 1e6)} million over five years for a million barrels at{' '}
+        {usd(CARRY_DEFAULTS.fee, 2)} a barrel-month; we ask only when filling one pays.) In any week our tank is empty, if the future a set number of months out
+        beats spot by more than that many months of full carry plus {cents(CARRY_DEFAULTS.handling)} a barrel each way for handling, we fill the tank and sell the
+        oil forward. The first chart compares the forward premium (future minus spot, positive in contango) with that cost; the second is Kessler’s fill:
       </P>
 
       <Figure name="Oil Time-Spread Trader · cash and carry" scenario={s2}>
@@ -470,11 +469,12 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Over five simulated years, the future ${monthsLabel} out minus spot against the cost of carrying a barrel that long. The premium beat the cost ${carry.trades} time${carry.trades === 1 ? '' : 's'} when the leased tank was free.`}
+          ariaLabel={`Over five simulated years, the future ${monthsLabel} out minus spot against the cost of carrying a barrel that long. The premium beat the cost ${carry.trades} time${carry.trades === 1 ? '' : 's'} when our tank was free.`}
           height={210}
           x={[0, 5]}
           y={[cy0, cy1]}
           xTicks={YEAR_TICKS}
+          xFormat={yearTick}
           yTicks={niceTicks(cy0, cy1, 4)}
           yFormat={(v) => `$${fmt(v, 1)}`}
           yLabel="$ per barrel"
@@ -490,9 +490,9 @@ export default function Lesson() {
           x={[0, 5]}
           y={[0, 100]}
           xTicks={YEAR_TICKS}
+          xFormat={yearTick}
           yTicks={[0, 50, 100]}
           yFormat={(v) => `${v}%`}
-          xLabel="years"
           yLabel="Kessler’s tanks, % full"
           refs={[{ axis: 'y', at: TANK_TOPS * 100, color: '#777', dash: '2 3', label: 'tanks effectively full' }]}
           series={[{ points: cFillPts, color: ORANGE, width: 2 }]}
@@ -501,7 +501,7 @@ export default function Lesson() {
           items={[
             { label: 'trades', value: String(carry.trades) },
             { label: <K c="price">profit locked in</K>, value: money(carry.profit), tone: carry.profit > 0 ? 'green' : 'ink' },
-            { label: 'lease in use', value: pct(carry.utilization) },
+            { label: 'tank in use', value: pct(carry.utilization) },
             { label: <K tone="orange">weeks ≥ 97% full</K>, value: String(tops), tone: 'orange' },
           ]}
         />
@@ -526,11 +526,6 @@ export default function Lesson() {
           onChange={(v) => s2.set({ fee: Math.round(v * 100) / 100 })}
           display={`${usd(cs.fee, 2)} per barrel-month`}
         />
-        <Caption>
-          {carry.trades > 0
-            ? `The trade fired ${carry.trades} time${carry.trades === 1 ? '' : 's'}, and the leased tank held oil ${pct(carry.utilization)} of the five years.`
-            : 'The premium never beat the cost of carrying while the tank was free, so the lease sat empty for all five years.'}
-        </Caption>
       </Figure>
 
       <P>
@@ -538,14 +533,15 @@ export default function Lesson() {
         {ref.carryClosest.week + 1}, when Kessler is {pct(ref.carryClosest.fill)} full, and even then falls {cents(ref.carryClosest.gap)} short. As the theory of
         storage says, the market pays storers to hold oil, but no more than it costs them. Now shrink the hub. At {CAPACITY_MIN} million barrels, Kessler is at least{' '}
         {pct(TANK_TOPS)} full in {ref.topsSmall} weeks of the five years rather than {ref.topsBase}. The tanks top out, the next barrel has nowhere onshore to go, and
-        the curve has to pay for storage at sea — the super-contango of Lesson 5.4. Whoever already holds a lease collects it: the trade fires {ref.carrySmall.trades}{' '}
-        times and locks in {money(ref.carrySmall.profit)}.
+        the curve has to pay for storage at sea — the super-contango of Lesson 5.4. Whoever has tank space to fill then collects it: the trade fires{' '}
+        {ref.carrySmall.trades} times and locks in {money(ref.carrySmall.profit)}. Holding longer doesn’t help, since each extra month must earn its own carry:
+        one-month holds lock in {money(ref.carrySmall1.profit)} here, three-month holds {money(ref.carrySmall3.profit)}.
       </P>
       <P>
         The cost that matters is our own. The curve’s contango is capped by the market’s cost of carry, built in our model on a storage fee of{' '}
         {usd(CARRY_DEFAULTS.fee, 2)} a barrel-month. A terminal that stores more cheaply earns the difference whenever contango nears full carry: lower the fee to{' '}
         {usd(0.3, 2)} and, at the starting hub and a two-month hold, the trade fires {ref.fee30.trades === 1 ? 'once' : `${ref.fee30.trades} times`}, for{' '}
-        {money(ref.fee30.profit)}; at {usd(0.2, 2)}, it fires {ref.fee20.trades} times for {millions(ref.fee20.profit)}. In our model, storage pays steadily only for
+        {money(ref.fee30.profit)}; at {usd(0.2, 2)}, it fires {ref.fee20.trades} times for {money(ref.fee20.profit)}. So storage pays steadily only for
         those whose tanks cost less than the market’s; for everyone else, it pays when the tanks run out.
       </P>
 
@@ -566,8 +562,8 @@ export default function Lesson() {
         fill up. In <FigRef to="Oil Time-Spread Trader">the first demonstration</FigRef>, a {CAPACITY_MIN}-million-barrel hub cost the calendar rule{' '}
         {money(-ref.small.stats.total)}; in the second, the same hub earned a storer {money(ref.carrySmall.profit)}. Both results come from one physical fact — how
         much a hub holds compared with the flows through it — and both vanish when that fact changes. The <a href={lessonHref('oil/6.2')}>next lesson</a> moves from
-        time to place and quality: the spread between Brent and WTI, set by the pipeline out of the basin, and the discount on a heavy, sour crude, set by what a
-        refinery can make of it.
+        time to place and quality: Brent against WTI, set by the pipeline out of the basin, and a heavy, sour crude against a light one, set by what a refinery can
+        make of each.
       </P>
     </LessonPage>
   );

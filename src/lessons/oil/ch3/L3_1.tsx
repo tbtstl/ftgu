@@ -3,14 +3,14 @@ import { Caption, Challenge, FigRef, Figure, H2, K, Legend, LessonPage, P, Reado
 import { crude, cumulativeYield } from '../../../engines/oil/assay';
 import { CRACKING_LIMIT, DEFAULT_CUTS, atmosphericEquivalent, distill, pressureForCut } from '../../../engines/oil/refining';
 import { CRUDE_IDS, CRUDE_SPECS, CUTS, type CrudeId } from '../../../model/oil/crudes';
-import { CALDER, CRUDE_PRICE, PRODUCT_PRICE } from '../../../model/oil/refinery';
+import { CORRAN, CRUDE_PRICE, PRODUCT_PRICE } from '../../../model/oil/refinery';
 import { StackedBar, XYChart } from '../shared/charts';
 
 const NAME: Record<CrudeId, string> = Object.fromEntries(CRUDE_SPECS.map((s) => [s.id, s.name])) as Record<CrudeId, string>;
 const CUT_COLOR: Record<string, string> = Object.fromEntries(CUTS.map((c) => [c.id, c.color]));
 
 /** The crude unit's throughput, kb/d. */
-export const RUN = CALDER.capacity.cdu;
+export const RUN = CORRAN.capacity.cdu;
 
 /** Slider ranges for the three atmospheric cut points, °C. */
 export const NK_RANGE = { min: 130, max: 190, step: 5 };
@@ -36,7 +36,7 @@ export interface TowerState {
 }
 
 export const TOWER_DEFAULTS: TowerState = {
-  crude: 'ridgeback',
+  crude: 'pinyon',
   nk: DEFAULT_CUTS.naphthaKero,
   kd: DEFAULT_CUTS.keroDiesel,
   dg: DEFAULT_CUTS.dieselGasoil,
@@ -47,17 +47,66 @@ export function withinLimits(st: Pick<TowerState, 'nk' | 'kd' | 'dg'>): boolean 
   return st.nk >= LIMITS.keroStartMin && st.kd <= LIMITS.keroEndMax && st.dg <= LIMITS.dieselEndMax;
 }
 
+function cutsOf(st: Pick<TowerState, 'nk' | 'kd' | 'dg'>) {
+  return { naphthaKero: st.nk, keroDiesel: st.kd, dieselGasoil: st.dg, vacuumCut: DEFAULT_CUTS.vacuumCut };
+}
+
 /** Kerosene (jet fuel) from a full run, kb/d. */
 export function jetRate(st: TowerState): number {
-  return distill(crude(st.crude), { naphthaKero: st.nk, keroDiesel: st.kd, dieselGasoil: st.dg, vacuumCut: DEFAULT_CUTS.vacuumCut }).kerosene.volume * RUN;
+  return distill(crude(st.crude), cutsOf(st)).kerosene.volume * RUN;
 }
 
 /**
- * Challenge a: the most jet fuel Ridgeback Light can give within the limits — the kerosene cut as
- * wide as allowed, 150–280 °C, with diesel still ending by 360 °C.
+ * What each cut would fetch sold as it is, $/bbl, at the course's reference prices: gases as LPG,
+ * both naphthas as naphtha, kerosene as jet fuel, diesel as diesel, and everything heavier as fuel oil.
  */
-export function maxJetSolved(st: TowerState): boolean {
-  return st.crude === 'ridgeback' && st.nk === LIMITS.keroStartMin && st.kd === LIMITS.keroEndMax && st.dg <= LIMITS.dieselEndMax;
+export const CUT_PRICE = {
+  lpg: PRODUCT_PRICE.lpg,
+  naphtha: PRODUCT_PRICE.naphtha,
+  kerosene: PRODUCT_PRICE.jet,
+  diesel: PRODUCT_PRICE.diesel,
+  residue: PRODUCT_PRICE.hsfo,
+};
+
+/** The column's cuts from a full run at CUT_PRICE, $ a day. */
+export function cutValue(st: TowerState): number {
+  const d = distill(crude(st.crude), cutsOf(st));
+  const perBbl =
+    d.lpg.volume * CUT_PRICE.lpg +
+    (d.lightNaphtha.volume + d.heavyNaphtha.volume) * CUT_PRICE.naphtha +
+    d.kerosene.volume * CUT_PRICE.kerosene +
+    d.diesel.volume * CUT_PRICE.diesel +
+    (d.vgo.volume + d.residue.volume) * CUT_PRICE.residue;
+  return perBbl * RUN * 1000;
+}
+
+/** Challenge a: the airline's minimum, kb/d of jet fuel from Pinyon Light. */
+export const AIRLINE_JET = 30;
+
+/**
+ * The best answer to challenge a, searched over the sliders' grid: Pinyon Light's cut points,
+ * within the limits, that give at least AIRLINE_JET of kerosene with the cuts worth the most.
+ */
+export const AIRLINE_BEST: TowerState & { value: number } = (() => {
+  let best: TowerState & { value: number } = { ...TOWER_DEFAULTS, value: -Infinity };
+  for (let nk = NK_RANGE.min; nk <= NK_RANGE.max; nk += NK_RANGE.step)
+    for (let kd = KD_RANGE.min; kd <= KD_RANGE.max; kd += KD_RANGE.step)
+      for (let dg = DG_RANGE.min; dg <= DG_RANGE.max; dg += DG_RANGE.step) {
+        const st: TowerState = { crude: 'pinyon', nk, kd, dg };
+        if (!withinLimits(st) || jetRate(st) < AIRLINE_JET - 1e-9) continue;
+        const value = cutValue(st);
+        if (value > best.value) best = { ...st, value };
+      }
+  return best;
+})();
+
+/**
+ * Challenge a: meet the airline from Pinyon Light, within the limits, with the cuts worth as much
+ * as they can be — the extra jet taken from the cheap naphtha before the dear diesel, and the diesel
+ * cut run to its limit.
+ */
+export function airlineSolved(st: TowerState): boolean {
+  return st.crude === 'pinyon' && withinLimits(st) && jetRate(st) >= AIRLINE_JET - 1e-9 && cutValue(st) >= AIRLINE_BEST.value - 1;
 }
 
 /** The vacuum column's target: gas oil boiling up to 550 °C (atmospheric-equivalent). */
@@ -86,6 +135,11 @@ function degC(t: number): string {
 
 function mmHg(p: number): string {
   return `${fmt(p, p < 100 ? 1 : 0)} mmHg`;
+}
+
+/** Dollars a day in millions, to the nearest thousand: a 5 °C move of the swing cut shows. */
+function millions(v: number): string {
+  return `$${fmt(v / 1e6, 3)} million`;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,13 +271,21 @@ export default function Lesson() {
     { id: 'resid', name: 'Atmospheric residue → vacuum column', range: `above ${st.dg} °C`, y: 362, flow: atmResidue * RUN, color: CUT_COLOR.residue },
   ];
   const ok = withinLimits(st);
-  const solvedA = maxJetSolved(st);
+  const solvedA = airlineSolved(st);
+  const jet = d.kerosene.volume * RUN;
+  const value = cutValue(st);
 
   // Reference numbers for the prose.
-  const rbDefault = distill(crude('ridgeback'));
-  const rbMaxJet = distill(crude('ridgeback'), { ...DEFAULT_CUTS, naphthaKero: LIMITS.keroStartMin, keroDiesel: LIMITS.keroEndMax });
+  const rbDefault = distill(crude('pinyon'));
   const nfDefault = distill(crude('northfield'));
   const cwAtm = 1 - cumulativeYield(crude('coldwater'), DEFAULT_CUTS.dieselGasoil);
+  // The swing cut priced: Pinyon Light, kerosene/diesel cut 5 °C above standard.
+  const rbStd: TowerState = { ...TOWER_DEFAULTS, crude: 'pinyon' };
+  const rbSwing: TowerState = { ...rbStd, kd: rbStd.kd + KD_RANGE.step };
+  const swingKb = jetRate(rbSwing) - jetRate(rbStd);
+  const swingValue = cutValue(rbStd) - cutValue(rbSwing);
+  // Challenge a's answer, for the success message.
+  const rbBest = distill(crude('pinyon'), cutsOf(AIRLINE_BEST));
 
   // ---- Figure 2: the vacuum column.
   const v = useScenario('vacuum', { crude: 'coldwater' as CrudeId, furnace: 380, logP: LOG_P_RANGE.max });
@@ -244,9 +306,8 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/3.1">
       <P>
-        Chapter 2 ended with our four crudes leaving their fields: Ridgeback Light and Northfield Sour from the inland basin, Coldwater Heavy from the north, Seaboard Blend
-        by sea. In this chapter they all go to the same place, the Calder refinery at Port Calder, which can take {fmt(RUN)},000 barrels of crude a day. The chapter’s
-        question is how one barrel of crude becomes several products, each with its own value, and the answer starts with the physics of{' '}
+        In this chapter, the four crudes of Chapter 2 all go to one place: the Corran refinery at Port Corran, which can take {fmt(RUN)},000 barrels of crude a day. The
+        chapter’s question is how one barrel of crude becomes several products, each with its own value, and the answer starts with the physics of{' '}
         <a href={lessonHref('oil/1.4')}>Lesson 1.4</a>: a mixture boils over a range, and what boils first is richer in its lightest molecules.
       </P>
       <P>
@@ -266,8 +327,8 @@ export default function Lesson() {
         <Tower st={st} draws={draws} />
         <Readouts
           items={[
-            { label: <K tone="orange">kerosene for jet fuel</K>, value: kbd(d.kerosene.volume * RUN), tone: 'orange' },
-            { label: <K tone="orange">diesel</K>, value: kbd(d.diesel.volume * RUN), tone: 'orange' },
+            { label: <K tone="orange">kerosene and diesel together</K>, value: kbd((d.kerosene.volume + d.diesel.volume) * RUN), tone: 'orange' },
+            { label: <K c="price">the cuts at product prices, a day</K>, value: millions(value), tone: 'green' },
             { label: 'boiled at atmospheric pressure', value: pct(1 - atmResidue) },
           ]}
         />
@@ -309,10 +370,11 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With Ridgeback Light at the standard cut points, the column makes {kbd(rbDefault.kerosene.volume * RUN)} of kerosene and {kbd(rbDefault.diesel.volume * RUN)} of
-        diesel, and {pct(cumulativeYield(crude('ridgeback'), DEFAULT_CUTS.dieselGasoil))} of the crude boils off before the residue leaves the bottom. Switch to Coldwater
+        With Pinyon Light at the standard cut points, the column makes {kbd(rbDefault.kerosene.volume * RUN)} of kerosene and {kbd(rbDefault.diesel.volume * RUN)} of
+        diesel, and {pct(cumulativeYield(crude('pinyon'), DEFAULT_CUTS.dieselGasoil))} of the crude boils off before the residue leaves the bottom. Switch to Coldwater
         Heavy and {pct(cwAtm)} of the barrel goes out of the bottom unboiled. None of these streams is a finished product yet. Northfield Sour’s diesel cut carries{' '}
-        {fmt(nfDefault.diesel.sulfur, 2)}% sulfur, against a limit of 15 parts per million for road diesel, and even Ridgeback Light’s carries{' '}
+        {fmt(nfDefault.diesel.sulfur, 2)}% sulfur — {fmt(Math.round(nfDefault.diesel.sulfur * 100) * 100)} parts per million (ppm), since 1% is 10,000 ppm — against a
+        limit of 15 ppm for road diesel, and even Pinyon Light’s carries{' '}
         {fmt(rbDefault.diesel.sulfur, 2)}%; removing it is the subject of <a href={lessonHref('oil/3.3')}>Lesson 3.3</a>. Distillation only sorts. It changes no
         molecules.
       </P>
@@ -322,8 +384,15 @@ export default function Lesson() {
         Nothing in nature says kerosene ends at {DEFAULT_CUTS.keroDiesel} °C. The column’s operators set the cut points by how much they draw off at each height, and they
         move them to suit the market. The boundary between kerosene and diesel is a <b>swing cut</b>: the molecules boiling around it can go into either product, so raising
         the cut point makes more jet fuel and less diesel. Which way to swing depends on prices. In the course’s simulated reference month, jet fuel sells for{' '}
-        {usd(PRODUCT_PRICE.jet)} a barrel at Port Calder and diesel for {usd(PRODUCT_PRICE.diesel)}, but in a winter of heavy heating-oil demand, or a summer of heavy air
+        {usd(PRODUCT_PRICE.jet)} a barrel at Port Corran and diesel for {usd(PRODUCT_PRICE.diesel)}, but in a winter of heavy heating-oil demand, or a summer of heavy air
         travel, the gap can move either way.
+      </P>
+      <P>
+        The value readout in this demonstration prices every cut as if it were sold as it is: gases as LPG at{' '}
+        {usd(CUT_PRICE.lpg)} a barrel, naphtha at {usd(CUT_PRICE.naphtha)}, kerosene and diesel at the prices just given, and everything heavier as fuel oil at{' '}
+        {usd(CUT_PRICE.residue)}. Raise Pinyon Light’s kerosene/diesel cut by {KD_RANGE.step} °C and {fmt(swingKb, 1)} kb/d moves from diesel to jet; the cuts are
+        worth {usd(swingValue)} a day less, {usd(CUT_PRICE.diesel - CUT_PRICE.kerosene)} for every barrel moved. The other two cut points move barrels between products
+        whose prices are much further apart.
       </P>
       <P>
         The cuts can’t move far, because each product has a specification. Jet fuel must not ignite too easily — the common Jet A grade must have a flash point of at least
@@ -335,16 +404,18 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="An airline wants all the jet fuel Calder can make. Running Ridgeback Light, set the cut points to make as much kerosene as the model’s limits allow."
+        question={`An airline wants at least ${AIRLINE_JET} kb/d of jet fuel from Pinyon Light. Predict first: which neighbor should the extra kerosene come from, and what should the other cut points do? Then set all three, within the model’s limits, so the column meets the airline with its cuts worth as much as they can be.`}
         solved={solvedA}
         status={
-          st.crude !== 'ridgeback'
-            ? 'Choose Ridgeback Light first.'
+          st.crude !== 'pinyon'
+            ? 'Choose Pinyon Light first.'
             : !ok
               ? 'One of the cuts is outside the model’s limits.'
-              : `The column makes ${kbd(d.kerosene.volume * RUN)} of kerosene. Can the cut be wider?`
+              : jet < AIRLINE_JET - 1e-9
+                ? `The column makes ${kbd(jet)} of kerosene; the airline wants ${AIRLINE_JET}.`
+                : `${kbd(jet)} of kerosene for the airline, and the cuts are worth ${millions(value)} a day. Can they be worth more?`
         }
-        success={`Solved: kerosene from ${LIMITS.keroStartMin} to ${LIMITS.keroEndMax} °C gives ${kbd(rbMaxJet.kerosene.volume * RUN)}, up from ${kbd(rbDefault.kerosene.volume * RUN)} at the standard cuts. The extra barrels aren’t new: diesel falls from ${kbd(rbDefault.diesel.volume * RUN)} to ${kbd(rbMaxJet.diesel.volume * RUN)}, and heavy naphtha from ${kbd(rbDefault.heavyNaphtha.volume * RUN)} to ${kbd(rbMaxJet.heavyNaphtha.volume * RUN)}. Distillation can only reshuffle what the crude contains.`}
+        success={`Solved: kerosene from ${AIRLINE_BEST.nk} to ${AIRLINE_BEST.kd} °C and diesel up to ${AIRLINE_BEST.dg} °C give the airline ${kbd(jet)}, and the cuts are worth ${millions(value)} a day, against ${millions(cutValue(rbStd))} at the standard cuts. The jet came first from the naphtha side, where a barrel moved to jet fetches ${usd(CUT_PRICE.kerosene - CUT_PRICE.naphtha)} more, and only then from diesel, where it fetches ${usd(CUT_PRICE.diesel - CUT_PRICE.kerosene)} less; and diesel runs to its limit because it fetches ${usd(CUT_PRICE.diesel - CUT_PRICE.residue)} more than fuel oil. Kerosene and diesel together rose from ${kbd((rbDefault.kerosene.volume + rbDefault.diesel.volume) * RUN)} to ${kbd((rbBest.kerosene.volume + rbBest.diesel.volume) * RUN)}, every barrel of it taken from the naphtha and the residue. Distillation can only reshuffle what the crude contains.`}
       />
 
       <H2>The vacuum column</H2>
@@ -353,7 +424,7 @@ export default function Lesson() {
         boiling from 350 to 550 °C can be cracked into gasoline and diesel, as the next lesson shows. The obvious move is to heat the crude more, but there’s a ceiling. At
         about {CRACKING_LIMIT} °C, heavy oil starts to break apart in the furnace and lay down coke on the inside of its tubes. So the refinery uses the other lever of
         Lesson 1.4: pressure. The residue is reheated and sent to a second column held at a vacuum — a few percent of atmospheric pressure, tens of millimeters of
-        mercury — where everything boils at a far lower temperature. Refiners describe what a vacuum column recovers by its <b>atmospheric-equivalent</b> cut point: the
+        mercury (mmHg) against the atmosphere’s 760 — where everything boils at a far lower temperature. Refiners describe what a vacuum column recovers by its <b>atmospheric-equivalent</b> cut point: the
         temperature at which the heaviest molecule it boils would boil at normal pressure.
       </P>
       <P>
@@ -448,7 +519,7 @@ export default function Lesson() {
 
       <P>
         At atmospheric pressure the furnace can only boil what boils below its own temperature: {degC(atmosphericEquivalent(CRACKING_LIMIT, 760))} at the cracking limit,
-        barely past the atmospheric column’s cut. Lower the pressure to 25 mmHg and the same {CRACKING_LIMIT} °C furnace reaches an atmospheric-equivalent{' '}
+        only {fmt(atmosphericEquivalent(CRACKING_LIMIT, 760) - DEFAULT_CUTS.dieselGasoil)} °C past the atmospheric column’s cut. Lower the pressure to 25 mmHg and the same {CRACKING_LIMIT} °C furnace reaches an atmospheric-equivalent{' '}
         {degC(deep)}. That matters most for heavy crude. Of Coldwater Heavy, {pct(1 - cumulativeYield(cw, DEFAULT_CUTS.dieselGasoil))} boils above{' '}
         {DEFAULT_CUTS.dieselGasoil} °C; a vacuum cut at {VACUUM_TARGET} °C recovers enough gas oil to leave {pct(1 - cumulativeYield(cw, VACUUM_TARGET))} as residue, and a
         cut at {fmt(deep)} °C leaves {pct(1 - cumulativeYield(cw, deep))}. Every barrel moved from residue to gas oil is a barrel the cracker can upgrade.
@@ -468,8 +539,8 @@ export default function Lesson() {
 
       <P>
         Distillation has now done all it can. It has split each barrel into cuts, but the cuts are in the proportions the crude came with, and the heaviest of them are worth
-        the least: in our simulated reference month, high-sulfur fuel oil fetches {usd(PRODUCT_PRICE.hsfo)} a barrel, {usd(CRUDE_PRICE.ridgeback - PRODUCT_PRICE.hsfo, 2)}{' '}
-        less than a barrel of Ridgeback Light costs delivered to Calder. Turning gas oil and residue into gasoline and diesel means changing the molecules themselves. The <a href={lessonHref('oil/3.2')}>next lesson</a> breaks them
+        the least: in our simulated reference month, high-sulfur fuel oil fetches {usd(PRODUCT_PRICE.hsfo)} a barrel, {usd(CRUDE_PRICE.pinyon - PRODUCT_PRICE.hsfo, 2)}{' '}
+        less than a barrel of Pinyon Light costs delivered to Corran. Turning gas oil and residue into gasoline and diesel means changing the molecules themselves. The <a href={lessonHref('oil/3.2')}>next lesson</a> breaks them
         apart. You can return to <FigRef to="Distillation Tower">the first demonstration</FigRef> to compare how the four crudes split.
       </P>
     </LessonPage>

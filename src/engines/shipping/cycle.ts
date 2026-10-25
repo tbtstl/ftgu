@@ -118,7 +118,7 @@ export function classScrapValue(id: ClassId): number {
 /**
  * Value of a ship of an age, $: expected earnings net of opex over her remaining life, plus scrap.
  * Older ships earn a little less (worse fuel economy, 0.8% a year of age) and cost more to run
- * (2.5% a year of age), as in Lesson 2.4.
+ * (2.5% a year of age): the ageing of Lesson 2.4, slightly simplified (its fuel penalty is 1% a year).
  */
 export function shipValue(id: ClassId, age: number, expected: number, longRun: number): number {
   const years = Math.max(0, Math.round(LIFE - age));

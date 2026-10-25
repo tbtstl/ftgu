@@ -1,5 +1,6 @@
 import { useDeferredValue, useMemo } from 'react';
 import {
+  Button,
   Caption,
   Challenge,
   Checkbox,
@@ -30,10 +31,13 @@ import {
 import { MARKET, type MarketModel } from '../../../engines/weather/market';
 import type { BookSettings } from '../../../engines/weather/portfolio';
 import { scorecard, type Scorecard } from '../../../engines/weather/scorecard';
+import { utilityWinters } from '../../../engines/weather/exposure';
 import type { WorldKnobs } from '../../../model/weather/archive';
 import {
+  DESK_RANGE,
+  REFERENCE_BOOK,
   REGION_DEFAULTS,
-  isCalder,
+  isFenwick,
   regionKnobs,
   updateCapstone,
   useWeatherCapstone,
@@ -42,6 +46,7 @@ import {
   type DeskSettings,
   type RegionSettings,
 } from '../shared/capstone';
+import { CapstoneStrip, useReference, type StripPart } from '../shared/CapstoneStrip';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -91,47 +96,68 @@ export function bookScore(region: RegionSettings, business: BusinessSettings, de
   return s;
 }
 
-function atDefaults(w: WorldOverrides): boolean {
-  return (Object.keys(WORLD_DEFAULTS) as Array<keyof WorldOverrides>).every((k) => w[k] === WORLD_DEFAULTS[k]);
-}
-
-/** The first challenge: the worst winter, whole book, less than this share of the worst unhedged miss. */
-export const WORST_SHARE = 0.2;
-
-/**
- * The first challenge: in the world as built, a utility book whose worst winter misses its plan by
- * less than a fifth of what the worst winter would have missed unhedged — while the trading desk
- * still makes money.
- */
-export function steadyBookSolved(region: RegionSettings, business: BusinessSettings, desk: DeskSettings, w: WorldOverrides): boolean {
-  if (business.kind !== 'utility' || !atDefaults(w)) return false;
-  const s = bookScore(region, business, desk, w);
-  return s.trades > 0 && s.tradingTotal > 0 && s.worstMiss < 0 && s.worstTotal > WORST_SHARE * s.worstMiss;
-}
-
-/** The share of the misses' variance the hedge must still remove in the second challenge. */
+/** The share of the misses' variance the hedge must still remove in the first challenge. */
 export const HEDGE_FLOOR = 0.9;
 
+const deskOpen = (d: DeskSettings) => d.size > 0 && d.months.length > 0;
+
+/** Whether the world's overrides change only what the market knows (whether it prices ENSO, how stale its forecasts are), and change it. */
+export function marketOnlyChanged(w: WorldOverrides): boolean {
+  const same = (k: keyof WorldOverrides) => w[k] === WORLD_DEFAULTS[k];
+  return same('pull') && same('variability') && same('halfSpread') && (w.usesEnso !== WORLD_DEFAULTS.usesEnso || w.lag !== WORLD_DEFAULTS.lag);
+}
+
 /**
- * The second challenge: take away the physics or the information behind the trading edge — the
- * Pacific's pull, or the market's blindness to it — until the desk, still open, finds nothing to
- * trade, while the hedge still removes at least 90% of the misses' variance.
+ * The first challenge: with the Pacific's pull left alone, change only what the market knows until
+ * the desk, still open, finds nothing to trade — while the hedge still removes at least 90% of the
+ * misses' variance. (Pricing ENSO isn't enough: the market's two-day lag still leaks the previous
+ * month's ENSO outlook, so its forecasts have to be fresh, or nearly, as well.)
  */
-export function physicsGoneSolved(region: RegionSettings, business: BusinessSettings, desk: DeskSettings, w: WorldOverrides): boolean {
-  if (!(w.pull === 0 || w.usesEnso)) return false;
-  if (desk.size <= 0 || desk.months.length === 0 || desk.hedgeStrips <= 0) return false;
+export function marketCatchesUpSolved(region: RegionSettings, business: BusinessSettings, desk: DeskSettings, w: WorldOverrides): boolean {
+  if (!marketOnlyChanged(w) || !deskOpen(desk) || desk.hedgeStrips <= 0) return false;
   const s = bookScore(region, business, desk, w);
   return s.trades === 0 && s.effectiveness >= HEDGE_FLOOR;
 }
 
-// ---------------------------------------------------------------------------
-// Numbers the prose quotes: Calder Bay's own climate, and a reference book.
+/** The world with no pull from the Pacific, as the second demonstration's table builds it. */
+export const NO_PULL: WorldOverrides = { ...WORLD_DEFAULTS, pull: 0 };
 
-export const REF_DESK: DeskSettings = { hedgeStrips: 2800, months: [11, 0, 1], lead: 60, threshold: 5, size: 10 };
+/**
+ * The second challenge, on the trading desk: in the world with no pull from the Pacific, where the
+ * desk deciding 60 days ahead finds nothing, choose when it decides so that it makes money again.
+ * Only the forecasts' freshness is left, so it has to decide within their reach of the month.
+ */
+export function noPullEdgeSolved(region: RegionSettings, business: BusinessSettings, desk: DeskSettings): boolean {
+  if (!deskOpen(desk)) return false;
+  const s = bookScore(region, business, desk, NO_PULL);
+  return s.trades > 0 && s.tradingTotal > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Numbers the prose quotes: Fenwick Bay's own climate, and a reference book.
+
+export const REF_DESK: DeskSettings = REFERENCE_BOOK;
 export const REF_BUSINESS: BusinessSettings = { kind: 'utility', scale: 1 };
 
 function refScore(desk: Partial<DeskSettings> = {}, w: Partial<WorldOverrides> = {}): Scorecard {
   return bookScore(REGION_DEFAULTS, REF_BUSINESS, { ...REF_DESK, ...desk }, { ...WORLD_DEFAULTS, ...w });
+}
+
+/** The standard deviation of the utility's winter margin around its average, winters 1–40: the risk Lesson 6.1 quotes, $. */
+export function archiveMarginSd(knobs: WorldKnobs): number {
+  const m = utilityWinters(knobs).map((w) => w.margin);
+  const mean = m.reduce((a, b) => a + b, 0) / m.length;
+  return Math.sqrt(m.reduce((a, b) => a + (b - mean) ** 2, 0) / m.length);
+}
+
+/** A share of variance the hedge removes, or "adds risk" when selling strips makes the business's results more variable. */
+export function removesText(effectiveness: number): string {
+  return effectiveness < 0 ? 'adds risk' : pct(effectiveness);
+}
+
+/** How stale the market's forecasts are, in words. */
+export function staleText(lag: number): string {
+  return lag === 0 ? 'fresh' : `${fmt(lag)} ${lag === 1 ? 'day' : 'days'} stale`;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +177,7 @@ function shortMoney(v: number): string {
 
 const MONTH_LABEL: Record<number, string> = { 11: 'December', 0: 'January', 1: 'February' };
 
-const BUSINESS_LABEL: Record<BusinessKind, string> = { utility: 'Calder Gas & Light', wind: 'the Hollin Ridge wind farm', farm: 'the Marlow corn farm' };
+const BUSINESS_LABEL: Record<BusinessKind, string> = { utility: 'Fenwick Gas & Light', wind: 'the Hollin Ridge wind farm', farm: 'the Marlow corn farm' };
 
 // ---------------------------------------------------------------------------
 // The book's chart: each winter against its plan, and the trading desk's running total.
@@ -164,15 +190,15 @@ function BookChart({ sc, label }: { sc: Scorecard; label: string }) {
   const x = scale(0, n, X0, X1);
   const vals = sc.winters.flatMap((w) => [w.miss, w.total]);
   const [lo, hi] = niceDomain(Math.min(0, ...vals), Math.max(1, ...vals), 4);
-  const y = scale(lo, hi, 196, 28);
+  const y = scale(lo, hi, 184, 28);
   const cum: number[] = [];
   let run = 0;
   for (const w of sc.winters) cum.push((run += w.trading));
   const [clo, chi] = niceDomain(Math.min(0, ...cum), Math.max(1, ...cum), 2);
-  const yc = scale(clo, chi, 306, 244);
+  const yc = scale(clo, chi, 276, 218);
   const bw = (X1 - X0) / n;
   return (
-    <svg className="chart" viewBox="0 0 640 336" role="img" aria-label={label}>
+    <svg className="chart" viewBox="0 0 640 306" role="img" aria-label={label}>
       <text className="ax" x={X0} y={14}>
         Each winter against its October plan
       </text>
@@ -188,7 +214,7 @@ function BookChart({ sc, label }: { sc: Scorecard; label: string }) {
           </g>
         );
       })}
-      <text className="ax" x={X0} y={234}>
+      <text className="ax" x={X0} y={208}>
         Trading desk, running total
       </text>
       <GridY y={yc} ticks={niceTicks(clo, chi, 2)} x0={X0} x1={X1} format={shortMoney} baseline={0} />
@@ -198,7 +224,7 @@ function BookChart({ sc, label }: { sc: Scorecard; label: string }) {
       )}
       {sc.winters.map((w, i) =>
         w.winter % 5 === 0 ? (
-          <text key={w.winter} className="ax ax-m" x={x(i + 0.5)} y={326}>
+          <text key={w.winter} className="ax ax-m" x={x(i + 0.5)} y={296}>
             {w.winter === 5 ? 'winter 5' : w.winter}
           </text>
         ) : null,
@@ -225,22 +251,30 @@ export const WORLDS: WorldRow[] = [
   { key: 'wide', label: 'Three times the spread', w: { ...WORLD_DEFAULTS, halfSpread: 3 * WORLD_DEFAULTS.halfSpread } },
 ];
 
+const STRIP_PARTS: StripPart[] = ['region', 'business', 'desk'];
+const REFERENCE = { desk: REFERENCE_BOOK };
+
 export default function Lesson() {
   const cap = useWeatherCapstone();
   const { region, business, desk } = cap;
   const wsc = useScenario('world', WORLD_DEFAULTS);
   const w = wsc.state;
+  const refBook = useReference(STRIP_PARTS, REFERENCE);
 
   const dRegion = useDeferredValue(region);
   const dBusiness = useDeferredValue(business);
   const dDesk = useDeferredValue(desk);
   const dW = useDeferredValue(w);
   const sc = useMemo(() => bookScore(dRegion, dBusiness, dDesk, dW), [dRegion, dBusiness, dDesk, dW]);
-  const solved = useMemo(() => steadyBookSolved(dRegion, dBusiness, dDesk, dW), [dRegion, dBusiness, dDesk, dW]);
-  const solved2 = useMemo(() => physicsGoneSolved(dRegion, dBusiness, dDesk, dW), [dRegion, dBusiness, dDesk, dW]);
+  const solved = useMemo(() => marketCatchesUpSolved(dRegion, dBusiness, dDesk, dW), [dRegion, dBusiness, dDesk, dW]);
   const table = useMemo(() => WORLDS.map((row) => ({ ...row, sc: bookScore(dRegion, dBusiness, dDesk, row.w) })), [dRegion, dBusiness, dDesk]);
+  const noPull = table.find((r) => r.key === 'noPull')!.sc;
+  const solved2 = useMemo(() => noPullEdgeSolved(dRegion, dBusiness, dDesk), [dRegion, dBusiness, dDesk]);
+  // For the challenges' messages: pricing ENSO alone, and the no-pull world ten days out.
+  const ensoOnly = useMemo(() => (solved ? bookScore(dRegion, dBusiness, dDesk, { ...WORLD_DEFAULTS, usesEnso: true }) : null), [solved, dRegion, dBusiness, dDesk]);
+  const at10 = useMemo(() => (solved2 && dDesk.lead < 10 ? bookScore(dRegion, dBusiness, { ...dDesk, lead: 10 }, NO_PULL) : null), [solved2, dRegion, dBusiness, dDesk]);
 
-  // Numbers the prose quotes, in Calder Bay's own climate with the reference book.
+  // Numbers the prose quotes, in Fenwick Bay's own climate with the reference book.
   const q = useMemo(() => {
     const unhedged = refScore({ hedgeStrips: 0 });
     const ref = refScore();
@@ -255,6 +289,7 @@ export default function Lesson() {
       wild: refScore({}, { variability: 2 }),
       wide: refScore({}, { halfSpread: 15 }),
       big: refScore({ size: 100 }),
+      archiveSd: archiveMarginSd(regionKnobs(REGION_DEFAULTS)),
     };
   }, []);
 
@@ -264,26 +299,42 @@ export default function Lesson() {
     setDesk({ months: [11, 0, 1, 2, 10].filter((x) => months.includes(x)) });
   };
   const ensoF = region.ensoF * w.pull;
-  const regionLine = isCalder(region)
-    ? 'Calder Bay’s own climate'
+  const regionLine = isFenwick(region)
+    ? 'Fenwick Bay’s own climate'
     : `your region from Lesson 6.1: ${fmt(region.latitude)}° north, continentality ${fmt(region.continentality, 2)}, ${fmt(region.elevation)} m`;
   const monthsText = desk.months.length ? desk.months.map((m) => MONTH_LABEL[m] ?? `month ${m + 1}`).join(', ') : 'no months';
+  const open = desk.size > 0 && desk.months.length > 0;
 
   const chartLabel = `${BUSINESS_LABEL[business.kind]} replayed over winters 2–40 in ${regionLine}, selling ${fmt(desk.hedgeStrips)} seasonal strips and trading ${fmt(desk.size)} contracts in ${monthsText}, ${fmt(desk.lead)} days ahead. Unhedged, the misses against plan have a standard deviation of ${millions(sc.missSd)} and the worst is ${millions(sc.worstMiss)}; the whole book's is ${millions(sc.totalSd)}, worst ${millions(sc.worstTotal)}. The desk made ${fmt(sc.trades)} trades for ${usd(sc.tradingTotal)}.`;
 
-  const status1 =
-    business.kind !== 'utility'
-      ? 'Switch the business back to Calder Gas & Light: a heating-season strip hedges a gas utility, not a farm.'
-      : !atDefaults(w)
-        ? 'Put the physics and the market back as they were (Reset): the challenge is to build the book in the world you made.'
-        : sc.trades === 0
-          ? 'The desk isn’t trading. Open it, or — if your region’s winters don’t answer to the Pacific — decide closer to each month, where fresher forecasts are the edge.'
-          : sc.tradingTotal <= 0
-            ? `The desk made ${fmt(sc.trades)} trades but lost ${usd(-sc.tradingTotal)} in all.`
-            : `The worst winter misses its plan by ${millions(-sc.worstTotal)}, ${pct(sc.worstTotal / sc.worstMiss)} of the ${millions(-sc.worstMiss)} it would have missed unhedged.`;
+  const physicsTouched = w.pull !== WORLD_DEFAULTS.pull || w.variability !== WORLD_DEFAULTS.variability || w.halfSpread !== WORLD_DEFAULTS.halfSpread;
+  const status1 = !open || desk.hedgeStrips <= 0
+    ? 'Keep the desk open (some contracts, some months) and some strips sold: the point is that the desk finds nothing, not that it is closed.'
+    : physicsTouched
+      ? 'Put the Pacific’s pull, the variability and the half-spread back as they were (Reset does it): change only what the market knows.'
+      : !marketOnlyChanged(w)
+        ? 'Change what the market knows: whether it prices ENSO, and how stale its forecasts are.'
+        : sc.trades > 0
+          ? `The desk still finds ${fmt(sc.trades)} trades. ${
+              w.usesEnso ? `The market prices the Pacific now, but its forecasts are ${staleText(w.lag)}.` : `The market’s forecasts are ${staleText(w.lag)}, but it is still blind to the Pacific.`
+            }`
+          : `The desk is idle, but the hedge removes only ${removesText(sc.effectiveness)} — is the business still the gas utility, with enough strips?`;
+
+  const status2 = !open
+    ? 'Open the desk: at least one month, and at least one contract a trade.'
+    : noPull.trades === 0
+      ? `Deciding ${fmt(desk.lead)} days ahead, the desk finds nothing to trade in that world.`
+      : `Deciding ${fmt(desk.lead)} days ahead, it makes ${fmt(noPull.trades)} trades in that world, but ${noPull.tradingTotal < 0 ? 'loses' : 'makes'} ${usd(Math.abs(noPull.tradingTotal))}.`;
+
+  const refButton = refBook.same ? (
+    refBook.undo ? <Button onClick={refBook.undo}>Undo the reference book</Button> : null
+  ) : (
+    <Button onClick={refBook.apply}>Load the reference book</Button>
+  );
 
   return (
     <LessonPage id="weather/6.5">
+      <CapstoneStrip parts={STRIP_PARTS} reference={REFERENCE} button="Load the reference book" />
       <P>
         Everything is in place. <a href={lessonHref('weather/6.1')}>Lesson 6.1</a> built a region and its climate; <a href={lessonHref('weather/6.2')}>6.2</a>{' '}
         forecast it, and found the calibrated forecaster worth trusting; <a href={lessonHref('weather/6.3')}>6.3</a> turned the forecasts into a business’s
@@ -294,9 +345,11 @@ export default function Lesson() {
       <P>
         The answer comes from a replay, built the way <a href={lessonHref('weather/5.5')}>Lesson 5.5</a> insisted on. This site ships no real archived forecasts.
         The course’s archive is simulated: forecasts its model issued on known dates, kept in the order they were issued, each built only from what had been revealed
-        by then. Every decision in the replay — the hedge sold each October 31, each trade on the monthly futures — uses only the forecast and the prices of its own
-        date, from the simulated market of <a href={lessonHref('weather/5.3')}>Lesson 5.3</a>. Nothing here is real money or investment advice. And the book is
-        judged as 5.5 judged the utility: each winter against the plan made in October, at the market’s expected index for the winter to come.
+        by then. Every decision in the replay — the hedge sold each October 31, each trade on the monthly futures — uses only the calibrated model’s forecast and
+        the prices of its own date, from the simulated market of <a href={lessonHref('weather/5.3')}>Lesson 5.3</a>. Nothing here is real money or investment
+        advice. And the book is judged as 5.5 judged the utility: each winter against its <b>October plan</b>, the margin the winter would bring at the market’s
+        expected index on October 31. It is built like the plan of <a href={lessonHref('weather/6.3')}>Lesson 6.3</a> — the climate and its warming trend, blind
+        to the Pacific — but made on October 31, when the market’s forecast already reaches into November’s first fortnight.
       </P>
       <P>
         In the next demonstration, each gray bar is one winter’s miss against plan for the business alone, and the narrow bar inside it is the whole book’s: the
@@ -305,7 +358,7 @@ export default function Lesson() {
         left as you built it. Replay the book:
       </P>
 
-      <Figure name="Weather Portfolio Challenge" scenario={wsc}>
+      <Figure name="Weather Portfolio Challenge" scenario={wsc} actions={refButton}>
         <Segmented
           label="Business"
           value={business.kind}
@@ -326,18 +379,17 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'misses unhedged (sd)', value: millions(sc.missSd) },
-            { label: 'hedge removes', value: pct(sc.effectiveness), tone: WX.index },
-            { label: 'whole book (sd)', value: millions(sc.totalSd), tone: WX.money },
-            { label: 'worst winter', value: millions(sc.worstTotal), tone: sc.worstTotal < 0 ? 'red' : WX.money },
+            { label: 'business alone (sd)', value: millions(sc.missSd) },
+            { label: 'hedge removes', value: removesText(sc.effectiveness), tone: sc.effectiveness < 0 ? 'red' : WX.index },
+            { label: 'book’s worst winter', value: millions(sc.worstTotal), tone: sc.worstTotal < 0 ? 'red' : WX.money },
             { label: `desk, ${fmt(sc.trades)} trades`, value: usd(sc.tradingTotal), tone: sc.tradingTotal < 0 ? 'red' : WX.money },
           ]}
         />
         <Controls columns={2}>
-          <Slider label="Seasonal strips sold" tone={WX.index} value={desk.hedgeStrips} min={0} max={5000} step={100} onChange={(v) => setDesk({ hedgeStrips: v })} display={fmt(desk.hedgeStrips)} />
-          <Slider label="Decide, days before each month" value={desk.lead} min={0} max={90} step={5} onChange={(v) => setDesk({ lead: v })} display={`${fmt(desk.lead)} days`} />
-          <Slider label="Threshold beyond the spread" value={desk.threshold} min={0} max={40} step={1} onChange={(v) => setDesk({ threshold: v })} display={`${fmt(desk.threshold)} points`} />
-          <Slider label="Contracts per trade" tone={WX.money} value={desk.size} min={0} max={100} step={5} onChange={(v) => setDesk({ size: v })} display={fmt(desk.size)} />
+          <Slider label="Seasonal strips sold" tone={WX.index} value={desk.hedgeStrips} min={0} max={DESK_RANGE.strips.max} step={DESK_RANGE.strips.step} onChange={(v) => setDesk({ hedgeStrips: v })} display={fmt(desk.hedgeStrips)} />
+          <Slider label="Decide, days before each month" value={desk.lead} min={0} max={DESK_RANGE.lead.max} step={DESK_RANGE.lead.step} onChange={(v) => setDesk({ lead: v })} display={`${fmt(desk.lead)} days`} />
+          <Slider label="Threshold beyond the spread" value={desk.threshold} min={0} max={DESK_RANGE.threshold.max} step={DESK_RANGE.threshold.step} onChange={(v) => setDesk({ threshold: v })} display={`${fmt(desk.threshold)} points`} />
+          <Slider label="Contracts per trade" tone={WX.money} value={desk.size} min={0} max={DESK_RANGE.size.max} step={DESK_RANGE.size.step} onChange={(v) => setDesk({ size: v })} display={fmt(desk.size)} />
           <Slider
             label="Pacific’s pull on the winter"
             tone={WX.temperature}
@@ -349,85 +401,75 @@ export default function Lesson() {
             display={`${fmt(ensoF, 1)} °F per °C`}
           />
           <Slider label="Day-to-day variability" tone={WX.temperature} value={w.variability} min={0.5} max={2} step={0.1} onChange={(v) => wsc.set({ variability: v })} display={`× ${fmt(w.variability, 1)}`} />
-          <Slider label="Market’s forecasts are" tone={WX.probability} value={w.lag} min={0} max={5} step={1} onChange={(v) => wsc.set({ lag: v })} display={`${fmt(w.lag)} days stale`} />
+          <Slider label="Market’s forecasts are" tone={WX.probability} value={w.lag} min={0} max={5} step={1} onChange={(v) => wsc.set({ lag: v })} display={staleText(w.lag)} />
           <Slider label="Market’s half-spread" tone={WX.money} value={w.halfSpread} min={0} max={20} step={1} onChange={(v) => wsc.set({ halfSpread: v })} display={`${fmt(w.halfSpread)} points`} />
         </Controls>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', margin: '4px 0 2px' }}>
-          {[11, 0, 1].map((m) => (
-            <Checkbox key={m} label={`Trade ${MONTH_LABEL[m]}`} checked={desk.months.includes(m)} onChange={(v) => toggleMonth(m, v)} />
-          ))}
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0 16px', margin: '4px 0 2px' }}>
+          <div role="group" aria-labelledby="ws-trade-months" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0 16px' }}>
+            <span id="ws-trade-months" className="ctl-l">
+              Trade
+            </span>
+            {[11, 0, 1].map((m) => (
+              <Checkbox key={m} label={MONTH_LABEL[m]} checked={desk.months.includes(m)} onChange={(v) => toggleMonth(m, v)} />
+            ))}
+          </div>
           <Checkbox label="The market prices ENSO" checked={w.usesEnso} onChange={(v) => wsc.set({ usesEnso: v })} />
         </div>
         <Caption>
-          Replayed in {regionLine}. The desk trades {monthsText}, deciding {fmt(desk.lead)} days ahead; {sc.trades ? `its ${fmt(sc.trades)} trades averaged ${usd(sc.tradingMean)}.` : 'it found nothing worth trading.'}
+          Replayed in {regionLine}; {sc.trades ? `the desk’s ${fmt(sc.trades)} trades averaged ${usd(sc.tradingMean)}.` : 'the desk found nothing worth trading.'}
         </Caption>
       </Figure>
 
       <P>
-        Take Calder Bay’s own climate, a book that sells {fmt(REF_DESK.hedgeStrips)} strips, and a desk trading {fmt(REF_DESK.size)} contracts in December,
-        January and February, decided {fmt(REF_DESK.lead)} days ahead. Unhedged, Calder Gas &amp; Light misses its October plan with a standard deviation of{' '}
-        {millions(q.unhedged.missSd)} a winter, and its worst winter falls {millions(-q.unhedged.worstMiss)} short. The strips — about the utility’s dollars per
-        degree day from <a href={lessonHref('weather/4.5')}>Lesson 4.5</a> divided by the strip’s $20 — remove {pct(q.ref.effectiveness, 1)} of that variance, and
-        the worst winter of the whole book misses by {millions(-q.ref.worstTotal)}. What the hedge can’t reach is the wind of Lesson 4.5, which moves the utility’s
-        gas sales without moving a degree day.
+        Take Fenwick Bay’s own climate and the reference book, which the demonstration’s “Load the reference book” button sets up: Fenwick Gas &amp; Light at its full size, selling{' '}
+        {fmt(REF_DESK.hedgeStrips)} strips, and a desk trading {fmt(REF_DESK.size)} contracts in December, January and February, decided {fmt(REF_DESK.lead)}{' '}
+        days ahead. Unhedged, Fenwick Gas &amp; Light misses its October plan with a standard deviation of {millions(q.unhedged.missSd)} a winter — a little less
+        than the {millions(q.archiveSd)} by which its winters vary around their average in <a href={lessonHref('weather/6.1')}>Lesson 6.1</a>, because the plan
+        already follows the warming trend and the market’s forecast of November’s first fortnight — and its worst winter falls {millions(-q.unhedged.worstMiss)}{' '}
+        short. The strips — about the utility’s dollars per degree day from <a href={lessonHref('weather/4.5')}>Lesson 4.5</a> divided by the strip’s $20 — remove{' '}
+        {pct(q.ref.effectiveness, 1)} of that variance, and the worst winter of the whole book misses by {millions(-q.ref.worstTotal)}. What the hedge can’t reach
+        is the wind of Lesson 4.5, which moves the utility’s gas sales without moving a degree day.
       </P>
       <P>
         The desk, meanwhile, made {fmt(q.ref.trades)} trades over 39 winters and {usd(q.ref.tradingTotal)} in all, about {usd(q.ref.tradingMean)} a trade. Next to
         the hedge it is small: the hedge changes how much the book can lose in a bad winter by millions, while the desk adds about {usd(q.ref.tradingTotal / 39)} in an
-        average winter. Even at a hundred contracts a trade it made {millions(q.big.tradingTotal)} over 39 winters. A hedge is a transfer of risk that almost always works; a trading edge is a
-        small tilt in the odds that shows up only over many winters, as <a href={lessonHref('weather/5.3')}>Lesson 5.3</a> found.
+        average winter. Even at a hundred contracts a trade it made {millions(q.big.tradingTotal)} over 39 winters. A hedge is a transfer of risk that almost always
+        works; a trading edge is a small tilt in the odds that shows up only over many winters, as <a href={lessonHref('weather/5.3')}>Lesson 5.3</a> found.
       </P>
-
-      <Challenge
-        id="a"
-        figure="Weather Portfolio Challenge"
-        question="In the world as you built it, run Calder Gas & Light with a book whose worst winter misses its plan by less than a fifth of what that winter would have missed unhedged — while the trading desk still makes money over the 39 winters."
-        solved={solved}
-        status={status1}
-        success={`Solved. Your worst winter misses by ${millions(-sc.worstTotal)} against ${millions(-sc.worstMiss)} unhedged, and the desk made ${usd(sc.tradingTotal)} on ${fmt(sc.trades)} trades. The two parts of the book do different jobs: the strips cut the losses the weather can cause, and the desk earns a little from information the market leaves unpriced.`}
-      />
 
       <H2>Break it</H2>
       <P>
         Every part of that result has a physical source, and the controls let you take each one away. Sixty days out no forecast reaches the month, so the
         desk’s only information beyond the climate is the Pacific: the ENSO tilt of <a href={lessonHref('weather/2.4')}>Lesson 2.4</a>, which the simulated market
-        ignores. Set the Pacific’s pull to zero and, at Calder Bay, the desk makes {fmt(q.noPull.trades)} trades. Let the market price ENSO instead and{' '}
-        {fmt(q.mktEnso.trades)} trades remain, losing {usd(-q.mktEnso.tradingTotal)} between them — the leftovers of rounding the information into prices, not an
-        edge. The hedge doesn’t care: it removes {pct(q.noPull.effectiveness, 1)} of the variance in the first world and {pct(q.mktEnso.effectiveness, 1)} in the
-        second. Notice, too, that when the market prices ENSO the utility’s unhedged misses shrink, to {millions(q.mktEnso.missSd)}: its October plan, set at the
-        market’s price, already contains the Pacific’s tilt. A market that knows more lets everyone plan better.
-      </P>
-      <P>
-        Now decide 5 days before each month instead. The forecasts of <a href={lessonHref('weather/3.5')}>Lesson 3.5</a> reach into the month, the market’s are two
-        days stale, and a second edge joins the first: {fmt(q.close.trades)} trades for {usd(q.close.tradingTotal)}. With no pull from the Pacific,{' '}
-        {fmt(q.closeNoPull.trades)} trades and {usd(q.closeNoPull.tradingTotal)} remain, all of it the freshness of the forecasts; make the market’s forecasts fresh
-        too and the desk makes {fmt(q.closeNothing.trades)}. Widen the spread to 15 points and the costs eat most of what is left: {fmt(q.wide.trades)} trades
-        for {usd(q.wide.tradingTotal)}. Double the variability and the risk the hedge exists for doubles with it — misses of {millions(q.wild.missSd)} a winter,{' '}
-        {pct(q.wild.effectiveness, 1)} of them removed by the strips.
+        ignores. There are two ways to take that edge away: remove the physics, the Pacific’s pull on the winter, or remove the market’s ignorance of it.
       </P>
 
       <Challenge
-        id="b"
+        id="a"
         figure="Weather Portfolio Challenge"
-        question="Keep the desk open and the strips sold. Take away the physics or the information behind the trading edge — the Pacific’s pull, or the market’s blindness to it — until the desk finds nothing at all to trade, while the hedge still removes at least 90% of the misses’ variance."
-        solved={solved2}
-        status={
-          !(w.pull === 0 || w.usesEnso)
-            ? 'The desk’s edge is still there: start with the Pacific — its pull, or whether the market prices it.'
-            : desk.size <= 0 || desk.months.length === 0 || desk.hedgeStrips <= 0
-              ? 'Keep the desk open (some contracts, some months) and some strips sold: the point is that the desk finds nothing, not that it is closed.'
-              : sc.trades > 0
-                ? `The desk still finds ${fmt(sc.trades)} trades. ${
-                    w.lag > 0 && (w.usesEnso || desk.lead <= 15)
-                      ? w.usesEnso && desk.lead > 15
-                        ? 'The market prices the Pacific, but from a view that is days old. Make its forecasts fresh too.'
-                        : 'Within a fortnight of the month, the market’s stale forecasts are a second edge.'
-                      : 'Look at what else the market still misses.'
-                  }`
-                : `The desk is idle, but the hedge removes only ${pct(sc.effectiveness)} — is the business still the gas utility, with enough strips?`
-        }
-        success={`Solved. The desk is open and finds nothing: with ${w.pull === 0 ? 'no pull from the Pacific, the market’s blindness costs it nothing' : 'the Pacific priced in, there is nothing left for the desk to know that the market doesn’t'}${w.lag === 0 ? ', and its forecasts are as fresh as ours' : ''}. The hedge still removes ${pct(sc.effectiveness)} of the misses’ variance. The edge came from physics the market left out; the hedge comes from the link between degree days and gas, which no market can take away.`}
+        question="Predict first: is telling the market about the Pacific enough? Leave the Pacific’s pull where it is, keep the desk open and the strips sold, and change only what the market knows — whether it prices ENSO, and how stale its forecasts are — until the desk finds nothing at all to trade, while the hedge still removes at least 90% of the misses’ variance."
+        solved={solved}
+        status={status1}
+        success={`Solved: the market ${w.usesEnso ? 'prices the Pacific' : 'still ignores the Pacific'} and its forecasts are ${staleText(w.lag)}, and the desk, still open, finds nothing: there is nothing left for it to know that the market doesn’t.${
+          ensoOnly && ensoOnly.trades > 0 ? ` Pricing ENSO alone would have left ${fmt(ensoOnly.trades)} trades: a market even two days behind still lags our view.` : ''
+        } The hedge still removes ${removesText(sc.effectiveness)} of the misses’ variance. The edge came from information the market left out; the hedge comes from the link between degree days and gas, which no market can take away.`}
       />
+
+      <P>
+        Telling the market about the Pacific isn’t enough on its own. At Fenwick Bay, with the reference book, {fmt(q.mktEnso.trades)} trades remain,{' '}
+        {q.mktEnso.tradingTotal < 0 ? 'losing' : 'making'} {usd(Math.abs(q.mktEnso.tradingTotal))} between them. They come from the market’s two-day lag: on the
+        dates the desk decides December and January, that lag reaches back into the previous month, so the market still prices the previous month’s ENSO outlook.
+        Make its forecasts fresh as well and they vanish. The physical route works too: set the Pacific’s pull to zero and the desk makes {fmt(q.noPull.trades)}{' '}
+        trades. The hedge doesn’t care: it removes {pct(q.noPull.effectiveness, 1)} of the variance with no pull and {pct(q.mktEnso.effectiveness, 1)} when the
+        market prices ENSO. Notice, too, that when the market prices ENSO the utility’s unhedged misses shrink, to {millions(q.mktEnso.missSd)}: its October plan,
+        set at the market’s price, already contains the Pacific’s tilt. A market that knows more lets everyone plan better.
+      </P>
+      <P>
+        With the Pacific’s pull and the market’s two-day lag restored, widen the spread to 15 points and the costs eat most of what the desk made:{' '}
+        {fmt(q.wide.trades)} trades for {usd(q.wide.tradingTotal)}. Double the variability and the risk the hedge exists for grows, but doesn’t double: misses of{' '}
+        {millions(q.wild.missSd)} a winter, {fmt(q.wild.missSd / q.ref.missSd, 2)} times as much, because — as <a href={lessonHref('weather/6.1')}>Lesson 6.1</a>{' '}
+        found — the Pacific’s part of a winter’s spread doesn’t stretch with the days. The strips remove {pct(q.wild.effectiveness, 1)} of it.
+      </P>
 
       <H2>What survives</H2>
       <P>
@@ -445,24 +487,40 @@ export default function Lesson() {
           columns={[
             { label: 'World', cell: (r) => r.label },
             { label: 'Misses (sd)', cell: (r) => shortMoney(r.sc.missSd), align: 'right' },
-            { label: 'Hedge removes', cell: (r) => pct(r.sc.effectiveness), align: 'right' },
+            { label: 'Hedge removes', cell: (r) => removesText(r.sc.effectiveness), align: 'right' },
             { label: 'Trades', cell: (r) => fmt(r.sc.trades), align: 'right' },
             { label: 'Desk P&L', cell: (r) => shortMoney(r.sc.tradingTotal), align: 'right' },
             { label: 'Worst winter', cell: (r) => shortMoney(r.sc.worstTotal), align: 'right' },
           ]}
         />
-        <Slider label="Decide, days before each month" value={desk.lead} min={0} max={90} step={5} onChange={(v) => setDesk({ lead: v })} display={`${fmt(desk.lead)} days`} />
+        <Slider label="Decide, days before each month" value={desk.lead} min={0} max={DESK_RANGE.lead.max} step={DESK_RANGE.lead.step} onChange={(v) => setDesk({ lead: v })} display={`${fmt(desk.lead)} days`} />
         <Caption>
           {BUSINESS_LABEL[business.kind]}, {fmt(desk.hedgeStrips)} strips, {fmt(desk.size)} contracts a trade in {monthsText}, in {regionLine}.
         </Caption>
       </Figure>
 
+      <Challenge
+        id="b"
+        question={`Predict first: in the world with no pull from the Pacific, a desk deciding ${fmt(REF_DESK.lead)} days ahead finds nothing to trade. Should it decide earlier or later to find an edge again — and how close to the month? Set the decision date so that, in that world, the desk makes money again.`}
+        solved={solved2}
+        status={status2}
+        success={`Solved: deciding ${fmt(dDesk.lead)} days ahead, the desk makes ${fmt(noPull.trades)} trades and ${usd(noPull.tradingTotal)} with no pull from the Pacific. With the Pacific gone, its only edge is the freshness of its forecasts against the market’s two-day-old ones, and that edge exists only where the forecast reaches into the month${
+          at10 ? `; ten days out it ${at10.trades ? `makes ${fmt(at10.trades)} trades and ${at10.tradingTotal < 0 ? 'loses' : 'makes'} ${usd(Math.abs(at10.tradingTotal))}` : 'finds nothing'}` : ''
+        }. Make the market’s forecasts fresh too and this edge is gone as well.`}
+      />
+
       <P>
-        Read the columns separately. With strips sold, the hedge column barely moves from row to row: the strips work because a gas utility’s sales follow the degree days at its
-        station (<a href={lessonHref('weather/4.1')}>Lesson 4.1</a>), and no change to the market or to the Pacific breaks that link. The trading columns move a
-        great deal. They are only as large as the information the market leaves out, and they vanish in exactly the worlds where it stops leaving it out. Switch
-        the business to the wind farm or the corn farm and the hedge column turns against you: a winter degree-day strip doesn’t follow their weather, so selling it
-        adds risk instead of removing it. They need indices of their own, the kind written in <a href={lessonHref('weather/5.1')}>Lesson 5.1</a>.
+        In Fenwick Bay, with the reference book, deciding 5 days before each month brings the forecasts of <a href={lessonHref('weather/3.5')}>Lesson 3.5</a> into
+        the month, and a second edge joins the first: {fmt(q.close.trades)} trades for {usd(q.close.tradingTotal)} in the world as built. With no pull from the
+        Pacific, {fmt(q.closeNoPull.trades)} trades and {usd(q.closeNoPull.tradingTotal)} remain, all of it the freshness of the forecasts; make the market’s
+        forecasts fresh too and the desk makes {fmt(q.closeNothing.trades)}.
+      </P>
+      <P>
+        Read the columns separately. With strips sold, the hedge column barely moves from row to row: the strips work because a gas utility’s sales follow the
+        degree days at its station (<a href={lessonHref('weather/4.1')}>Lesson 4.1</a>), and no change to the market or to the Pacific breaks that link. The trading
+        columns move a great deal. They are only as large as the information the market leaves out, and they vanish in exactly the worlds where it stops leaving it
+        out. Switch the business to the wind farm or the corn farm and the hedge column turns against you: a winter degree-day strip doesn’t follow their weather,
+        so selling it adds risk instead of removing it. They need indices of their own, the kind written in <a href={lessonHref('weather/5.1')}>Lesson 5.1</a>.
       </P>
 
       <H2>From sunlight to a tested book</H2>

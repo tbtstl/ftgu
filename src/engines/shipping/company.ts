@@ -10,7 +10,7 @@ import { classOpex, replacementEarnings, shipValue, type CycleMonth } from './cy
 import { annuity, scrapValue, SHIP_LIFE } from './economics';
 import { sharesAt } from './forecast';
 import { equilibrium } from './market';
-import { seaDistance } from './network';
+import { seaDistance, seaRoute } from './network';
 import { AUX_PORT_TPD } from './propulsion';
 import { COMMISSION, ballastDraft, fuelPerDay, ladenDraft } from './voyage';
 
@@ -254,9 +254,45 @@ export interface OpsResult {
   profit: number;
   voyageNet: number;
   dailyCosts: number;
-  /** What the same ships would have earned at the market index, less the same costs, $. */
+  /**
+   * What the same ships would have earned at the market rate, less the same costs, $. With the
+   * bunker price fixed, the market rate pays the same freights with fuel at that price.
+   */
   benchmark: number;
   days: number;
+}
+
+/**
+ * Fuel one of the class's ships burns per day of her time trading the month's market: its laden
+ * and ballast passages at the market's speeds, and its days in port and canals, t/day.
+ */
+const MARKET_FUEL_CACHE = new Map<string, number>();
+export function marketFuelPerDay(cls: ClassId, m: CycleMonth, t: number): number {
+  const key = `${cls}|${t}|${m.demand}|${m.fleet}|${m.bunker}|${m.month}`;
+  const hit = MARKET_FUEL_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const ev = eventAt(t);
+  const eq = equilibrium(cls, { demand: m.demand, month: m.month, fleet: m.fleet, bunker: m.bunker, cohortShares: sharesAt(m), closed: ev?.closed, congestion: ev?.congestion, routeScale: ev?.routeScale });
+  const c = MARKET_CLASSES[cls];
+  const v = c.vessel;
+  const ladenDays = eq.ladenMiles / (24 * eq.ladenSpeed);
+  const ballastDays = eq.ballastMiles / (24 * eq.ballastSpeed);
+  const otherDays = Math.max(0, eq.shipDays - ladenDays - ballastDays);
+  const fuel = ladenDays * fuelPerDay(v, eq.ladenSpeed, ladenDraft(v, c.cargo)) + ballastDays * fuelPerDay(v, eq.ballastSpeed, ballastDraft(v)) + otherDays * AUX_PORT_TPD;
+  const out = eq.shipDays > 0 ? fuel / eq.shipDays : 0;
+  if (MARKET_FUEL_CACHE.size > 3000) MARKET_FUEL_CACHE.clear();
+  MARKET_FUEL_CACHE.set(key, out);
+  return out;
+}
+
+/**
+ * The market's earnings in a month, $/day. With the bunker price fixed by the policy, freights stay
+ * as they were and only fuel changes: the month's earnings less the extra fuel bill per day.
+ */
+export function marketTceAt(cls: ClassId, hist: History, t: number, bunker?: number): number {
+  const m = hist.cls[cls][t];
+  if (bunker === undefined || bunker === m.bunker) return m.tce;
+  return m.tce - (bunker - m.bunker) * marketFuelPerDay(cls, m, t);
 }
 
 function bunkerAt(p: OpsPolicy, hist: History, start: number, day: number): number {
@@ -273,18 +309,21 @@ export function planFixture(s: CompanyShip, at: string, day: number, c: CargoOff
   const arrive = day + ballastDays;
   if (arrive > c.to + 1e-9 || !Number.isFinite(ballastNm)) return null;
   const load = Math.max(arrive, c.from);
-  const ladenNm = seaDistance(c.route.from, c.route.to, { draft: ladenDraft(v, c.tonnes), closed });
+  // The laden passage, with its canal tolls and canal days, as the market charges them (Lesson 3.3).
+  const laden = seaRoute(c.route.from, c.route.to, { draft: ladenDraft(v, c.tonnes), closed });
+  const ladenNm = laden?.nm ?? Infinity;
   if (!Number.isFinite(ladenNm) || !Number.isFinite(c.freight)) return null;
   const qin = c.route.to === 'QIN' || c.route.from === 'QIN' ? (p.congestion ?? 0) : 0;
   const ev = eventAt(start + Math.floor(day / MONTH));
   const evWait = (ev?.congestion?.[c.route.from] ?? 0) + (ev?.congestion?.[c.route.to] ?? 0);
   const portDays = c.route.portDays + qin + evWait;
   const ladenDays = ladenNm / (24 * p.speed);
-  const canal = ladenNm > 0 && c.route.id === 'P-NOL-QIN' && !closed?.includes('panama') ? cls.canalTolls.panama : 0;
+  const canalDays = laden?.canalDays ?? 0;
+  const canal = (laden?.chokepoints.includes('panama') ? cls.canalTolls.panama : 0) + (laden?.chokepoints.includes('suez') ? cls.canalTolls.suez : 0);
   const bunker = bunkerAt(p, hist, start, day);
-  const fuel = ballastDays * fuelPerDay(v, p.speed, ballastDraft(v)) + ladenDays * fuelPerDay(v, p.speed, ladenDraft(v, c.tonnes)) + (portDays + (load - arrive)) * AUX_PORT_TPD;
+  const fuel = ballastDays * fuelPerDay(v, p.speed, ballastDraft(v)) + ladenDays * fuelPerDay(v, p.speed, ladenDraft(v, c.tonnes)) + (portDays + canalDays + (load - arrive)) * AUX_PORT_TPD;
   const net = c.freight * c.tonnes * (1 - COMMISSION) - fuel * bunker - cls.portCosts - canal;
-  const end = load + portDays + ladenDays;
+  const end = load + portDays + canalDays + ladenDays;
   return { cargo: c, ballastNm, ballastDays, depart: day, arrive, load, end, fuel, net, tce: net / (end - day) };
 }
 
@@ -340,7 +379,7 @@ export function operate(ships: CompanyShip[], offers: CargoOffer[], p: OpsPolicy
     let earn = 0;
     for (let d = 0; d < span; d += MONTH) {
       const t = Math.min(hist.months - 1, world.start + Math.floor(d / MONTH));
-      earn += hist.cls[r.ship.cls][t].tce * Math.min(MONTH, span - d) * EARN;
+      earn += marketTceAt(r.ship.cls, hist, t, p.bunker) * Math.min(MONTH, span - d) * EARN;
     }
     return a + earn - (c.opex + c.debtService + c.hire) * span;
   }, 0);

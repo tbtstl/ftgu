@@ -12,6 +12,7 @@ import {
   Readouts,
   Segmented,
   Slider,
+  TEXT,
   fmt,
   lessonHref,
   linePath,
@@ -24,13 +25,19 @@ import { REFERENCE_YEAR, simulatedYear } from '../../../model/agriculture/climat
 import { DISTRICT, dayOf, type DistrictId } from '../../../model/agriculture/region';
 import { DayChart } from '../shared/DayChart';
 import { buAc } from '../shared/format';
+import { FILL } from '../shared/tones';
 
 type Field = 'home' | 'ridge';
 const FIELDS: Record<Field, SoilInputs & { district: DistrictId; label: string }> = {
   home: { district: 'prairie', label: 'Cedar Bend home field', nRate: 150, soilP: 25, soilK: 180, ph: 6.4, om: 4.5 },
   ridge: { district: 'ridge', label: 'Rented Ridge field', nRate: 150, soilP: 18, soilK: 150, ph: 5.3, om: 2.5 },
 };
-const NCOLOR: Record<Nutrient, string> = { N: GRAPHIC.violet, P: GRAPHIC.orange, K: GRAPHIC.blue };
+const LOW_K = 80;
+/** The home field with the Ridge's thinner organic matter: the nitrogen the microbes no longer release, and the nitrogen stave left. */
+const OM_GAP_N = nitrogenSupply(FIELDS.home).mineralized - nitrogenSupply({ ...FIELDS.home, om: FIELDS.ridge.om }).mineralized;
+export const THIN_OM_N = sufficiency('corn', { ...FIELDS.home, om: FIELDS.ridge.om }).N;
+// Nitrogen is green and potassium gray here: violet means light and blue means water throughout the chapter.
+const NCOLOR: Record<Nutrient, string> = { N: GRAPHIC.green, P: GRAPHIC.orange, K: GRAPHIC.gray };
 
 const seasonCache = new Map<string, number>();
 /** Corn yield in the field's district in the reference season, at this nutrient sufficiency. */
@@ -45,10 +52,27 @@ function fieldYield(district: DistrictId, factor: number): number {
   return y;
 }
 
-/** The challenge: the rented Ridge field at 98% nutrient sufficiency or better, with no phosphorus added. */
+/**
+ * The challenge: the rented Ridge field at 98% nutrient sufficiency or better, with no phosphorus added. Its potassium and
+ * organic matter stay as they are: neither is a lever a farmer can pull in one season.
+ */
 export function ridgeSolved(field: Field, s: SoilInputs): boolean {
-  return field === 'ridge' && s.soilP === FIELDS.ridge.soilP && sufficiency('corn', s).factor >= 0.98;
+  const f = FIELDS.ridge;
+  return field === 'ridge' && s.soilP === f.soilP && s.soilK === f.soilK && s.om === f.om && sufficiency('corn', s).factor >= 0.98;
 }
+
+/** The nutrient holding the crop back, or none when every stave is at 99% or more. */
+export function limitingLabel(suff: { factor: number; limiting: Nutrient }): string {
+  return suff.factor >= 0.99 ? 'none' : NUTRIENT_NAME[suff.limiting];
+}
+
+/** Nitrogen the reference season's corn at Cedar Bend calls for as it grows, lb/ac (it doesn't depend on the fertilizer plan). */
+const SEASON_N_DEMAND = (() => {
+  const p = DISTRICT.prairie;
+  const w = simulatedYear(REFERENCE_YEAR, 'prairie');
+  const base = simulateSeason(w, { crop: 'corn', plantDay: dayOf(5, 1), maturityGdd: p.hybridGdd, pawIn: p.pawIn, startWater: p.springWater });
+  return nitrogenSeason(w, base, { rate: 150, timing: 'spring', om: p.om, ph: p.ph, pawIn: p.pawIn }).totalDemand;
+})();
 
 /** Liebig's barrel: one stave per nutrient, the level set by the shortest. */
 function Barrel({ suff }: { suff: Record<Nutrient, number> & { factor: number; limiting: Nutrient } }) {
@@ -60,10 +84,10 @@ function Barrel({ suff }: { suff: Record<Nutrient, number> & { factor: number; l
       className="diagram"
       viewBox="0 0 620 250"
       role="img"
-      aria-label={`Nutrient sufficiency: nitrogen ${fmt(suff.N * 100, 1)}%, phosphorus ${fmt(suff.P * 100, 1)}%, potassium ${fmt(suff.K * 100, 1)}%. ${NUTRIENT_NAME[suff.limiting]} is limiting, so the crop grows at ${fmt(suff.factor * 100, 1)}%.`}
+      aria-label={`Nutrient sufficiency: nitrogen ${fmt(suff.N * 100, 1)}%, phosphorus ${fmt(suff.P * 100, 1)}%, potassium ${fmt(suff.K * 100, 1)}%. ${suff.factor >= 0.99 ? 'Nothing is seriously short' : `${NUTRIENT_NAME[suff.limiting]} is limiting`}, so the crop grows at ${fmt(suff.factor * 100, 1)}%.`}
     >
-      <rect x={84} y={y(level)} width={292} height={220 - y(level)} fill="#cfe2f3" />
-      <line x1={84} x2={376} y1={y(level)} y2={y(level)} stroke={GRAPHIC.blue} strokeWidth={2} />
+      <rect x={84} y={y(level)} width={292} height={220 - y(level)} fill={FILL.growth} />
+      <line x1={84} x2={376} y1={y(level)} y2={y(level)} stroke={FILL.growthLine} strokeWidth={2} />
       {NUTRIENTS.map((n) => (
         <g key={n}>
           <rect x={xs[n] - 34} y={y(Math.max(0.5, suff[n]))} width={68} height={220 - y(Math.max(0.5, suff[n]))} fill="none" stroke={NCOLOR[n]} strokeWidth={n === suff.limiting ? 3 : 2} />
@@ -82,11 +106,11 @@ function Barrel({ suff }: { suff: Record<Nutrient, number> & { factor: number; l
           {fmt(v * 100)}%
         </text>
       ))}
-      <text className="lab" x={410} y={y(level) + 4} style={{ fill: '#2f6fb3' }}>
+      <text className="lab" x={410} y={y(level) + 4} style={{ fill: TEXT.teal }}>
         the crop grows at {fmt(suff.factor * 100, 1)}%
       </text>
       <text className="ax" x={410} y={y(level) + 22}>
-        set by the shortest stave
+        {limitingLabel(suff) === 'none' ? 'every stave at 99% or more' : `short stave: ${limitingLabel(suff).toLowerCase()}`}
       </text>
     </svg>
   );
@@ -130,7 +154,6 @@ export default function Lesson() {
   const suff = sufficiency('corn', inputs);
   const supply = nitrogenSupply(inputs);
   const district = FIELDS[field].district;
-  const potential = fieldYield(district, 1);
   const yieldNow = fieldYield(district, suff.factor);
   const solved = ridgeSolved(field, inputs);
 
@@ -164,10 +187,17 @@ export default function Lesson() {
       </P>
       <P>
         How much of each the crop can actually get depends on three things. The first is supply: what fertilizer adds, what is left from last year, and, for
-        nitrogen, what soil microbes release as they slowly digest the soil’s <K tone="teal">organic matter</K> — our model’s rule of thumb is 20 pounds an acre a
+        nitrogen, what soil microbes release as they slowly digest the soil’s <K>organic matter</K> — our model’s rule of thumb is 20 pounds an acre a
         year for every percent of it. The second is <K tone="red">pH</K>, the soil’s acidity, which decides how much of what’s there the roots can reach. The third is
-        the strangest: no nutrient can make up for another. In the next demonstration, each nutrient’s <K tone="violet">sufficiency</K> — the share of full growth it
-        alone would allow — is a stave of a barrel, and the crop fills it only to the lowest stave. Choose a field and change the soil:
+        the strangest: no nutrient can make up for another.
+      </P>
+      <P>
+        Farmers learn what their soil holds from a <b>soil test</b>. Every few years they send cores from each field to a lab, which reports the pH, the organic
+        matter, and how much phosphorus and potassium a standard chemical extraction pulls out of the soil, in <b>parts per million</b> (ppm) of the soil’s weight.
+        The extraction is a stand-in for what roots can reach, and labs calibrate it against field trials, which is why recommendations come as “below this many
+        ppm, apply this much.” Nitrogen is the exception: nitrate moves and changes so fast that a spring soil test says little about August, so most farmers budget
+        it instead, as the next demonstration does. In it, each nutrient’s <K tone="teal">sufficiency</K> — the share of full growth it alone would allow — is a
+        stave of a barrel, and the crop fills it only to the lowest stave. Choose a field and change the soil:
       </P>
 
       <Figure name="Soil Chemistry Lab" scenario={s}>
@@ -188,59 +218,57 @@ export default function Lesson() {
         <Legend items={NUTRIENTS.map((x) => ({ label: `${NUTRIENT_NAME[x]} available`, color: NCOLOR[x] }))} />
         <Readouts
           items={[
-            { label: 'nitrogen supply, lb/ac', value: `${fmt(supply.total)} of ${fmt(suff.nNeed)}`, tone: 'violet' },
-            { label: 'limiting nutrient', value: NUTRIENT_NAME[suff.limiting] },
+            { label: 'nitrogen supply, lb/ac', value: `${fmt(supply.total)} of ${fmt(suff.nNeed)}`, tone: 'green' },
             { label: 'corn yield, reference season', value: buAc(yieldNow), tone: 'gold' },
-            { label: 'share of this field’s potential', value: `${fmt((yieldNow / potential) * 100, 1)}%` },
           ]}
         />
-        <Slider label="Nitrogen fertilizer" tone="violet" value={s.state.nRate} min={0} max={250} step={10} onChange={(v) => s.set({ nRate: v })} display={`${s.state.nRate} lb N/ac`} />
+        <Slider label="Nitrogen fertilizer" tone="green" value={s.state.nRate} min={0} max={250} step={10} onChange={(v) => s.set({ nRate: v })} display={`${s.state.nRate} lb N/ac`} />
         <Slider label="Soil-test phosphorus" tone="orange" value={s.state.soilP} min={2} max={50} onChange={(v) => s.set({ soilP: v })} display={`${s.state.soilP} ppm`} />
-        <Slider label="Soil-test potassium" tone="blue" value={s.state.soilK} min={40} max={250} step={5} onChange={(v) => s.set({ soilK: v })} display={`${s.state.soilK} ppm`} />
+        <Slider label="Soil-test potassium" value={s.state.soilK} min={40} max={250} step={5} onChange={(v) => s.set({ soilK: v })} display={`${s.state.soilK} ppm`} />
         <Slider label="Soil pH" tone="red" value={s.state.ph} min={4.5} max={8.5} step={0.1} onChange={(v) => s.set({ ph: Math.round(v * 10) / 10 })} display={fmt(s.state.ph, 1)} />
-        <Slider label="Organic matter" tone="teal" value={s.state.om} min={1} max={6} step={0.5} onChange={(v) => s.set({ om: v })} display={`${fmt(s.state.om, 1)}%`} />
+        <Slider label="Organic matter" value={s.state.om} min={1} max={6} step={0.5} onChange={(v) => s.set({ om: v })} display={`${fmt(s.state.om, 1)}%`} />
       </Figure>
 
       <P>
         Cedar Bend’s home field is in good shape. Its 4.5% organic matter releases about 90 pounds of nitrogen a year; with 30 left from last year and 150 pounds of
         fertilizer, of which the crop recovers about two-thirds, the supply is 218 pounds against the 220 a full crop needs. Take the fertilizer away and nitrogen sufficiency drops to
-        79%, and in the reference season the corn yields 144 bushels an acre instead of 188. Each nutrient’s curve flattens as it fills: the
-        first 50 pounds of fertilizer add 24 bushels, the step from 100 to 150 adds only 5. That diminishing return is the economics of fertilizer in miniature, and
-        we’ll come back to it in Chapter 2.
+        79%, and in the reference season the corn yields 144 bushels an acre instead of 188. Nitrogen’s stave climbs fast at first and then flattens: the first 50
+        pounds of fertilizer add 24 bushels, the step from 100 to 150 adds only 5. That diminishing return is the economics of fertilizer in miniature, and
+        we’ll come back to it in Chapter 2. Organic matter is the slower account. Slide it from the home field’s {fmt(FIELDS.home.om, 1)}% down to the Ridge’s{' '}
+        {fmt(FIELDS.ridge.om, 1)}% and the microbes release {fmt(OM_GAP_N)} pounds less nitrogen a year, pulling the nitrogen stave down to{' '}
+        {fmt(THIN_OM_N * 100)}%. Building it back up takes years of crop residue and manure, so no plan for a single season can count on it.
       </P>
       <P>
         Now slide the pH. Between about 6 and 7, everything is available. Below 5.5, iron and aluminum lock phosphorus into compounds roots can’t dissolve, and the
         microbes that release nitrogen slow down; above 7.5, calcium does the locking. Nothing about the amount of phosphorus in the soil changes. What changes is how
-        much of it the crop can reach, and the barrel’s level follows whichever stave is shortest.
-      </P>
-      <P>
-        Farmers learn these numbers from a <b>soil test</b>. Every few years they send cores from each field to a lab, which reports the pH, the organic matter, and
-        how much phosphorus and potassium a standard chemical extraction pulls out of the soil, in parts per million. The extraction is a stand-in for what roots can
-        reach, and labs calibrate it against field trials, which is why recommendations come as “below this many ppm, apply this much.” Nitrogen is the exception:
-        nitrate moves and changes so fast that a spring soil test says little about August, so most farmers budget it instead, as this demonstration does.
+        much of it the crop can reach, and the barrel’s level follows whichever stave is shortest. Potassium is plentiful on the home field, but it has a floor too:
+        drop its soil test to {fmt(LOW_K)} ppm and the short stave switches to potassium, at {fmt(sufficiency('corn', { ...FIELDS.home, soilK: LOW_K }).K * 100)}%.
       </P>
 
       <Challenge
         id="a"
-        question="Switch to the rented field on the Upland Ridge. Without adding phosphorus — keep its soil test at 18 ppm — bring the crop to 98% nutrient sufficiency or better."
+        question="Switch to the rented field on the Upland Ridge. Without adding phosphorus — keep its soil test at 18 ppm — and leaving its potassium and organic matter as they are, bring the crop to 98% nutrient sufficiency or better."
         solved={solved}
         status={
           field !== 'ridge'
             ? 'Switch to the rented Ridge field.'
             : s.state.soilP !== FIELDS.ridge.soilP
               ? `The phosphorus test is ${s.state.soilP} ppm. Set it back to 18: no phosphorus may be added.`
-              : `The crop grows at ${fmt(suff.factor * 100, 1)}%, held back by ${NUTRIENT_NAME[suff.limiting].toLowerCase()}.`
+              : s.state.soilK !== FIELDS.ridge.soilK || s.state.om !== FIELDS.ridge.om
+                ? `Set potassium back to ${FIELDS.ridge.soilK} ppm and organic matter to ${fmt(FIELDS.ridge.om, 1)}%: neither changes in a season.`
+                : `The crop grows at ${fmt(suff.factor * 100, 1)}%, held back by ${NUTRIENT_NAME[suff.limiting].toLowerCase()}.`
         }
-        success={`Solved: at pH ${fmt(s.state.ph, 1)} with ${s.state.nRate} pounds of nitrogen, the shortest stave is ${NUTRIENT_NAME[suff.limiting].toLowerCase()} at ${fmt(suff.factor * 100, 1)}%. Two things had to change. Liming the field — spreading ground limestone to raise its pH — unlocked the phosphorus already there, and once phosphorus stopped limiting, the field’s thin organic matter left nitrogen as the short stave, which more fertilizer fixed. At the starting pH, extra nitrogen alone does nothing: at 200 pounds the yield is the same as at 150, because phosphorus is the limit.`}
+        success={`Solved: at pH ${fmt(s.state.ph, 1)} with ${s.state.nRate} pounds of nitrogen, the shortest stave is ${NUTRIENT_NAME[suff.limiting].toLowerCase()} at ${fmt(suff.factor * 100, 1)}%. Two things had to change. Liming the field — spreading ground limestone to raise its pH — unlocked the phosphorus already there, and once phosphorus was no longer far behind, the field’s thin organic matter left nitrogen as the short stave, which more fertilizer lifted. At the starting pH, extra nitrogen alone does nothing: at 200 pounds the yield is the same as at 150, because phosphorus is the limit.`}
       />
 
       <H2>Nitrogen moves with water</H2>
       <P>
-        Phosphorus and potassium cling to soil particles and stay where they are put. Nitrogen in its main soil form, <K tone="violet">nitrate</K>, dissolves in water
+        Phosphorus and potassium cling to soil particles and stay where they are put. Nitrogen in its main soil form, <K tone="green">nitrate</K>, dissolves in water
         and travels with it. Whenever rain soaks the root zone beyond what it can hold, the excess drains away below the roots, often through buried drainage tiles, and
         into streams and groundwater, and takes nitrate with it. The budget in <FigRef to="Soil Chemistry Lab">the first demonstration</FigRef> assumed a typical
-        season, in which the crop recovers about two-thirds of the fertilizer. In the next demonstration we track it through the reference season instead. The violet
-        line is the nitrate in the root zone; the blue area is what has drained away; the teal lines are what the crop has taken up and what it wanted. Choose when
+        season, in which the crop recovers about two-thirds of the fertilizer. In the next demonstration we track it through the reference season instead. The green
+        line is the nitrate in the root zone; the blue area is what has drained away; the teal lines are what the crop has taken up and what its growth called for —
+        {' '}{fmt(SEASON_N_DEMAND)} pounds over this season, a little less than the 220 the budget allowed for a full crop. Choose when
         Cedar Bend applies its nitrogen — the autumn before, at planting, or half at planting and half six weeks later — and how wet the spring is:
       </P>
 
@@ -261,7 +289,7 @@ export default function Lesson() {
             { values: ns.leached, color: GRAPHIC.blue, kind: 'area', opacity: 0.3 },
             { values: ns.demand, color: GRAPHIC.teal, dash: '5 4', width: 1.5 },
             { values: ns.uptake, color: GRAPHIC.teal, width: 2.5 },
-            { values: ns.pool, color: GRAPHIC.violet, width: 2.5 },
+            { values: ns.pool, color: GRAPHIC.green, width: 2.5 },
           ]}
           from={0}
           to={dayOf(10, 1)}
@@ -279,7 +307,7 @@ export default function Lesson() {
         />
         <Legend
           items={[
-            { label: 'Nitrate in the root zone', color: GRAPHIC.violet, kind: 'line' },
+            { label: 'Nitrate in the root zone', color: GRAPHIC.green, kind: 'line' },
             { label: 'Drained away', color: GRAPHIC.blue },
             { label: 'Taken up', color: GRAPHIC.teal, kind: 'line' },
             { label: 'Wanted', color: GRAPHIC.teal, kind: 'line', dashed: true },
@@ -293,7 +321,7 @@ export default function Lesson() {
             { label: 'with nitrogen to spare', value: buAc(nRun.base.yield) },
           ]}
         />
-        <Slider label="Nitrogen fertilizer" tone="violet" value={n.state.rate} min={0} max={250} step={10} onChange={(v) => n.set({ rate: v })} display={`${n.state.rate} lb N/ac`} />
+        <Slider label="Nitrogen fertilizer" tone="green" value={n.state.rate} min={0} max={250} step={10} onChange={(v) => n.set({ rate: v })} display={`${n.state.rate} lb N/ac`} />
         <Slider label="Spring rain, January to June" tone="blue" value={n.state.spring} min={0.6} max={1.8} step={0.1} onChange={(v) => n.set({ spring: Math.round(v * 10) / 10 })} display={`${fmt(n.state.spring * 100)}% of normal`} />
       </Figure>
 

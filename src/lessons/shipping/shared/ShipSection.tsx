@@ -45,6 +45,10 @@ export interface ShipSectionProps {
   /** Height of the cargo surface above the keel, m. */
   cargoTop?: number;
   cargoColor?: string;
+  /** Height above the keel of the top of a cargo stacked on deck, m (drawn from the main deck up). */
+  deckTop?: number;
+  /** Color of the deck cargo; defaults to the cargo color. */
+  deckColor?: string;
   /** Fraction full of the double-bottom and hopper tanks. */
   lowerFill?: number;
   /** Fraction full of the topside tanks: one number for both, or [port, starboard]. */
@@ -93,6 +97,8 @@ export function ShipSection({
   heelDeg = 0,
   cargoTop,
   cargoColor = '#b9a58b',
+  deckTop,
+  deckColor,
   lowerFill = 0,
   topsideFill = 0,
   points,
@@ -228,11 +234,20 @@ export function ShipSection({
         )}
         {/* hatch cover */}
         <rect x={X(-hatch - 0.6)} y={Z(coaming + 0.8)} width={X(2 * hatch + 1.2)} height={0.8 * s} fill="#e2ded6" stroke={HULL_STROKE} strokeWidth={1} />
+        {/* a deck cargo, stacked from the main deck between stanchions at her sides, in layers of logs */}
+        {deckTop !== undefined && deckTop > D + 0.05 && (
+          <g>
+            <rect x={X(-hb + 0.3)} y={Z(deckTop)} width={X(2 * hb - 0.6)} height={Z(D) - Z(deckTop)} fill={deckColor ?? cargoColor} opacity={0.9} stroke="#6b6257" strokeWidth={1} />
+            {Array.from({ length: Math.max(0, Math.ceil((deckTop - D) / 0.9) - 1) }, (_, i) => (
+              <line key={i} x1={X(-hb + 0.3)} x2={X(hb - 0.3)} y1={Z(D + 0.9 * (i + 1))} y2={Z(D + 0.9 * (i + 1))} stroke="#6b6257" strokeWidth={0.6} opacity={0.7} />
+            ))}
+          </g>
+        )}
         <path d={hull} fill="none" stroke={HULL_STROKE} strokeWidth={1.5} strokeLinejoin="round" />
-        <text x={X(-hb + 0.6)} y={Z(D) - 6} className="ax">
+        <text x={X(-hb + 0.6)} y={Z(Math.max(D, deckTop ?? D)) - 6} className="ax">
           port
         </text>
-        <text x={X(hb - 0.6)} y={Z(D) - 6} textAnchor="end" className="ax">
+        <text x={X(hb - 0.6)} y={Z(Math.max(D, deckTop ?? D)) - 6} textAnchor="end" className="ax">
           starboard
         </text>
       </g>

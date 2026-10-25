@@ -92,7 +92,32 @@ export function cheapestSolved(plan: Plan, speed: number): boolean {
   return best.filled === CARGOES.length && r.filled === CARGOES.length && r.cost <= best.cost + 1;
 }
 
-export const START_PLAN: Plan = { tub: 'albatross', phe: 'gannet', rby: 'tern', new: 'fulmar' };
+/**
+ * The starting plan: first open, first served. Ships in the order they come open take the cargoes in
+ * the order their windows open, which covers all four but sends Albatross and Gannet the wrong way.
+ */
+export const START_PLAN: Plan = { tub: 'skua', phe: 'albatross', rby: 'tern', new: 'gannet' };
+
+/** The cargoes a ship can reach inside their loading windows at a ballast speed. */
+export function reachableCargoes(ship: OpenShip, speed: number): CargoNeed[] {
+  const o = positionOptions(speed);
+  return CARGOES.filter((c) => position(ALBATROSS, ship, c, o).ok);
+}
+
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/** What the challenge's success message says about the ships a plan leaves without a cargo. */
+export function idleNote(plan: Plan, speed: number): string {
+  const idle = SHIPS.filter((s) => !CARGOES.some((c) => plan[c.id] === s.id));
+  if (!idle.length) return 'No ship is left without a cargo.';
+  return idle
+    .map((s) => {
+      const reach = reachableCargoes(s, speed);
+      if (!reach.length) return `${s.name} is left without a cargo, open in ${PLACE[s.at].name} with no cargo she can reach before its loading window closes.`;
+      return `${s.name} is left without a cargo: she could reach ${andList(reach.map((c) => PLACE[c.port].name))} in time, but other ships do ${reach.length > 1 ? 'those jobs' : 'that job'} for less.`;
+    })
+    .join(' ');
+}
 
 // ---------------------------------------------------------------------------
 // Demonstration 2: the world's ballasters.
@@ -123,8 +148,12 @@ const BEST12 = cheapestPlan(12);
 const BEST10 = cheapestPlan(10);
 const FUEL_BALLAST_12 = fuelPerDay(ALBATROSS, 12, DRAFT);
 const FULMAR_NEW_10 = position(ALBATROSS, SHIPS[4], CARGOES[3], positionOptions(10));
+export const ALB_NEW_12 = position(ALBATROSS, SHIPS[0], CARGOES[3], O12);
+export const GANNET_NEW_12 = position(ALBATROSS, SHIPS[1], CARGOES[3], O12);
+export const FULMAR_NEW_12 = position(ALBATROSS, SHIPS[4], CARGOES[3], O12);
 const CAPE = ballasters('cape', 1, 1);
 const CAPE_B15 = ballasters('cape', 1.5, 1);
+const CAPE_A15 = ballasters('cape', 1, 1.5);
 const KMAX = ballasters('kmax', 1, 1);
 const KMAX_PAR_SAN = KMAX.req.plan.flows.find((f) => f.from === 'PAR' && f.to === 'SAN');
 const shipName = (id: string | null) => SHIPS.find((s) => s.id === id)?.name ?? 'no ship';
@@ -152,6 +181,7 @@ export default function Lesson() {
   const totCost = sailing.reduce((s, l) => s + l.p!.cost, 0);
   const best = cheapestPlan(speed);
   const solved = cheapestSolved(plan, speed);
+  const startCost = planCost(START_PLAN, speed).cost;
   const assign = (cargo: string, ship: ShipChoice) =>
     pos.set((s) => {
       const next: Record<string, ShipChoice> = {};
@@ -203,7 +233,8 @@ export default function Lesson() {
   return (
     <LessonPage id="shipping/3.4">
       <P>
-        The trades of our world run one way. Iron ore leaves Brazil and Western Australia for China; coal leaves Australia, South Africa and Indonesia for China
+        As the trades map of <a href={lessonHref('shipping/3.1')}>Lesson 3.1</a> showed, the trades of our world run one way. Iron ore leaves Brazil and Western
+        Australia for China; coal leaves Australia, South Africa and Indonesia for China
         and India; grain leaves the Americas for Asia. Almost nothing comes back in the same ships. So when a Capesize finishes discharging ore in Qingdao she is
         empty, and her next cargo is somewhere else — often an ocean away. The voyage she makes to reach it, carrying only seawater ballast, is a{' '}
         <K tone="blue">ballast voyage</K>. It earns nothing, and it is where the chapter’s question gets its answer: why can ships be scarce in Brazil while others
@@ -263,47 +294,55 @@ export default function Lesson() {
             { label: 'days in ballast', value: fmt(totDays, 1), tone: 'teal' },
             { label: 'fuel burned', value: `${fmt(totFuel)} t`, tone: 'gold' },
             { label: 'positioning cost', value: usdK(totCost), tone: 'green' },
-            { label: 'cargoes covered', value: `${covered.length} of ${CARGOES.length}`, tone: covered.length < CARGOES.length ? 'red' : undefined },
           ]}
         />
         <Slider label="Speed in ballast" tone="teal" value={speed} min={10} max={14} step={0.5} onChange={(v) => pos.set({ speed: v })} display={`${fmt(speed, 1)} kn`} />
         <Caption>
-          {idle.length ? `Left without a cargo: ${idle.map((s) => s.name).join(', ')}. ` : ''}
-          {solved
-            ? `This is the cheapest plan at ${fmt(speed, 1)} knots.`
-            : `At ${fmt(speed, 1)} knots the cheapest plan covers ${best.filled === CARGOES.length ? 'all four cargoes' : `${best.filled} cargoes`} for ${usdK(best.cost)}.`}
+          {covered.length < CARGOES.length ? (
+            <span style={{ color: TEXT.red }}>
+              {covered.length} of {CARGOES.length} cargoes covered
+            </span>
+          ) : (
+            'All four cargoes covered'
+          )}
+          {idle.length ? `; left without a cargo: ${idle.map((s) => s.name).join(', ')}.` : '; every ship has a cargo.'}
+          {solved ? ` This is the cheapest plan at ${fmt(speed, 1)} knots.` : ''}
         </Caption>
       </Figure>
 
       <P>
-        The starting plan is the obvious one: Albatross, Northwind’s own ship, takes the Brazilian ore. She has {nm(ALB_TUB.nm)} to sail from Qingdao to Tubarão,
-        round the Cape of Good Hope — {days(ALB_TUB.days)} at 12 knots, burning {fmt(FUEL_BALLAST_12, 1)} tonnes of fuel a day — and she reaches the port on day{' '}
-        {fmt(ALB_TUB.arrive, 1)}, just inside a window that closes on day {CARGOES[0].to}. That ballast voyage alone costs {usdK(ALB_TUB.cost)}. Together the four
-        voyages of the starting plan cost {usdK(START12.cost)}.
+        The starting plan follows the simplest rule a planner could use: first open, first served. Albatross, Northwind’s own ship and the first to come open,
+        takes the first cargo to load, the ore at Port Hedland; Tern takes the coal at Richards Bay, Gannet the coal at Newcastle, and Skua the Brazilian ore,
+        which loads last. Fulmar, open last, is left over. Every cargo is covered, and the four ballast voyages cost {usdK(START12.cost)} together.
       </P>
       <P>
-        Now look at Skua, open in Rotterdam. She is {nm(SKUA_TUB.nm)} from Tubarão and could be there on day {fmt(SKUA_TUB.arrive, 1)}, so early that she would
-        wait {days(SKUA_TUB.early)} for the window to open, and still her voyage costs only {usdK(SKUA_TUB.cost)}. Distance is the advantage that matters. A ship
-        already in the Atlantic beats one in the Pacific for an Atlantic cargo by thousands of miles, and no amount of speed makes that up.
+        Skua is the right ship for Tubarão, and it is worth seeing why. Albatross could go instead: from Qingdao she would sail {nm(ALB_TUB.nm)} round the Cape
+        of Good Hope — {days(ALB_TUB.days)} at 12 knots, burning {fmt(FUEL_BALLAST_12, 1)} tonnes of fuel a day — and reach the port on day{' '}
+        {fmt(ALB_TUB.arrive, 1)}, just inside a window that closes on day {CARGOES[0].to}, for {usdK(ALB_TUB.cost)}. Skua, open in Rotterdam, is{' '}
+        {nm(SKUA_TUB.nm)} from Tubarão and could be there on day {fmt(SKUA_TUB.arrive, 1)}, so early that she would wait {days(SKUA_TUB.early)} for the window to
+        open, and still her voyage costs only {usdK(SKUA_TUB.cost)}. Distance is the advantage that matters. A ship already in the Atlantic beats one in the
+        Pacific for an Atlantic cargo by thousands of miles, and no amount of speed makes that up.
       </P>
 
       <Challenge
         id="a"
-        question="Cover all four cargoes at the lowest total positioning cost."
+        question="First open, first served covers every cargo, but not at the lowest cost. Predict first: which of its voyages would you change, and which ship would you leave without a cargo? Then cover all four cargoes at the lowest total positioning cost."
         solved={solved}
         status={
           covered.length < CARGOES.length
             ? `${covered.length} of ${CARGOES.length} cargoes are covered.`
             : `All four cargoes are covered for ${usdK(totCost)}. Is there a cheaper plan?`
         }
-        success={`Solved. At ${fmt(speed, 1)} knots the cheapest plan sends ${CARGOES.map((c) => `${shipName(best.pairs[c.id])} to ${PLACE[c.port].name}`).join(', ')}, for ${usdK(best.cost)}. ${idle.map((s) => s.name).join(' and ') || 'No ship'} ${idle.length === 1 ? 'is' : 'are'} left without a cargo${idle.some((s) => s.at === 'QIN') ? ', open in Qingdao with nothing in reach' : ''}.`}
+        success={`Solved. At ${fmt(speed, 1)} knots the cheapest plan sends ${andList(CARGOES.map((c) => `${shipName(best.pairs[c.id])} to ${PLACE[c.port].name}`))}, for ${usdK(best.cost)}, ${usdK(startCost - best.cost)} less than first open, first served. ${idleNote(plan, speed)}`}
       />
 
       <H2>The window decides who can compete</H2>
       <P>
-        At 12 knots the cheapest plan covers all four cargoes for {usdK(BEST12.cost)}, and it leaves {shipName(SHIPS.find((s) => !Object.values(BEST12.pairs).includes(s.id))?.id ?? null)}{' '}
-        idle. The ship nearest to a cargo isn’t always the one that should take it: what matters is the whole set of voyages, because every ship can only go one
-        way. Slow the fleet to 10 knots in <FigRef to="Fleet Positioning Simulator">the first demonstration</FigRef> and the answer changes. Fulmar, open in Qingdao on day 8, now can’t reach Newcastle before day{' '}
+        At 12 knots the cheapest plan covers all four cargoes for {usdK(BEST12.cost)} and leaves Albatross, the first ship open, without a cargo. Gannet takes
+        Port Hedland: from Singapore she is far nearer to it than Albatross is from Qingdao. Newcastle’s cheapest single voyage would be Gannet’s too, at{' '}
+        {usdK(GANNET_NEW_12.cost)}, but she saves more at Port Hedland, so Newcastle goes to Fulmar — not to Albatross, though both sail from Qingdao, because
+        Albatross would arrive {days(ALB_NEW_12.early)} before the window opens and pay for the wait. Neither the first ship open nor the nearest is always the
+        one that should go: what matters is the whole set of voyages, because every ship can only go one way. Slow the fleet to 10 knots in <FigRef to="Fleet Positioning Simulator">the first demonstration</FigRef> and the answer changes. Fulmar, open in Qingdao on day 8, now can’t reach Newcastle before day{' '}
         {fmt(FULMAR_NEW_10.arrive, 1)}, after the window closes on day {CARGOES[3].to}, so the cheapest plan becomes{' '}
         {CARGOES.map((c) => `${shipName(BEST10.pairs[c.id])} to ${PLACE[c.port].name}`).join(', ')}.
       </P>
@@ -317,9 +356,10 @@ export default function Lesson() {
       <P>
         Scale those four cargoes up to a whole year of our world’s trades and the same logic becomes a map. In the next demonstration, the lines are the ballast
         voyages the trades require. Each follows the shortest sea route of <a href={lessonHref('shipping/3.1')}>Lesson 3.1</a>, and together they are planned at
-        the least total distance: every ship that discharges somewhere sails empty to wherever ships are needed next. Line widths are ships a year; the orange ones run from the Pacific and Indian Oceans
-        into the Atlantic. Each port is labeled with its <K tone="blue">positional value</K>: how many ballast miles a ship there saves, compared with a ship at the
-        port where open ships are most plentiful. Change how much ore Brazil and Australia export, or switch to the Kamsarmax trades:
+        the least total distance: every ship that discharges somewhere sails empty to wherever ships are needed next. Line widths are voyages a year; the orange
+        ones run from the Pacific and Indian Oceans into the Atlantic. Each port is labeled with its <K tone="blue">positional value</K>: how many ballast miles a
+        ship there saves, compared with a ship at the worst-placed port, which is labeled 0. Change how much ore Brazil and Australia export, or switch to the
+        Kamsarmax trades:
       </P>
 
       <Figure name="Fleet Positioning Simulator · the world’s ballasters" scenario={wb}>
@@ -333,7 +373,7 @@ export default function Lesson() {
           ]}
         />
         <WorldMap
-          ariaLabel={`Ballast voyages of the ${MARKET_CLASSES[cls].name} trades: ${flowRows.map((f) => `${PLACE[f.from].name} to ${PLACE[f.to].name}, ${fmt(f.ships)} ships a year`).join('; ')}. ${fmt(intoAtlantic)} ships a year ballast into the Atlantic.`}
+          ariaLabel={`Ballast voyages of the ${MARKET_CLASSES[cls].name} trades: ${flowRows.map((f) => `${PLACE[f.from].name} to ${PLACE[f.to].name}, ${fmt(f.ships)} voyages a year`).join('; ')}. ${fmt(intoAtlantic)} ballast voyages a year into the Atlantic.`}
           routes={routes2}
           ports={ports2}
         />
@@ -349,7 +389,7 @@ export default function Lesson() {
           items={[
             { label: 'ships needed at 12 kn laden, 13 in ballast', value: fmt(req.ships) },
             { label: 'ballast miles per laden mile', value: fmt(req.ballastRatio, 2), tone: 'blue' },
-            { label: 'ships a year ballasting into the Atlantic', value: fmt(intoAtlantic), tone: 'orange' },
+            { label: 'ballast voyages a year into the Atlantic', value: fmt(intoAtlantic), tone: 'orange' },
           ]}
         />
         <Slider
@@ -378,24 +418,26 @@ export default function Lesson() {
           rowKey={(f) => `${f.from}-${f.to}`}
           columns={[
             { label: 'Ballast voyage', cell: (f) => `${PLACE[f.from].name} → ${PLACE[f.to].name}` },
-            { label: 'Ships a year', cell: (f) => fmt(f.ships), align: 'right' },
+            { label: 'Voyages a year', cell: (f) => fmt(f.ships), align: 'right' },
             { label: 'Miles each', cell: (f) => fmt(f.nm), align: 'right' },
           ]}
         />
       </Figure>
 
       <P>
-        In the Capesize trades, {fmt(CAPE.intoAtlantic)} ships a year leave China empty for Brazil, each sailing {nm(CAPE.req.plan.flows.find((f) => f.from === 'QIN' && f.to === 'TUB')?.nm ?? 0)}.
+        In the Capesize trades, {fmt(CAPE.intoAtlantic)} times a year a ship leaves China empty for Brazil, each time sailing {nm(CAPE.req.plan.flows.find((f) => f.from === 'QIN' && f.to === 'TUB')?.nm ?? 0)}.
         No Capesize cargo leaves China, so every ship that arrives there leaves in ballast, and every ballast voyage is a laden voyage run backward: the fleet
         sails exactly {fmt(CAPE.req.ballastRatio, 2)} ballast miles for every laden one. The positional values say how lopsided that makes the map. A ship ready to
         load at Tubarão is worth {nm(CAPE.req.plan.ready.TUB)} fewer ballast miles than one open in Qingdao, and a ship discharging in Rotterdam is{' '}
         {nm(CAPE.req.plan.open.ROT)} better placed than one discharging in China, because from Rotterdam the next Brazilian cargo is a short hop.
       </P>
       <P>
-        Raise Brazil’s ore exports by half and the ballasters into the Atlantic rise to {fmt(CAPE_B15.intoAtlantic)} a year, and the ships needed to carry the
+        Raise Brazil’s ore exports by half and the ballast voyages into the Atlantic rise to {fmt(CAPE_B15.intoAtlantic)} a year, and the ships needed to carry the
         trades from {fmt(CAPE.req.ships)} to {fmt(CAPE_B15.req.ships)}: each extra tonne from Brazil ties up a ship for a long laden voyage and an equally long
-        empty one. Now switch to the Kamsarmax trades, which are more tangled. Some of the ships that discharge Indonesian and South African coal in India sail
-        on to Brazil for soybeans — {fmt(KMAX_PAR_SAN?.ships ?? 0)} a year, {nm(KMAX_PAR_SAN?.nm ?? 0)} each — and some that discharge in China cross the Pacific to
+        empty one. Put Brazil back and raise Australia’s by half instead: the trades need{' '}
+        {fmt(CAPE_A15.req.ships)} ships, but not one more ballast voyage enters the Atlantic: Australian
+        ore goes to China, and its ships sail straight back. Now switch to the Kamsarmax trades, which are more tangled. Some of the ships that discharge Indonesian and South African coal in India sail
+        on to Brazil for soybeans — {fmt(KMAX_PAR_SAN?.ships ?? 0)} voyages a year, {nm(KMAX_PAR_SAN?.nm ?? 0)} each — and some that discharge in China cross the Pacific to
         the US Gulf for grain. Because ships can often find their next cargo nearer than the port their last one came from, the Kamsarmax fleet sails{' '}
         {fmt(KMAX.req.ballastRatio, 2)} ballast miles per laden mile.
       </P>

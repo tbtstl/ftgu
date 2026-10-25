@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
@@ -39,6 +39,8 @@ import {
   type TournamentResult,
 } from '../../../engines/gas/capstone';
 import { CORRIDORS, GAS_NODE, PIPELINE, STORAGE_SPECS } from '../../../model/gas/world';
+import { useProgress } from '../../../course/progress';
+import { CapstoneSoFar } from '../shared/CapstoneUi';
 import { useGasCapstone } from '../shared/capstone';
 import { XYChart } from '../shared/XYChart';
 import { bcf, money } from '../shared/format';
@@ -78,6 +80,9 @@ export function tournamentPartName(part: TournamentPart, p: PortfolioSettings): 
 function partPhrase(part: TournamentPart, p: PortfolioSettings): string {
   return `the ${tournamentPartName(part, p)}`;
 }
+
+/** Each rival's name as the figure's choice shows it. */
+const RIVAL_SHORT: Record<string, string> = { storage: 'Hedged lease', gambler: 'Unhedged lease', insurer: 'Metro seller', forecaster: 'Weather', shipper: 'Northline' };
 
 /** A desk's name in a sentence. */
 export function deskPhrase(id: string): string {
@@ -125,7 +130,7 @@ export function withParts(p: PortfolioSettings, kept: TournamentPart[]): Portfol
 export interface TournamentRun {
   seeds: number[];
   years: PortfolioYear[];
-  /** Each winter's degree-days colder than normal over November–March (negative = milder). */
+  /** Each winter's heating degree days above normal over November–March (negative = milder). */
   colder: number[];
   result: TournamentResult;
 }
@@ -179,6 +184,32 @@ export function partTotals(run: TournamentRun): Record<TournamentPart, number> {
   return out;
 }
 
+export interface ColdMild {
+  /** Average winters, $: [over the winters colder than normal, over the rest]. */
+  firm: [number, number];
+  metro: [number, number];
+  /** The same for the insurer desk's Metro sale, made every month. */
+  insurer: [number, number];
+  /** How many of the colder winters, counting down from the coldest, the reader's Metro sale stood aside from entirely. */
+  idleColdest: number;
+}
+
+/** The insurance-like parts over a set of winters: what they made in the colder ones and in the rest. */
+export function tournamentColdMild(mine: TournamentRun, insurer?: TournamentRun): ColdMild {
+  const cold = mine.colder.map((c, i) => ({ c, i })).filter((x) => x.c > 0).map((x) => x.i);
+  const mild = mine.colder.map((c, i) => ({ c, i })).filter((x) => x.c <= 0).map((x) => x.i);
+  const avg = (run: TournamentRun | undefined, idx: number[], part: TournamentPart) =>
+    run && idx.length ? idx.reduce((a, i) => a + run.years[i][part].total, 0) / idx.length : 0;
+  const coldestFirst = [...cold].sort((a, b) => mine.colder[b] - mine.colder[a]);
+  const firstSold = coldestFirst.findIndex((i) => mine.years[i].metro.trades > 0);
+  return {
+    firm: [avg(mine, cold, 'firm'), avg(mine, mild, 'firm')],
+    metro: [avg(mine, cold, 'metro'), avg(mine, mild, 'metro')],
+    insurer: [avg(insurer, cold, 'metro'), avg(insurer, mild, 'metro')],
+    idleColdest: firstSold < 0 ? coldestFirst.length : firstSold,
+  };
+}
+
 /** The parts the portfolio holds that made money over the eight practice winters. */
 export function practiceKeepers(s: GasSystem, p: PortfolioSettings): TournamentPart[] {
   const t = partTotals(tournamentRun(s, p, 'practice'));
@@ -211,7 +242,7 @@ export function tournamentPortfolioWords(p: PortfolioSettings): string {
   if (p.toll) parts.push('a toll on Lakeside');
   const skill = fmt(p.skill, Math.round(p.skill * 100) % 10 === 0 ? 1 : 2);
   if (p.weatherLots > 0 && p.skill > 0)
-    parts.push(`weather trades of ${fmt(p.weatherLots)} lots whenever a forecast with skill ${skill} is more than ${fmt(p.weatherThresholdF, 1)} °F from normal`);
+    parts.push(`weather trades of ${fmt(p.weatherLots)} lots, October to April, whenever a forecast with skill ${skill} is more than ${fmt(p.weatherThresholdF, 1)} °F from normal`);
   if (p.metroSellMMBtuD > 0) {
     const skip =
       p.metroSkipColderF === null
@@ -245,13 +276,13 @@ function cell(x: number): string {
   return x < 0 ? `−${s}` : s;
 }
 
-/** Degree-days colder (+) or warmer (−) than normal. */
+/** Heating degree days colder (+) or warmer (−) than normal. */
 function dd(x: number): string {
   return `${x >= 0.5 ? '+' : x <= -0.5 ? '−' : ''}${fmt(Math.abs(x))}`;
 }
 
 function colderWords(x: number): string {
-  return `${fmt(Math.abs(x))} degree days ${x >= 0 ? 'colder' : 'warmer'} than normal`;
+  return `${fmt(Math.abs(x))} heating degree days ${x >= 0 ? 'colder' : 'warmer'} than normal`;
 }
 
 const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -267,7 +298,7 @@ function list(xs: string[]): string {
 // ---------------------------------------------------------------------------
 // Figure 2's chart: each unseen winter's profit, part by part, mildest to coldest.
 
-function PartsChart({ run, p, kept, keptTotals }: { run: TournamentRun; p: PortfolioSettings; kept: TournamentPart[]; keptTotals: number[] }) {
+function PartsChart({ run, which, p, kept, keptTotals }: { run: TournamentRun; which: TournamentWinters; p: PortfolioSettings; kept: TournamentPart[]; keptTotals: number[] }) {
   const parts = activeParts(p);
   const order = run.colder.map((c, i) => ({ c, i })).sort((a, b) => a.c - b.c);
   const W = 640;
@@ -294,7 +325,7 @@ function PartsChart({ run, p, kept, keptTotals }: { run: TournamentRun; p: Portf
   const ticks = niceTicks(y0, y1, 5);
   const label = order.map(({ c, i }) => `${colderWords(c)}: ${money(run.years[i].total)} in all, ${money(keptTotals[i])} from the parts kept`).join('; ');
   return (
-    <svg className="chart" viewBox={`0 0 ${W} 262`} role="img" aria-label={`Each unseen winter’s profit, part by part, from the mildest to the coldest. ${label}.`}>
+    <svg className="chart" viewBox={`0 0 ${W} 262`} role="img" aria-label={`Each ${which === 'unseen' ? 'unseen' : 'practice'} winter’s profit, part by part, from the mildest to the coldest. ${label}.`}>
       {ticks.map((t) => (
         <g key={t}>
           <line x1={left} x2={right} y1={y(t)} y2={y(t)} stroke={Math.abs(t) < 1e-9 ? '#9a9a9a' : '#e4e1d8'} strokeWidth={1} />
@@ -332,7 +363,7 @@ function PartsChart({ run, p, kept, keptTotals }: { run: TournamentRun; p: Portf
         winter
       </text>
       <text className="ax" x={left} y={254} style={{ fill: TEXT.gray }}>
-        degree days colder (+) or warmer (−) than normal, November–March
+        heating degree days colder (+) or warmer (−) than normal, November–March
       </text>
     </svg>
   );
@@ -390,21 +421,35 @@ export default function Lesson() {
   const kept = held.filter((part) => keep[part]);
   const keptUnseen = useMemo(() => tournamentRun(yours, withParts(p, kept), 'unseen'), [yours, p, kept.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
   const keptPractice = useMemo(() => tournamentRun(yours, withParts(p, kept), 'practice'), [yours, p, kept.join('|')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const keptTotals = keptUnseen.result.totals;
   const partsU = partTotals(U);
   const partsP = partTotals(practice);
   const keepers = practiceKeepers(yours, p);
   const solved = tournamentSolved(keep, yours, p);
+  // The unseen winters stay hidden in this demonstration until the challenge is solved (now or on an earlier visit).
+  const progress = useProgress();
+  const revealed = solved || (progress['gas/7.5']?.includes('a') ?? false);
+  const [view, setView] = useState<TournamentWinters>('unseen');
+  const shown: TournamentWinters = revealed ? view : 'practice';
+  const shownRun = shown === 'unseen' ? U : practice;
+  const shownKept = shown === 'unseen' ? keptUnseen : keptPractice;
   const keepersRun = tournamentRun(yours, withParts(p, keepers), 'unseen');
   const dropped = held.filter((part) => !keepers.includes(part));
   const droppedUnseen = dropped.reduce((a, part) => a + partsU[part], 0);
   // The insurance-like parts: what pays when the winter is cold.
   const coldIdx = U.colder.map((c, i) => ({ c, i })).filter((x) => x.c > 0).map((x) => x.i);
   const mildIdx = U.colder.map((c, i) => ({ c, i })).filter((x) => x.c <= 0).map((x) => x.i);
-  const avgOver = (idx: number[], part: TournamentPart) => (idx.length ? idx.reduce((a, i) => a + U.years[i][part].total, 0) / idx.length : 0);
+  const cm = tournamentColdMild(U, byId.insurer?.run);
   const practiceColdCount = practice.colder.filter((c) => c > 0).length;
   const unseenColdCount = coldIdx.length;
   const bothWays = held.filter((part) => partsP[part] > 0 && partsU[part] > 0);
+  // Selling Metro's basis: the insurer desk sells every winter month; the reader's sale may stand aside when the forecast leans cold.
+  const idle = cm.idleColdest;
+  const metroWords =
+    p.metroSkipColderF !== null && byId.insurer
+      ? `Selling Metro’s basis is the same insurance written the other way. Sold every month, as the insurer desk sold it, it averaged ${money(cm.insurer[0])} a winter in the colder unseen winters and ${money(cm.insurer[1])} in the milder. Your sale had the forecast standing guard${
+          idle ? `, which kept it out of the ${idle === 1 ? 'coldest unseen winter' : `${word(idle)} coldest unseen winters`} altogether` : ''
+        }: it averaged ${money(cm.metro[0])} in the colder winters and ${money(cm.metro[1])} in the milder. `
+      : `Selling Metro’s basis is the same insurance written the other way: ${money(cm.metro[0])} a winter in the colder ones, ${money(cm.metro[1])} in the milder. `;
 
   const status = !held.length
     ? 'Your portfolio holds nothing yet: set one up in Lesson 7.4.'
@@ -414,6 +459,7 @@ export default function Lesson() {
 
   return (
     <LessonPage id="gas/7.5">
+      <CapstoneSoFar capstone={cap} portfolio />
       <P>
         <a href={lessonHref('gas/7.4')}>The previous lesson</a> put a portfolio together on your network and ran it through the eight practice winters, the same
         winters <a href={lessonHref('gas/7.2')}>Lesson 7.2</a> ran your market through. Every choice in it was made by someone who could see those winters. That is
@@ -425,7 +471,7 @@ export default function Lesson() {
         The network running is <a href={lessonHref('gas/7.1')}>{networkWords}</a>, and the portfolio is <a href={lessonHref('gas/7.4')}>yours</a>:{' '}
         {tournamentPortfolioWords(p)}. Five rival desks play the same winters on the same network, each with one of Chapter 6’s strategies alone: a storage desk
         holding a hedged lease of {bcf(RIVALS[0].settings.storageShare * STORAGE_SPECS.saltflat.workingBcf, 1)}, a desk holding the same lease unhedged, a desk
-        that sells Metro’s winter <K c="price">basis</K> every month without looking at the forecast, a weather desk, and a shipper with firm capacity on
+        that sells Metro’s winter <K c="price">basis</K> every month without looking at the forecast, a weather desk trading October to April, and a shipper with firm capacity on
         Northline. A passive desk holds nothing and makes nothing; any strategy has to beat it after its costs. The rules are Chapter 6’s. A storage lease, firm
         capacity and a toll cost what April 1’s curve said they were worth, so a desk earns only what it adds to the market’s own valuation (
         <a href={lessonHref('gas/6.4')}>Lesson 6.4</a>); futures and swaps pay their fees and tie up margin. If you go back to Lesson 7.4 and change the
@@ -438,25 +484,27 @@ export default function Lesson() {
       </P>
 
       <Figure name="Gas Trading Tournament" scenario={f}>
-        <Segmented
-          label="Winters"
-          value={f.state.winters}
-          onChange={(v) => f.set({ winters: v })}
-          options={[
-            { value: 'unseen', label: `${word(n)} unseen winters` },
-            { value: 'practice', label: `${word(PRACTICE_SEEDS.length)} practice winters` },
-          ]}
-        />
-        <Segmented
-          label="Network"
-          value={f.state.network}
-          onChange={(v) => f.set({ network: v })}
-          options={[
-            { value: 'yours', label: changed ? 'Your network' : 'Your network (as built)' },
-            { value: 'built', label: 'The network as built' },
-          ]}
-        />
-        <Segmented label="Rival" value={f.state.rival} onChange={(v) => f.set({ rival: v })} options={RIVALS.map((r) => ({ value: r.id, label: r.name }))} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 40 }}>
+          <Segmented
+            label="Winters"
+            value={f.state.winters}
+            onChange={(v) => f.set({ winters: v })}
+            options={[
+              { value: 'unseen', label: `${word(n)} unseen winters` },
+              { value: 'practice', label: `${word(PRACTICE_SEEDS.length)} practice winters` },
+            ]}
+          />
+          <Segmented
+            label="Network"
+            value={f.state.network}
+            onChange={(v) => f.set({ network: v })}
+            options={[
+              { value: 'yours', label: changed ? 'Your network' : 'Yours (as built)' },
+              { value: 'built', label: 'As built' },
+            ]}
+          />
+        </div>
+        <Segmented label="Rival" value={f.state.rival} onChange={(v) => f.set({ rival: v })} options={RIVALS.map((r) => ({ value: r.id, label: RIVAL_SHORT[r.id] ?? r.name }))} />
         <XYChart
           xDomain={[-600, 700]}
           yDomain={[ylo, yhi]}
@@ -465,7 +513,7 @@ export default function Lesson() {
           xFormat={(v) => (v > 0 ? `+${fmt(v)}` : fmt(v))}
           yFormat={(v) => (Math.abs(v) < 1e-9 ? '$0' : v < 0 ? `−$${fmt(-v, 1)}M` : `$${fmt(v, 1)}M`)}
           yLabel="Profit in the winter, after fees"
-          xLabel="Degree days colder (+) or warmer (−) than normal, November–March"
+          xLabel="Heating degree days colder (+) or warmer (−) than normal, November–March"
           height={260}
           hLines={[{ at: 0, color: '#9a9a9a', width: 1 }]}
           vLines={[{ at: 0, color: '#d8d4c8', dash: '3 3', width: 1 }]}
@@ -499,14 +547,6 @@ export default function Lesson() {
           rowKey={(d) => d.id}
           rowClass={(d) => (d.id === 'yours' ? 'hl' : d.id === rival.id ? '' : 'dim')}
         />
-        <Readouts
-          items={[
-            { label: 'your average winter', value: money(me.run.result.mean), tone: 'green' },
-            { label: 'your worst winter', value: money(me.run.result.worst), tone: 'green' },
-            { label: `your place of ${desks.length}`, value: fmt(rank) },
-            { label: 'your winters in profit', value: `${won(me.run.result)} of ${me.run.result.totals.length}` },
-          ]}
-        />
         <Caption>
           {fs.winters === 'unseen' ? 'The unseen winters' : 'The practice winters'} on {fs.network === 'built' ? 'the network as built' : changed ? 'your network' : 'your network, which is the network as built'}:
           your portfolio averages {money(me.run.result.mean)} a winter and ranks {ordinal(rank)} of {word(desks.length)}; {deskPhrase(rival.id)} averages{' '}
@@ -530,7 +570,8 @@ export default function Lesson() {
       {storageDesk && gambler && insurer && forecaster && shipper ? (
         <P>
           The rivals tell the chapter’s story again. The hedged storage desk made money in {word(won(storageDesk))} of the {word(n)} winters, averaging{' '}
-          {money(storageDesk.mean)}: its hedges lock in what April’s curve offered, and redrawing the schedule each month adds to it, in almost any weather (
+          {money(storageDesk.mean)}. Its fee had already paid for what April’s curve offered, so all of that is what redrawing the schedule each month earned,
+          and the hedges kept it coming in almost any weather{storageDesk.worst < 0 ? ` — its ${won(storageDesk) === n - 1 ? 'one losing' : 'worst'} winter lost ${money(-storageDesk.worst)}` : ''} (
           <a href={lessonHref('gas/6.4')}>Lesson 6.4</a>). The same lease unhedged averaged {money(gambler.mean)} and made money in {won(gambler) <= n / 2 ? 'only ' : ''}
           {word(won(gambler))}, with a worst winter of {money(gambler.worst)}: a bet on the winter, as in <a href={lessonHref('gas/6.2')}>Lesson 6.2</a>. The desk
           that sold Metro’s basis without a forecast averaged {money(insurer.mean)}, and the shipper holding firm Northline {money(shipper.mean)} — the two sides of
@@ -544,10 +585,11 @@ export default function Lesson() {
 
       <H2>What decided it</H2>
       <P>
-        A portfolio’s total hides its parts. In the next demonstration, each bar is one unseen winter, from the mildest on the left to the coldest on the right,
-        split into what each part of your portfolio made or lost: the storage lease in gold, firm capacity in orange, the Lakeside toll in red, the weather trades
-        in teal, and the sale of Metro’s basis in green, with the parts your portfolio doesn’t hold left out. The black dot is the total of the parts you keep.
-        Switch parts off to see what the portfolio would have been without them:
+        A portfolio’s total hides its parts. In the next demonstration, each bar is one winter, from the mildest on the left to the coldest on the right, split
+        into what each part of your portfolio made or lost: the storage lease in gold, firm capacity in orange, the Lakeside toll in red, the weather trades in
+        teal, and the sale of Metro’s basis in green, with the parts your portfolio doesn’t hold left out. The black dot is the total of the parts you keep. It
+        shows the eight practice winters, the ones you could see; the unseen winters open once you have decided what to keep. Switch parts off to see what the
+        portfolio would have been without them:
       </P>
 
       <Figure name="Gas Trading Tournament · what decided it" scenario={g}>
@@ -570,13 +612,24 @@ export default function Lesson() {
         ) : (
           <Caption>Your portfolio holds no positions yet; set one up in Lesson 7.4.</Caption>
         )}
-        <PartsChart run={U} p={p} kept={kept} keptTotals={keptTotals} />
+        {revealed && (
+          <Segmented
+            label="Winters"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'practice', label: `${word(PRACTICE_SEEDS.length)} practice winters` },
+              { value: 'unseen', label: `${word(n)} unseen winters` },
+            ]}
+          />
+        )}
+        <PartsChart run={shownRun} which={shown} p={p} kept={kept} keptTotals={shownKept.result.totals} />
         <DataTable
-          caption="Each part's total over the practice winters and the unseen winters"
+          caption={revealed ? 'Each part’s total over the practice winters and the unseen winters' : 'Each part’s total over the practice winters; the unseen winters open once you have decided'}
           columns={[
             { label: 'Part', cell: (part: TournamentPart) => tournamentPartName(part, p).replace(/^./, (c) => c.toUpperCase()) },
             { label: `${word(PRACTICE_SEEDS.length)} practice winters`, cell: (part) => money(partsP[part]), align: 'right' },
-            { label: `${word(n)} unseen winters`, cell: (part) => money(partsU[part]), align: 'right' },
+            ...(revealed ? [{ label: `${word(n)} unseen winters`, cell: (part: TournamentPart) => money(partsU[part]), align: 'right' as const }] : []),
           ]}
           rows={held}
           rowKey={(part) => part}
@@ -584,10 +637,9 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'kept parts, average practice winter', value: money(keptPractice.result.mean), tone: 'green' },
-            { label: 'kept parts, average unseen winter', value: money(keptUnseen.result.mean), tone: 'green' },
-            { label: 'kept parts, worst unseen winter', value: money(keptUnseen.result.worst), tone: 'green' },
-            { label: 'all parts, average unseen winter', value: money(uMean), tone: 'green' },
+            { label: `kept parts, average ${shown} winter`, value: money(shownKept.result.mean), tone: 'green' },
+            { label: `kept parts, worst ${shown} winter`, value: money(shownKept.result.worst), tone: 'green' },
+            { label: `all parts, average ${shown} winter`, value: money(shownRun.result.mean), tone: 'green' },
           ]}
         />
       </Figure>
@@ -616,21 +668,19 @@ export default function Lesson() {
         {word(PRACTICE_SEEDS.length)} together averaged {colderWords(practiceColder)}; {word(unseenColdCount)} of the {word(n)} unseen winters were colder than
         normal, and the {word(n)} together averaged {colderWords(unseenColder)}.{' '}
         {held.includes('firm') && p.firmLine === 'calder-metro' && coldIdx.length && mildIdx.length
-          ? `Firm capacity into Metro is insurance against a cold winter: on your network it averaged ${money(avgOver(coldIdx, 'firm'))} in the unseen winters colder than normal and ${money(avgOver(mildIdx, 'firm'))} in the milder ones. `
+          ? `Firm capacity into Metro is insurance against a cold winter: on your network it averaged ${money(cm.firm[0])} in the unseen winters colder than normal and ${money(cm.firm[1])} in the milder ones. `
           : ''}
-        {held.includes('metro') && coldIdx.length && mildIdx.length
-          ? `Selling Metro’s basis is the same insurance written the other way: ${money(avgOver(coldIdx, 'metro'))} a winter in the colder ones, ${money(avgOver(mildIdx, 'metro'))} in the milder. `
-          : ''}
+        {held.includes('metro') && coldIdx.length && mildIdx.length ? metroWords : ''}
         The coldest practice winter was {colderWords(Math.max(...practice.colder))}; the coldest unseen one, {colderWords(Math.max(...U.colder))}. A sample of
         winters flatters whichever side of the policy it favors, and eight winters can hold too few severe ones to show what insurance is worth — the lesson of
         Metro’s fair value in Lesson 6.5, met again on a network of your own.{' '}
         {bothWays.length
           ? `On your network, the ${bothWays.length === 1 ? 'part' : 'parts'} that made money on both sets of winters ${bothWays.length === 1 ? 'was' : 'were'} ${list(bothWays.map((part) => partPhrase(part, p)))}.`
           : 'On your network, no part made money on both sets of winters.'}{' '}
-        {bothWays.includes('storage') && p.storageHedged ? 'A hedged lease earns what April’s curve offered whichever winter comes. ' : ''}
+        {bothWays.includes('storage') && p.storageHedged ? 'A hedged lease earns what redrawing its schedule adds, in almost any winter. ' : ''}
         {bothWays.includes('weather') ? (
           <>
-            A forecast that trades only the two weeks it can see risks little when it is wrong (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>).
+            A forecast that trades small, and only when its two weeks lean, risks little when it is wrong (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>).
           </>
         ) : null}
       </P>
@@ -643,7 +693,7 @@ export default function Lesson() {
         friction and compression, and into storage fields that fill all summer and can only empty so fast. Then we let a market price it all, and every price
         difference turned out to be a constraint that binds: a full pipeline between two places, a full storage field between two seasons, a field that can’t
         deliver fast enough on the coldest day. In <FigRef to="Gas Trading Tournament">the tournament</FigRef>, those same constraints decided who made money: the
-        desks that owned a constraint’s value and hedged what they couldn’t forecast held up, and the ones that bet on the weather lived or died by it.
+        desks that owned a constraint’s value and hedged what they couldn’t forecast held up, and the ones that bet on the winter unhedged lived or died by it.
       </P>
       <P>
         What you can do now is what the tournament asked of you. Starting from production, pipelines, storage and the weather, you can say where a gas system will

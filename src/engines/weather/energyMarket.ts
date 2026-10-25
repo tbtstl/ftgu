@@ -1,4 +1,4 @@
-// From weather to energy prices in the Calder region. Heating demand for gas (degree days),
+// From weather to energy prices in the Fenwick region. Heating demand for gas (degree days),
 // electricity demand (heating and air conditioning), wind and sunshine feed one day of the
 // electricity course's power system — its nine plants and its reference-day demand shape — and
 // a gas system with limited pipeline capacity into the region. The two markets are linked: gas

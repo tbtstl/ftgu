@@ -26,7 +26,6 @@ import {
   useScenario,
 } from '../../../framework';
 import { LORENZ, LYAPUNOV, distance, ensembleStarts, lorenzRun, wing, type L3 } from '../../../engines/weather/lorenz';
-import { knownShare } from '../../../model/weather/archive';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -165,10 +164,15 @@ export function ensembleRun(start: number, spread: number): EnsembleRun {
   return e;
 }
 
-/** The second challenge: with the starting spread, an ensemble that stays tighter than 5 for at least 3 time units. */
+/**
+ * The second challenge: with the starting scatter, a start before STEADY_BEFORE (so not the junction
+ * near 13 that the prose explores) whose ensemble stays tighter than 5 for at least 3 time units.
+ * Only 3.25 qualifies: just past the run's other junction crossing, at 3.
+ */
 export const STEADY_UNTIL = 3;
+export const STEADY_BEFORE = 10;
 export function steadySolved(start: number, spread: number): boolean {
-  if (Math.abs(spread - SPREAD_DEFAULT) > 1e-9) return false;
+  if (Math.abs(spread - SPREAD_DEFAULT) > 1e-9 || start >= STEADY_BEFORE) return false;
   const l = ensembleRun(start, spread).loosened;
   return l === null || l >= STEADY_UNTIL - 1e-9;
 }
@@ -390,6 +394,8 @@ export default function Lesson() {
   const i2 = Math.min(ENS_STEPS, Math.round(Math.min(t2, ENS_T_MAX) / DT));
   const right = ens.runs.filter((r) => wing(r[i2]) === 'right').length;
   const solved2 = steadySolved(start, spread);
+  // For the second challenge's success: the start a quarter earlier, crossing between the wings.
+  const earlier = solved2 ? (ensembleRun(start - START_STEP, spread).loosened ?? ENS_T_MAX) : 0;
 
   // Numbers the prose quotes.
   const atDefault = twinRuns(EXP_DEFAULT).parted ?? TWIN_T_MAX;
@@ -398,6 +404,8 @@ export default function Lesson() {
   const plateau = [-3, -3.5, -4].map((x) => twinRuns(x).parted ?? 0);
   const halving = Math.LN2 / LYAPUNOV;
   const hundredfold = Math.log(100) / LYAPUNOV;
+  // The first challenge's estimate from the average rate, on the slider's steps.
+  const estimateExp = Math.round((EXP_DEFAULT - ((TOGETHER_UNTIL - atDefault) * LYAPUNOV) / Math.LN10) / EXP_STEP) * EXP_STEP;
   const junction = ensembleRun(START_DEFAULT, SPREAD_DEFAULT).loosened ?? ENS_T_MAX;
   const after = ensembleRun(START_DEFAULT + START_STEP, SPREAD_DEFAULT).loosened ?? ENS_T_MAX;
   const p13 = pointAt(START_DEFAULT);
@@ -431,7 +439,9 @@ export default function Lesson() {
       <P>
         There is no randomness anywhere in them. In the next demonstration, two runs of these equations start from the same point, except that the second
         run’s x is larger by a tiny <K tone={WX.probability}>initial error</K>. The left panel draws each run’s state as a point moving in the x–z plane, where it
-        traces Lorenz’s famous butterfly; the right one plots x against time for both. Set the size of the initial error:
+        traces Lorenz’s famous butterfly; the right one plots x against time for both. From almost any start, a run is soon drawn onto this butterfly-shaped set
+        of states, and it circles it forever without ever exactly repeating itself; such a set is called an <b>attractor</b>. Time is in the equations’ own units,
+        not hours or days. Set the size of the initial error:
       </P>
 
       <Figure name="Initial Condition Laboratory" scenario={s} play={play}>
@@ -462,7 +472,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At the start the error is one part in 10,000, about the size of Lorenz’s rounding. For a long time the two runs are indistinguishable: they circle one wing,
+        At the start the error is 0.0001 in x, which swings between about −20 and +20 — about the size of Lorenz’s rounding. For a long time the two runs are indistinguishable: they circle one wing,
         cross to the other, and come back, in step. Then, at t = {fmt(atDefault, 1)}, they part, and from then on their states are as unrelated as two points
         picked at random on the butterfly. Run either one again from its own start and it does exactly the same thing; the system is perfectly{' '}
         <b>deterministic</b>. It is unpredictable all the same, because no measurement of a starting state is ever exact. This <b>sensitive dependence on
@@ -485,7 +495,7 @@ export default function Lesson() {
       <P>
         So a forecast stays useful until δ reaches the largest error we can tolerate, and the time that takes depends on the initial error only through its
         logarithm. That is chaos’s cruel arithmetic. Halving the initial error buys only ln 2 / λ ≈ {fmt(halving, 2)} time units; making it a hundred times smaller
-        buys about {fmt(hundredfold, 1)}. Slide the error from a tenth all the way down to one part in a billion: the runs part at t = {fmt(atTenth, 1)} at first
+        buys about {fmt(hundredfold, 1)}. Slide the error from a tenth all the way down to a billionth: the runs part at t = {fmt(atTenth, 1)} at first
         and at t = {fmt(atBillionth, 1)} at the end. A measurement a hundred million times better gains fewer than {fmt(Math.ceil(atBillionth - atTenth))} time
         units.
       </P>
@@ -497,14 +507,14 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`What is the largest initial error, on the slider’s steps, that keeps the two runs within ${PART_DISTANCE} of each other until at least t = ${TOGETHER_UNTIL}?`}
+        question={`What is the largest initial error, on the slider’s steps, that keeps the two runs within ${PART_DISTANCE} of each other until at least t = ${TOGETHER_UNTIL}? Estimate first from λ: at the starting ${diffShort(EXP_DEFAULT)} they part at t = ${fmt(atDefault, 1)}, and on average each hundredfold improvement buys about ${fmt(hundredfold, 1)} time units. Then check.`}
         solved={solved}
         status={
           runs.parted !== null && runs.parted < TOGETHER_UNTIL
             ? `With an error of ${diffShort(exp)} the runs part at t = ${fmt(runs.parted, 1)}.`
             : `With an error of ${diffShort(exp)} the runs stay together past t = ${TOGETHER_UNTIL}. Could a larger error still do it?`
         }
-        success={`Solved. It takes an error of ${diffShort(exp)} — one part in a million, about a hundred times smaller than Lorenz’s rounding — to keep the runs together until t = ${fmt(runs.parted ?? TWIN_T_MAX, 1)}. Doubling the time the forecast is good for took a hundredfold better start.`}
+        success={`Solved. It takes an error of ${diffShort(exp)} — a millionth, about a hundred times smaller than Lorenz’s rounding — to keep the runs together until t = ${fmt(runs.parted ?? TWIN_T_MAX, 1)}. The average rate alone pointed to about ${diffShort(estimateExp)}; this stretch of the flow happens to be gentler than average, so a somewhat larger error does. Doubling the time the forecast is good for took a hundredfold better start.`}
       />
 
       <H2>Predictability depends on the flow</H2>
@@ -513,7 +523,8 @@ export default function Lesson() {
         <K tone={WX.probability}>ensemble</K> — each starting from a slightly different state within that range, and watch where they go. In the next
         demonstration, {MEMBERS} runs start scattered around a point on the butterfly, colored by the wing each is on. The chart on the right plots how far the
         members are from their average (on a logarithmic scale, where steady exponential growth is a straight line), with the dashed line showing growth at the
-        average rate. Choose where on the attractor the ensemble starts and how widely it is scattered:
+        average rate. Choose where on the attractor the ensemble starts, measured as time along one long run around it, and how widely the members are
+        scattered in each of x, y and z (the spread on the chart is their distance from the average in all three at once):
       </P>
 
       <Figure name="Initial Condition Laboratory · ensemble" scenario={e} play={play2}>
@@ -535,7 +546,7 @@ export default function Lesson() {
           ]}
         />
         <Slider
-          label="Starting point along the attractor"
+          label="Starting point, time along the run"
           value={start}
           min={START_MIN}
           max={START_MAX}
@@ -544,7 +555,7 @@ export default function Lesson() {
           display={fmt(start, 2)}
         />
         <Slider
-          label="Initial spread"
+          label="Initial scatter in each variable"
           tone={WX.probability}
           value={spread}
           min={0.05}
@@ -565,16 +576,18 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`Keep the initial spread at ${SPREAD_DEFAULT}. Find a starting point from which the ensemble stays tighter than ${LOOSE_SPREAD} until at least t = ${STEADY_UNTIL}.`}
+        question={`Keep the initial scatter at ${SPREAD_DEFAULT}. The junction near ${START_DEFAULT} isn’t the only place where the flow chooses a wing. Find a starting point before ${STEADY_BEFORE} from which the ensemble stays tighter than ${LOOSE_SPREAD} until at least t = ${STEADY_UNTIL}.`}
         solved={solved2}
         status={
           Math.abs(spread - SPREAD_DEFAULT) > 1e-9
-            ? `Set the initial spread back to ${SPREAD_DEFAULT} first.`
-            : ens.loosened !== null
-              ? `From ${fmt(start, 2)}, the spread passes ${LOOSE_SPREAD} at t = ${fmt(ens.loosened, 2)}.`
-              : `From ${fmt(start, 2)}, the spread stays below ${LOOSE_SPREAD}.`
+            ? `Set the initial scatter back to ${SPREAD_DEFAULT} first.`
+            : start >= STEADY_BEFORE
+              ? `Look before ${STEADY_BEFORE} on the slider, away from the junction near ${START_DEFAULT}.`
+              : ens.loosened !== null
+                ? `From ${fmt(start, 2)}, the spread passes ${LOOSE_SPREAD} at t = ${fmt(ens.loosened, 2)}.`
+                : `From ${fmt(start, 2)}, the spread stays below ${LOOSE_SPREAD}.`
         }
-        success={`Solved. From ${fmt(start, 2)} the ensemble stays tighter than ${LOOSE_SPREAD} until t = ${fmt(ens.loosened ?? ENS_T_MAX, 2)}. A forecaster with this ensemble would know today’s forecast deserves more confidence than one issued from the junction — which is the point of running many forecasts instead of one.`}
+        success={`Solved. From ${fmt(start, 2)} the ensemble stays tighter than ${LOOSE_SPREAD} until t = ${fmt(ens.loosened ?? ENS_T_MAX, 2)}. A quarter of a time unit earlier, at ${fmt(start - START_STEP, 2)}, the run is crossing between the wings again, and the same cloud comes apart by t = ${fmt(earlier, 2)}. A forecaster with this ensemble would know today’s forecast deserves more confidence than one issued from the junction — which is the point of running many forecasts instead of one.`}
       />
 
       <P>
@@ -586,13 +599,13 @@ export default function Lesson() {
         <FigRef to="Initial Condition Laboratory · ensemble">the second demonstration</FigRef> and can go either way within a day.
       </P>
       <P>
-        The course’s simulated archive builds this limit in. A forecast of Calder Bay’s temperature issued one day ahead knows {pct(knownShare(1))} of the
-        day-to-day variability that the weather will have; five days ahead, {pct(knownShare(5))}; ten days ahead, {pct(knownShare(10))}; and beyond fifteen days,
-        nothing at all — only the climate of <a href={lessonHref('weather/2.5')}>Lesson 2.5</a> and the slow tilt of ENSO remain.
+        The course’s simulated archive builds this limit in, as <a href={lessonHref('weather/3.3')}>Lesson 3.3</a> found: what a forecast of Fenwick Bay knows
+        about a day’s weather fades with lead time, and beyond fifteen days it knows nothing at all — only the climate of{' '}
+        <a href={lessonHref('weather/2.5')}>Lesson 2.5</a> and the slow tilt of ENSO remain.
       </P>
       <P>
         If the future can’t be known exactly, the honest thing a forecast can do is say how uncertain it is: give the whole range of what might happen, and how
-        likely each part of it is. That is what an ensemble is for. The next lesson runs ensembles for Calder Bay, turns them into probabilities, and asks how to
+        likely each part of it is. That is what an ensemble is for. The next lesson runs ensembles for Fenwick Bay, turns them into probabilities, and asks how to
         tell whether a probability forecast is any good.
       </P>
     </LessonPage>

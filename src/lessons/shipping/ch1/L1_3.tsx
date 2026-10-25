@@ -25,11 +25,15 @@ import {
 } from '../../../framework';
 import { KESTREL } from '../../../model/shipping/vessels';
 import { calmResistance } from '../../../engines/shipping/resistance';
+import { maxCargo } from '../../../engines/shipping/hydrostatics';
 import { AUX_SEA_TPD, ETA_D, ETA_SHAFT, FUELS, passage, powerAndFuel, sfocAt, sfocBest, type FuelId } from '../../../engines/shipping/propulsion';
 import { XYChart } from '../shared/XYChart';
+import { useRevealed } from './reveal';
 
 const K_ = KESTREL;
 const DRAFT = K_.designDraft;
+/** Kestrel’s cargo on the laden passage: her full intake from Lesson 1.1, to the nearest 100 tonnes. */
+const CARGO = Math.round(maxCargo(K_, K_.consumables) / 100) * 100;
 
 /** The laden passage of the second demonstration, nautical miles. */
 export const PASSAGE_NM = 3600;
@@ -163,7 +167,7 @@ export default function Lesson() {
     };
   }, []);
   const solved = twelveDaySolved(v);
-  const late = voy.days > DEADLINE_DAYS + 1e-9;
+  const revealed = useRevealed('shipping/1.3', 'a', solved);
 
   // Numbers quoted in the prose (Kestrel laden, VLSFO, standard efficiencies).
   const r14 = calmResistance(K_, 14, DRAFT);
@@ -188,9 +192,12 @@ export default function Lesson() {
         Kestrel is driven, like nearly every large cargo ship, by a <b>slow-speed two-stroke diesel</b>: an engine several stories tall whose crankshaft turns
         slowly enough — around a hundred revolutions a minute — to drive a large propeller directly, with no gearbox in between. The power passes through three
         stages, and each keeps some of it. The engine turns the fuel’s chemical energy into the turning power of its crankshaft, called <b>brake power</b>; the
-        shaft carries that power aft through its bearings; and the propeller turns it into thrust, stirring the water as it goes. In the next demonstration, the
-        width of each band is power, flowing from the fuel on the left to the hull on the right, and the gray bands peeling away are losses. Change the speed, the
-        engine’s efficiency, the propeller’s efficiency and the fuel:
+        shaft carries that power aft through its bearings; and the propeller turns it into thrust, stirring the water as it goes. The share of the power reaching
+        the propeller that ends up pushing the hull is the <b>propulsive efficiency</b>, η<sub>D</sub>. In the next demonstration, the thickness of each band is
+        power, flowing from the fuel on the left to the hull on the right, and the gray bands peeling away are losses. The fuel buttons choose what she burns —
+        high-sulfur fuel oil (HSFO), very-low-sulfur fuel oil (VLSFO), marine gasoil (MGO) or liquefied natural gas (LNG), which we’ll compare later — and the fuel
+        readout also counts her <b>gensets</b>, the smaller auxiliary engines that make her electricity. Change the speed, the engine’s efficiency, the
+        propeller’s efficiency and the fuel:
       </P>
 
       <Figure name="Marine Propulsion Simulator" scenario={ps}>
@@ -199,10 +206,8 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: over ? 'brake power: beyond the engine’s rating' : `brake power, ${pct(pf.load)} of the engine’s rating`, value: kwf(pf.brakePower), tone: 'red' },
-            { label: 'specific fuel consumption', value: `${fmt(pf.sfoc, 1)} g/kWh` },
             { label: `${fuel.short} burned, engines and gensets`, value: tpd(pf.totalTpd), tone: 'red' },
             { label: 'CO₂ emitted', value: `${fmt(pf.totalTpd * fuel.co2)} t/day` },
-            { label: `fuel cost at an illustrative ${usd(fuel.price)}/t`, value: `${usd(pf.totalTpd * fuel.price)}/day`, tone: 'green' },
           ]}
         />
         <Slider label="Speed" tone="teal" value={speed} min={SPEED_MIN} max={SPEED_MAX} step={0.1} onChange={(x) => ps.set({ speed: x })} display={`${fmt(speed, 1)} kn`} />
@@ -238,7 +243,7 @@ export default function Lesson() {
         Start at 14 knots on very-low-sulfur fuel oil. Fuel flows into the main engine at a rate that carries {kwf(fuel14)} of chemical energy, and about half of it
         leaves as heat, in the exhaust and the cooling water. The other half reaches the crankshaft as {kwf(at14.brakePower)} of brake power — {pct(at14.load)} of
         the engine’s <b>maximum continuous rating</b>, the {kwf(K_.mcr)} it is built to deliver all day, every day. The shaft and its bearings take {pct(1 - ETA_SHAFT)}, {kwf(at14.brakePower - at14.deliveredPower)}.
-        Of the {kwf(at14.deliveredPower)} that reaches the propeller, {kwf(at14.effectivePower)} pushes the hull, a <b>propulsive efficiency</b> of {pct(ETA_D)};
+        Of the {kwf(at14.deliveredPower)} that reaches the propeller, {kwf(at14.effectivePower)} pushes the hull, a propulsive efficiency of {pct(ETA_D)};
         the rest goes into the swirling wash behind the ship. All told, only {pct(at14.effectivePower / fuel14)} of the fuel’s energy ends up as push.
       </P>
       <P>
@@ -255,14 +260,14 @@ export default function Lesson() {
       <P>
         That is the best the engine does, and only near {pct(0.8)} of its rating. Run it much harder or much more gently and it burns a little more for each
         kilowatt-hour: at {pct(0.3)} load our model’s engine needs {fmt(sfocAt(0.3, 0.5, FUELS.vlsfo), 1)} g/kWh, about a tenth more. Multiply brake power by the
-        hours in a day and by the SFOC and you have the main engine’s fuel, {tpd(at14.mainTpd)} at 14 knots. Kestrel’s smaller <b>auxiliary engines</b>, which
-        generate electricity for her pumps, lights and galley, burn another {fmt(AUX_SEA_TPD, 1)} tonnes a day at sea whatever her speed, bringing the total
+        hours in a day and by the SFOC and you have the main engine’s fuel, {tpd(at14.mainTpd)} at 14 knots. Kestrel’s gensets, which generate electricity
+        for her pumps, lights and galley, burn another {fmt(AUX_SEA_TPD, 1)} tonnes a day at sea whatever her speed, bringing the total
         to {tpd(at14.totalTpd)}.
       </P>
       <P>
-        The two efficiency sliders matter as much as each other. Drop the engine’s thermal efficiency to 45% and the ship burns{' '}
-        {tpd(powerAndFuel(K_, 14, { draft: DRAFT, efficiency: 0.45 }).totalTpd)}; leave the engine alone and drop the propulsive efficiency to 65% instead, and she
-        burns {tpd(powerAndFuel(K_, 14, { draft: DRAFT, etaD: 0.65 }).totalTpd)}. A better propeller, a hull shaped to feed it smooth water, or simply a propeller
+        The two efficiency sliders matter as much as each other. Drop the engine’s thermal efficiency from 50% to 45%, a tenth of it, and the ship burns{' '}
+        {tpd(powerAndFuel(K_, 14, { draft: DRAFT, efficiency: 0.45 }).totalTpd)}; leave the engine alone and cut the propulsive efficiency by the same tenth
+        instead, from {pct(ETA_D)} to {pct(ETA_D * 0.9)}, and she burns {tpd(powerAndFuel(K_, 14, { draft: DRAFT, etaD: ETA_D * 0.9 }).totalTpd)}. A better propeller, a hull shaped to feed it smooth water, or simply a propeller
         polished free of fouling saves fuel exactly as a better engine does.
       </P>
 
@@ -281,7 +286,7 @@ export default function Lesson() {
         dioxide follows the carbon in the fuel, using the conversion factors the International Maritime Organization publishes: about 3.1 tonnes of CO₂ for every
         tonne of fuel oil, and 2.75 for LNG, so the gas-burning Kestrel emits {pct(1 - (byFuel('lng').totalTpd * FUELS.lng.co2) / (byFuel('vlsfo').totalTpd * FUELS.vlsfo.co2))}{' '}
         less CO₂ from her exhaust. That figure flatters LNG: some methane slips through the engine unburned, and methane is a far more potent greenhouse gas than
-        CO₂. The prices in the demonstration are illustrative; real bunker prices move with oil and gas markets and differ from port to port.
+        CO₂.
       </P>
 
       <H2>A voyage, not a day</H2>
@@ -313,7 +318,7 @@ export default function Lesson() {
           height={150}
         />
         <XYChart
-          ariaLabel={`Fuel for the ${fmt(PASSAGE_NM)}-mile passage against speed. At ${fmt(v, 1)} knots it takes ${fmt(voy.days, 2)} days and ${fmt(voy.fuelTonnes)} tonnes of fuel.`}
+          ariaLabel={`Fuel for the ${fmt(PASSAGE_NM)}-mile passage against speed. At ${fmt(v, 1)} knots it takes ${revealed ? `${fmt(voy.days, 2)} days and ` : ''}${fmt(voy.fuelTonnes)} tonnes of fuel.`}
           series={[
             { xs: sweep.xs, ys: sweep.square, color: '#9a9a9a', width: 1.5, dash: '5 4', label: 'square of speed', labelColor: TEXT.gray },
             { xs: sweep.xs, ys: sweep.voyage, color: GRAPHIC.gold, width: 2.5 },
@@ -334,7 +339,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'days at sea', value: fmt(voy.days, 2), tone: late ? 'red' : 'teal' },
+            ...(revealed ? [{ label: 'days at sea', value: fmt(voy.days, 2), tone: 'teal' as const }] : []),
             { label: 'fuel for the passage', value: `${fmt(voy.fuelTonnes)} t`, tone: 'gold' },
             { label: 'CO₂', value: `${fmt(voy.co2Tonnes)} t` },
             { label: `fuel cost at an illustrative ${usd(FUELS.vlsfo.price)}/t`, value: usd(voy.cost), tone: 'green' },
@@ -352,6 +357,12 @@ export default function Lesson() {
         speed, so fuel per voyage goes roughly as the square.
       </P>
       <P>
+        In money, at an illustrative {usd(FUELS.vlsfo.price)} a tonne for very-low-sulfur fuel oil — real bunker prices move with the oil market and differ
+        from port to port — the passage’s fuel costs {usd(v14.cost)} at 14 knots. Spread
+        over the {fmt(CARGO)} tonnes of cargo she carries, that is {usd(v14.cost / CARGO, 2)} a tonne; at 12 knots it is {usd(v12.cost / CARGO, 2)}. Bulk freight is usually
+        quoted per tonne of cargo too, so this is the first cost it must cover; <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a> sets the two side by side.
+      </P>
+      <P>
         Below about 12 knots the solid curves pull steadily away from the dashed ones. The auxiliary engines burn their {fmt(AUX_SEA_TPD, 1)} tonnes a day however slowly
         the ship moves, and the main engine’s SFOC creeps up as its load falls, so each knot given up saves less than the last: at 10 knots the passage still takes{' '}
         {fmt(v10.fuelTonnes)} tonnes, where a pure square law from 14 knots would predict {fmt(v14.fuelTonnes * (10 / 14) ** 2)}.
@@ -359,14 +370,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`The receivers in China want Kestrel’s cargo within ${DEADLINE_DAYS} days. Set the speed that delivers it in time on the least fuel.`}
+        question={`The receivers in China want Kestrel’s cargo within ${DEADLINE_DAYS} days. Work it out before touching the slider, because the figure hides the days at sea until you’re right: which speed gets the cargo there in time on the least fuel? Then set it.`}
         solved={solved}
-        status={
-          late
-            ? `At ${fmt(v, 1)} knots the passage takes ${fmt(voy.days, 2)} days: too late.`
-            : `At ${fmt(v, 1)} knots she arrives in ${fmt(voy.days, 2)} days on ${fmt(voy.fuelTonnes, 1)} t. Could she go slower and still make it?`
-        }
-        success={`Solved. Fuel per voyage rises with every knot, so the cheapest way to meet a deadline is to arrive exactly on it: ${fmt(PASSAGE_NM)} ÷ (${DEADLINE_DAYS} days × 24 hours) = 12.5 knots, burning ${fmt(v125.fuelTonnes, 1)} t — ${fmt(v14.fuelTonnes - v125.fuelTonnes)} t less than at 14 knots.`}
+        status={`Set to ${fmt(v, 1)} knots, she burns ${fmt(voy.fuelTonnes)} t on the passage.`}
+        success={`Solved. Fuel per voyage rises with every knot, so the cheapest way to meet a deadline is to arrive exactly on it: ${fmt(PASSAGE_NM)} ÷ (${DEADLINE_DAYS} days × 24 hours) = ${fmt(PASSAGE_NM)} ÷ ${DEADLINE_DAYS * 24} = 12.5 knots, burning ${fmt(v125.fuelTonnes, 1)} t — ${fmt(v14.fuelTonnes - v125.fuelTonnes)} t less than at 14 knots. A tenth of a knot slower and she would arrive ${fmt((voyageAt(12.4).days - DEADLINE_DAYS) * 24, 1)} hours late.`}
       />
 
       <P>

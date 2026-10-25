@@ -37,6 +37,8 @@ import { WX } from '../shared/tones';
 
 /** Dawn temperature at the surface, °C. */
 export const MORNING_C = 20;
+/** The tropopause: above it the morning air stops cooling with height, km. */
+export const TROPOPAUSE_KM = 12;
 /** The cap: a layer from 1.5 to 2 km where the morning air warms with height. */
 export const CAP_LAYER = { baseKm: 1.5, depthKm: 0.5 };
 /** Heights the ascent is computed to, km (the diagram shows the lowest 14). */
@@ -65,7 +67,7 @@ export const T_MAX = 38;
 export const T_STEP = 0.5;
 
 export function morningSounding(lapse: number, cap: number): Sounding {
-  return { surfaceC: MORNING_C, lapse, tropopauseKm: 12, inversion: { ...CAP_LAYER, strengthK: cap } };
+  return { surfaceC: MORNING_C, lapse, tropopauseKm: TROPOPAUSE_KM, inversion: { ...CAP_LAYER, strengthK: cap } };
 }
 
 /** The surface parcel's ascent through the heated morning profile. */
@@ -84,13 +86,38 @@ export function breaksThrough(st: ConvectionState): boolean {
   return thermalTopM(st) > (CAP_LAYER.baseKm + CAP_LAYER.depthKm + 1) * 1000;
 }
 
+/** Whether the dew point, lapse rate and cap are the challenge's: the starting ones. */
+export function capConditionsKept(st: ConvectionState): boolean {
+  const d = CONVECTION_DEFAULTS;
+  return Math.abs(st.dewC - d.dewC) < 1e-6 && Math.abs(st.lapse - d.lapse) < 1e-6 && Math.abs(st.cap - d.cap) < 1e-6;
+}
+
 /**
- * The challenge: with a cap of at least 2 °C, the lowest afternoon temperature (to the half degree)
- * at which a thermal breaks through. With the starting dew point, lapse rate and cap it's 30.5 °C.
+ * The challenge: with the starting dew point, lapse rate and cap, the lowest afternoon temperature
+ * (to the half degree) at which a thermal breaks through. It's 30.5 °C.
  */
 export function capSolved(st: ConvectionState): boolean {
-  if (st.cap < 2 || st.surfaceC - T_STEP < T_MIN - 1e-9) return false;
+  if (!capConditionsKept(st) || st.surfaceC - T_STEP < T_MIN - 1e-9) return false;
   return breaksThrough(st) && !breaksThrough({ ...st, surfaceC: st.surfaceC - T_STEP });
+}
+
+/**
+ * The thermal's lift inside its first cloud: the warmest the parcel gets above its surroundings
+ * between the cloud base and the level of free convection, and where.
+ */
+export function lowCloudLift(a: Ascent): { gapC: number; atKm: number } {
+  let gapC = 0;
+  let atKm = a.lclKm;
+  const top = a.lfcKm ?? a.z[a.z.length - 1];
+  for (let i = 0; i < a.z.length; i++) {
+    if (a.z[i] < a.lclKm || a.z[i] >= top) continue;
+    const g = a.parcel[i] - a.env[i];
+    if (g > gapC) {
+      gapC = g;
+      atKm = a.z[i];
+    }
+  }
+  return { gapC, atKm };
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +151,9 @@ const Y = scale(0, Z_MAX, 352, 18);
 const sx = (t: number, z: number) => X(t + SKEW * z);
 const PARCEL_DRY = '#666666';
 const PARCEL_MOIST = GRAPHIC.teal;
-const CIN_FILL = GRAPHIC.blue;
+/** CIN is where the parcel is colder, and so denser, than its surroundings: the density tone, hatched to set it apart from CAPE's gold. */
+const CIN_FILL = GRAPHIC.orange;
+const CIN_SWATCH = `repeating-linear-gradient(135deg, ${CIN_FILL} 0 2px, ${tint(CIN_FILL, 0.25)} 2px 5px)`;
 
 /** Index of the last ascent level at or below a height. */
 function idx(a: Ascent, zKm: number) {
@@ -147,8 +176,9 @@ function spread<T extends { y: number }>(items: T[], gap = 15): T[] {
   return s;
 }
 
-function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; sim: ParcelState; top: number }) {
+function SoundingDiagram({ a, st, sim, top, broke }: { a: Ascent; st: ConvectionState; sim: ParcelState; top: number; broke: boolean }) {
   const clip = 'cv' + useId().replace(/[^a-zA-Z0-9]/g, '');
+  const hatch = clip + 'h';
   const n = idx(a, Z_MAX) + 1;
   const zs = a.z.slice(0, n);
   const envX = zs.map((z, i) => sx(a.env[i], z));
@@ -158,7 +188,7 @@ function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; 
   const dryPath = linePath(parX.slice(0, lclI + 1), ys.slice(0, lclI + 1));
   const moistPath = lclI < n - 1 ? linePath(parX.slice(lclI), ys.slice(lclI)) : '';
 
-  // Gold: positive area from the LFC to the EL. Blue: negative area beneath the LFC.
+  // Gold: positive area from the LFC to the EL. Hatched orange: negative area beneath the LFC.
   let capePath = '';
   let cinPath = '';
   if (a.lfcKm !== null && a.elKm !== null && a.cape > 0.5) {
@@ -191,9 +221,9 @@ function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; 
     [
       { key: 'lcl', y: Y(Math.min(a.lclKm, Z_MAX)), z: a.lclKm, text: 'cloud base', color: TEXT.teal },
       ...(a.lfcKm !== null ? [{ key: 'lfc', y: Y(a.lfcKm), z: a.lfcKm, text: 'free convection', color: TEXT.gold }] : []),
-      ...(a.elKm !== null ? [{ key: 'el', y: Y(Math.min(a.elKm, Z_MAX)), z: a.elKm, text: 'cloud top', color: TEXT.gold }] : []),
+      ...(a.elKm !== null ? [{ key: 'el', y: Y(Math.min(a.elKm, Z_MAX)), z: a.elKm, text: broke ? 'cloud top' : 'top if released', color: TEXT.gold }] : []),
     ],
-    15,
+    26,
   );
 
   const zk = Math.min(Z_MAX, sim.z / 1000);
@@ -209,12 +239,16 @@ function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; 
       className="chart"
       viewBox="0 0 640 384"
       role="img"
-      aria-label={`Temperature against height over Marlow on a summer afternoon at ${fmt(st.surfaceC, 1)} °C, with a dew point of ${fmt(Math.min(st.dewC, st.surfaceC), 1)} °C, air aloft cooling ${fmt(st.lapse, 1)} °C per km and a cap ${fmt(st.cap, 1)} °C strong. Cloud base ${fmt(a.lclKm, 1)} km; ${a.lfcKm !== null ? `level of free convection ${fmt(a.lfcKm, 1)} km, cloud top ${fmt(a.elKm ?? 0, 1)} km` : 'no level of free convection'}; CAPE ${fmt(a.cape)} J/kg, CIN ${fmt(a.cin)} J/kg. A thermal is at ${fmt(sim.z / 1000, 1)} km, moving ${fmt(Math.abs(sim.w))} m/s ${sim.w >= 0 ? 'up' : 'down'}.`}
+      aria-label={`Temperature against height over Marlow on a summer afternoon at ${fmt(st.surfaceC, 1)} °C, with a dew point of ${fmt(Math.min(st.dewC, st.surfaceC), 1)} °C, air aloft cooling ${fmt(st.lapse, 1)} °C per km and a cap ${fmt(st.cap, 1)} °C strong. Cloud base ${fmt(a.lclKm, 1)} km; ${a.lfcKm !== null ? `level of free convection ${fmt(a.lfcKm, 1)} km, cloud top ${broke ? '' : 'if the cap were broken '}${fmt(a.elKm ?? 0, 1)} km` : 'no level of free convection'}; CAPE ${fmt(a.cape)} J/kg, CIN ${fmt(a.cin)} J/kg. A thermal is at ${fmt(sim.z / 1000, 1)} km, moving ${fmt(Math.abs(sim.w))} m/s ${sim.w >= 0 ? 'up' : 'down'}.`}
     >
       <defs>
         <clipPath id={clip}>
           <rect x={PX0} y={Y(Z_MAX)} width={PX1 - PX0} height={Y(0) - Y(Z_MAX)} />
         </clipPath>
+        <pattern id={hatch} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width={6} height={6} fill={CIN_FILL} opacity={0.12} />
+          <line x1={0} y1={0} x2={0} y2={6} stroke={CIN_FILL} strokeWidth={2} opacity={0.6} />
+        </pattern>
       </defs>
       <text className="ax" x={PX0} y={10}>
         Height
@@ -232,7 +266,7 @@ function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; 
             {anvil && <rect x={420} y={Y(Math.min(a.elKm! + 0.4, Z_MAX))} width={104} height={14} rx={7} fill="#e9ecef" stroke="#cfd4da" />}
           </g>
         )}
-        {cinPath && <path d={cinPath} fill={CIN_FILL} opacity={0.22} />}
+        {cinPath && <path d={cinPath} fill={`url(#${hatch})`} />}
         {capePath && <path d={capePath} fill={GRAPHIC.gold} opacity={0.35} />}
         <path d={linePath(envX, ys)} fill="none" stroke={GRAPHIC.red} strokeWidth={3} strokeLinejoin="round" />
         <path d={dryPath} fill="none" stroke={PARCEL_DRY} strokeWidth={2} strokeDasharray="6 4" />
@@ -255,8 +289,11 @@ function SoundingDiagram({ a, st, sim, top }: { a: Ascent; st: ConvectionState; 
       {marks.map((m) => (
         <g key={m.key}>
           <line x1={PX1} x2={PX1 + 6} y1={Y(Math.min(m.z, Z_MAX))} y2={Y(Math.min(m.z, Z_MAX))} stroke={m.color} strokeWidth={1.5} />
-          <text x={PX1 + 9} y={m.y + 4} style={{ fontSize: 11, fill: m.color, fontWeight: 500 }}>
+          <text x={PX1 + 9} y={m.y - 1} style={{ fontSize: 11, fill: m.color, fontWeight: 500 }}>
             {m.text}
+          </text>
+          <text x={PX1 + 9} y={m.y + 11} style={{ fontSize: 11, fill: m.color }}>
+            {fmt(m.z, 1)} km
           </text>
         </g>
       ))}
@@ -367,6 +404,7 @@ export default function Lesson() {
   const d = useScenario('displaced', { lapse: 6.5, lift: 300 });
   const { lapse, lift } = d.state;
   const bv = bruntVaisala(LAYER_C, lapse);
+  const n2Text = `${bv.n2 < 0 ? '−' : ''}${fmt(Math.abs(bv.n2) * 1e4, 2)}`;
   const play2 = usePlay(true);
   const [t2, setT2] = useState(0);
   useEffect(() => setT2(0), [lapse, lift]);
@@ -387,52 +425,48 @@ export default function Lesson() {
       <P>
         <a href={lessonHref('weather/1.2')}>Lesson 1.2</a> lifted a dry parcel through the standard atmosphere and found that it came back. It cools by almost
         10 °C for every kilometer it rises, the air around it by only 6.5, so it ends up colder and denser than its surroundings and sinks.{' '}
-        <a href={lessonHref('weather/1.3')}>Lesson 1.3</a> added a twist. Once the parcel saturates, every gram of vapor that condenses pays back its latent heat,
+        <a href={lessonHref('weather/1.3')}>Lesson 1.3</a> added a twist. Once the parcel saturates, its condensing vapor pays back its latent heat,
         and it cools at the moist rate instead, around 4 or 5 °C per kilometer in warm, humid air. So which is it? Does the atmosphere push a rising parcel back
         down, or can a small nudge grow into a thunderstorm?
       </P>
       <P>
         It depends on three rates of cooling with height. Two belong to the parcel: the dry rate, 9.8 °C per km, and the moist rate. The third belongs to the day: the{' '}
-        <K tone={WX.temperature}>environmental lapse rate</K>, how fast the surrounding air actually cools with height, which is set by the weather and changes
-        from day to day. If the surrounding air cools more slowly than even the moist rate, every lifted parcel ends up colder than its surroundings, and the air is{' '}
+        <K tone={WX.temperature}>environmental lapse rate</K>, how fast the surrounding air actually cools with height, which changes from day to day. If the surrounding air cools more slowly than even the moist rate, every lifted parcel ends up colder than its surroundings, and the air is{' '}
         <b>absolutely stable</b>. If it cools faster than the dry rate, every lifted parcel ends up warmer, and the air is <b>absolutely unstable</b> — something
         that happens only in a thin layer over sun-baked ground, because it overturns as fast as it forms. In between, the air is stable for a clear parcel but
         unstable for a cloudy one: <b>conditionally unstable</b>. The standard atmosphere’s 6.5 °C per km sits squarely in that middle range, so whether lifted air
         keeps going depends on how much moisture it carries and how far it’s pushed.
       </P>
       <P>
-        Take a summer morning over Marlow, the farm town on the region’s inland plains. At dawn the ground is at {MORNING_C} °C and the air above cools with height,
+        Take a summer morning over Marlow, a farm town on the plains 350 km inland from Fenwick Bay. At dawn the ground is at {MORNING_C} °C and the air above cools with height,
         except in a layer between 1.5 and 2 km where it warms instead — an inversion. Meteorologists call a layer like that a <b>cap</b>. As the sun heats the
-        ground, rising bubbles of warm air called <b>thermals</b> stir the lowest layer until it cools at the dry rate all the way up from the surface, to the height
-        where it meets the morning air.
+        ground, rising bubbles of warm air called <b>thermals</b> stir the lowest layer until it cools at the dry rate, up to the height where it meets the morning
+        air.
       </P>
       <P>
         The next demonstration plots temperature against height. To make small differences visible it leans, as meteorologists’ own charts do: each kilometer up,
         the temperature scale shifts 6.5 °C, so air cooling at the standard rate draws a vertical line and the faint lines of equal temperature lean to the right.
         The red line is the surrounding air. The dashed gray line is a parcel lifted from the ground at the dry rate, and it turns teal at its cloud base, where it
-        saturates and cools at the moist rate. In the layer where the parcel could rise on its own, warmer than its surroundings, the gap is shaded gold; wherever
-        it’s colder beneath that layer, blue. The dot is a thermal leaving the ground at {THERMAL_W0} m/s, sped up {SPEED} times. Heat the afternoon, and change the moisture, the air aloft and the cap:
+        saturates and cools at the moist rate. Where the parcel could rise on its own, warmer than its surroundings, the gap is shaded gold, with marks
+        at the right for where that free convection begins and the cloud top it would reach; where it’s colder beneath that layer, the gap is hatched orange. Both areas are energies, which the readouts call CAPE and CIN; we’ll come to them once the thermal is moving. The dot is a
+        thermal leaving the ground at {THERMAL_W0} m/s, sped up {SPEED} times. Heat the afternoon, and change the moisture, the air aloft and the cap:
       </P>
 
       <Figure name="Convection Simulator" scenario={s} play={play}>
-        <SoundingDiagram a={a} st={st} sim={sim} top={sim.top} />
+        <SoundingDiagram a={a} st={st} sim={sim} top={sim.top} broke={broke} />
         <Legend
           items={[
             { label: 'Surrounding air', color: GRAPHIC.red, kind: 'line' },
             { label: 'Parcel, clear', color: PARCEL_DRY, kind: 'line', dashed: true },
             { label: 'Parcel, in cloud', color: PARCEL_MOIST, kind: 'line' },
             { label: 'CAPE', color: tint(GRAPHIC.gold, 0.5) },
-            { label: 'CIN', color: tint(CIN_FILL, 0.35) },
+            { label: 'CIN', color: CIN_SWATCH },
           ]}
         />
         <Readouts
           items={[
-            { label: 'cloud base', value: `${fmt(a.lclKm, 1)} km`, tone: WX.moisture },
-            { label: 'free convection from', value: a.lfcKm !== null ? `${fmt(a.lfcKm, 1)} km` : 'none', tone: WX.energy },
-            { label: 'cloud top', value: a.elKm !== null ? `${fmt(a.elKm, 1)} km` : '—', tone: WX.energy },
             { label: 'CAPE', value: `${fmt(a.cape)} J/kg`, tone: WX.energy },
-            { label: 'CIN', value: `${fmt(a.cin)} J/kg`, tone: WX.pressure },
-            { label: 'updraft limit, √(2·CAPE)', value: `${fmt(Math.sqrt(2 * a.cape))} m/s`, tone: WX.wind },
+            { label: 'CIN', value: `${fmt(a.cin)} J/kg`, tone: WX.density },
           ]}
         />
         <Slider
@@ -466,22 +500,30 @@ export default function Lesson() {
 
       <P>
         At the starting {CONVECTION_DEFAULTS.surfaceC} °C, late in the morning, the thermal reaches its cloud base at {fmt(START.lclKm, 1)} km and makes a small
-        puff of cloud, then runs into the cap. Inside the cap the surrounding air is warmer than the parcel, so the parcel is denser than its surroundings, slows,
-        and sinks back. Higher up there is a gold layer, starting at {fmt(START.lfcKm ?? 0, 1)} km, where the parcel would be warmer than the air around it and rise
-        on its own. It just can’t get there.
+        puff of cloud. In the cloud, warmed by its condensing vapor, the parcel is briefly warmer than the air around it — by up to {fmt(START_LIFT.gapC, 1)} °C,
+        at {fmt(START_LIFT.atKm, 1)} km — and that lift carries it into the cap. But inside the cap the surrounding air warms with height, so the parcel soon
+        falls behind and is denser than its surroundings. It climbs to about {fmt(START_TOP / 1000, 1)} km, slows, and sinks back. Higher up, from {fmt(START.lfcKm ?? 0, 1)} km, is a gold layer where the parcel would rise on its own. It
+        just can’t get there.
       </P>
       <P>
-        The shaded areas are energies. A parcel warmer than its surroundings by ΔT feels an upward push of g·ΔT/T for each kilogram, and adding that push up through
-        the gold layer gives the <K tone={WX.energy}>convective available potential energy</K>, or <b>CAPE</b>, in joules per kilogram. The blue area, added the
-        same way, is the <K tone={WX.pressure}>convective inhibition</K>, or <b>CIN</b>: the energy something must supply to lift the parcel to its{' '}
-        <b>level of free convection</b>, the bottom of the gold layer. Here the CIN is {fmt(START.cin)} J/kg. The thermal’s own motion carries only ½w² ={' '}
-        {fmt(0.5 * THERMAL_W0 * THERMAL_W0, 1)} J/kg. And if all the CAPE turned into motion, a parcel would leave the gold layer rising at √(2·CAPE): the readout’s
-        updraft limit.
+        Here is why the shaded areas are energies. A parcel warmer than its surroundings by ΔT feels an upward push of g·ΔT/T for each kilogram, and adding that push up through
+        the gold layer gives the <K tone={WX.energy}>convective available potential energy</K>, or <b>CAPE</b>, in joules per kilogram. The hatched area, where the
+        parcel is denser than its surroundings, added the same way, is the <K tone={WX.density}>convective inhibition</K>, or <b>CIN</b>: the energy something must
+        supply to lift the parcel to its <b>level of free convection</b>, the bottom of the gold layer. Here the CIN is {fmt(START.cin)} J/kg. The thermal’s own
+        motion carries only ½w² = {fmt(0.5 * THERMAL_W0 * THERMAL_W0, 1)} J/kg. And if all the CAPE turned into motion, a parcel would leave the gold layer rising at
+        √(2·CAPE), the <b>updraft limit</b>.
+      </P>
+      <P>
+        The two sliders for the morning air show the opening’s classes. Slide the air aloft’s lapse rate down to {STABLE_LAPSE} °C per km, slower than the moist
+        rate: the caption calls the air {STABLE_CLASS}, and the gold layer is gone. Raise it to {COOL_LAPSE} and the cooler air aloft holds{' '}
+        {fmt(COOL_ALOFT.cape)} J/kg of CAPE behind just {fmt(COOL_ALOFT.cin)} J/kg of CIN; even the morning’s thermal gets through. Set it back to{' '}
+        {CONVECTION_DEFAULTS.lapse} and take the cap away, and with no CIN the same {CONVECTION_DEFAULTS.surfaceC} °C morning grows a storm at once. The third
+        class, air cooling faster than the dry rate, comes in the last demonstration.
       </P>
 
       <H2>Breaking the cap</H2>
       <P>
-        Now let the afternoon warm up. Each degree of heating warms the parcel all the way up its path, and the blue area shrinks while the gold one grows. Moisture
+        Now let the afternoon warm up. Each degree of heating warms the parcel all the way up its path, and the hatched area shrinks while the gold one grows. Moisture
         works on the same areas from the other end: a higher dew point lowers the cloud base, so the parcel switches sooner to the slower, moist rate of cooling and
         arrives at the cap warmer.
       </P>
@@ -491,8 +533,8 @@ export default function Lesson() {
         question={`Keep the dew point at ${CONVECTION_DEFAULTS.dewC} °C, the air aloft at ${CONVECTION_DEFAULTS.lapse} °C per km and the cap at +${CONVECTION_DEFAULTS.cap} °C. What is the coolest afternoon, to the half degree, at which a thermal breaks through the cap?`}
         solved={solved}
         status={
-          st.cap < 2
-            ? 'Put the cap back first: with less than 2 °C of it there’s little to break.'
+          !capConditionsKept(st)
+            ? `First set the dew point back to ${CONVECTION_DEFAULTS.dewC} °C, the air aloft to ${CONVECTION_DEFAULTS.lapse} °C per km and the cap to +${CONVECTION_DEFAULTS.cap} °C (Reset does all three).`
             : broke
               ? `At ${fmt(st.surfaceC, 1)} °C the thermal breaks through, with ${fmt(a.cin)} J/kg of CIN left. Would a cooler afternoon do?`
               : `At ${fmt(st.surfaceC, 1)} °C the thermal stops at ${fmt(top / 1000, 1)} km, with ${fmt(a.cin)} J/kg of CIN to overcome.`
@@ -505,15 +547,16 @@ export default function Lesson() {
         <b>equilibrium level</b> at {fmt(AT_32.elKm ?? 0, 1)} km, where the parcel is finally no warmer than its surroundings. That height is the top of the
         thunderstorm. The updraft limit is {fmt(Math.sqrt(2 * AT_32.cape))} m/s, but the thermal in the demonstration peaks near {fmt(PEAK_32)} m/s, because its drag
         stands in for what slows real updrafts: they mix in cooler, drier air from around them and carry the weight of their water. Its momentum still carries it
-        past the equilibrium level, to about {fmt(TOP_32 / 1000, 1)} km, before it falls back. Real storms do the same, and the dome that pokes above a
-        thunderstorm’s flat top is called an <b>overshooting top</b>.
+        past the equilibrium level, to about {fmt(TOP_32 / 1000, 1)} km, before it falls back. On the way it passes {TROPOPAUSE_KM} km, where the red line stops
+        cooling with height: the <b>tropopause</b>, the top of the <b>troposphere</b>, the layer that holds nearly all the weather.
+        Above it, in the stratosphere, the air is very stable and caps even the strongest storms; the real tropopause sits near that height in the middle
+        latitudes. Real storms overshoot too, poking an <b>overshooting top</b> above their flat tops.
       </P>
       <P>
         Moisture matters as much as heat. At 32 °C, a dew point of 14 °C leaves just {fmt(DRY_32.cape)} J/kg of CAPE behind {fmt(DRY_32.cin)} J/kg of CIN, and the
         cap holds; at 20 °C the CAPE is {fmt(WET_32.cape)} J/kg. That is the recipe for a summer afternoon over the plains: moist air near the ground, cooler air
         aloft, and a day’s heating to bring them into contact. It’s why storms over land are most common in the late afternoon and evening, and why a cap that holds
-        until late in the day can produce fewer storms but more violent ones, fed by energy that has been building for hours. A degree or two of temperature, or of
-        dew point, decides between a sunny evening and hail.
+        until late in the day can produce fewer storms but more violent ones, fed by energy that has been building for hours.
       </P>
 
       <H2>Stable air pushes back</H2>
@@ -549,12 +592,13 @@ export default function Lesson() {
             period !== null
               ? { label: 'one oscillation', value: `${fmt(period, 1)} min`, tone: WX.temperature }
               : { label: bv.growthS !== null ? 'runs away: e-fold every' : 'neutral', value: bv.growthS !== null ? `${fmt(bv.growthS / 60, 1)} min` : '—', tone: WX.temperature },
-            { label: 'N²', value: `${bv.n2 < 0 ? '−' : ''}${fmt(Math.abs(bv.n2) * 1e4, 2)} × 10⁻⁴ s⁻²` },
           ]}
         />
         <Slider label="Lapse rate of the layer" tone={WX.temperature} value={lapse} min={4} max={12} step={0.1} onChange={(v) => d.set({ lapse: v })} display={`${fmt(lapse, 1)} °C per km`} />
         <Slider label="Nudge" value={lift} min={100} max={1000} step={50} onChange={(v) => d.set({ lift: v })} display={`${fmt(lift)} m`} />
-        <Eq label={`N squared equals ${fmt(G, 2)} over ${fmt(LAYER_C + K0, 0)} kelvins times ${fmt(DRY_LAPSE, 1)} minus ${fmt(lapse, 1)} degrees per kilometer`}>
+        <Eq
+          label={`N squared equals ${fmt(G, 2)} over ${fmt(LAYER_C + K0, 0)} kelvins times ${fmt(DRY_LAPSE, 1)} minus ${fmt(lapse, 1)} degrees per 1,000 meters: ${n2Text} times ten to the minus 4 per second squared`}
+        >
           <span>
             N<Sup>2</Sup>
           </span>
@@ -564,33 +608,46 @@ export default function Lesson() {
           <span>({fmt(DRY_LAPSE, 1)}</span>
           <Op>−</Op>
           <span>
-            <K tone={WX.temperature}>{fmt(lapse, 1)}</K>) K/km
+            <K tone={WX.temperature}>{fmt(lapse, 1)}</K>) °C per 1,000 m
+          </span>
+          <Op>=</Op>
+          <span>
+            {n2Text} × 10<Sup>−4</Sup> s<Sup>−2</Sup>
           </span>
         </Eq>
       </Figure>
 
       <P>
         At the standard 6.5 °C per km, the parcel bobs once every {fmt(standardPeriod, 1)} minutes, whatever the size of the nudge. In more stable air the spring is
-        stiffer: at 4 °C per km a cycle takes {fmt(oscillationPeriodMin(4)!, 1)} minutes. As the lapse rate approaches the dry rate the restoring push fades and the
-        period stretches without limit; past it, there is no push back at all, and the parcel runs away, its height growing e-fold every{' '}
-        {fmt(bruntVaisala(LAYER_C, 11).growthS! / 60, 1)} minutes at 11 °C per km. Stable layers carry these oscillations as waves. Wind blowing over a ridge
-        sets them going downstream, and where their crests lift the air to saturation they show up as rows of smooth, lens-shaped wave clouds that stay in place
-        while the wind blows through them.
+        stiffer: at 4 °C per km a cycle takes {fmt(oscillationPeriodMin(4)!, 1)} minutes. Since N² grows in proportion to the gap between the dry rate and the
+        layer’s lapse rate, the period goes as one over the square root of that gap: a gap four times as wide halves it. As the lapse rate approaches the dry rate
+        the restoring push fades and the period stretches without limit. Past it — the absolutely unstable air of the lesson’s opening — there is no push back at
+        all, and the parcel runs away, its height growing e-fold every {fmt(bruntVaisala(LAYER_C, 11).growthS! / 60, 1)} minutes at 11 °C per km. Stable layers carry these oscillations as waves: wind
+        blowing over a ridge sets them going downstream, and where their crests lift the air to saturation, smooth, lens-shaped clouds stay in place while the wind
+        blows through them.
       </P>
 
       <Challenge
         id="b"
-        question={`In the standard atmosphere a displaced parcel bobs once every ${fmt(standardPeriod, 1)} minutes. Find a lapse rate that doubles that, to about 20 minutes.`}
+        question={`In the standard atmosphere a displaced parcel bobs once every ${fmt(standardPeriod, 1)} minutes. Predict first, from the square-root rule: what lapse rate doubles that, to about 20 minutes? Then set it and check.`}
         solved={solved2}
-        status={period !== null ? `Right now one oscillation takes ${fmt(period, 1)} minutes.` : 'This layer isn’t stable at all: the parcel never comes back.'}
-        success={`Solved. At ${fmt(lapse, 1)} °C per km one oscillation takes ${fmt(period ?? 0, 1)} minutes. The period goes as 1/N, and N as the square root of the gap between the dry rate and the layer’s, so doubling the period takes a gap a quarter as wide: (9.8 − 6.5) ÷ 4 ≈ 0.8 °C per km, or a layer cooling about 9 °C per km.`}
+        status={
+          lapse === 6.5
+            ? 'Predict first, then set the lapse rate.'
+            : period === null
+              ? 'This layer isn’t stable at all: the parcel never comes back.'
+              : period < PERIOD_TARGET_MIN[0]
+                ? 'Too short: this layer is still too stable.'
+                : 'Too long: this layer is too close to the dry rate.'
+        }
+        success={`Solved. Doubling the period takes a gap a quarter as wide: (9.8 − 6.5) ÷ 4 ≈ 0.8 °C per km, or a layer cooling about 9 °C per km. At ${fmt(lapse, 1)} °C per km one oscillation takes ${fmt(period ?? 0, 1)} minutes. Air that cools nearly as fast as the dry rate barely resists being lifted.`}
       />
 
       <P>
         <FigRef to="Convection Simulator">The first demonstration</FigRef> showed the atmosphere’s vertical machinery: heating from below builds up energy, and
         moisture and stability decide whether it is released. But the heating that drives it is uneven from place to place as well as from hour to hour. A column of
-        warm air over the plains is less dense than a column of cool air over the sea, and the difference shows up in the pressure at the ground. Air pushed by
-        those differences moves sideways, across a planet that turns beneath it. That is the subject of the next lesson.
+        warm air over the plains is less dense than a column of cool air over the sea, so it stands taller. The next lesson shows how that difference becomes a
+        push that moves the air sideways, across a planet that turns beneath it.
       </P>
     </LessonPage>
   );
@@ -598,6 +655,8 @@ export default function Lesson() {
 
 // Numbers the prose quotes, from the same model the figure runs.
 const START = convectionAscent(CONVECTION_DEFAULTS);
+const START_LIFT = lowCloudLift(START);
+const START_TOP = thermalTopM(CONVECTION_DEFAULTS);
 const AT_32_STATE = { ...CONVECTION_DEFAULTS, surfaceC: 32 };
 const AT_32 = convectionAscent(AT_32_STATE);
 const FLIGHT_32 = (() => {
@@ -614,6 +673,12 @@ const FLIGHT_32 = (() => {
 const PEAK_32 = FLIGHT_32.peak;
 const TOP_32 = FLIGHT_32.top;
 const DRY_32 = convectionAscent({ ...AT_32_STATE, dewC: 14 });
+/** The stability prompts: air aloft cooling slower than the moist rate, faster than the standard one, and no cap. */
+export const STABLE_LAPSE = 4;
+export const COOL_LAPSE = 7.5;
+const STABLE_ASCENT = convectionAscent({ ...CONVECTION_DEFAULTS, lapse: STABLE_LAPSE });
+const STABLE_CLASS = stabilityClass(STABLE_LAPSE, moistLapseRate(STABLE_ASCENT.parcel[idx(STABLE_ASCENT, STABLE_ASCENT.lclKm)], STABLE_ASCENT.p[idx(STABLE_ASCENT, STABLE_ASCENT.lclKm)]));
+const COOL_ALOFT = convectionAscent({ ...CONVECTION_DEFAULTS, lapse: COOL_LAPSE });
 const WET_32 = convectionAscent({ ...AT_32_STATE, dewC: 20 });
 
 /** When the displaced-parcel animation starts over, in simulated seconds: two seconds after its trace ends. */

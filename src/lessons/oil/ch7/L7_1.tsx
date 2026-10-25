@@ -41,14 +41,14 @@ import {
   type ProductionPlan,
   type ProductionResult,
 } from '../../../engines/oil/business';
-import { TERMS, WATERFLOOD, ridgebackWellCost } from '../../../engines/oil/economics';
+import { TERMS, WATERFLOOD, pinyonWellCost } from '../../../engines/oil/economics';
 import { CRUDE_COLOR } from '../../../model/oil/crudes';
-import { KESSLER_CALDER } from '../../../model/oil/logistics';
-import { CALDER } from '../../../model/oil/refinery';
+import { KESSLER_CORRAN } from '../../../model/oil/logistics';
+import { CORRAN } from '../../../model/oil/refinery';
 import { HISTORY_DEFAULTS, oilHistory, type HistoryParams, type HistoryWeek } from '../../../model/oil/history';
 import { XYChart } from '../shared/charts';
 import { BusinessCard } from '../shared/BusinessCard';
-import { resetBusinessPart, updateBusiness, useBusiness } from '../shared/business';
+import { confirmResetPart, updateBusiness, useBusiness } from '../shared/business';
 
 // ---------------------------------------------------------------------------
 // The world the prices come from (lesson-level assumptions, not part of the saved plan).
@@ -78,8 +78,8 @@ export function ourHistory(st: WorldState = WORLD_DEFAULTS): HistoryWeek[] {
 }
 
 /** Average production in a year of the plan (1 = the coming year), b/d, in total or from one source. */
-export function yearProduction(r: ProductionResult, year: number, source?: 'northfield' | 'flood' | 'ridgeback'): number {
-  const parts = source ? [r[source]] : [r.northfield, r.flood, r.ridgeback];
+export function yearProduction(r: ProductionResult, year: number, source?: 'northfield' | 'flood' | 'pinyon'): number {
+  const parts = source ? [r[source]] : [r.northfield, r.flood, r.pinyon];
   const from = (year - 1) * 12;
   return parts.reduce((s, arr) => s + arr.slice(from, from + 12).reduce((a, q) => a + q, 0) / 12, 0);
 }
@@ -113,7 +113,7 @@ export function valuations(plan: ProductionPlan, hs: HistoryWeek[][]): Valuation
       let slope = 0;
       let f = 1;
       for (let m = 0; m < r.price.length; m++) {
-        if (m >= histMonths) slope += ((r.northfield[m] + r.flood[m] + r.ridgeback[m]) * DAYS_PER_MONTH * NET_SHARE) / f;
+        if (m >= histMonths) slope += ((r.northfield[m] + r.flood[m] + r.pinyon[m]) * DAYS_PER_MONTH * NET_SHARE) / f;
         f *= MONTHLY_DISCOUNT;
       }
       ref = { r, slope };
@@ -125,7 +125,7 @@ export function valuations(plan: ProductionPlan, hs: HistoryWeek[][]): Valuation
     let d = 0;
     let f = 1;
     for (let m = 0; m < p.length; m++) {
-      if (p[m] !== r.price[m]) d += ((r.northfield[m] + r.flood[m] + r.ridgeback[m]) * DAYS_PER_MONTH * NET_SHARE * (p[m] - r.price[m])) / f;
+      if (p[m] !== r.price[m]) d += ((r.northfield[m] + r.flood[m] + r.pinyon[m]) * DAYS_PER_MONTH * NET_SHARE * (p[m] - r.price[m])) / f;
       f *= MONTHLY_DISCOUNT;
     }
     return { at75: r.npv + d, slope: ref.slope };
@@ -240,13 +240,25 @@ export function luckSolved(plan: ProductionPlan, st: DeckState): boolean {
 
 const NF_COLOR = CRUDE_COLOR.northfield;
 const FLOOD_COLOR = tint(CRUDE_COLOR.northfield, 0.45);
-const RB_COLOR = CRUDE_COLOR.ridgeback;
+const RB_COLOR = CRUDE_COLOR.pinyon;
 const YEARS_SHOWN = 10;
 
+/** Money as the chapter writes it: billions to two decimals, millions whole. */
 function money(x: number): string {
   const a = Math.abs(x);
-  if (a >= 1e6) return `${x < 0 ? '−' : ''}$${fmt(a / 1e6)} million`;
+  const s = x < 0 ? '−' : '';
+  if (a >= 1e9) return `${s}$${fmt(a / 1e9, 2)} billion`;
+  if (a >= 1e6) return `${s}$${fmt(a / 1e6)} million`;
   return usd(x);
+}
+
+/** Millions to one decimal, for the numbers challenge b is estimated from. */
+const money1 = (x: number) => `${x < 0 ? '−' : ''}$${fmt(Math.abs(x) / 1e6, 1)} million`;
+
+/** A range of values in the chapter's format ("$2.79–2.89 billion"). */
+function moneyRange(lo: number, hi: number): string {
+  if (lo >= 1e9 && hi >= 1e9) return `$${fmt(lo / 1e9, 2)}–${fmt(hi / 1e9, 2)} billion`;
+  return `${money(lo)}–${money(hi)}`;
 }
 
 function moneyM(x: number, digits = 0): string {
@@ -254,7 +266,8 @@ function moneyM(x: number, digits = 0): string {
 }
 
 const dollars = (x: number) => usd(x, 2);
-const bpd = (x: number) => `${fmt(x)} b/d`;
+/** Production to the nearest hundred barrels a day. */
+const bpd = (x: number) => `${fmt(Math.round(x / 100) * 100)} b/d`;
 const X0 = 60;
 const X1 = 624;
 
@@ -264,24 +277,24 @@ const X1 = 624;
 /** Stacked oil production over ten years, b/d. */
 function ProductionChart({ r }: { r: ProductionResult }) {
   const n = YEARS_SHOWN * 12;
-  const totals = Array.from({ length: n }, (_, m) => r.northfield[m] + r.flood[m] + r.ridgeback[m]);
+  const totals = Array.from({ length: n }, (_, m) => r.northfield[m] + r.flood[m] + r.pinyon[m]);
   const [, top] = niceDomain(0, Math.max(10000, ...totals), 4);
   const x = scale(0, n, X0, X1);
-  const y = scale(0, top, 152, 22);
+  const y = scale(0, top, 132, 22);
   const xs = Array.from({ length: n }, (_, m) => x(m + 0.5));
   const lay0 = r.northfield.slice(0, n);
   const lay1 = lay0.map((v, m) => v + r.flood[m]);
-  const lay2 = lay1.map((v, m) => v + r.ridgeback[m]);
+  const lay2 = lay1.map((v, m) => v + r.pinyon[m]);
   const zero = lay0.map(() => 0);
   const peakAt = totals.indexOf(Math.max(...totals));
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 172"
+      viewBox="0 0 640 152"
       role="img"
       aria-label={`The plan’s oil production over ten years, stacked: ${bpd(yearProduction(r, 1))} in year 1, ${bpd(yearProduction(r, 3))} in year 3 (${bpd(
         yearProduction(r, 3, 'flood'),
-      )} of it from the waterflood and ${bpd(yearProduction(r, 3, 'ridgeback'))} from Ridgeback wells), peaking at ${bpd(totals[peakAt])} in year ${
+      )} of it from the waterflood and ${bpd(yearProduction(r, 3, 'pinyon'))} from Pinyon wells), peaking at ${bpd(totals[peakAt])} in year ${
         Math.floor(peakAt / 12) + 1
       }, and ${bpd(yearProduction(r, 10))} in year 10.`}
     >
@@ -294,7 +307,7 @@ function ProductionChart({ r }: { r: ProductionResult }) {
       <path d={areaPath(xs, lay2.map(y), lay1.map(y))} fill={RB_COLOR} opacity={0.85} />
       <path d={linePath(xs, lay2.map(y))} fill="none" stroke="#333" strokeWidth={1.2} />
       {[0, 2, 4, 6, 8, 10].map((yr) => (
-        <text key={yr} className="ax ax-m" x={x(yr * 12)} y={166}>
+        <text key={yr} className="ax ax-m" x={x(yr * 12)} y={146}>
           {yr === 0 ? 'now' : `year ${yr}`}
         </text>
       ))}
@@ -315,7 +328,7 @@ function PriceChart({ r, h, plan }: { r: ProductionResult; h: HistoryWeek[]; pla
       ariaLabel={`WTI on the course’s simulated history: years start at ${starts.map((p) => dollars(p)).join(', ')}; afterward the long-run $${LONG_RUN_WTI}. A well’s breakeven is ${dollars(
         WELL_BREAKEVEN,
       )}.${plan.drillAbove > 0 ? ` The drilling rule needs at least $${plan.drillAbove}: ${skipped.length ? `year${skipped.length > 1 ? 's' : ''} ${skipped.join(', ')} skipped` : 'no year skipped'}.` : ''}`}
-      height={152}
+      height={136}
       x={[0, YEARS_SHOWN]}
       y={[d0, d1]}
       xTicks={[0, 2, 4, 6, 8, 10]}
@@ -440,62 +453,88 @@ function DeckChart({ lines, pumps, longRun }: { lines: DeckLine[]; pumps: DeckLi
 }
 
 // ---------------------------------------------------------------------------
-// Reference numbers for the prose (the starting plan, the course's world unless noted).
+// Numbers for the prose. Some describe the world or each investment on its own; the rest are the
+// reader's plan, computed live (planFacts), so the text matches the figures whatever the plan.
 
 function lessonFacts() {
   const h = ourHistory();
-  const D = productionOnPath(PRODUCTION_DEFAULTS, h);
   const none: ProductionPlan = { wellsPerYear: 0, waterflood: false, drillAbove: 0 };
   const pumps = productionOnPath(none, h);
   const floodOnly = productionOnPath({ ...none, waterflood: true }, h);
   const wellsOnly = productionOnPath({ ...none, wellsPerYear: PRODUCTION_DEFAULTS.wellsPerYear }, h);
-  const barrels = (arr: number[]) => arr.reduce((s, q) => s + (q * 365.25) / 12, 0);
-  const floodBbl = barrels(floodOnly.flood);
-  const wellBbl = barrels(wellsOnly.ridgeback);
-  const allBbl = barrels(D.northfield) + barrels(D.flood) + barrels(D.ridgeback);
-  const lateBbl = [D.northfield, D.flood, D.ridgeback].reduce((s, arr) => s + barrels(arr.slice(60)), 0);
-  const fan = fanNpvs(PRODUCTION_DEFAULTS);
-  const rank = fan.filter((v) => v > fan[0]).length + 1;
+  const D = productionOnPath(PRODUCTION_DEFAULTS, h);
   const startsDefault = yearStarts(WORLD_DEFAULTS);
-  const gate65 = productionOnPath({ ...PRODUCTION_DEFAULTS, drillAbove: 65 }, h);
-  const lines = deckLines(PRODUCTION_DEFAULTS);
-  const spread = middleSpread(lines);
-  const peak = Math.max(...D.northfield.map((q, m) => q + D.flood[m] + D.ridgeback[m]));
   return {
-    D,
     pumpsY1: yearProduction(pumps, 1),
     pumpsY5: yearProduction(pumps, 5),
-    y3: yearProduction(D, 3),
-    y3flood: yearProduction(D, 3, 'flood'),
-    y3sour: yearProduction(D, 3, 'northfield') + yearProduction(D, 3, 'flood'),
-    y3light: yearProduction(D, 3, 'ridgeback'),
-    floodBbl,
-    wellBbl,
+    startY3: yearProduction(D, 3),
+    startY3flood: yearProduction(D, 3, 'flood'),
+    floodBbl: barrelsOf(floodOnly.flood),
+    wellBbl: barrelsOf(wellsOnly.pinyon),
     wellsCapital: wellsOnly.capitalTotal,
-    lateShare: lateBbl / allBbl,
-    fanMin: Math.min(...fan),
-    fanMax: Math.max(...fan),
-    fanP10: quantile(fan, 0.1),
-    fanP90: quantile(fan, 0.9),
-    fanP50: quantile(fan, 0.5),
-    rank,
     ourStarts: [0, 1, 2, 3, 4].map((yr) => h[yr * 52].wti),
     minStart: Math.min(...startsDefault),
     belowDefault: startsDefault.filter((p) => p < WELL_BREAKEVEN).length,
     startsCount: startsDefault.length,
     averageWti: averageWti(WORLD_DEFAULTS),
-    gate65Loss: D.npv - gate65.npv,
-    gate65Skipped: gate65.drilled.map((d, i) => (d ? null : i + 1)).filter((v): v is number => v !== null),
-    slope: lines[0].slope,
-    spread,
-    luck: spread / lines[0].slope,
-    peak,
   };
 }
 
 let facts: ReturnType<typeof lessonFacts> | null = null;
 function getFacts() {
   return (facts ??= lessonFacts());
+}
+
+/** Barrels produced over a run of months, from monthly rates in b/d. */
+function barrelsOf(arr: number[]): number {
+  return arr.reduce((s, q) => s + (q * 365.25) / 12, 0);
+}
+
+/** The prose's numbers for a production plan in the course's world. */
+function computePlanFacts(plan: ProductionPlan) {
+  const h = ourHistory();
+  const r = productionOnPath(plan, h);
+  const always = productionOnPath({ ...plan, drillAbove: 0 }, h);
+  const gate65 = productionOnPath({ ...plan, drillAbove: 65 }, h);
+  const fan = fanNpvs(plan);
+  const lines = deckLines(plan);
+  const spread = middleSpread(lines);
+  const late = { old: barrelsOf(r.northfield.slice(60)), flood: barrelsOf(r.flood.slice(60)), wells: barrelsOf(r.pinyon.slice(60)) };
+  const all = barrelsOf(r.northfield) + barrelsOf(r.flood) + barrelsOf(r.pinyon);
+  return {
+    r,
+    y3: yearProduction(r, 3),
+    y3sour: yearProduction(r, 3, 'northfield') + yearProduction(r, 3, 'flood'),
+    y3light: yearProduction(r, 3, 'pinyon'),
+    peak: Math.max(...r.northfield.map((q, m) => q + r.flood[m] + r.pinyon[m])),
+    fanMin: Math.min(...fan),
+    fanMax: Math.max(...fan),
+    fanP10: quantile(fan, 0.1),
+    fanP50: quantile(fan, 0.5),
+    fanP90: quantile(fan, 0.9),
+    rank: fan.filter((v) => v > fan[0]).length + 1,
+    gate65Loss: always.npv - gate65.npv,
+    gate65Skipped: gate65.drilled.map((d, i) => (d ? null : i + 1)).filter((v): v is number => v !== null),
+    lateShare: (late.old + late.flood + late.wells) / all,
+    /** Where most of the late barrels come from. */
+    lateFrom: late.wells > late.old + late.flood ? 'the Pinyon wells' : late.flood > 0 ? 'the waterflood and Northfield’s old wells' : 'Northfield’s old wells',
+    slope: lines[0].slope,
+    spread,
+    luck: spread / lines[0].slope,
+  };
+}
+
+export type PlanFacts = ReturnType<typeof computePlanFacts>;
+const planFactsCache = new Map<string, PlanFacts>();
+export function planFacts(plan: ProductionPlan): PlanFacts {
+  const key = JSON.stringify(plan);
+  let v = planFactsCache.get(key);
+  if (!v) {
+    v = computePlanFacts(plan);
+    if (planFactsCache.size > 50) planFactsCache.clear();
+    planFactsCache.set(key, v);
+  }
+  return v;
 }
 
 /** Average weekly WTI over all thirty histories of a world. */
@@ -522,15 +561,16 @@ const FREE_WORLD: WorldState = { ...WORLD_DEFAULTS, group: 'free' };
  * The prose's numbers for the world without the producer group's steadying. They need thirty more
  * histories, so the lesson computes them just after it first appears rather than before.
  */
-export function freeWorldFacts() {
-  const free = fanNpvs(PRODUCTION_DEFAULTS, FREE_WORLD);
+export function freeWorldFacts(plan: ProductionPlan = PRODUCTION_DEFAULTS) {
+  const always = { ...plan, drillAbove: 0 };
+  const free = fanNpvs(always, FREE_WORLD);
   const starts = yearStarts(FREE_WORLD);
   // The histories with a year starting below the breakeven, and what skipping those years' wells did.
-  const gatedPlan = { ...PRODUCTION_DEFAULTS, drillAbove: WELL_BREAKEVEN };
+  const gatedPlan = { ...always, drillAbove: WELL_BREAKEVEN };
   const skipLosses = FAN_SEEDS.map((seed) => {
     const hf = oilHistory({ ...worldParams(FREE_WORLD), seed });
     if (drillingYears(gatedPlan, hf).every(Boolean)) return null;
-    return productionOnPath(gatedPlan, hf).npv - productionOnPath(PRODUCTION_DEFAULTS, hf).npv;
+    return productionOnPath(gatedPlan, hf).npv - productionOnPath(always, hf).npv;
   }).filter((v): v is number => v !== null);
   return {
     averageWti: averageWti(FREE_WORLD),
@@ -544,25 +584,32 @@ export function freeWorldFacts() {
   };
 }
 
-let freeFacts: ReturnType<typeof freeWorldFacts> | null = null;
 
 const ORDINAL = ['best', 'second-best', 'third-best', 'fourth-best', 'fifth-best'];
+
+/** "best", "second-best", …, "30th-best". */
+function ordinal(rank: number): string {
+  if (ORDINAL[rank - 1]) return ORDINAL[rank - 1];
+  const suffix = rank % 10 === 1 && rank !== 11 ? 'st' : rank % 10 === 2 && rank !== 12 ? 'nd' : rank % 10 === 3 && rank !== 13 ? 'rd' : 'th';
+  return `${rank}${suffix}-best`;
+}
 
 // ---------------------------------------------------------------------------
 
 export default function Lesson() {
   const f = getFacts();
-  // The free-world numbers arrive just after the lesson first appears (see freeWorldFacts).
-  const [ff, setFf] = useState(freeFacts);
-  useEffect(() => {
-    if (!ff) setFf((freeFacts ??= freeWorldFacts()));
-  }, [ff]);
   const plan = useBusiness().production;
+  const deferredPlan = useDeferredValue(plan);
+  const pf = useMemo(() => planFacts(deferredPlan), [deferredPlan]);
+  // The free-world numbers need thirty more histories, so they arrive just after the lesson first appears.
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  const ff = useMemo(() => (ready ? freeWorldFacts(deferredPlan) : null), [ready, deferredPlan]);
+
   const s1 = useScenario<WorldState>('world', WORLD_DEFAULTS);
   const world = s1.state;
   const h = useMemo(() => ourHistory(world), [world]);
   const r = useMemo(() => productionOnPath(plan, h), [plan, h]);
-  const deferredPlan = useDeferredValue(plan);
   const deferredWorld = useDeferredValue(world);
   const npvs = useMemo(() => fanNpvs(deferredPlan, deferredWorld), [deferredPlan, deferredWorld]);
   const solvedA = useMemo(() => cheapestPlanSolved(plan), [plan]);
@@ -574,54 +621,54 @@ export default function Lesson() {
   const pumps = useMemo(() => valuations({ wellsPerYear: 0, waterflood: false, drillAbove: 0 }, [ourHistory()])[0], []);
   const lr = s2.state.longRun;
   const ourAt = npvAt(lines[0], lr);
-  const spreadHere = middleSpread(lines, lr);
   const spread75 = middleSpread(lines);
   const solvedB = luckSolved(deferredPlan, s2.state);
   const drop = lines[0].at75 - ourAt;
 
   const set = (patch: Partial<ProductionPlan>) => updateBusiness('production', patch);
-  const skipped = r.drilled.map((d, i) => (d ? null : i + 1)).filter((v): v is number => v !== null);
   const L = PLAN_LIMITS;
+  const invests = plan.waterflood || plan.wellsPerYear > 0;
+  const kindness = pf.rank <= 10 ? 'its five years happened to be kind to producers' : pf.rank > 20 ? 'its five years were hard on producers' : 'its five years were ordinary ones';
 
   return (
     <LessonPage id="oil/7.1">
       <P>
-        <a href={lessonHref('oil/6.5')}>Chapter 6</a> ended with a book of trades held against other people’s assets: their tanks, their pipeline space, their
-        refineries. In this last chapter we own the assets. Our company holds the Northfield field and acreage in the Ridgeback play from Chapter 2, the Calder
-        refinery from Chapter 3 and the right to commit to space on the Kessler–Calder line from Chapter 4, and it has a trading desk that has learned Chapter 6.
-        Over five lessons we’ll plan its production, design its refinery, build the logistics between them, forecast the market it sells into, and finally run and
-        hedge the whole business. Each lesson owns one part of the plan. The plan is kept in this browser, so the next lesson picks it up where this one leaves it,
-        and every lesson also works from the starting plan if you’d rather skip ahead.
+        <a href={lessonHref('oil/6.5')}>Chapter 6</a> traded against other people’s assets; in this last chapter we own them. Our company holds the Northfield field
+        and acreage in the Pinyon play from Chapter 2, the Corran refinery from Chapter 3 and the right to commit to space on the Kessler–Corran line from Chapter
+        4, and it has a trading desk that has learned Chapter 6. Its plan is built one part per lesson — the fields in this one, then the refinery and the line,
+        with a forecast and the hedges to finish — and it’s kept in this browser, so the next lesson picks it up where this one leaves it. Every lesson also works
+        from the starting plan if you’d rather skip ahead.
       </P>
       <P>
         Nothing in this chapter is new machinery. The company’s upstream half is the Oil Field Planner of <a href={lessonHref('oil/2.5')}>Lesson 2.5</a>.
         Northfield’s wells, on pumps, make {bpd(f.pumpsY1)} in the coming year and decline to {bpd(f.pumpsY5)} by the fifth (
         <a href={lessonHref('oil/2.4')}>Lesson 2.4</a>); a {money(WATERFLOOD.capital)} waterflood would sweep more of the field’s oil toward its producers; and
-        each standard Ridgeback well from <a href={lessonHref('oil/2.3')}>Lesson 2.3</a> costs ${fmt(ridgebackWellCost() / 1e6, 1)} million, peaks within weeks, declines steeply
+        each standard Pinyon well from <a href={lessonHref('oil/2.3')}>Lesson 2.3</a> costs ${fmt(pinyonWellCost() / 1e6, 1)} million, peaks within weeks, declines steeply
         and breaks even at {dollars(WELL_BREAKEVEN)}. What changes is the <K c="price">price</K>. Lesson 2.5 valued everything at one flat price. Here each month
         earns the WTI of the simulated history of Chapter 5 — five years made by the physics of stocks, pipelines and shocks — and after those five years a{' '}
         <K c="price">long-run price</K> of ${LONG_RUN_WTI}, with the cash discounted at 10% as before. Every price is simulated.
       </P>
+      <BusinessCard current="production" />
       <P>
-        In the next demonstration, the first three controls are the plan, and they’re saved as your company’s: how many Ridgeback wells to drill in each of the next
+        In the next demonstration, the first three controls are the plan, and they’re saved as your company’s: how many Pinyon wells to drill in each of the next
         five years, whether to fund the waterflood, and an optional rule that skips a year’s wells when WTI is low as the year begins. The other two change the world
         the prices come from: whether the producer group steadies prices with its spare capacity (<a href={lessonHref('oil/5.1')}>Lesson 5.1</a>), and how often
-        supply outages strike (<a href={lessonHref('oil/5.5')}>Lesson 5.5</a>). The charts show the plan’s production, WTI along our history, and the plan’s value on
-        thirty histories drawn from the same physics with different luck, as in <a href={lessonHref('oil/6.5')}>Lesson 6.5</a> — ours is the dark dot:
+        supply outages strike (<a href={lessonHref('oil/5.5')}>Lesson 5.5</a>). The charts show the plan’s production, WTI along our history (a hollow red dot
+        marks a year the drilling rule skips), and the plan’s value on thirty histories drawn from the same physics with different luck, as in{' '}
+        <a href={lessonHref('oil/6.5')}>Lesson 6.5</a> — ours is the dark dot:
       </P>
 
       <Figure
         name="Oil Production Portfolio"
         onReset={() => {
-          s1.reset();
-          resetBusinessPart('production');
+          if (confirmResetPart('production')) s1.reset();
         }}
       >
         <Legend
           items={[
             { label: 'Northfield on pumps (Northfield Sour)', color: NF_COLOR },
             { label: 'Waterflood’s extra oil (Northfield Sour)', color: FLOOD_COLOR },
-            { label: 'Ridgeback wells (Ridgeback Light)', color: RB_COLOR },
+            { label: 'Pinyon wells (Pinyon Light)', color: RB_COLOR },
           ]}
         />
         <ProductionChart r={r} />
@@ -631,13 +678,12 @@ export default function Lesson() {
           items={[
             { label: <K c="money">capital</K>, value: money(r.capitalTotal) },
             { label: <K c="price">NPV on our history</K>, value: money(r.npv), tone: 'green' },
-            { label: <K tone="violet">middle 80% of histories</K>, value: `${moneyM(quantile(npvs, 0.1))}–${moneyM(quantile(npvs, 0.9)).slice(1)}`, tone: 'violet' },
+            { label: <K tone="violet">middle 80%</K>, value: moneyRange(quantile(npvs, 0.1), quantile(npvs, 0.9)), tone: 'violet' },
             { label: <K tone="orange">year-3 production</K>, value: bpd(y3), tone: 'orange' },
-            { label: 'wells drilled', value: fmt(r.wellsDrilled) },
           ]}
         />
         <Slider
-          label="Ridgeback wells per year"
+          label="Pinyon wells per year"
           tone="orange"
           value={plan.wellsPerYear}
           min={L.wellsPerYear[0]}
@@ -680,25 +726,16 @@ export default function Lesson() {
           onChange={(v) => s1.set({ shocks: Math.round(v * 10) / 10 })}
           display={`${fmt(world.shocks, 1)} a year`}
         />
-        <Caption>
-          {r.wellsDrilled === 0 && !plan.waterflood
-            ? `With no new investment, Northfield’s pumped wells decline toward their economic limit, and the plan is worth ${money(r.npv)}.`
-            : `${fmt(r.wellsDrilled)} Ridgeback wells${skipped.length ? ` (year${skipped.length > 1 ? 's' : ''} ${skipped.join(', ')} skipped by the drilling rule)` : ''}${
-                plan.waterflood ? ' and the waterflood' : ''
-              }: ${money(r.capitalTotal)} of capital for ${money(r.npv)} of value on our history, and between ${money(Math.min(...npvs))} and ${money(
-                Math.max(...npvs),
-              )} across the thirty.`}
-        </Caption>
-        <BusinessCard current="production" />
       </Figure>
 
       <P>
-        The starting plan drills {fmt(f.D.wellsDrilled)} wells and funds the waterflood, for {money(f.D.capitalTotal)} of capital, and on our history it’s worth{' '}
-        {money(f.D.npv)}. In year 3 it produces {bpd(f.y3)}, and {bpd(f.y3flood)} of that is the waterflood’s. The imbalance is Lesson 2.5’s economics at the
-        scale of a company. For its {money(WATERFLOOD.capital)}, the waterflood brings up {fmt(f.floodBbl / 1e6, 1)} million barrels, about{' '}
+        Your plan drills {fmt(pf.r.wellsDrilled)} wells{plan.waterflood ? ' and funds the waterflood' : ' and leaves the waterflood unfunded'}, for{' '}
+        {money(pf.r.capitalTotal)} of capital; on our history it’s worth {money(pf.r.npv)}, and in year 3 it produces {bpd(pf.y3)}. Compare what each investment
+        buys. For its {money(WATERFLOOD.capital)}, the waterflood brings up {fmt(f.floodBbl / 1e6, 1)} million barrels, about{' '}
         {dollars(WATERFLOOD.capital / f.floodBbl)} of capital a barrel; {PRODUCTION_DEFAULTS.wellsPerYear} wells a year cost {money(f.wellsCapital)} for{' '}
-        {fmt(f.wellBbl / 1e6, 1)} million barrels, {dollars(f.wellsCapital / f.wellBbl)} a barrel. Oil in a field already found, piped and staffed is the cheapest
-        oil the company has. The wells add value too — at these prices every one of them pays — but they buy their barrels dearly, and quickly.
+        {fmt(f.wellBbl / 1e6, 1)} million barrels, {dollars(f.wellsCapital / f.wellBbl)} a barrel. In the starting plan, which funds both, the waterflood makes{' '}
+        {bpd(f.startY3flood)} of the {bpd(f.startY3)} of year 3. As <a href={lessonHref('oil/2.5')}>Lesson 2.5</a> found for one field, oil already found, piped
+        and staffed comes cheapest. The wells add value too — at these prices every one of them pays — but they buy their barrels dearly, and quickly.
       </P>
 
       <Challenge
@@ -719,12 +756,12 @@ export default function Lesson() {
 
       <H2>Five years of luck</H2>
       <P>
-        Now look at the thirty dots. With the starting world, the starting plan’s <K c="price">value</K> runs from {money(f.fanMin)} on the unluckiest history to{' '}
-        {money(f.fanMax)} on the luckiest, and the middle 80% lie between {money(f.fanP10)} and {money(f.fanP90)}. Our history is the{' '}
-        {ORDINAL[f.rank - 1] ?? `${f.rank}th-best`} of the thirty: its five years happened to be kind to producers. The <K tone="violet">spread</K> comes from the
-        shocks of Chapter 5. Switch the producer group off and the dots fan out and shift right
+        Now look at the thirty dots. With the starting world, your plan’s <K c="price">value</K> runs from {money(pf.fanMin)} on the unluckiest history to{' '}
+        {money(pf.fanMax)} on the luckiest, and the <K tone="violet">middle 80%</K>, which leaves three histories below it and three above, lies between{' '}
+        {money(pf.fanP10)} and {money(pf.fanP90)}. Our history is the {ordinal(pf.rank)} of the thirty: {kindness}. That range comes from the shocks of Chapter 5.
+        Switch the producer group off and the dots fan out and shift right
         {ff
-          ? `: the middle 80% now runs from ${money(ff.p10)} to ${money(ff.p90)}, one history reaches ${money(ff.max)}, and the median rises from ${money(f.fanP50)} to ${money(ff.p50)}, as WTI over the thirty histories averages ${dollars(ff.averageWti)} instead of ${dollars(f.averageWti)}`
+          ? `: the middle 80% now runs from ${money(ff.p10)} to ${money(ff.p90)}, one history reaches ${money(ff.max)}, and the median rises from ${money(pf.fanP50)} to ${money(ff.p50)}, as WTI over the thirty histories averages ${dollars(ff.averageWti)} instead of ${dollars(f.averageWti)}`
           : ''}
         . Part of that is the shape of the price curve: price rises further when stocks run short than it falls when they build by as much (
         <a href={lessonHref('oil/5.1')}>Lesson 5.1</a>), so wilder swings in stocks lift the average price a producer sells at. Set the outages to zero instead, and
@@ -737,8 +774,9 @@ export default function Lesson() {
         {f.belowDefault === 0
           ? `none of the ${f.startsCount} year-starts in the thirty histories falls below the ${dollars(WELL_BREAKEVEN)} breakeven — the lowest is ${dollars(f.minStart)} — so a rule at the breakeven never binds`
           : `${f.belowDefault} of the ${f.startsCount} year-starts fall below the breakeven`}
-        , and a stricter rule only skips wells that would have paid: at $65, our plan skips year {f.gate65Skipped.join(' and ')}’s wells and gives up{' '}
-        {money(f.gate65Loss)}.{' '}
+        {plan.wellsPerYear > 0 && pf.gate65Skipped.length > 0
+          ? `, and a stricter rule only skips wells that would have paid: at $65, your plan skips year ${pf.gate65Skipped.join(' and ')}’s wells and gives up ${money(pf.gate65Loss)}.`
+          : ', and a stricter rule only skips wells that would have paid.'}{' '}
         {ff
           ? `Even with the group switched off, only ${ff.below} of the ${ff.starts} year-starts fall below the breakeven${
               ff.skipLosses.length > 0 && ff.skipLosses.every((v) => v < 0)
@@ -751,11 +789,10 @@ export default function Lesson() {
 
       <H2>The price after the history</H2>
       <P>
-        The history ends after five years; the plan’s oil doesn’t. {pct(f.lateShare)} of the barrels the starting plan produces over twenty years come after year 5,
-        most of them from the waterflood and Northfield’s old wells, and they’re valued at the long-run assumption of ${LONG_RUN_WTI}. Companies value their fields
-        against an assumed path of prices like this, often called a <b>price deck</b>. In the next demonstration, change the assumption. The green line is the plan’s
-        value on our history; the shaded band holds the middle 80% of the thirty histories at each long-run price; the dashed line is Northfield on pumps alone,
-        with no new investment:
+        The history ends after five years; the plan’s oil doesn’t. {pct(pf.lateShare)} of the barrels your plan produces over twenty years come after year 5, most
+        of them from {pf.lateFrom}, and they’re valued at the long-run assumption of ${LONG_RUN_WTI}. Companies value their fields against an assumed path of
+        prices like this, often called a <b>price deck</b>. In the next demonstration, change the assumption. The green line is the plan’s value on our history;
+        the shaded band holds the middle 80% of the thirty histories at each long-run price; the dashed line is Northfield on pumps alone, with no new investment:
       </P>
 
       <Figure name="Oil Production Portfolio · price deck" scenario={s2}>
@@ -763,9 +800,9 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: <K c="price">NPV on our history</K>, value: money(ourAt), tone: 'green' },
-            { label: 'change from $75', value: `${drop > 0 ? '−' : drop < 0 ? '+' : ''}${money(Math.abs(drop))}` },
-            { label: <K c="price">each $1 of long-run price</K>, value: money(lines[0].slope), tone: 'green' },
-            { label: <K tone="violet">middle 80% of histories</K>, value: money(spreadHere), tone: 'violet' },
+            { label: <K c="price">each $1 of long-run price</K>, value: money1(lines[0].slope), tone: 'green' },
+            { label: <K tone="violet">middle 80% at ${LONG_RUN_WTI}, width</K>, value: money1(spread75), tone: 'violet' },
+            ...(solvedB ? [{ label: `change from $${LONG_RUN_WTI}`, value: `${drop > 0 ? '−' : drop < 0 ? '+' : ''}${money1(Math.abs(drop))}` }] : []),
           ]}
         />
         <Slider
@@ -778,33 +815,38 @@ export default function Lesson() {
           display={`$${lr} a barrel`}
         />
         <Caption>
-          {`At $${lr} after year 5, your plan is worth ${money(ourAt)} on our history, ${money(Math.abs(drop))} ${drop >= 0 ? 'less' : 'more'} than at $${LONG_RUN_WTI}; the thirty histories’ middle 80% is ${money(
-            spread75,
-          )} wide at $${LONG_RUN_WTI}, the same as ${dollars(spread75 / lines[0].slope)} of long-run price.`}
+          {`At $${lr} after year 5, your plan is worth ${money(ourAt)} on our history, and Northfield on pumps alone ${money(npvAt(pumps, lr))}.`}
         </Caption>
       </Figure>
 
       <P>
-        For the starting plan, each dollar of long-run price is worth {money(f.slope)}, and the whole middle 80% of the thirty histories, {money(f.spread)} wide,
-        is worth only {dollars(f.luck)} of it. Five years of simulated shocks move the plan’s value less than a modest change in a number nobody can observe: what
-        oil will fetch in year 12. Notice also the gap between the green line and the dashed one. It is the value our investments add, and it widens as the long-run
-        price rises, because the late barrels of the waterflood and the wells earn that price.
+        For your plan, each dollar of long-run price is worth {money1(pf.slope)}: the barrels after year 5, discounted to today. The middle 80% of the thirty
+        histories, the whole effect of five years of simulated shocks between the unlucky and the lucky, is {money1(pf.spread)} wide at ${LONG_RUN_WTI}. Which
+        moves the plan’s value more?
       </P>
 
       <Challenge
         id="b"
-        question="Lower the long-run price until your plan’s value on our history has fallen by at least the width of the thirty histories’ middle 80% at $75. What’s the highest long-run price, to the nearest dollar, that does it?"
+        question={`Estimate first, from those two readouts: how many dollars of long-run price is the middle 80%’s width worth? Then check it: set the highest whole-dollar long-run price at which your plan’s value on our history has fallen by at least that width from its value at $${LONG_RUN_WTI}.`}
         solved={solvedB}
-        status={`At $${lr}, the plan’s value on our history is ${money(Math.max(0, drop))} below its value at $${LONG_RUN_WTI}; the middle 80% at $${LONG_RUN_WTI} is ${money(spread75)} wide.`}
-        success={`Solved: $${lr}. Five years of simulated luck are worth ${dollars(spread75 / lines[0].slope)} of long-run price to this plan — the long-run assumption carries more of its value than the history does.`}
+        status={`Make your estimate before you move the slider. At $${lr}, your plan is worth ${money(ourAt)} on our history.`}
+        success={`Solved: $${lr}. The middle 80% is worth ${dollars(spread75 / lines[0].slope)} of long-run price to this plan: at $${lr} its value has fallen ${money1(drop)}, at $${lr + 1} only ${money1(drop - lines[0].slope)}. The long-run assumption can move the plan’s value more than the history’s luck does.`}
       />
 
       <P>
-        Our plan makes two crudes. Northfield and its waterflood produce Northfield Sour, {bpd(f.y3sour)} in year 3 under the starting plan; the Ridgeback wells
-        produce Ridgeback Light, {bpd(f.y3light)}. All of it reaches Kessler, {fmt(KESSLER_CALDER.lengthMiles)} miles from the coast. At the coast, the Calder refinery
-        runs {fmt(CALDER.capacity.cdu * 1000)} barrels a day, {CALDER.capacity.cdu * 1000 > 2 * f.peak ? 'more than twice' : 'well over'} what our fields make even at
-        their peak, and buys most of its crude from others. The <a href={lessonHref('oil/7.2')}>next lesson</a> turns to the refinery: what to build there, and what
-        it would earn.
+        The whole middle 80% is worth only {dollars(pf.luck)} of long-run price. Five years of simulated shocks move the plan’s value less than a modest change in a
+        number nobody can observe: what oil will fetch in year 12.
+        {invests
+          ? ' Notice also the gap between the green line and the dashed one. It is the value our investments add, and it widens as the long-run price rises, because the late barrels of the waterflood and the wells earn that price.'
+          : ''}
+      </P>
+
+      <P>
+        Our plan makes two crudes. Northfield{plan.waterflood ? ' and its waterflood produce' : ' produces'} Northfield Sour, {bpd(pf.y3sour)} in year 3 under your
+        plan; the Pinyon wells produce Pinyon Light, {bpd(pf.y3light)}. All of it reaches Kessler, {fmt(KESSLER_CORRAN.lengthMiles)} miles from the coast. At
+        the coast, the Corran refinery runs {fmt(CORRAN.capacity.cdu * 1000)} barrels a day, {CORRAN.capacity.cdu * 1000 > 2 * pf.peak ? 'more than twice' : 'well over'}{' '}
+        what our fields make even at their peak, and buys most of its crude from others. The <a href={lessonHref('oil/7.2')}>next lesson</a> turns to the refinery:
+        what to build there, and what it would earn.
       </P>
       <P>
         Before moving on, return to <FigRef to="Oil Production Portfolio">the first demonstration</FigRef> and leave the plan the way you want your company to run

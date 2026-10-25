@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import {
+  Caption,
   Challenge,
+  Checkbox,
   DataTable,
   Eq,
   FigRef,
@@ -8,7 +10,6 @@ import {
   Frac,
   GRAPHIC,
   H2,
-  K,
   Legend,
   LessonPage,
   Op,
@@ -25,7 +26,8 @@ import {
   useScenario,
 } from '../../../framework';
 import { fleetRequirement, type Requirement } from '../../../engines/shipping/market';
-import { seaRoute } from '../../../engines/shipping/network';
+import { chokepointName, seaRoute } from '../../../engines/shipping/network';
+import type { CycleEvent } from '../../../engines/shipping/cycle';
 import { PLACE } from '../../../model/shipping/geo';
 import { MARKET_CLASSES, OFF_HIRE_DAYS, routesOf, type ClassId } from '../../../model/shipping/trades';
 import { HISTORY_EVENTS, HISTORY_MONTHS, standardHistory } from '../../../model/shipping/history';
@@ -51,8 +53,9 @@ const ROUTE_COLOR: Record<string, string> = {
   'C-NEW-QIN': GRAPHIC.gold,
   'C-RBY-PAR': GRAPHIC.teal,
 };
-const SLIDER_MAX: Record<string, number> = { 'C-PHE-QIN': 1200, 'C-TUB-QIN': 600, 'C-TUB-ROT': 100, 'C-NEW-QIN': 100, 'C-RBY-PAR': 60 };
-const SLIDER_STEP: Record<string, number> = { 'C-PHE-QIN': 10, 'C-TUB-QIN': 10, 'C-TUB-ROT': 5, 'C-NEW-QIN': 5, 'C-RBY-PAR': 5 };
+/** Only the trades into Qingdao get sliders; the two others hold their starting volumes. */
+const SLIDER_MAX: Record<string, number> = { 'C-PHE-QIN': 1200, 'C-TUB-QIN': 600, 'C-NEW-QIN': 100 };
+const SLIDER_STEP: Record<string, number> = { 'C-PHE-QIN': 10, 'C-TUB-QIN': 10, 'C-NEW-QIN': 5 };
 const POINTS = Object.fromEntries(CAPE_ROUTES.map((r) => [r.id, seaRoute(r.from, r.to)!.points]));
 
 const placeName = (id: string) => PLACE[id].name;
@@ -71,6 +74,11 @@ export function capeNeeds(volumes: Record<string, number>): Requirement {
 
 const BASE = capeNeeds(BASE_MT);
 
+/** The demonstration's volumes: the reader's three trades into Qingdao, with Rotterdam's and Paradip's at their starting volumes. */
+export function flowVolumes(state: Record<string, number>): Record<string, number> {
+  return { ...BASE_MT, ...Object.fromEntries(QIN_ROUTES.map((id) => [id, state[id] ?? BASE_MT[id]])) };
+}
+
 /**
  * The challenge: Qingdao still receives its 890 million tonnes, the trades to Rotterdam and Paradip are
  * untouched, and the Capesize trades need at least 50 more ships than at the start.
@@ -85,6 +93,8 @@ export function sourcingSolved(volumes: Record<string, number>): boolean {
 // Numbers the prose quotes.
 const ROUTE_BASE = Object.fromEntries(BASE.routes.map((r) => [r.route.id, r]));
 const HAUL_RATIO = ROUTE_BASE['C-TUB-QIN'].nm / ROUTE_BASE['C-PHE-QIN'].nm;
+const TUB_T_SHARE = (ROUTE_BASE['C-TUB-QIN'].voyages * MARKET_CLASSES.cape.cargo) / BASE.tonnes;
+const TUB_TM_SHARE = ROUTE_BASE['C-TUB-QIN'].tonMiles / BASE.tonMiles;
 const shipsPer10 = (id: string) => capeNeeds({ ...BASE_MT, [id]: BASE_MT[id] + 10 }).ships - BASE.ships;
 const PER10_PHE = shipsPer10('C-PHE-QIN');
 const PER10_TUB = shipsPer10('C-TUB-QIN');
@@ -126,7 +136,7 @@ const HIST: Record<ClassId, { actual: MonthNeeds[]; without: MonthNeeds[] }> = {
 };
 
 /** An event's effect on a class: tonnes, tonne-miles and ships, against the same months without it. */
-function eventEffect(id: ClassId, i: number) {
+export function eventEffect(id: ClassId, i: number): { tonnes: number; tonMiles: number; ships: number } {
   const ev = HISTORY_EVENTS[i];
   const sum = (rows: MonthNeeds[], k: keyof MonthNeeds) => rows.slice(ev.from, ev.to).reduce((s, r) => s + r[k], 0);
   const a = HIST[id].actual;
@@ -147,6 +157,16 @@ const PANAMA_KMAX = eventEffect('kmax', PANAMA);
 const CONG_CAPE = eventEffect('cape', CONGESTION);
 const CONG_KMAX = eventEffect('kmax', CONGESTION);
 const SHORT_LABEL = ['China ports', 'Brazil ore', 'Panama'];
+const EFFECTS: Record<ClassId, Array<{ tonnes: number; tonMiles: number; ships: number }>> = {
+  cape: HISTORY_EVENTS.map((_, i) => eventEffect('cape', i)),
+  kmax: HISTORY_EVENTS.map((_, i) => eventEffect('kmax', i)),
+};
+/** The history models the Panama drought as closing the canal outright, so this lesson names it that way. */
+const eventName = (e: CycleEvent) => (e.closed ? `Drought closes the ${chokepointName(e.closed[0])}` : e.label);
+const eventYear = (e: CycleEvent) => Math.floor(e.from / 12) + 1;
+const PANAMA_MONTHS = HISTORY_EVENTS[PANAMA].to - HISTORY_EVENTS[PANAMA].from;
+const changePct = (x: number) => (Math.abs(x) < 0.0005 ? 'no change' : `${x > 0 ? '+' : '−'}${pct(Math.abs(x), 1)}`);
+const changeShips = (x: number) => (Math.abs(x) < 0.5 ? 'no change' : `${x > 0 ? '+' : '−'}${fmt(Math.abs(x))}`);
 
 function yearAvg(rows: MonthNeeds[], y: number, k: keyof MonthNeeds) {
   return rows.slice(y * 12, y * 12 + 12).reduce((s, r) => s + r[k], 0) / 12;
@@ -155,11 +175,10 @@ const CAPE_GROWTH = yearAvg(HIST.cape.actual, 11, 'tonnes') / yearAvg(HIST.cape.
 
 export default function Lesson() {
   const tf = useScenario('trade-flows', { ...BASE_MT });
-  const vols = tf.state as Record<string, number>;
+  const vols = useMemo(() => flowVolumes(tf.state as Record<string, number>), [tf.state]);
   const need = useMemo(() => capeNeeds(vols), [vols]);
   const extra = need.ships - BASE.ships;
   const qin = QIN_ROUTES.reduce((s, id) => s + vols[id], 0);
-  const othersChanged = OTHER_ROUTES.filter((id) => vols[id] !== BASE_MT[id]);
   const solved = sourcingSolved(vols);
   const totalT = need.tonnes;
   const rows = need.routes.map((r) => ({
@@ -172,26 +191,34 @@ export default function Lesson() {
   }));
   const seaL = need.ladenMiles / (24 * LADEN_KN);
   const seaB = need.ballastMiles / (24 * BALLAST_KN);
+  const short = need.ships > FLEET;
 
-  const hs = useScenario('history', { cls: 'cape' as ClassId, year: 6 });
+  const hs = useScenario('history', { cls: 'cape' as ClassId, without: false });
   const id = hs.state.cls;
   const series = useMemo(() => {
     const a = HIST[id].actual;
+    const w = HIST[id].without;
+    // Both histories share Year 1 (the first disruption starts in Year 4), so one base indexes both.
     const y1t = yearAvg(a, 0, 'tonnes');
     const y1m = yearAvg(a, 0, 'tonMiles');
     const xs = a.map((_, t) => t / 12);
     const tn = a.map((r) => (100 * r.tonnes) / y1t);
     const tm = a.map((r) => (100 * r.tonMiles) / y1m);
-    const lo = Math.floor(Math.min(...tn, ...tm) / 20) * 20;
-    const hi = Math.ceil(Math.max(...tn, ...tm) / 20) * 20;
-    return { xs, tn, tm, lo, hi, y1t, y1m };
+    // The history without the disruptions differs only during them: draw it there, joined to the solid lines at each end.
+    const dashed = HISTORY_EVENTS.flatMap((e) => {
+      const ts = Array.from({ length: e.to - e.from + 2 }, (_, k) => e.from - 1 + k).filter((t) => t >= 0 && t < w.length);
+      return [
+        { xs: ts.map((t) => t / 12), ys: ts.map((t) => (100 * w[t].tonnes) / y1t), color: GRAPHIC.orange, width: 1.6, dash: '5 4' },
+        { xs: ts.map((t) => t / 12), ys: ts.map((t) => (100 * w[t].tonMiles) / y1m), color: GRAPHIC.blue, width: 1.6, dash: '5 4' },
+      ];
+    });
+    const all = [...tn, ...tm, ...dashed.flatMap((d) => d.ys)];
+    const lo = Math.floor(Math.min(...all) / 20) * 20;
+    const hi = Math.ceil(Math.max(...all) / 20) * 20;
+    return { xs, tn, tm, dashed, lo, hi };
   }, [id]);
-  const y = hs.state.year - 1;
-  const yt = (100 * yearAvg(HIST[id].actual, y, 'tonnes')) / series.y1t;
-  const ym = (100 * yearAvg(HIST[id].actual, y, 'tonMiles')) / series.y1m;
-  const ys = yearAvg(HIST[id].actual, y, 'ships');
   const className = MARKET_CLASSES[id].name;
-  const yearEvents = HISTORY_EVENTS.filter((e) => e.from < (y + 1) * 12 && e.to > y * 12);
+  const effectRows = HISTORY_EVENTS.map((e, i) => ({ i, e, ...EFFECTS[id][i] }));
 
   return (
     <LessonPage id="shipping/3.5">
@@ -203,14 +230,15 @@ export default function Lesson() {
       </P>
       <P>
         A tonne of iron ore moved from Western Australia to China and a tonne moved from Brazil to China are the same tonne to the steel mill. To a shipowner they
-        are very different, because one occupies a ship almost three times as long as the other. Shipping counts its work in{' '}
-        <K tone="orange">tonne-miles</K>: one tonne carried one nautical mile. Tonnes times distance, summed over every trade, is the demand that ships have to
-        meet.
+        are very different. <a href={lessonHref('shipping/3.1')}>Lesson 3.1</a> found that the Brazilian tonne travels almost three times as far, so Brazil’s ore
+        to China is {pct(TUB_T_SHARE)} of the Capesize tonnes but {pct(TUB_TM_SHARE)} of the tonne-miles. Tonnes times distance, summed over every trade, is
+        the work the fleet has to do. This lesson turns that work into a number of ships.
       </P>
       <P>
         The course’s Capesize world has five trades, carrying {mt(BASE.tonnes / 1e6)} a year between them — round, illustrative volumes of a realistic size, not
-        market data. In the next demonstration each trade’s line on the map is drawn as thick as its volume. Change the volumes and watch the tonnes, the
-        tonne-miles and the number of Capesizes it takes to carry them all, sailing at {LADEN_KN} knots laden and {BALLAST_KN} in ballast:
+        market data. In the next demonstration each trade’s line on the map is drawn as thick as its volume. Change the volumes of the three trades into
+        Qingdao — the two to Rotterdam and Paradip stay as they are — and watch the tonnes, the tonne-miles and the number of Capesizes it takes to carry them
+        all, sailing at {LADEN_KN} knots laden and {BALLAST_KN} in ballast:
       </P>
 
       <Figure name="Global Trade Flow Model" scenario={tf}>
@@ -228,11 +256,9 @@ export default function Lesson() {
             { label: 'cargo a year', value: mt(need.tonnes / 1e6), tone: 'orange' },
             { label: 'tonne-miles a year', value: `${fmt(need.tonMiles)} billion`, tone: 'orange' },
             { label: 'average haul', value: need.tonnes > 0 ? nm((need.tonMiles * 1e9) / need.tonnes) : '—', tone: 'blue' },
-            { label: 'ballast miles per laden mile', value: fmt(need.ballastRatio, 2), tone: 'blue' },
-            { label: `Capesizes needed, of a fleet of ${fmt(FLEET)}`, value: fmt(need.ships), tone: need.ships > FLEET ? 'red' : undefined },
           ]}
         />
-        {CAPE_ROUTES.map((r) => (
+        {CAPE_ROUTES.filter((r) => QIN_ROUTES.includes(r.id)).map((r) => (
           <Slider
             key={r.id}
             label={
@@ -277,22 +303,24 @@ export default function Lesson() {
             bottom={<span>{EARNING_DAYS}</span>}
           />
           <Op>=</Op>
-          <span>{fmt(need.ships)}</span>
+          <Tn tone={short ? 'red' : 'ink'}>{fmt(need.ships)} ships</Tn>
         </Eq>
+        <Caption>
+          {short
+            ? `That is more than the ${fmt(FLEET)} Capesizes in the fleet: at these speeds, these trades can’t all be carried.`
+            : `The fleet has ${fmt(FLEET)} Capesizes, ${fmt(FLEET - need.ships)} more than these trades need.`}
+        </Caption>
       </Figure>
 
       <P>
-        At the starting volumes, Port Hedland to Qingdao carries {pct(ROUTE_BASE['C-PHE-QIN'].voyages * MARKET_CLASSES.cape.cargo / BASE.tonnes)} of the tonnes but
-        only {pct(ROUTE_BASE['C-PHE-QIN'].tonMiles / BASE.tonMiles)} of the tonne-miles. Tubarão to Qingdao carries{' '}
-        {pct(ROUTE_BASE['C-TUB-QIN'].voyages * MARKET_CLASSES.cape.cargo / BASE.tonnes)} of the tonnes and{' '}
-        {pct(ROUTE_BASE['C-TUB-QIN'].tonMiles / BASE.tonMiles)} of the tonne-miles: it is the biggest trade in the model, measured the way ships feel it. Its
-        haul, {nm(ROUTE_BASE['C-TUB-QIN'].nm)} round the Cape of Good Hope, is {fmt(HAUL_RATIO, 1)} times the {nm(ROUTE_BASE['C-PHE-QIN'].nm)} from Port Hedland.
-        Averaged over every tonne, the Capesize trades carry their cargo {nm((BASE.tonMiles * 1e9) / BASE.tonnes)}.
+        At the starting volumes, the table’s last two columns are Lesson 3.1’s finding again: measured in tonne-miles, the way ships feel it, Tubarão to Qingdao
+        is the biggest trade in the model. Averaged over every tonne, the Capesize trades carry their cargo {nm((BASE.tonMiles * 1e9) / BASE.tonnes)}.
       </P>
       <P>
-        Now add ten million tonnes to each trade in turn and watch the ships. Ten more from Port Hedland need {fmt(PER10_PHE, 1)} more Capesizes; ten more from
-        Tubarão need {fmt(PER10_TUB, 1)}, {fmt(PER10_TUB / PER10_PHE, 1)} times as many. That is a little less than the ratio of the distances, because every
-        voyage also spends days in port loading and discharging, however far it sails.
+        Now add ten million tonnes to Port Hedland’s ore, then to Tubarão’s instead, and watch the ships. Ten more from Port Hedland need {fmt(PER10_PHE, 1)} more Capesizes; ten more from
+        Tubarão need {fmt(PER10_TUB, 1)}, {fmt(PER10_TUB / PER10_PHE, 1)} times as many. The haul from Tubarão, {nm(ROUTE_BASE['C-TUB-QIN'].nm)} round the Cape of
+        Good Hope, is {fmt(HAUL_RATIO, 1)} times the {nm(ROUTE_BASE['C-PHE-QIN'].nm)} from Port Hedland; the ships needed grow a little less than that, because
+        every voyage also spends days in port loading and discharging, however far it sails.
       </P>
 
       <H2>What a ship’s year buys</H2>
@@ -312,22 +340,20 @@ export default function Lesson() {
 
       <H2>Where China buys its ore</H2>
       <P>
-        Qingdao takes {mt(QIN_TONNES)} a year from three sources. Suppose its buyers change where that ore comes from, but not how much they buy. Take it all
-        from Western Australia and the Capesize trades need {fmt(ALL_AUS)} ships; take it all from Brazil and they need {fmt(ALL_BRZ)}, far more than the whole
-        fleet. Every ten million tonnes switched from Port Hedland to Tubarão ties up {fmt(SHIFT_PER10, 1)} more Capesizes. For shipowners, where a country buys
+        Qingdao takes {mt(QIN_TONNES)} a year from three sources: iron ore from Port Hedland and Tubarão, and coal from Newcastle. Suppose its buyers change where
+        that cargo comes from, but not how much they buy. Take it all from Western Australia and the Capesize trades need {fmt(ALL_AUS)} ships; take it all
+        from Brazil and they need {fmt(ALL_BRZ)}, far more than the whole fleet. Every ten million tonnes switched from Port Hedland to Tubarão ties up {fmt(SHIFT_PER10, 1)} more Capesizes. For shipowners, where a country buys
         its raw materials matters as much as how much it buys.
       </P>
 
       <Challenge
         id="a"
-        question={`Keep the ${mt(QIN_TONNES)} arriving in Qingdao, and leave the trades to Rotterdam and Paradip as they are, but change where Qingdao’s ore and coal come from so that the trades need at least ${EXTRA_SHIPS} more Capesizes.`}
+        question={`Keep the ${mt(QIN_TONNES)} arriving in Qingdao, but change where its ore and coal come from so that the trades need at least ${EXTRA_SHIPS} more Capesizes. Estimate first how many million tonnes have to move.`}
         solved={solved}
         status={
-          othersChanged.length
-            ? `Set ${othersChanged.map(routeName).join(' and ')} back to ${othersChanged.map((id) => mt(BASE_MT[id])).join(' and ')}.`
-            : Math.abs(qin - QIN_TONNES) > 1e-6
-              ? `Qingdao now receives ${mt(qin)}; it should receive ${mt(QIN_TONNES)}.`
-              : `Qingdao receives ${mt(qin)}, and the trades need ${fmt(extra, 1)} more ships than at the start.`
+          Math.abs(qin - QIN_TONNES) > 1e-6
+            ? `Qingdao now receives ${mt(qin)}; it should receive ${mt(QIN_TONNES)}.`
+            : `Qingdao receives ${mt(qin)}, and the trades need ${fmt(extra, 1)} more ships than at the start.`
         }
         success={`Solved. The trades now need ${fmt(extra, 1)} more Capesizes for the same ${mt(QIN_TONNES)} into Qingdao. Moving about ${fmt(MIN_SHIFT)} million tonnes from Port Hedland to Tubarão is enough on its own: each tonne switched sails ${fmt(HAUL_RATIO, 1)} times as far laden, and as far again back in ballast.`}
       />
@@ -336,7 +362,8 @@ export default function Lesson() {
       <P>
         Demand for ships changes with both tonnes and distance. In the next demonstration, the twelve simulated years of <a href={lessonHref('shipping/2.5')}>Lesson
         2.5</a> are turned into trade: each month’s cargo volumes, with their seasons, their growth and shocks, and the three disruptions written into the
-        history. Both lines are indexed to their Year 1 average, so they start together at 100. Choose a size class, and step through the years:
+        history. Both lines are indexed to their Year 1 average, so they start together at 100. Choose a size class, and turn on the dashed lines to compare
+        each disruption with the same months as they would have run without it:
       </P>
 
       <Figure name="Global Trade Flow Model · history" scenario={hs}>
@@ -353,14 +380,18 @@ export default function Lesson() {
           items={[
             { label: 'Tonnes', color: GRAPHIC.orange, kind: 'line' },
             { label: 'Tonne-miles', color: GRAPHIC.blue, kind: 'line' },
+            { label: 'Without the disruption', color: GRAPHIC.gray, kind: 'line', dashed: true },
             { label: 'Disruptions', color: tint(GRAPHIC.red, 0.3) },
           ]}
         />
         <XYChart
-          ariaLabel={`${className} tonnes and tonne-miles over twelve simulated years, indexed to Year 1 = 100. In Year ${hs.state.year} tonnes average ${fmt(yt)} and tonne-miles ${fmt(ym)}.`}
+          ariaLabel={`${className} tonnes and tonne-miles over twelve simulated years, indexed to Year 1 = 100${hs.state.without ? ', with dashed lines for the same months without each disruption' : ''}. ${effectRows
+            .map((r) => `${eventName(r.e)}, Year ${eventYear(r.e)}: tonnes ${changePct(r.tonnes)}, tonne-miles ${changePct(r.tonMiles)}, ships needed ${changeShips(r.ships)}`)
+            .join('; ')}.`}
           series={[
             { xs: series.xs, ys: series.tn, color: GRAPHIC.orange, width: 2 },
             { xs: series.xs, ys: series.tm, color: GRAPHIC.blue, width: 1.8 },
+            ...(hs.state.without ? series.dashed : []),
           ]}
           xMin={0}
           xMax={HISTORY_MONTHS / 12}
@@ -371,34 +402,37 @@ export default function Lesson() {
           yFormat={(v) => fmt(v)}
           yLabel="Index, Year 1 = 100"
           height={230}
-          bands={[
-            { from: y, to: y + 1, color: tint(GRAPHIC.gray, 0.12) },
-            ...HISTORY_EVENTS.map((e, i) => ({ from: e.from / 12, to: e.to / 12, color: tint(GRAPHIC.red, 0.3), label: SHORT_LABEL[i] })),
+          bands={HISTORY_EVENTS.map((e, i) => ({ from: e.from / 12, to: e.to / 12, color: tint(GRAPHIC.red, 0.3), label: SHORT_LABEL[i] }))}
+        />
+        <Checkbox label="Show the same months without the disruptions (dashed)" checked={hs.state.without} onChange={(v) => hs.set({ without: v })} />
+        <DataTable
+          caption={`Each disruption’s effect on the ${className} trades, against the same months without it`}
+          rows={effectRows}
+          rowKey={(r) => String(r.i)}
+          columns={[
+            { label: 'Disruption', cell: (r) => eventName(r.e) },
+            { label: 'When', cell: (r) => `Year ${eventYear(r.e)}`, align: 'left' },
+            { label: 'Tonnes', cell: (r) => changePct(r.tonnes), align: 'right' },
+            { label: 'Tonne-miles', cell: (r) => changePct(r.tonMiles), align: 'right' },
+            { label: 'Ships needed', cell: (r) => changeShips(r.ships), align: 'right' },
           ]}
         />
-        <Readouts
-          items={[
-            { label: `tonnes in Year ${hs.state.year}`, value: fmt(yt), tone: 'orange' },
-            { label: 'tonne-miles', value: fmt(ym), tone: 'blue' },
-            { label: `${className}s needed at ${LADEN_KN} and ${BALLAST_KN} knots`, value: fmt(ys) },
-            { label: 'disruptions that year', value: yearEvents.length ? yearEvents.map((e) => e.label).join('; ') : 'none' },
-          ]}
-        />
-        <Slider label="Year" tone="teal" value={hs.state.year} min={1} max={HISTORY_MONTHS / 12} onChange={(v) => hs.set({ year: v })} display={`Year ${hs.state.year}`} />
       </Figure>
 
       <P>
         Most of the time the two lines move together. Growth and the history’s demand shocks scale every trade at once, so tonnes and tonne-miles rise and fall
         in step: by Year 12 Capesize cargoes are {pct(CAPE_GROWTH)} above Year 1, and so is the work they make. The lines part only when the mix changes. When
-        Brazil’s ore mines are disrupted in Year 6, Capesize tonnes fall {pct(-BRAZIL_CAPE.tonnes, 1)} below what the same months would otherwise have carried,
-        but tonne-miles fall {pct(-BRAZIL_CAPE.tonMiles, 1)}, because it is the longest haul that stops. The trades need {fmt(-BRAZIL_CAPE.ships)} fewer
-        Capesizes while it lasts.
+        Brazil’s ore mines are disrupted in Year {eventYear(HISTORY_EVENTS[BRAZIL])}, Capesize tonnes fall {pct(-BRAZIL_CAPE.tonnes, 1)} below the dashed line,
+        what the same months would otherwise have carried, but tonne-miles fall {pct(-BRAZIL_CAPE.tonMiles, 1)}, because it is the longest haul that stops.
+        The trades need {fmt(-BRAZIL_CAPE.ships)} fewer Capesizes while it lasts.
       </P>
       <P>
-        Switch to Kamsarmaxes and find the Panama restriction in Year 9. Not a tonne of cargo is lost: grain from the US Gulf still reaches China, the long way
+        Switch to Kamsarmaxes and find the Panama Canal in Year {eventYear(HISTORY_EVENTS[PANAMA])}. Our history’s drought closes the canal outright for{' '}
+        {fmt(PANAMA_MONTHS)} months, harsher than the real drought of 2023, which, like the queue of <a href={lessonHref('shipping/3.3')}>Lesson 3.3</a>, cut
+        the number of ships the canal passed without stopping them all. Not a tonne of cargo is lost: grain from the US Gulf still reaches China, the long way
         round through Suez. Tonnes stay where they were, but tonne-miles rise {pct(PANAMA_KMAX.tonMiles, 1)}, and the trades need {fmt(PANAMA_KMAX.ships)} more
-        ships. The congestion in China in Year 4 changes neither line at all, yet it ties up {fmt(CONG_CAPE.ships)} Capesizes and {fmt(CONG_KMAX.ships)}{' '}
-        Kamsarmaxes waiting at anchor: tonne-miles measure the work, and port days come on top. In{' '}
+        ships. The congestion in China in Year {eventYear(HISTORY_EVENTS[CONGESTION])} changes neither line at all, yet it ties up {fmt(CONG_CAPE.ships)}{' '}
+        Capesizes and {fmt(CONG_KMAX.ships)} Kamsarmaxes waiting at anchor: tonne-miles measure the work, and port days come on top. In{' '}
         <FigRef to="Global Trade Flow Model">the first demonstration</FigRef>, that is the port-days term of the equation.
       </P>
       <P>

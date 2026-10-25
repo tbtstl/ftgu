@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Caption, Challenge, FigRef, Figure, GRAPHIC, H2, K, Legend, LessonPage, P, Readouts, Slider, fmt, lessonHref, usd, useScenario } from '../../../framework';
 import { DEFAULT_STORAGE, expectedBuffer, monthlyCarry, planStorage, priceStrip, simulateBuffer, type StorageParams } from '../../../engines/oil/storage';
 import { marginPerBarrel, planRefinery } from '../../../engines/oil/refinery';
-import { CALDER } from '../../../model/oil/refinery';
+import { CORRAN } from '../../../model/oil/refinery';
 import { VESSELS } from '../../../model/oil/logistics';
 import { XYChart } from '../shared/charts';
 
@@ -30,6 +30,11 @@ export interface TerminalState {
 
 export const TERMINAL_DEFAULTS: TerminalState = { slope: 0.6, seasonal: 0, fee: DEFAULT_STORAGE.fee, rate: DEFAULT_STORAGE.rate * 100, month: 4 };
 
+/** Challenge a's first estimate: the financing rate (% a year) at which a month's carry on a $75 barrel equals the price rise. */
+export function carryParityRate(slope = CHALLENGE_SLOPE, fee = DEFAULT_STORAGE.fee): number {
+  return ((slope - fee) * 12 * 100) / STRIP_START;
+}
+
 function paramsOf(st: Pick<TerminalState, 'fee' | 'rate'>): StorageParams {
   return { ...DEFAULT_STORAGE, fee: st.fee, rate: st.rate / 100 };
 }
@@ -51,8 +56,8 @@ export function highestRateSolved(st: Pick<TerminalState, 'slope' | 'seasonal' |
 // ---------------------------------------------------------------------------
 // Figure 2: the refinery's buffer stock.
 
-/** Calder's crude runs, b/d, delivered by cargoes of one week's runs. */
-export const RUNS = CALDER.capacity.cdu * 1000;
+/** Corran's crude runs, b/d, delivered by cargoes of one week's runs. */
+export const RUNS = CORRAN.capacity.cdu * 1000;
 export const BUFFER_PARAMS = { runs: RUNS, cargo: RUNS * 7, interval: 7, maxDelay: 4, storms: 3 };
 export const BUFFER_STEP = 150000;
 export const BUFFER_MAX = 2400000;
@@ -172,7 +177,8 @@ function TankFarm({ inventory, capacity, month }: { inventory: number; capacity:
 
 export default function Lesson() {
   const s1 = useScenario<TerminalState>('terminal', TERMINAL_DEFAULTS);
-  const st = s1.state;
+  // The storage fee stays at the terminal's standard rate; the figure varies the financing rate instead.
+  const st = { ...s1.state, fee: DEFAULT_STORAGE.fee };
   const prices = useMemo(() => priceStrip(STRIP_START, st.slope, st.seasonal), [st.slope, st.seasonal]);
   const { slope, seasonal, fee, rate } = st;
   const plan = useMemo(() => terminalPlan({ slope, seasonal, fee, rate }), [slope, seasonal, fee, rate]);
@@ -187,7 +193,7 @@ export default function Lesson() {
   // Reference runs quoted in the prose.
   const ref = useMemo(() => {
     const at = (slope: number, seasonal = 0, rate = 6) => terminalPlan({ slope, seasonal, fee: DEFAULT_STORAGE.fee, rate });
-    return { s080: at(0.8), s085: at(0.85), s100: at(1.0), seas1: at(0, 1), seas2: at(0, 2), seas3: at(0, 3), r85: at(1.0, 0, 8.5) };
+    return { s080: at(0.8), s082: at(0.82), s085: at(0.85), s100: at(1.0), seas1: at(0, 1), seas2: at(0, 2), seas3: at(0, 3), r85: at(1.0, 0, 8.5) };
   }, []);
 
   const s2 = useScenario('buffer', { buffer: 0 });
@@ -219,15 +225,16 @@ export default function Lesson() {
       <P>
         There are two reasons to fill those tanks. One is to keep things running, which we’ll come to. The other is to make money from time. Suppose buyers will
         agree today on prices for oil delivered in each of the next twelve months — <b>forward prices</b>. (Where those prices come from is the subject of{' '}
-        <a href={lessonHref('oil/5.4')}>Lesson 5.4</a>.) If oil for delivery in a year sells for more than oil today, a terminal can buy now, store, and sell
-        forward, locking in the difference. This is called <b>cash and carry</b>. What it costs is the <K c="price">carry</K>: the storage fee, plus the interest on
+        <a href={lessonHref('oil/5.4')}>Lesson 5.4</a>.) When later months are dearer than nearer ones, the market is said to be in <b>contango</b>; when they are
+        cheaper, it is in <b>backwardation</b>. In contango, a terminal can buy oil now, store it, and sell it forward for delivery later, locking in the
+        difference. This is called <b>cash and carry</b>. What it costs is the <K c="price">carry</K>: the storage fee, plus the interest on
         the money tied up in the oil. At {usd(STRIP_START)} a barrel, a {usd(DEFAULT_STORAGE.fee, 2)} monthly fee and {fmt(DEFAULT_STORAGE.rate * 100)}% interest, that
         comes to {usd(monthlyCarry(STRIP_START), 3)} a barrel a month, plus {usd(DEFAULT_STORAGE.handling, 2)} to pump each barrel in and again to pump it out.
       </P>
       <P>
         In the next demonstration, a linear program plans a year at the terminal: how much to buy, hold and sell each month against the forward prices, within its
         working capacity and the {mbbl(DEFAULT_STORAGE.throughput, 0)} it can pump in or out in a month. The prices are simulated. Set how fast they rise from month to
-        month, add a seasonal swing, and change the costs of carrying; click the inventory chart to see any month in the tanks:
+        month, add a seasonal swing, and set the financing rate; click the inventory chart to see any month in the tanks:
       </P>
 
       <Figure name="Oil Storage Terminal" scenario={s1}>
@@ -287,21 +294,22 @@ export default function Lesson() {
         />
         <Slider label="Price rise per month" tone="green" value={st.slope} min={-0.5} max={2} step={0.05} onChange={(v) => s1.set({ slope: Math.round(v * 100) / 100 })} display={`${st.slope < 0 ? '−' : ''}${usd(Math.abs(st.slope), 2)}`} />
         <Slider label="Seasonal swing" tone="green" value={st.seasonal} min={0} max={5} step={0.5} onChange={(v) => s1.set({ seasonal: v })} display={`±${usd(st.seasonal, 2)}`} />
-        <Slider label="Storage fee per month" tone="green" value={st.fee} min={0.1} max={1} step={0.05} onChange={(v) => s1.set({ fee: Math.round(v * 100) / 100 })} display={usd(st.fee, 2)} />
         <Slider label="Financing rate" tone="green" value={st.rate} min={0} max={15} step={RATE_STEP} onChange={(v) => s1.set({ rate: v })} display={`${fmt(st.rate, 1)}% a year`} />
         <Caption>
           {peak < 1000
             ? `The prices don’t rise fast enough to pay for carrying oil, so the terminal stores nothing.`
-            : `The terminal buys in ${plan.buy.filter((b) => b > 1000).length} months, holds up to ${mbbl(peak)}, and sells in ${plan.sell.filter((b) => b > 1000).length}: storage fees of ${millions(plan.fees)}, interest of ${millions(plan.financing)} and handling of ${millions(plan.handlingCost)}.`}
+            : `The terminal buys in ${plan.buy.filter((b) => b > 1000).length} months and sells in ${plan.sell.filter((b) => b > 1000).length}, paying storage fees of ${millions(plan.fees)}, interest of ${millions(plan.financing)} and handling of ${millions(plan.handlingCost)}.`}
         </Caption>
       </Figure>
 
       <P>
         At a rise of 60 cents a month the plan stores nothing, and it still stores nothing at 80 cents: each month’s rise is about the {usd(monthlyCarry(STRIP_START), 3)}{' '}
-        it costs to hold the barrel, and the handling eats the rest. Somewhere between 80 and 85 cents the answer flips completely. At 85 cents the terminal fills
-        all {mbbl(DEFAULT_STORAGE.capacity, 0)} and earns {millions(ref.s085.profit)}; at {usd(1, 2)} it earns {millions(ref.s100.profit)}. The tanks fill over the first
-        three months, as fast as the pumps allow, sit full, and empty over the last three. Storage is all or nothing because every barrel faces the same arithmetic:
-        if one barrel pays to carry, they all do, until the tanks are full.
+        it costs to hold the barrel, and the handling eats the rest. Somewhere between 80 and 85 cents the answer flips, almost at once. At 82 cents the terminal
+        already holds {mbbl(Math.max(...ref.s082.inventory), 0)}; at 85 cents it fills all {mbbl(DEFAULT_STORAGE.capacity, 0)} and earns {millions(ref.s085.profit)};
+        at {usd(1, 2)} it earns {millions(ref.s100.profit)}. The tanks fill over the first three months, as fast as the pumps allow, sit full, and empty over the last
+        three. Storage is nearly all or nothing because every barrel faces the same arithmetic: if one barrel pays to carry, nearly all do, until the tanks are full.
+        Only the pumps blur the edge. The barrels that go in last and come out first are held for the fewest months, so just past the threshold they don’t yet earn
+        back their handling, and the tanks stop short of full.
       </P>
       <P>
         The same logic works with a seasonal swing instead of a steady rise. With flat prices but a swing of {usd(3)} — dearer in the middle of the year, cheaper at
@@ -312,23 +320,24 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Set prices to rise ${usd(CHALLENGE_SLOPE, 2)} a month, with no seasonal swing and the standard ${usd(DEFAULT_STORAGE.fee, 2)} fee. What is the highest financing rate, to the nearest half percent, at which filling the tanks still earns something?`}
+        question={`Set prices to rise ${usd(CHALLENGE_SLOPE, 2)} a month, with no seasonal swing. Estimate first, from the carry: at what financing rate does a month’s carry on a ${usd(STRIP_START)} barrel come to the full ${usd(CHALLENGE_SLOPE, 2)}? Then find the highest rate, to the nearest half percent, at which filling the tanks still earns something. Is it above or below your estimate, and why?`}
         solved={solvedA}
         status={
-          Math.abs(st.slope - CHALLENGE_SLOPE) > 1e-9 || st.seasonal !== 0 || Math.abs(st.fee - DEFAULT_STORAGE.fee) > 1e-9
-            ? `Set the price rise to ${usd(CHALLENGE_SLOPE, 2)} a month, the swing to zero and the fee to ${usd(DEFAULT_STORAGE.fee, 2)}.`
+          Math.abs(st.slope - CHALLENGE_SLOPE) > 1e-9 || st.seasonal !== 0
+            ? `Set the price rise to ${usd(CHALLENGE_SLOPE, 2)} a month and the swing to zero.`
             : `At ${fmt(st.rate, 1)}% a year, the year earns ${millions(plan.profit)}.`
         }
-        success={`Solved: ${fmt(st.rate, 1)}%. At that rate, carrying a barrel costs ${usd(monthlyCarry(STRIP_START, paramsOf(st)), 3)} a month at $75, just under the dollar the price rises, and the year earns ${millions(plan.profit)}. Half a point more and the interest swallows the gain. Cash and carry is a bet on nothing but the spread between months, so it lives or dies on the cost of money.`}
+        success={`Solved: ${fmt(st.rate, 1)}%, below the ${fmt(carryParityRate(), 1)}% at which ${usd(DEFAULT_STORAGE.fee, 2)} of fee and the interest on ${usd(STRIP_START)} add up to ${usd(CHALLENGE_SLOPE, 2)} a month. The carry at ${fmt(st.rate, 1)}% is ${usd(carry, 3)}, and most of the remaining ${usd(CHALLENGE_SLOPE - carry, 2)} goes on what the simple estimate leaves out: ${usd(DEFAULT_STORAGE.handling, 2)} to pump each barrel in and again to pump it out, and interest on a price that has risen past ${usd(STRIP_START)} by the time the barrel is held. Half a point more and nothing pays. Cash and carry earns nothing but the spread between months, so it lives or dies on the cost of money.`}
       />
 
       <H2>Stock you can’t do without</H2>
       <P>
-        The second reason to hold oil has nothing to do with forward prices. Suppose the Calder refinery received all its crude by sea, as it receives Seaboard Blend:
+        The second reason to hold oil has nothing to do with forward prices. Suppose the Corran refinery received all its crude by sea, as it receives Seaboard Blend:
         cargoes of {barrels(BUFFER_PARAMS.cargo)} barrels, one week of runs, due every {BUFFER_PARAMS.interval} days. Ships are late. In our model each cargo can arrive
         up to {BUFFER_PARAMS.maxDelay} days behind schedule, and {BUFFER_PARAMS.storms} storms a year close the port for two to five days, holding every ship that’s due.
         If the crude tank runs dry, the refinery has to cut its runs, and every barrel it doesn’t run costs it the margin it would have earned — about {usd(LOST_MARGIN)}{' '}
-        a barrel, from <a href={lessonHref('oil/3.5')}>Lesson 3.5</a>. So the refinery keeps a <b>safety stock</b> on top of the oil that comes and goes each week.
+        a barrel, from <a href={lessonHref('oil/3.5')}>Lesson 3.5</a>. The runs are lost for good: the refinery is already running at capacity, so it can’t make them
+        up later, and the crude it didn’t run simply waits in the tank. So the refinery keeps a <b>safety stock</b> on top of the oil that comes and goes each week.
         Holding it costs the same carry as before: {usd(HOLD_PER_YEAR, 2)} per barrel per year.
       </P>
       <P>
@@ -416,10 +425,10 @@ export default function Lesson() {
       </P>
       <P>
         The two reasons for storage meet in the forward prices themselves. When stocks are plentiful, an extra barrel on hand is worth little, so oil for later can
-        sell for more than oil today, by up to the cost of carrying it; when stocks are scarce, a barrel today is worth a premium. Chapter 5 turns that into the
-        shape of the futures curve. First, though, the tanks have to be connected to everything else. Storage moves oil through time; pipelines and ships move it
-        through space. The <a href={lessonHref('oil/4.4')}>next lesson</a> puts the whole network together, and asks what that does to the price of a barrel in each
-        place.
+        sell for more than oil today, by up to the cost of carrying it: contango. When stocks are scarce, a barrel today is worth a premium, and the market tips into
+        backwardation. Chapter 5 turns that into the shape of the futures curve. First, though, the tanks have to be connected to everything else. Storage moves oil
+        through time; pipelines and ships move it through space. The <a href={lessonHref('oil/4.4')}>next lesson</a> puts the whole network together, and asks what
+        that does to the price of a barrel in each place.
       </P>
     </LessonPage>
   );

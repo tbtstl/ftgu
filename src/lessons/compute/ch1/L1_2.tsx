@@ -37,6 +37,7 @@ import {
   subthresholdSwingMV,
   type FetParams,
 } from '../../../engines/compute/transistor';
+import { useRevealed } from './reveal';
 
 // ---------------------------------------------------------------------------
 // Numbers the prose quotes, all from the transistor engine.
@@ -56,11 +57,29 @@ export const LOW_VTH: FetParams = { ...NFET, vth: 0.2 };
 export const LEAK_LIMIT_UA = 0.001;
 export const ON_TARGET_UA = 800;
 
-/** The challenge: a threshold that leaks less than 1 nA/µm and still conducts more than 800 µA/µm at 0.8 V. */
+/** A threshold that leaks less than 1 nA/µm and still conducts more than 800 µA/µm at 0.8 V. */
 export function thresholdSolved(vth: number): boolean {
   const p = { ...NFET, vth };
   return offCurrent(VDD, p) < LEAK_LIMIT_UA && onCurrent(VDD, p) > ON_TARGET_UA;
 }
+
+/** The threshold slider's grid: 0.20–0.45 V in steps of 0.01 V. */
+export const VTH = { min: 0.2, max: 0.45, step: 0.01 } as const;
+
+/**
+ * The challenge: the lowest threshold on the slider's grid — the fastest transistor — that keeps
+ * the leak under 1 nA while the on current stays over 800 µA. From 0.30 V, cutting the 2.38 nA
+ * leak 2.38-fold takes log₁₀ 2.38 × 77 mV ≈ 29 mV, so 0.33 V.
+ */
+export function lowestThresholdSolved(vth: number): boolean {
+  const v = Math.round(vth * 100) / 100;
+  return thresholdSolved(v) && !thresholdSolved(Math.round((v - VTH.step) * 100) / 100);
+}
+
+const VTH_GRID = Array.from({ length: Math.round((VTH.max - VTH.min) / VTH.step) + 1 }, (_, i) => Math.round((VTH.min + i * VTH.step) * 100) / 100);
+/** The lowest and highest thresholds on the grid that meet both limits (0.33 and 0.35 V). */
+export const LOWEST_VTH = VTH_GRID.find(thresholdSolved) ?? VTH.max;
+export const HIGHEST_VTH = [...VTH_GRID].reverse().find(thresholdSolved) ?? VTH.max;
 
 // ---------------------------------------------------------------------------
 // Display helpers.
@@ -422,16 +441,16 @@ export default function Lesson() {
   const s1 = useScenario('transistor', { vg: 0, vd: 0.8 });
   const { vg, vd } = s1.state;
   const id = drainCurrent(vg, vd);
-  const region = fetRegion(vg, vd);
 
   // Figure 2: the threshold voltage.
-  const s2 = useScenario('threshold', { vth: 0.3 });
+  const s2 = useScenario('threshold', { vth: NFET.vth });
   const vth = s2.state.vth;
   const p2 = { ...NFET, vth };
   const on2 = onCurrent(VDD, p2);
   const off2 = offCurrent(VDD, p2);
-  const solved = thresholdSolved(vth);
-  const leaky = off2 >= LEAK_LIMIT_UA;
+  const solved = lowestThresholdSolved(vth);
+  // The size of the leak, which would answer the challenge, stays hidden until it is solved.
+  const revealed = useRevealed('compute/1.2', 'a', solved);
   const weak = on2 <= ON_TARGET_UA;
 
   // Figure 3: the inverter.
@@ -485,13 +504,6 @@ export default function Lesson() {
           vthLine={NFET.vth}
           ariaLabel={`Drain current against gate voltage on a log scale, with the drain at ${volts(vd)}. At ${volts(vg)} on the gate the current is ${current(id)} per µm.`}
         />
-        <Readouts
-          items={[
-            { label: 'drain current per µm', value: current(id), tone: 'orange' },
-            { label: 'state', value: region === 'off' ? 'off' : region === 'linear' ? 'on, linear' : 'on, saturated' },
-            { label: 'current into the gate', value: '0' },
-          ]}
-        />
         <Slider label="Gate voltage" tone="blue" value={vg} min={0} max={1} step={0.01} onChange={(v) => s1.set({ vg: v })} display={volts(vg)} />
         <Slider label="Drain voltage" tone="blue" value={vd} min={0} max={1} step={0.05} onChange={(v) => s1.set({ vd: v })} display={volts(vd)} />
       </Figure>
@@ -524,8 +536,11 @@ export default function Lesson() {
       <P>
         That makes a good switch, not a perfect one, and a chip has billions of them sitting off at any moment. Their leaks add up to a share of a chip’s power that it
         pays whether or not it is computing anything. How big that share is depends largely on where the threshold is put, which chipmakers set with the doping under
-        the gate and the choice of gate material. In the next demonstration, move the threshold and compare the transistor’s current at {volts(VDD)}{' '}
-        on the gate with its leakage at 0 V. Once you move it, a dashed curve keeps the {volts(NFET.vth)} transistor we started with for comparison:
+        the gate and the choice of gate material. In the next demonstration, move the threshold and watch both ends of the curve: the current with {volts(VDD)}{' '}
+        on the gate, and the leak with it at 0 V, whose size stays hidden until you’ve solved the challenge that follows. Once you move the threshold, a dashed
+        curve keeps the {volts(NFET.vth)} transistor we started with for comparison. The readout is how long a logic gate built from these transistors takes to
+        switch — to swing the inputs of the four or so gates it drives, and the wire to them, halfway to the new level — which{' '}
+        <a href={lessonHref('compute/1.3')}>Lesson 1.3</a> will call a gate delay:
       </P>
 
       <Figure name="Transistor Simulator · threshold" scenario={s2}>
@@ -535,7 +550,13 @@ export default function Lesson() {
             { vth, vd: VDD, color: GRAPHIC.orange },
           ]}
           marks={[
-            { vg: 0, uA: off2, color: off2 < LEAK_LIMIT_UA ? TEXT.green : TEXT.red, label: `leaks ${current(off2)}` },
+            // Until the challenge is solved, the leak's mark is neutral and unlabeled with its size.
+            {
+              vg: 0,
+              uA: off2,
+              color: revealed ? (off2 < LEAK_LIMIT_UA ? TEXT.green : TEXT.red) : GRAPHIC.orange,
+              label: revealed ? `leaks ${current(off2)}` : 'leak: ?',
+            },
             { vg: VDD, uA: on2, color: on2 > ON_TARGET_UA ? TEXT.green : TEXT.red, label: `${current(on2)} on`, anchor: 'end' },
           ]}
           limits={[
@@ -544,22 +565,28 @@ export default function Lesson() {
           ]}
           vthLine={vth}
           height={230}
-          ariaLabel={`Drain current against gate voltage with the drain at ${volts(VDD)}, for a threshold of ${volts(vth)}: ${current(on2)} per µm with the gate at ${volts(VDD)}, and a leak of ${current(off2)} per µm with the gate at 0 V.`}
+          ariaLabel={`Drain current against gate voltage with the drain at ${volts(VDD)}, for a threshold of ${volts(vth)}: ${current(on2)} per µm with the gate at ${volts(VDD)}${
+            revealed ? `, and a leak of ${current(off2)} per µm with the gate at 0 V` : ''
+          }.`}
         />
         <Legend
           items={[
-            { label: `threshold ${volts(vth)}`, color: GRAPHIC.orange, kind: 'line' },
-            { label: `threshold ${volts(NFET.vth)}`, color: '#9a9a9a', kind: 'line', dashed: true },
+            { label: `threshold ${volts(vth)}`, color: GRAPHIC.orange, kind: 'line' as const },
+            // The dashed reference curve is drawn only once the threshold has moved.
+            ...(Math.abs(vth - NFET.vth) > 1e-9 ? [{ label: `threshold ${volts(NFET.vth)}`, color: '#9a9a9a', kind: 'line' as const, dashed: true }] : []),
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'on current per µm, gate at 0.8 V', value: current(on2), tone: 'orange' },
-            { label: 'leakage per µm, gate at 0 V', value: current(off2), tone: 'red' },
-            { label: 'one gate’s switching time', value: `${fmt(gateDelayPs(VDD, p2), 1)} ps`, tone: 'teal' },
-          ]}
+        <Readouts items={[{ label: 'one gate’s switching time', value: `${fmt(gateDelayPs(VDD, p2), 1)} ps`, tone: 'teal' }]} />
+        <Slider
+          label="Threshold voltage"
+          tone="blue"
+          value={vth}
+          min={VTH.min}
+          max={VTH.max}
+          step={VTH.step}
+          onChange={(v) => s2.set({ vth: Math.round(v * 100) / 100 })}
+          display={volts(vth)}
         />
-        <Slider label="Threshold voltage" tone="blue" value={vth} min={0.2} max={0.45} step={0.01} onChange={(v) => s2.set({ vth: Math.round(v * 100) / 100 })} display={volts(vth)} />
         <Eq label="The on/off ratio: on current divided by leakage">
           <span>on/off ratio</span>
           <Op>=</Op>
@@ -576,24 +603,22 @@ export default function Lesson() {
             }
           />
           <Op>=</Op>
-          <Frac top={<K c="current">{current(on2)}</K>} bottom={<K c="power">{current(off2)}</K>} />
+          <Frac top={<K c="current">{current(on2)}</K>} bottom={<K c="power">{revealed ? current(off2) : '?'}</K>} />
           <Op>=</Op>
-          <span>{fmt(on2 / off2)}</span>
+          <span>{revealed ? fmt(on2 / off2) : '?'}</span>
         </Eq>
       </Figure>
 
       <Challenge
         id="a"
-        question="Choose a threshold voltage that keeps the leakage below 1 nA per micrometer while the on current stays above 800 µA per micrometer."
+        question={`Predict first: the leak falls tenfold for every ${fmt(SWING_MV)} mV the threshold rises. How far must the threshold rise from ${volts(NFET.vth)} to bring the ${current(IOFF)} leak under 1 nA? Then set the lowest threshold, to the hundredth of a volt, that does it — the fastest transistor within the limit — and check that the on current stays above 800 µA. The leak’s size stays hidden until you do.`}
         solved={solved}
         status={
-          leaky && weak
-            ? `At ${volts(vth)}, the transistor both leaks too much and conducts too little.`
-            : leaky
-              ? `At ${volts(vth)}, the leakage is ${current(off2)} per µm: over the 1 nA limit. Raise the threshold.`
-              : `At ${volts(vth)}, the on current is ${current(on2)} per µm: under the 800 µA target. Lower the threshold.`
+          weak
+            ? `At ${volts(vth)}, the on current is ${current(on2)} per µm: under the 800 µA target.`
+            : `At ${volts(vth)}, the transistor passes ${current(on2)} per µm. Is this the lowest threshold that keeps the leak under 1 nA? Work out the rise from the ${fmt(SWING_MV)} mV per tenfold.`
         }
-        success={`Solved. Only thresholds from 0.33 to 0.35 V meet both limits. Each 10 mV lower buys a few percent more on current but raises the leakage by about a third; each 10 mV higher cuts the leak but costs on current, and so speed. At ${volts(vth)} this transistor passes ${current(on2)} and leaks ${current(off2)} per µm.`}
+        success={`Solved. Cutting the leak ${fmt(IOFF / LEAK_LIMIT_UA, 2)}-fold takes log₁₀ ${fmt(IOFF / LEAK_LIMIT_UA, 2)} ≈ ${fmt(Math.log10(IOFF / LEAK_LIMIT_UA), 2)} of a tenfold step, and ${fmt(Math.log10(IOFF / LEAK_LIMIT_UA), 2)} × ${fmt(SWING_MV)} mV ≈ ${fmt(Math.log10(IOFF / LEAK_LIMIT_UA) * SWING_MV)} mV, so ${volts(LOWEST_VTH)} is the lowest threshold under the limit: it leaks ${current(offCurrent(VDD, { ...NFET, vth: LOWEST_VTH }))} and still passes ${current(onCurrent(VDD, { ...NFET, vth: LOWEST_VTH }))} per µm. Thresholds up to ${volts(HIGHEST_VTH)} meet both limits; each 10 mV higher cuts the leak by about a quarter but costs on current, and so speed.`}
       />
 
       <P>
@@ -618,7 +643,6 @@ export default function Lesson() {
         <ThroughChart vin={vin} vdd={vdd} curve={curves.through} />
         <Readouts
           items={[
-            { label: 'output voltage', value: volts(vout), tone: 'blue' },
             { label: 'current from supply to ground, per µm', value: current(through), tone: 'orange' },
             { label: 'one gate’s switching time', value: `${fmt(gateDelayPs(vdd), 1)} ps`, tone: 'teal' },
           ]}
@@ -646,8 +670,8 @@ export default function Lesson() {
         Now watch the current. With the input at either end, one of the two transistors is off, so the only current from supply to ground is a{' '}
         {current(IOFF)} leak. Only partway through a switch do both conduct at once, peaking at {current(midI)} per micrometer with the input at 0.4 V — more than{' '}
         {fmt(Math.floor(midI / IOFF / 1000) * 1000)} times the leak. The bigger cost of a switch is the charge needed to swing the next gates’ inputs from one level to
-        the other. Either way, a CMOS circuit spends energy when it switches, not while it holds its state, so a chip’s power depends on how often its transistors
-        switch.
+        the other. Either way, a CMOS circuit spends most of its energy when it switches; while it holds its state it pays only the leak. So a chip’s power depends
+        largely on how often its transistors switch.
       </P>
       <P>
         The supply voltage sets how fast they can. Less voltage means less on current to charge the next gate, so the gate is slower: in our model one switches in about{' '}

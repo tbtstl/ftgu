@@ -30,6 +30,7 @@ import { PLACE } from '../../../model/shipping/geo';
 import { MARKET_CLASSES } from '../../../model/shipping/trades';
 import { clearMarket, reservation, tceAt, type Clearing, type LaneSpec, type MarketShip, type Offer } from '../../../engines/shipping/clearing';
 import { equilibrium, type Equilibrium } from '../../../engines/shipping/market';
+import { COMMISSION } from '../../../engines/shipping/voyage';
 import { XYChart } from '../shared/XYChart';
 
 // ---------------------------------------------------------------------------
@@ -81,17 +82,26 @@ export function marketAt(cargoes: number, alternative: number, bunker: number): 
   );
 }
 
-const fromQingdao = (c: Clearing) => c.fixtures.some((f) => f.ship.ship.at === 'QIN');
+/** Heron's surplus: her margin over her reservation at the market freight, on the cargo less commission, $. */
+export function heronSurplus(cargoes: number, alternative: number, bunker: number): number {
+  const c = marketAt(cargoes, alternative, bunker);
+  const heron = offersAt(alternative, bunker).find((o) => o.ship.id === 'heron')!;
+  return cargoes >= 1 && Number.isFinite(c.rate) ? (c.rate - heron.reservation) * CARGO * (1 - COMMISSION) : 0;
+}
 
 /**
- * The challenge: the fewest cargoes that make the market fetch a ship from Qingdao — a ship open
- * there is fixed, and with one cargo fewer none would be.
+ * The challenge: at the starting earnings elsewhere and bunker price, the fewest cargoes at which
+ * Heron's surplus is at least double what six cargoes give her.
  */
-export function qingdaoSolved(cargoes: number, alternative: number, bunker: number): boolean {
-  return fromQingdao(marketAt(cargoes, alternative, bunker)) && (cargoes <= 1 || !fromQingdao(marketAt(cargoes - 1, alternative, bunker)));
+export function doubleSolved(cargoes: number, alternative: number, bunker: number): boolean {
+  if (alternative !== DEFAULTS.alternative || bunker !== DEFAULTS.bunker) return false;
+  const target = 2 * heronSurplus(DEFAULTS.cargoes, alternative, bunker);
+  return heronSurplus(cargoes, alternative, bunker) >= target && heronSurplus(cargoes - 1, alternative, bunker) < target;
 }
 
 const placeName = (at: string) => PLACE[at].name;
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const ORDINALS = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
 const perT = (x: number) => `${usd(x, 2)}/t`;
 const perDay = (x: number) => `${usd(x)}/day`;
 
@@ -104,9 +114,21 @@ const HERON = byId(OFFERS0, 'heron');
 const BASE_REACH = Math.max(...BASE.fixtures.map((f) => f.ship.ballastNm));
 const CURLEW = byId(OFFERS0, 'curlew');
 const PLOVER = byId(OFFERS0, 'plover');
-const ANSWER_N = Array.from({ length: MAX_CARGOES }, (_, i) => i + 1).find((n) => qingdaoSolved(n, DEFAULTS.alternative, DEFAULTS.bunker)) ?? MAX_CARGOES;
-const ANSWER = marketAt(ANSWER_N, DEFAULTS.alternative, DEFAULTS.bunker);
-const BEFORE = marketAt(ANSWER_N - 1, DEFAULTS.alternative, DEFAULTS.bunker);
+/** Six cargoes' surplus for Heron, and the challenge's answer: the fewest cargoes that double it. */
+export const SURPLUS6 = heronSurplus(DEFAULTS.cargoes, DEFAULTS.alternative, DEFAULTS.bunker);
+export const DOUBLE_N = Array.from({ length: MAX_CARGOES }, (_, i) => i + 1).find((n) => doubleSolved(n, DEFAULTS.alternative, DEFAULTS.bunker)) ?? MAX_CARGOES;
+const DOUBLED = marketAt(DOUBLE_N, DEFAULTS.alternative, DEFAULTS.bunker);
+/** The cargoes between six and the answer, whose marginal ships aren't dear enough. */
+const SHORT_OF = Array.from({ length: DOUBLE_N - DEFAULTS.cargoes - 1 }, (_, i) => marketAt(DEFAULTS.cargoes + 1 + i, DEFAULTS.alternative, DEFAULTS.bunker));
+/** Albatross's earnings when she is the marginal ship, and at the starting six cargoes, $/day. */
+export const ALB_MARGINAL_N = Array.from({ length: MAX_CARGOES }, (_, i) => i + 1).find((n) => marketAt(n, DEFAULTS.alternative, DEFAULTS.bunker).fixtures.at(-1)?.ship.ship.id === 'albatross') ?? 0;
+const albTceAt = (n: number) => {
+  const f = marketAt(n, DEFAULTS.alternative, DEFAULTS.bunker).fixtures.find((x) => x.ship.ship.id === 'albatross')!;
+  return tceAt(f.ship, LANE, marketAt(n, DEFAULTS.alternative, DEFAULTS.bunker).rate, DEFAULTS.alternative);
+};
+export const ALB_TCE_MARGINAL = albTceAt(ALB_MARGINAL_N);
+export const ALB_TCE_BASE = albTceAt(DEFAULTS.cargoes);
+const ALBATROSS_AT = byId(OFFERS0, 'albatross');
 
 // ---------------------------------------------------------------------------
 // The whole market.
@@ -126,6 +148,39 @@ const at = (d: number, bunker = 600) => equilibrium('cape', { demand: d, bunker 
 const c3 = (e: Equilibrium) => e.routes.find((r) => r.route.id === 'C-TUB-QIN')!.freight;
 const pctOf = (d: number) => `${fmt(d * 100)}%`;
 
+// Lay-up: each age group's lay-up point, and the floor they make.
+const COHORTS = MARKET_CLASSES.cape.cohorts;
+export const OLDEST = COHORTS[COHORTS.length - 1];
+export const NEWEST = COHORTS[0];
+export interface FloorStep {
+  from: number;
+  to: number;
+  tce: number;
+  /** The age group whose lay-up point sets this step (it is partly laid up). */
+  cohort: string;
+}
+/** The floor's steps at the baseline fleet and bunkers: runs of demand with ships idle at one level of earnings. */
+export const FLOOR_STEPS: FloorStep[] = (() => {
+  const steps: FloorStep[] = [];
+  DEMANDS.forEach((d, i) => {
+    const e = SWEEP0[i];
+    if (e.idleShips < 0.5) return;
+    const last = steps[steps.length - 1];
+    if (last && Math.abs(last.tce - e.tce) < 1) last.to = d;
+    else steps.push({ from: d, to: d, tce: e.tce, cohort: COHORTS.find((k) => Math.abs(k.layup - e.tce) < 1)?.name ?? '' });
+  });
+  return steps;
+})();
+const LOWER = FLOOR_STEPS[0];
+const UPPER = FLOOR_STEPS[FLOOR_STEPS.length - 1];
+// Past the choke: charterers give up cargo while ships are still speeding up.
+export const CHOKE_EQ = at(CHOKE);
+export const TOP = at(DEMANDS[DEMANDS.length - 1]);
+/** Extra earnings per point of demand, $/day: near 90% and past the choke. */
+export const SLOPE_LOW = (at(1).tce - at(0.9).tce) / 10;
+export const SLOPE_HIGH = (TOP.tce - CHOKE_EQ.tce) / ((DEMANDS[DEMANDS.length - 1] - CHOKE) * 100);
+const round100 = (x: number) => Math.round(x / 100) * 100;
+
 // Chart geometry for the staircase.
 const X0 = 56;
 const X1 = 620;
@@ -143,7 +198,9 @@ export default function Lesson() {
   const marginal = c.fixtures.length ? c.fixtures[c.fixtures.length - 1].ship : null;
   const alb = c.fixtures.find((f) => f.ship.ship.id === 'albatross')?.ship;
   const albTce = alb ? tceAt(alb, { ...LANE, bunker }, c.rate, alternative) : null;
-  const solved = qingdaoSolved(cargoes, alternative, bunker);
+  const solved = doubleSolved(cargoes, alternative, bunker);
+  const heronRes = offers.find((o) => o.ship.id === 'heron')!.reservation;
+  const gap6 = BASE.rate - HERON.reservation;
   const y = scale(0, 40, Y0, YT);
   const yc = (v: number) => y(Math.min(40, v));
   const bidPath = c.bids
@@ -158,20 +215,27 @@ export default function Lesson() {
   const idleEnd = DEMANDS[curve.findIndex((e) => e.idleShips < 0.5)] ?? 1.4;
   const chokeIdx = curve.findIndex((e) => e.served < 0.999);
   const choke = chokeIdx >= 0 ? DEMANDS[chokeIdx] : null;
-  const region = eq.idleShips >= 0.5 ? 'Ships are laid up: earnings sit at the floor where the oldest ships stop trading.' : eq.served < 0.999 ? 'Every ship is at full speed: only charterers giving up cargo balance the market.' : 'Every ship is trading: earnings are whatever makes the fleet steam fast enough to carry the cargo.';
+  const region =
+    eq.idleShips >= 0.5
+      ? 'Ships are laid up: earnings sit on the floor set by the oldest ships’ lay-up points.'
+      : eq.served < 0.999
+        ? 'Earnings have passed what the least valuable cargoes can pay: charterers give some of them up, while the ships keep speeding up.'
+        : 'Every ship is trading: earnings are whatever makes the fleet steam fast enough to carry the cargo.';
 
   return (
     <LessonPage id="shipping/4.1">
       <P>
         Chapter 3 ended with a number for demand: the tonne-miles the world’s trades must move, the ballast voyages their lopsided flows force, the days lost in
-        port. Chapter 2 gave us supply: a fleet that can lay ships up, slow down or speed up, and that grows only years after it’s ordered. This chapter asks how
+        port. Chapter 2 gave us supply: a fleet that can slow down or speed up, whose oldest ships are the first to stop paying their way, and that grows only
+        years after it’s ordered. This chapter asks how
         the two meet — how a fleet of ships that move becomes a market for moving things — and this lesson starts with one place and one fortnight, to see how many
         separate ships and cargoes arrive at a single price. From here on the course puts prices on things. All of them come from our model: realistic in size,
         simulated in every detail, and not market data.
       </P>
       <P>
         The place is Tubarão, in Brazil, and the cargoes are iron ore for China, {fmt(CARGO)} tonnes each, loading in the next few weeks. Charterers — the mining
-        companies and traders who own the ore — need Capesizes to lift them. Around the world, eleven Capesizes are about to come <b>open</b>: free of their last
+        companies and traders who own the ore — need Capesizes to lift them. When an owner and a charterer agree terms for a cargo, the ship is “fixed” and the
+        deal is a <K tone="green">fixture</K>. Around the world, eleven Capesizes are about to come <b>open</b>: free of their last
         cargo, wherever that left them. Each owner can work out the least freight per tonne that would make this cargo worth taking, its{' '}
         <K tone="green">reservation freight</K>. It has to pay for sailing empty to Tubarão, for the laden voyage to Qingdao, for fuel, port charges and
         commissions — and for the ship’s time, which is worth whatever she could earn elsewhere instead:
@@ -200,7 +264,7 @@ export default function Lesson() {
           items={[
             { label: 'Ships’ reservation freights (solid: fixed)', color: GRAPHIC.blue },
             { label: 'Charterers’ bids', color: GRAPHIC.orange, kind: 'line' },
-            { label: 'Market rate', color: GRAPHIC.green, kind: 'line' },
+            { label: 'Market freight', color: GRAPHIC.green, kind: 'line' },
           ]}
         />
         <svg
@@ -252,15 +316,13 @@ export default function Lesson() {
             <g>
               <line x1={X0} x2={X1} y1={yc(c.rate)} y2={yc(c.rate)} stroke={TEXT.green} strokeWidth={2} />
               <text x={X1} y={yc(c.rate) - 6} textAnchor="end" style={{ fontSize: 12, fontWeight: 600, fill: TEXT.green, paintOrder: 'stroke', stroke: '#fcfcfb', strokeWidth: 3 }}>
-                market rate {perT(c.rate)}
+                market freight {perT(c.rate)}
               </text>
             </g>
           )}
         </svg>
         <Readouts
           items={[
-            { label: 'market freight, Tubarão–Qingdao', value: Number.isFinite(c.rate) ? perT(c.rate) : '—', tone: 'green' },
-            { label: 'fixtures', value: `${c.fixtures.length} of ${cargoes} cargoes` },
             { label: 'marginal ship', value: marginal ? `${marginal.ship.name}, ${placeName(marginal.ship.at)}` : '—' },
             { label: 'Albatross earns', value: albTce !== null ? perDay(albTce) : 'not fixed', tone: albTce !== null ? 'green' : undefined },
           ]}
@@ -270,7 +332,7 @@ export default function Lesson() {
         <Slider label="Bunker price" tone="red" value={bunker} min={300} max={900} step={10} onChange={(v) => s.set({ bunker: v })} display={`${usd(bunker)}/t`} />
         <Caption>
           {Number.isFinite(c.rate)
-            ? `Any rate in the shaded band, from ${perT(c.low)} to ${Number.isFinite(c.high) ? perT(c.high) : 'the last bid'}, would clear: no ship left out would take less, and no cargo left out would pay more. We quote the bottom.${unfixed > 0 ? ` ${unfixed} cargo${unfixed > 1 ? 'es go' : ' goes'} unfixed.` : ''}`
+            ? `Any freight in the shaded band, from ${perT(c.low)} to ${Number.isFinite(c.high) ? perT(c.high) : 'the last bid'}, would clear: no ship left out would take less, and no cargo left out would pay more. We quote the bottom.${unfixed > 0 ? ` ${unfixed} cargo${unfixed > 1 ? 'es go' : ' goes'} unfixed.` : ''}`
             : 'No ship can be had for what any charterer will pay: nothing trades.'}
         </Caption>
       </Figure>
@@ -280,19 +342,22 @@ export default function Lesson() {
         Every mile a ship must sail in ballast raises the bar a little, so the staircase climbs with distance — the positional advantage of{' '}
         <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a>, now measured in dollars. The six cheapest ships are all within{' '}
         {fmt(Math.ceil(BASE_REACH / 100) * 100)} miles of Tubarão; the sixth is {BASE.fixtures[BASE.fixtures.length - 1].ship.ship.name}, open at{' '}
-        {placeName(BASE.fixtures[BASE.fixtures.length - 1].ship.ship.at)}, and the market rate is her reservation: {perT(BASE.rate)}.
+        {placeName(BASE.fixtures[BASE.fixtures.length - 1].ship.ship.at)}, and the market freight is her reservation: {perT(BASE.rate)}.
       </P>
       <P>
-        Notice that every fixture is done at that one rate. A charterer has no reason to pay Heron more than {perT(BASE.rate)} when another ship would accept it,
+        Notice that every fixture is done at that one freight. A charterer has no reason to pay Heron more than {perT(BASE.rate)} when another ship would accept it,
         and Heron has no reason to take less when the market will pay it. Real fixtures are negotiated privately, ship by ship, through shipbrokers, but
-        competition pushes them toward a single going rate in the same way. The cheap ships keep the gap between the rate and their reservations: Heron’s{' '}
-        {perT(BASE.rate - HERON.reservation)} on {fmt(CARGO)} tonnes is about {usd((BASE.rate - HERON.reservation) * CARGO * 0.95)} for being in the right place.
+        competition pushes them toward a single going rate in the same way. The cheap ships keep the gap between the freight and their reservations: Heron’s{' '}
+        {perT(BASE.rate - HERON.reservation)} on {fmt(CARGO)} tonnes, less commission, is about {usd(Math.round(SURPLUS6 / 1000) * 1000)} for being in
+        the right place. The Albatross readout shows rent in daily terms. Set {NUMBER_WORDS[ALB_MARGINAL_N]} cargoes: Albatross, open at{' '}
+        {placeName(ALBATROSS_AT.ship.at)}, is now the marginal ship, the freight is her own reservation, and she earns exactly the{' '}
+        {perDay(ALB_TCE_MARGINAL)} she could earn elsewhere — nothing more. With six cargoes she earns {perDay(ALB_TCE_BASE)}; the difference is her rent.
       </P>
 
       <H2>The marginal ship sets the rate</H2>
       <P>
         Now add a seventh cargo. The nearby ships are all taken, and the next cheapest, {NEXT.fixtures[NEXT.fixtures.length - 1].ship.ship.name}, is in{' '}
-        {placeName(NEXT.fixtures[NEXT.fixtures.length - 1].ship.ship.at)}, {fmt(NEXT.fixtures[NEXT.fixtures.length - 1].ship.ballastNm)} miles away. The rate
+        {placeName(NEXT.fixtures[NEXT.fixtures.length - 1].ship.ship.at)}, {fmt(NEXT.fixtures[NEXT.fixtures.length - 1].ship.ballastNm)} miles away. The freight
         jumps to {perT(NEXT.rate)}, {fmt((NEXT.rate / BASE.rate - 1) * 100)}% more, for every fixture, because one more cargo had to reach across an ocean. Demand
         for ships hardly bends: the orange staircase sits far above the ships’ costs because a mill short of ore pays almost anything rather than stop. So it’s
         supply, and the position of the marginal ship, that decides the price.
@@ -306,25 +371,36 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Add cargoes, one at a time, until the market has to fetch a ship that is still in Qingdao. What does that do to the freight rate?"
+        question={`Predict first. With six cargoes, Heron’s surplus is about ${usd(Math.round(SURPLUS6 / 1000) * 1000)}. At the starting settings, what is the fewest number of cargoes that at least doubles it? Work it out from the reservation freights on the bars, then set it.`}
         solved={solved}
         status={
-          fromQingdao(c)
-            ? `A ship from Qingdao is fixed with ${cargoes} cargoes — is that the fewest that needs one?`
-            : cargoes === MAX_CARGOES
-              ? `Even ${MAX_CARGOES} cargoes don’t bring a ship from Qingdao at these settings: the last charterers would rather leave their ore than pay what she needs. Lower the earnings elsewhere or the bunker price.`
-              : `With ${cargoes} cargo${cargoes > 1 ? 'es' : ''} the marginal ship is ${marginal ? `${marginal.ship.name}, from ${placeName(marginal.ship.at)}` : 'none'}, at ${Number.isFinite(c.rate) ? perT(c.rate) : 'no rate'}.`
+          alternative !== DEFAULTS.alternative || bunker !== DEFAULTS.bunker
+            ? `Put the earnings elsewhere back to ${perDay(DEFAULTS.alternative)} and the bunker price to ${usd(DEFAULTS.bunker)} a tonne.`
+            : cargoes === DEFAULTS.cargoes
+              ? `With six cargoes Heron keeps ${perT(gap6)} over her reservation. Predict how many cargoes double that, then set it.`
+              : heronSurplus(cargoes, alternative, bunker) < 2 * SURPLUS6
+                ? `With ${cargoes} cargo${cargoes > 1 ? 'es' : ''}, Heron keeps ${perT(Number.isFinite(c.rate) ? Math.max(0, c.rate - heronRes) : 0)} over her reservation, against ${perT(gap6)} with six: not yet double.`
+                : `With ${cargoes} cargoes Heron’s surplus is more than double, but fewer cargoes already do it.`
         }
-        success={`Solved. With ${cargoes} cargoes the last ship fixed is ${c.fixtures[c.fixtures.length - 1].ship.ship.name}, ballasting ${fmt(c.fixtures[c.fixtures.length - 1].ship.ballastNm)} miles from Qingdao, and every fixture now pays ${perT(c.rate)}. At the starting settings that is ${perT(ANSWER.rate - BEFORE.rate)} more than with one cargo fewer, and ${perT(ANSWER.rate - BASE.rate)} more than with six. The ships that were already close earn all of it.`}
+        success={`Solved: ${DOUBLE_N} cargoes. Heron’s surplus doubles when the gap between the freight and her ${perT(HERON.reservation)} reservation doubles, to ${perT(2 * (BASE.rate - HERON.reservation))}: a freight of at least ${perT(HERON.reservation + 2 * (BASE.rate - HERON.reservation))}. ${SHORT_OF.map((m) => `${m.fixtures.at(-1)!.ship.ship.name}, from ${placeName(m.fixtures.at(-1)!.ship.ship.at)}, asks ${perT(m.rate)}`).join('; ')}: not enough. The ${ORDINALS[DOUBLE_N]} cargo fetches ${DOUBLED.fixtures.at(-1)!.ship.ship.name} from ${placeName(DOUBLED.fixtures.at(-1)!.ship.ship.at)}, at ${perT(DOUBLED.rate)}, and Heron makes ${usd(heronSurplus(DOUBLE_N, DEFAULTS.alternative, DEFAULTS.bunker))} without moving. The further the marginal ship has to come, the more rent the near ones keep.`}
       />
 
       <H2>From one port to the whole market</H2>
       <P>
-        Our fortnight at Tubarão leaves out most of what Chapters 2 and 3 found: ships that lay up when earnings are poor, ships that speed up when they’re good,
-        and a world of trades sending ships back and forth. The market model puts them together. For every trade it counts the ship-days needed — laden voyages,
-        ballast voyages, port calls — and it finds the daily earnings, the time-charter equivalent, at which the fleet supplies exactly that many: idle ships come
-        back once earnings beat their lay-up level, and every ship sails at the speed the rule of <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a> picks for
-        those earnings. The freight on each route then pays for the voyage at those earnings, plus the ballast voyage the trade forces.
+        Our fortnight at Tubarão leaves out most of what Chapters 2 and 3 found: ships that speed up when earnings are good, and a world of trades sending ships
+        back and forth. It leaves out one more choice, too. An owner whose ship can’t earn her keep can <K tone="teal">lay her up</K>: moor her in a sheltered
+        anchorage with a skeleton crew, cut her insurance and stop her engines. A laid-up ship burns no fuel and saves most of her crew and upkeep, but she still
+        pays for the few people aboard, her mooring and her reduced insurance, her loan runs on regardless, and laying her up and bringing her back takes weeks
+        and costs money. So lay-up is a last resort. The running-cost break-even of <a href={lessonHref('shipping/2.4')}>Lesson 2.4</a> marks where trading
+        starts to lose cash; below it an owner keeps trading at a loss, as long as the loss is smaller than lying idle would cost. Her <b>lay-up point</b> is
+        lower still, where the two losses are equal. In our model it is {perDay(OLDEST.layup)} for Capesizes {OLDEST.name}, which burn the most fuel and cost
+        the most to keep, falling with age to {perDay(NEWEST.layup)} for those {NEWEST.name} old.
+      </P>
+      <P>
+        The market model puts all of this together. For every trade it counts the ship-days needed — laden voyages, ballast voyages, port calls — and it finds
+        the daily earnings, the time-charter equivalent, at which the fleet supplies exactly that many: laid-up ships come back once earnings pass their lay-up
+        point, and every ship sails at the speed the rule of <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a> picks for those earnings. The freight on each
+        route then pays for the voyage at those earnings, plus the ballast voyage the trade forces.
       </P>
       <P>
         In the next demonstration that market is the world’s Capesizes. The curve is the market’s earnings against demand, as a share of the course’s baseline
@@ -350,7 +426,7 @@ export default function Lesson() {
           yLabel="Market earnings, $ per day (TCE)"
           bands={[
             { from: 60, to: idleEnd * 100, color: tint(GRAPHIC.gray, 0.16), label: 'ships laid up' },
-            ...(choke !== null ? [{ from: choke * 100, to: 140, color: tint(GRAPHIC.red, 0.16), label: 'full speed' }] : []),
+            ...(choke !== null ? [{ from: choke * 100, to: 140, color: tint(GRAPHIC.red, 0.16), label: 'charterers drop cargo' }] : []),
           ]}
           markers={[{ x: m.state.demand * 100, y: Math.min(70_000, eq.tce), color: TEXT.green }]}
           height={240}
@@ -372,14 +448,17 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The curve has three parts, and each comes from an earlier lesson. Below about {pctOf(IDLE_END)} of baseline demand there are more ships than work, the
-        oldest ones lay up, and earnings sit on a floor — {perDay(at(0.7).tce)} at {pctOf(0.7)}. The floor is the lowest daily earnings at which the oldest,
-        least efficient ships still choose to trade rather than lie idle: in our model a few thousand dollars, well below the operating costs of{' '}
-        <a href={lessonHref('shipping/2.4')}>Lesson 2.4</a>, because a laid-up ship still has to be paid for. Above it every ship is needed, and the only way to carry more cargo is to
-        sail faster. Earnings rise to make the extra fuel worth burning: {perDay(at(0.9).tce)} at {pctOf(0.9)}, {perDay(BASELINE.tce)} at the baseline,{' '}
-        {perDay(at(1.2).tce)} at {pctOf(1.2)}, as the fleet’s laden speed climbs from {fmt(at(0.9).ladenSpeed, 1)} to {fmt(at(1.2).ladenSpeed, 1)} knots. Beyond
-        about {pctOf(CHOKE)} the ships are at full speed, and only charterers giving up their least valuable cargoes can balance the market, so earnings climb
-        almost straight up. A small change in demand there moves the rate a lot; on the floor it hardly moves it at all.
+        The curve has three parts. Below about {pctOf(IDLE_END)} of baseline demand there are more ships than work, the surplus is laid up, and earnings sit on
+        a floor set by the lay-up points — a short staircase, in fact: {perDay(UPPER.tce)} from {pctOf(UPPER.from)} to {pctOf(UPPER.to)}, while only ships{' '}
+        {UPPER.cohort} are laid up, and {perDay(LOWER.tce)} at {pctOf(LOWER.to)} and below, where those {LOWER.cohort} old join them. Above the floor every ship
+        is needed, and the only way to carry more cargo is to sail faster. Earnings rise to make the extra fuel worth burning: {perDay(at(0.9).tce)} at{' '}
+        {pctOf(0.9)}, {perDay(BASELINE.tce)} at the baseline, {perDay(at(1.2).tce)} at {pctOf(1.2)}, as the fleet’s laden speed climbs from{' '}
+        {fmt(at(0.9).ladenSpeed, 1)} to {fmt(at(1.2).ladenSpeed, 1)} knots. Past about {pctOf(CHOKE)}, earnings pass {perDay(MARKET_CLASSES.cape.choke)}, more
+        than the least valuable cargoes can pay, and charterers start to give them up: at {pctOf(DEMANDS[DEMANDS.length - 1])}, {fmt((1 - TOP.served) * 100)}% of the
+        cargo stays ashore. The ships still aren’t at full speed — the fleet averages {fmt(TOP.ladenSpeed, 1)} knots laden there, against a limit of{' '}
+        {fmt(MARKET_CLASSES.cape.vMax, 1)} — so faster ships and lost cargo balance the market together, and earnings keep climbing steeply: about{' '}
+        {usd(round100(SLOPE_HIGH))} a day for each extra point of demand, against about {usd(round100(SLOPE_LOW))} near {pctOf(0.9)}. A small change in demand
+        there moves earnings a lot; on the floor it hardly moves them at all.
       </P>
       <P>
         At the baseline the market pays {perDay(BASELINE.tce)}, and the Brazil–China freight is {perT(c3(BASELINE))}. That is in line with what a ship from
@@ -395,7 +474,7 @@ export default function Lesson() {
         speed rule, and real markets have other ways to adjust, but the direction is right: who pays for fuel depends on how tight the market is.
       </P>
       <P>
-        So far a “fixture” has simply meant a ship and a cargo agreeing on a rate per tonne. In practice there are several ways to hire a ship, and they divide the
+        So far a fixture has simply meant a ship and a cargo agreeing on a freight per tonne. In practice there are several ways to hire a ship, and they divide the
         voyage’s risks very differently. <a href={lessonHref('shipping/4.2')}>The next lesson</a> compares the two most common: paying per tonne for a voyage,
         or paying per day for the ship.
       </P>

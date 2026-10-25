@@ -35,7 +35,8 @@ import { annualPue } from '../../../engines/compute/cooling';
 import { fabric } from '../../../engines/compute/dcNetwork';
 import { ACCELERATORS, GPU_IDS, SERVERS, type Cooling, type GpuId } from '../../../model/compute/hardware';
 import { SITES, SITE_IDS, type SiteId } from '../../../model/compute/sites';
-import { gpusForIt, largestItFor } from './L4_2';
+import { gpusForIt, largestItFor, roundTo } from './L4_2';
+import { useProgress } from '../../../course/progress';
 
 // ---------------------------------------------------------------------------
 // The plan behind every number: an accelerator at a site, its PUE from Lesson 4.3.
@@ -134,8 +135,8 @@ export function breakEvenSolved(s: PriceState): boolean {
 const BASE = costOf(PLANNER_DEFAULTS);
 const BASE_PLAN = planOf(PLANNER_DEFAULTS);
 const CRF = capitalRecovery(0.1, 5);
-const BAYPORT = costOf({ ...PLANNER_DEFAULTS, site: 'bayport' });
-const NORTH = costOf({ ...PLANNER_DEFAULTS, site: 'northfield' });
+const MARSTON = costOf({ ...PLANNER_DEFAULTS, site: 'marston' });
+const NORTH = costOf({ ...PLANNER_DEFAULTS, site: 'fernhill' });
 const POWER_2X = gpuHourCost({ ...BASE_PLAN, powerPrice: 2 * SITES.techpark.powerPrice });
 const POWER_FREE = gpuHourCost({ ...BASE_PLAN, powerPrice: 0 });
 const IDLE_HOUR = gpuHourCost({ ...BASE_PLAN, utilization: 0 }).perHour;
@@ -150,6 +151,10 @@ const LIFE7 = costOf({ ...PLANNER_DEFAULTS, life: 7 });
 const BE5 = breakEven(5, CHALLENGE_PRICE);
 const BE3 = breakEven(3, CHALLENGE_PRICE);
 const BE7 = breakEven(7, CHALLENGE_PRICE);
+/** The second challenge's prediction: the capital recovery factor over four years, and what it does to the yearly cost. */
+const CRF4 = capitalRecovery(0.1, CHALLENGE_LIFE);
+const LIFE4 = costOf({ ...PLANNER_DEFAULTS, life: CHALLENGE_LIFE });
+const BE4 = breakEven(CHALLENGE_LIFE, CHALLENGE_PRICE);
 /** Lesson 4.4's non-blocking fabric for 1,024 GPUs, per GPU. */
 const FABRIC_PER_GPU = fabric({ gpus: 1024, downPorts: 32 }).costPerGpu;
 /**
@@ -160,7 +165,9 @@ export function gpusPerGrid(site: SiteId): number {
   return gpusForIt(largestItFor(site, 'N+1'));
 }
 const PER_MW_TECHPARK = gpusPerGrid('techpark') / SITES.techpark.gridMW;
-const BAYPORT_GPUS = gpusPerGrid('bayport');
+/** Hours a GPU is used in a year at the planner's starting utilization. */
+const USED_HOURS = 8760 * (PLANNER_DEFAULTS.util / 100);
+const MARSTON_GPUS = gpusPerGrid('marston');
 
 export const LESSON_NUMBERS = {
   baseYear: BASE.totalYear,
@@ -171,8 +178,8 @@ export const LESSON_NUMBERS = {
   facilityCapex: BASE.facilityCapex,
   powerShare: BASE.powerShare,
   crf: CRF,
-  bayport: BAYPORT.perUsedHour,
-  bayportShare: BAYPORT.powerShare,
+  marston: MARSTON.perUsedHour,
+  marstonShare: MARSTON.powerShare,
   north: NORTH.perUsedHour,
   northShare: NORTH.powerShare,
   power2x: POWER_2X.perUsedHour,
@@ -189,8 +196,19 @@ export const LESSON_NUMBERS = {
   be5: BE5,
   be3: BE3,
   be7: BE7,
+  crf4: CRF4,
+  be4: BE4,
+  /** Servers and network: the part of the yearly cost that follows the server life. */
+  serverNetShare: (BASE.serverYear + BASE.networkYear) / BASE.totalYear,
+  serverNet5: BASE.serverYear + BASE.networkYear,
+  serverNet4: LIFE4.serverYear + LIFE4.networkYear,
+  year4Rise: LIFE4.totalYear / BASE.totalYear - 1,
   perMwTechpark: PER_MW_TECHPARK,
-  bayportGpus: BAYPORT_GPUS,
+  marstonGpus: MARSTON_GPUS,
+  marstonBuilding: MARSTON.facilityYear / USED_HOURS,
+  northBuilding: NORTH.facilityYear / USED_HOURS,
+  marstonPower: MARSTON.powerYear / USED_HOURS,
+  northPower: NORTH.powerYear / USED_HOURS,
   fabricPerGpu: FABRIC_PER_GPU,
 };
 
@@ -231,7 +249,7 @@ function partsOf(c: GpuHourCost): CostPart[] {
   ];
 }
 
-const SITE_LABEL: Record<SiteId, string> = { bayport: 'Bayport', techpark: 'Tech Park', northfield: 'Northfield' };
+const SITE_LABEL: Record<SiteId, string> = { marston: 'Marston', techpark: 'Tech Park', fernhill: 'Fernhill' };
 
 // ---------------------------------------------------------------------------
 // Figure 1: the cost of an hour, and of a used hour.
@@ -315,7 +333,7 @@ const LIVES = [3, 4, 5, 6, 7];
 const U_MIN = 20;
 const UTILS = Array.from({ length: 100 - U_MIN + 1 }, (_, i) => U_MIN + i);
 
-function UtilChart({ s, curves, be }: { s: PriceState; curves: Record<number, number[]>; be: number }) {
+function UtilChart({ s, curves, be, hideBreakEven }: { s: PriceState; curves: Record<number, number[]>; be: number; hideBreakEven: boolean }) {
   const clip = 'uc' + useId().replace(/[^a-zA-Z0-9]/g, '');
   const x0 = 64;
   const x1 = 604;
@@ -333,13 +351,13 @@ function UtilChart({ s, curves, be }: { s: PriceState; curves: Record<number, nu
     const back = UTILS.map((u) => [sx(u), sy(s.price)]).reverse();
     return 'M' + [...pts, ...back].map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L') + ' Z';
   };
-  const beShown = Number.isFinite(be) && be * 100 >= U_MIN && be <= 1;
+  const beShown = !hideBreakEven && Number.isFinite(be) && be * 100 >= U_MIN && be <= 1;
   return (
     <svg
       className="chart"
       viewBox="0 0 640 250"
       role="img"
-      aria-label={`Cost of a used A-class hour at Tech Park against utilization, over a ${s.life}-year server life: ${dollars(costNow)} at ${fmt(s.util)}%. Against a simulated price of ${dollars(s.price)}, it breaks even at ${beShown ? share(be) : 'no utilization up to 100%'}.`}
+      aria-label={`Cost of a used A-class hour at Tech Park against utilization, over a ${s.life}-year server life: ${dollars(costNow)} at ${fmt(s.util)}%. Against a simulated price of ${dollars(s.price)}, ${hideBreakEven ? 'the break-even is hidden for the challenge' : `it breaks even at ${beShown ? share(be) : 'no utilization up to 100%'}`}.`}
     >
       <defs>
         <clipPath id={clip}>
@@ -422,9 +440,15 @@ export default function Lesson() {
   const yearNow = costOf(priceState(p.util, p.life)).totalYear;
   const profit = p.price * 8760 * (p.util / 100) - yearNow;
   const solvedB = breakEvenSolved(p);
+  // The four-year break-even stays hidden until the second challenge is solved (now or on an earlier visit).
+  const progress = useProgress();
+  const revealedB = solvedB || (progress['compute/4.5']?.includes('b') ?? false);
+  const hideBreakEven = !revealedB && p.life === CHALLENGE_LIFE;
   const statusB =
     p.life !== CHALLENGE_LIFE
-      ? `Set the server life to ${CHALLENGE_LIFE} years; it’s ${p.life}.`
+      ? p.life === PRICE_DEFAULTS.life
+        ? `Make your prediction, then set the server life to ${CHALLENGE_LIFE} years.`
+        : `Set the server life to ${CHALLENGE_LIFE} years; it’s ${p.life}.`
       : Math.abs(p.price - CHALLENGE_PRICE) > 1e-6
         ? `Set the price back to ${dollars(CHALLENGE_PRICE)}.`
         : costNow > p.price
@@ -442,7 +466,7 @@ export default function Lesson() {
       <P>
         Most of the cost is paid before the GPU computes anything. An 8-GPU A-class server costs {usd(SERVERS.A.capex)} in our simulated prices, {usd(BASE.serverCapex)} per GPU;
         its share of a non-blocking network adds {usd(BASE.networkCapex)}, close to the {usd(FABRIC_PER_GPU)} of Lesson 4.4. The building, with its substation, UPS modules, generators and
-        chillers, we price at {usd(FACILITY_CAPEX_PER_KW.air)} for every kilowatt of IT load it can carry, a realistic figure for a new data center. Each A-class GPU’s share of a
+        chillers, we price at {usd(FACILITY_CAPEX_PER_KW.air)} for every kilowatt of IT load it can carry at Tech Park, a realistic figure for a new data center. Each A-class GPU’s share of a
         server, at {fmt(BASE.itKW, 2)} kW, therefore ties up {usd(BASE.facilityCapex)} of building. In all, {usd(LESSON_NUMBERS.baseCapex)} of <K c="price">capital</K> per GPU.
       </P>
       <P>
@@ -453,8 +477,9 @@ export default function Lesson() {
         power), and upkeep — staff, spares and support contracts — at {pct(UPKEEP_SHARE)} of the hardware’s price each year.
       </P>
       <P>
-        In the next demonstration, the bars are the cost of one GPU, divided first over every hour of the year and then over the hours it is actually rented and busy — its{' '}
-        <b>utilization</b>. The table lists each part. Choose the accelerator, the site and the cooling, and set the utilization, how many years the servers must pay for
+        In the next demonstration, the bars are the cost of one GPU, divided first over every hour of the year and then over the hours it is actually rented and busy. The
+        share of hours rented and busy is its <b>utilization</b> — a different measure from the model FLOPs utilization of{' '}
+        <a href={lessonHref('compute/3.3')}>Lesson 3.3</a>, which counted the share of a GPU’s arithmetic put to use. The table lists each part. Choose the accelerator, the site and the cooling, and set the utilization, how many years the servers must pay for
         themselves, and the cost of capital:
       </P>
 
@@ -473,28 +498,21 @@ export default function Lesson() {
         <CostBars c={c} util={st.util} gpu={st.gpu} />
         <Legend items={parts.map((x) => ({ label: x.label, color: x.color }))} />
         <DataTable
-          caption="The cost of one GPU: capital, cost per year and cost per used hour, by part"
+          caption="The cost of one GPU: capital, cost per year, share of the yearly cost and cost per used hour, by part"
           rows={parts}
           rowKey={(r) => r.id}
           columns={[
             { label: 'Per GPU', cell: (r) => r.label },
             { label: 'Capital', cell: (r) => (r.capex === null ? '—' : usd(r.capex)), align: 'right' },
             { label: 'Per year', cell: (r) => usd(r.year), align: 'right' },
+            { label: 'Share', cell: (r) => pct(r.year / c.totalYear, 1), align: 'right' },
             { label: 'Per used hour', cell: (r) => dollars(r.year / (8760 * u)), align: 'right' },
           ]}
-          footer={['Total', usd(c.serverCapex + c.networkCapex + c.facilityCapex), usd(c.totalYear), dollars(c.perUsedHour)]}
+          footer={['Total', usd(c.serverCapex + c.networkCapex + c.facilityCapex), usd(c.totalYear), '100%', dollars(c.perUsedHour)]}
         />
         <Slider label="Utilization" value={st.util} min={10} max={100} step={5} onChange={(v) => s1.set({ util: v })} display={`${fmt(st.util)}%`} />
         <Slider label="Server life" value={st.life} min={3} max={7} onChange={(v) => s1.set({ life: v })} display={`${st.life} years`} />
         <Slider label="Cost of capital" tone="green" value={st.rate} min={0} max={15} onChange={(v) => s1.set({ rate: v })} display={`${st.rate}% a year`} />
-        <Readouts
-          items={[
-            { label: 'per used GPU-hour', value: dollars(c.perUsedHour), tone: 'green' },
-            { label: 'per hour, used or not', value: dollars(c.perHour), tone: 'green' },
-            { label: 'electricity’s share', value: pct(c.powerShare, 1), tone: 'gold' },
-            { label: 'capital per GPU', value: usd(c.serverCapex + c.networkCapex + c.facilityCapex), tone: 'green' },
-          ]}
-        />
         <Eq label="Cost per used hour equals the yearly cost divided by the hours used">
           <span>cost per used hour</span>
           <Op>=</Op>
@@ -516,20 +534,24 @@ export default function Lesson() {
         question={`Keeping the A-class 70% busy, bring the cost of one used hour under ${dollars(TARGET)}.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved: ${dollars(c.perUsedHour)} a used hour. Moving the GPU barely helps — even Northfield’s cheap power and cold air only bring it to ${dollars(NORTH.perUsedHour)} — because the cost is mostly capital. Paying the servers off over a longer life, or borrowing more cheaply, is what moves it.`}
+        success={`Solved: ${dollars(c.perUsedHour)} a used hour. Moving the GPU barely helps — even Fernhill’s cheap power and cold air only bring it to ${dollars(NORTH.perUsedHour)} — because the cost is mostly capital. Paying the servers off over a longer life, or borrowing more cheaply, is what moves it.`}
       />
 
       <H2>Electricity is cheap; megawatts are not</H2>
       <P>
-        Try the three sites. Bayport’s power costs {usd(SITES.bayport.powerPrice)} a megawatt-hour and its warm climate needs more cooling, yet a used A-class hour there costs{' '}
-        {dollars(BAYPORT.perUsedHour)}, against {dollars(NORTH.perUsedHour)} at Northfield, where power costs {usd(SITES.northfield.powerPrice)}. Electricity is{' '}
-        {pct(BAYPORT.powerShare, 1)} of the cost at Bayport and {pct(NORTH.powerShare, 1)} at Northfield. Double Tech Park’s electricity price and a used hour rises only to{' '}
+        Try the three sites. Marston’s power costs {usd(SITES.marston.powerPrice)} a megawatt-hour and its warm climate needs more cooling, yet a used A-class hour there costs{' '}
+        {dollars(MARSTON.perUsedHour)}, against {dollars(NORTH.perUsedHour)} at Fernhill, where power costs {usd(SITES.fernhill.powerPrice)}. Electricity is{' '}
+        {pct(MARSTON.powerShare, 1)} of the cost at Marston and {pct(NORTH.powerShare, 1)} at Fernhill. Nor is all of the gap electricity. Construction costs differ by
+        site too: as the table of sites in <a href={lessonHref('compute/4.2')}>Lesson 4.2</a> showed, building at Marston costs {fmt(SITES.marston.buildCostIndex, 1)} times
+        what it does at Tech Park, and at Fernhill {fmt(SITES.fernhill.buildCostIndex, 1)} times, which is why the table’s building-and-plant row changes with the site.
+        That row comes to {dollars(MARSTON.facilityYear / USED_HOURS)} of a used hour at Marston and {dollars(NORTH.facilityYear / USED_HOURS)} at Fernhill, a gap about
+        as wide as electricity’s {dollars(MARSTON.powerYear / USED_HOURS)} against {dollars(NORTH.powerYear / USED_HOURS)}. Double Tech Park’s electricity price and a used hour rises only to{' '}
         {dollars(POWER_2X.perUsedHour)}; make the power free and it falls only to {dollars(POWER_FREE.perUsedHour)}.
       </P>
       <P>
         That doesn’t make power unimportant. It makes the price of power unimportant next to the availability of it. Every megawatt a site can draw from the grid feeds about{' '}
-        {about(PER_MW_TECHPARK)} air-cooled A-class GPUs at Tech Park, once their cooling at the hottest hour and their losses are counted, and Bayport’s {fmt(SITES.bayport.gridMW)} MW connection
-        (<a href={lessonHref('compute/4.2')}>Lesson 4.2</a>) caps it at about {about(BAYPORT_GPUS)}, whatever it is willing to pay. A GPU cloud chooses its sites for the megawatts
+        {about(PER_MW_TECHPARK)} air-cooled A-class GPUs at Tech Park, once their cooling at the hottest hour and their losses are counted, and Marston’s {fmt(SITES.marston.gridMW)} MW connection
+        (<a href={lessonHref('compute/4.2')}>Lesson 4.2</a>) caps it at about {fmt(roundTo(MARSTON_GPUS, 100))}, whatever it is willing to pay. A GPU cloud chooses its sites for the megawatts
         it can get, and pays the local price for them.
       </P>
       <P>
@@ -553,22 +575,22 @@ export default function Lesson() {
       </P>
 
       <Figure name="Compute Facility Planner · utilization" scenario={s2}>
-        <UtilChart s={p} curves={curves} be={be} />
+        <UtilChart s={p} curves={curves} be={be} hideBreakEven={hideBreakEven} />
         <Slider label="Utilization" value={p.util} min={U_MIN} max={100} onChange={(v) => s2.set({ util: v })} display={`${fmt(p.util)}%`} />
         <Slider label="Server life" value={p.life} min={3} max={7} onChange={(v) => s2.set({ life: v })} display={`${p.life} years`} />
         <Slider label="Rental price" tone="green" value={p.price} min={1} max={4} step={0.05} onChange={(v) => s2.set({ price: Math.round(v * 100) / 100 })} display={`${dollars(p.price)} per hour`} />
         <Readouts
           items={[
             { label: 'cost per used hour', value: dollars(costNow), tone: 'green' },
-            { label: 'break-even utilization', value: Number.isFinite(be) ? share(be) : 'none ≤ 100%' },
-            { label: 'margin per used hour', value: dollars(p.price - costNow), tone: p.price - costNow < 0 ? 'red' : 'green' },
             { label: 'profit per GPU per year', value: usd(profit), tone: profit < 0 ? 'red' : 'green' },
           ]}
         />
         <Caption>
-          {Number.isFinite(be)
-            ? `At ${dollars(p.price)} an hour, a ${p.life}-year A-class covers its costs once it is rented ${share(be)} of the time. At ${fmt(p.util)}% it ${profit >= 0 ? `earns ${usd(profit)}` : `loses ${usd(-profit)}`} a year.`
-            : `At ${dollars(p.price)} an hour, a ${p.life}-year A-class never covers its costs, even rented every hour of the year.`}
+          {hideBreakEven
+            ? `At ${dollars(p.price)} an hour, a ${p.life}-year A-class’s break-even stays hidden until you find it in this lesson’s second challenge.`
+            : Number.isFinite(be)
+              ? `At ${dollars(p.price)} an hour, a ${p.life}-year A-class covers its costs once it is rented ${share(be)} of the time.`
+              : `At ${dollars(p.price)} an hour, a ${p.life}-year A-class never covers its costs, even rented every hour of the year.`}
         </Caption>
       </Figure>
 
@@ -581,10 +603,10 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Compute Facility Planner · utilization"
-        question={`Suppose newer accelerators mean an A-class can rent for ${dollars(CHALLENGE_PRICE)} an hour for only ${CHALLENGE_LIFE} years. Find the lowest utilization, to the whole percent, at which it still pays for itself.`}
+        question={`Suppose newer accelerators mean an A-class can rent for ${dollars(CHALLENGE_PRICE)} an hour for only ${CHALLENGE_LIFE} years. Predict first: over ${CHALLENGE_LIFE} years the capital recovery factor rises from ${fmt(CRF, 4)} to ${fmt(CRF4, 4)}, about a fifth more, and the servers and network it applies to are about three-quarters of the yearly cost. Will the break-even pass 70%? Then find the lowest utilization, to the whole percent, at which the GPU still pays for itself.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${fmt(p.util)}%. Over ${CHALLENGE_LIFE} years each year must repay more of the server’s price, so the same GPU needs to be busy ${share(breakEven(CHALLENGE_LIFE, CHALLENGE_PRICE))} of the time instead of ${share(BE5)}.`}
+        success={`Solved: ${fmt(p.util)}%. Over ${CHALLENGE_LIFE} years each year must repay more of the server’s price: the servers and network cost ${usd(LIFE4.serverYear + LIFE4.networkYear)} a year instead of ${usd(BASE.serverYear + BASE.networkYear)}, the whole GPU about ${pct(LIFE4.totalYear / BASE.totalYear - 1)} more, and the break-even rises with it, from ${share(BE5)} to ${share(BE4)}. A year less of life cost almost ten points of utilization.`}
       />
 
       <H2>A bet on the life of a GPU</H2>

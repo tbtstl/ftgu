@@ -28,11 +28,11 @@ export function indexOf(kind: DegreeKind, means: number[], base = BASE_F): numbe
   return means.reduce((s, m) => s + degreeDays(kind, m, base), 0);
 }
 
-/** Calder Bay's monthly index for a year of the archive. */
+/** Fenwick Bay's monthly index for a year of the archive. */
 export function monthIndex(kind: DegreeKind, year: number, month: number, base = BASE_F): number {
   const { start, days } = monthDays(year, month);
   let s = 0;
-  for (let i = 0; i < days; i++) s += degreeDays(kind, tempF('calder', start + i), base);
+  for (let i = 0; i < days; i++) s += degreeDays(kind, tempF('fenwick', start + i), base);
   return s;
 }
 
@@ -49,10 +49,10 @@ export function indexFromMonthlyMean(kind: DegreeKind, meanOfMonth: number, days
 export { MONTH_DAYS };
 
 // ---------------------------------------------------------------------------
-// Calder Gas & Light, the city's gas utility.
+// Fenwick Gas & Light, the city's gas utility.
 
 export const UTILITY = {
-  name: 'Calder Gas & Light',
+  name: 'Fenwick Gas & Light',
   /** Gas used whatever the weather — water heating, cooking, industry — MMBtu per day. */
   baseLoad: 150_000,
   /** Extra gas for each heating degree day, MMBtu. */
@@ -74,7 +74,7 @@ export function sendout(h: number, windMs?: number): number {
   return UTILITY.baseLoad + UTILITY.perHdd * h * wind;
 }
 
-/** The city's wind on a day of the archive: Calder Bay sits lower and more sheltered than Hollin Ridge, about 0.7 times its hub-height wind. */
+/** The city's wind on a day of the archive: Fenwick Bay sits lower and more sheltered than Hollin Ridge, about 0.7 times its hub-height wind. */
 export const CITY_WIND_SHARE = 0.7;
 
 // ---------------------------------------------------------------------------

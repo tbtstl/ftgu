@@ -10,8 +10,8 @@ import { gaussian, rng } from '../../model/random';
 /** Grid points around the latitude circle; one per degree of longitude (about 84 km at 41°). */
 export const NX = 360;
 export const DX_KM = (2 * Math.PI * 6371 * Math.cos((41 * Math.PI) / 180)) / NX;
-/** Calder Bay's grid point. */
-export const CALDER_I = 300;
+/** Fenwick Bay's grid point. */
+export const FENWICK_I = 300;
 
 /** The ocean upstream of the continent: grid points from `from` to `to`, going east. */
 export const OCEAN = { from: 140, to: 245 };
@@ -126,22 +126,22 @@ export function analysis(truth: Float64Array, sites: number[], obsErrorF = 0.5, 
 }
 
 /**
- * A forecast for Calder Bay: start from the analysis at day 0 and carry it east exactly with the
- * wind (no numerical error), against the evolving truth. Returns the error at Calder Bay by lead.
+ * A forecast for Fenwick Bay: start from the analysis at day 0 and carry it east exactly with the
+ * wind (no numerical error), against the evolving truth. Returns the error at Fenwick Bay by lead.
  */
-export function calderForecastErrors(opts: { landSpacing: number; oceanSpacing: number; windMs: number; evolution: number; days: number; seed?: number }): Array<{ lead: number; forecast: number; truth: number; error: number }> {
+export function fenwickForecastErrors(opts: { landSpacing: number; oceanSpacing: number; windMs: number; evolution: number; days: number; seed?: number }): Array<{ lead: number; forecast: number; truth: number; error: number }> {
   const waves = truthWaves(opts.seed ?? 7);
   const t0 = truthField(waves, 0, opts.windMs, opts.evolution);
   const an = analysis(t0, observationSites(opts.landSpacing, opts.oceanSpacing));
   const out: Array<{ lead: number; forecast: number; truth: number; error: number }> = [];
   const cellsPerDay = (opts.windMs * 86400) / 1000 / DX_KM;
   for (let lead = 0; lead <= opts.days; lead += 0.5) {
-    const src = CALDER_I - cellsPerDay * lead;
+    const src = FENWICK_I - cellsPerDay * lead;
     const j = ((src % NX) + NX) % NX;
     const j0 = Math.floor(j);
     const fr = j - j0;
     const forecast = an[j0] * (1 - fr) + an[(j0 + 1) % NX] * fr;
-    const truth = truthField(waves, lead, opts.windMs, opts.evolution)[CALDER_I];
+    const truth = truthField(waves, lead, opts.windMs, opts.evolution)[FENWICK_I];
     out.push({ lead, forecast, truth, error: forecast - truth });
   }
   return out;

@@ -25,7 +25,7 @@ import {
   PLAN_LIMITS,
   SULFUR_CAPITAL,
   UNIT_CAPITAL,
-  calderPrices,
+  corranPrices,
   refineryCapital,
   refineryDay,
   refineryMargin,
@@ -33,16 +33,16 @@ import {
 } from '../../../engines/oil/business';
 import { TERMS } from '../../../engines/oil/economics';
 import { shadowPrices } from '../../../engines/oil/refinery';
-import { HISTORY_DEFAULTS, oilHistory, type HistoryParams, type HistoryWeek } from '../../../model/oil/history';
-import { CALDER, CRUDE_PRICE, PRODUCT_PRICE, UNIT_NAME, type RefineryConfig, type UnitId } from '../../../model/oil/refinery';
+import { oilHistory, type HistoryParams, type HistoryWeek } from '../../../model/oil/history';
+import { CORRAN, CRUDE_PRICE, PRODUCT_PRICE, UNIT_NAME, type RefineryConfig, type UnitId } from '../../../model/oil/refinery';
 import { REF_PRICES } from '../../../model/oil/world';
 import { BusinessCard } from '../shared/BusinessCard';
-import { resetBusinessPart, updateBusiness, useBusiness } from '../shared/business';
+import { confirmResetPart, updateBusiness, useBusiness } from '../shared/business';
 import { XYChart } from '../shared/charts';
 import { RefineryFlow } from '../shared/RefineryFlow';
 
 // ---------------------------------------------------------------------------
-// Valuing a design: its gain over today's Calder, week by week through the simulated history.
+// Valuing a design: its gain over today's Corran, week by week through the simulated history.
 
 const UNITS: UnitId[] = ['cdu', 'reformer', 'fcc', 'coker', 'dht'];
 
@@ -52,20 +52,20 @@ export const RATE = TERMS.discount;
 /** Present value of $1 a year for YEARS years at RATE. */
 export const ANNUITY = (1 - Math.pow(1 + RATE, -YEARS)) / RATE;
 
-/** A configuration with some units changed from today's Calder. */
-export function designOf(capacity: Partial<Record<UnitId, number>>, hydrogenPlant = CALDER.hydrogenPlant, sulfurPlant = CALDER.sulfurPlant): RefineryConfig {
-  return { capacity: { ...CALDER.capacity, ...capacity }, hydrogenPlant, sulfurPlant };
+/** A configuration with some units changed from today's Corran. */
+export function designOf(capacity: Partial<Record<UnitId, number>>, hydrogenPlant = CORRAN.hydrogenPlant, sulfurPlant = CORRAN.sulfurPlant): RefineryConfig {
+  return { capacity: { ...CORRAN.capacity, ...capacity }, hydrogenPlant, sulfurPlant };
 }
 
 const gainCache = new Map<string, number[]>();
-/** Each week's margin of a design less today's Calder's, $ per day, through a simulated history. */
+/** Each week's margin of a design less today's Corran's, $ per day, through a simulated history. */
 export function weeklyGain(c: RefineryConfig, hp: HistoryParams = {}): number[] {
   const key = JSON.stringify([c, hp]);
   const hit = gainCache.get(key);
   if (hit) return hit;
   const h = oilHistory(hp);
   const d = refineryDay(c);
-  const d0 = refineryDay(CALDER);
+  const d0 = refineryDay(CORRAN);
   const g = h.map((w) => refineryMargin(w, d) - refineryMargin(w, d0));
   if (gainCache.size > 300) gainCache.clear();
   gainCache.set(key, g);
@@ -73,7 +73,7 @@ export function weeklyGain(c: RefineryConfig, hp: HistoryParams = {}): number[] 
 }
 
 export interface DesignValue {
-  /** Average gain over today's Calder across the five simulated years, $ per day. */
+  /** Average gain over today's Corran across the five simulated years, $ per day. */
   gain: number;
   capital: number;
   /** The average gain earned every day for YEARS years at RATE, less the capital, $. */
@@ -146,28 +146,36 @@ export interface HistoryState {
   compare: Compare;
   /** A lasting widening of fuel oil's discount after year 2, $/bbl. */
   shift: number;
-  seasonality: number;
 }
 
-export const HISTORY_STATE_DEFAULTS: HistoryState = { compare: 'coker', shift: 0, seasonality: HISTORY_DEFAULTS.seasonality };
+export const HISTORY_STATE_DEFAULTS: HistoryState = { compare: 'coker', shift: 0 };
 
 /** The test expansion: 10 kb/d more coker, nothing else. */
-export const COKER_TEST = designOf({ coker: CALDER.capacity.coker + 10 });
+export const COKER_TEST = designOf({ coker: CORRAN.capacity.coker + 10 });
+const COKER_TEST_CAPITAL = refineryCapital(COKER_TEST);
 /** Challenge b: the payback the coker expansion must reach, years. */
 export const PAYBACK_TARGET = 6;
 
-export function historyParams(st: Pick<HistoryState, 'shift' | 'seasonality'>): HistoryParams {
-  return { fuelOilShock: st.shift > 0 ? { year: 2, size: st.shift } : null, seasonality: st.seasonality };
+export function historyParams(st: Pick<HistoryState, 'shift'>): HistoryParams {
+  return { fuelOilShock: st.shift > 0 ? { year: 2, size: st.shift } : null };
 }
 
-/** The coker expansion's payback with a lasting fuel-oil shift of `shift` (seasons as usual), years. */
+/** The coker expansion's payback with a lasting fuel-oil shift of `shift`, years. */
 export function cokerPayback(shift: number): number {
-  return designValue(COKER_TEST, historyParams({ shift, seasonality: HISTORY_DEFAULTS.seasonality })).payback;
+  return designValue(COKER_TEST, historyParams({ shift })).payback;
 }
 
-/** Challenge b: the smallest whole-dollar shift at which the 10 kb/d coker pays back within the target. */
+/** The average daily gain the coker expansion needs to repay its capital within the target, $. */
+export function neededGain(): number {
+  return refineryCapital(COKER_TEST) / (PAYBACK_TARGET * 365);
+}
+
+/**
+ * Challenge b: the smallest whole-dollar shift at which the 10 kb/d coker pays back within the
+ * target. The reader estimates it first, from the gains with no shift and a $10 shift.
+ */
 export function shiftSolved(st: HistoryState): boolean {
-  if (st.compare !== 'coker' || st.seasonality !== HISTORY_DEFAULTS.seasonality) return false;
+  if (st.compare !== 'coker') return false;
   return cokerPayback(st.shift) <= PAYBACK_TARGET && (st.shift === 0 || cokerPayback(st.shift - 1) > PAYBACK_TARGET);
 }
 
@@ -195,10 +203,10 @@ function corr(a: number[], b: number[]): number {
   return c / Math.sqrt(va * vb);
 }
 
-/** Coldwater Heavy's discount to Ridgeback Light at Port Calder in a week, $/bbl. */
+/** Coldwater Heavy's discount to Pinyon Light at Port Corran in a week, $/bbl. */
 export function heavyDiscount(w: HistoryWeek): number {
-  const p = calderPrices(w);
-  return p.crude.ridgeback - p.crude.coldwater;
+  const p = corranPrices(w);
+  return p.crude.pinyon - p.crude.coldwater;
 }
 
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -210,32 +218,32 @@ export const EXAMPLE_DHT = 65;
 let factsCache: ReturnType<typeof computeFacts> | null = null;
 function computeFacts() {
   const h = oilHistory();
-  const calder = refineryDay(CALDER);
-  const sp = designShadowPrices(CALDER);
+  const corran = refineryDay(CORRAN);
+  const sp = designShadowPrices(CORRAN);
   const coker = refineryDay(COKER_TEST);
-  const coker40 = refineryDay(designOf({ coker: CALDER.capacity.coker + 15 }));
+  const coker40 = refineryDay(designOf({ coker: CORRAN.capacity.coker + 15 }));
   const cdu = designOf({ cdu: EXAMPLE_CDU });
   const dht = designOf({ dht: EXAMPLE_DHT });
   const dht60 = refineryDay(designOf({ dht: 60 }));
   const both = designOf({ cdu: EXAMPLE_CDU, dht: EXAMPLE_DHT });
-  const shifted = historyParams({ shift: 10, seasonality: HISTORY_DEFAULTS.seasonality });
+  const shifted = historyParams({ shift: 10 });
   const g = weeklyGain(COKER_TEST);
   const year2 = g.slice(52, 104);
   return {
-    calder,
-    calderHistory: mean(h.map((w) => refineryMargin(w, calder))),
+    corran,
+    corranHistory: mean(h.map((w) => refineryMargin(w, corran))),
     sp,
     coker,
-    cokerRefGain: coker.margin - calder.margin,
-    coker40RefGain: coker40.margin - calder.margin,
+    cokerRefGain: coker.margin - corran.margin,
+    coker40RefGain: coker40.margin - corran.margin,
     coker40Sulfur: coker40.plan.sulfurPlant,
     cokerValue: designValue(COKER_TEST),
     cokerShifted: designValue(COKER_TEST, shifted),
-    refDiscount: CRUDE_PRICE.ridgeback - CRUDE_PRICE.coldwater,
+    refDiscount: CRUDE_PRICE.pinyon - CRUDE_PRICE.coldwater,
     histDiscount: mean(h.map(heavyDiscount)),
     refDieselCrack: PRODUCT_PRICE.diesel - REF_PRICES.brent,
     histDieselCrack: mean(h.map((w) => w.diesel - w.brent)),
-    cduRefGain: refineryDay(cdu).margin - calder.margin,
+    cduRefGain: refineryDay(cdu).margin - corran.margin,
     cduValue: designValue(cdu),
     cduSp: designShadowPrices(cdu),
     dht60Feed: dht60.plan.unitFeed.dht,
@@ -292,7 +300,7 @@ export default function Lesson() {
   const business = useBusiness();
   const config = business.refinery;
   const day = refineryDay(config);
-  const gainRef = day.margin - f.calder.margin;
+  const gainRef = day.margin - f.corran.margin;
   const deferred = useDeferredValue(config);
   const value = useMemo(() => designValue(deferred), [deferred]);
   const sp = useMemo(() => designShadowPrices(deferred), [deferred]);
@@ -314,7 +322,7 @@ export default function Lesson() {
         max={max}
         step={step}
         onChange={(v) => setUnit(u, v)}
-        display={`${fmt(config.capacity[u])} kb/d${config.capacity[u] > CALDER.capacity[u] ? ` (+${fmt(config.capacity[u] - CALDER.capacity[u])})` : ''}`}
+        display={`${fmt(config.capacity[u])} kb/d${config.capacity[u] > CORRAN.capacity[u] ? ` (+${fmt(config.capacity[u] - CORRAN.capacity[u])})` : ''}`}
       />
     );
   };
@@ -338,38 +346,38 @@ export default function Lesson() {
 
   const crudeText = (d: RefineryDay) =>
     listOf(
-      (['ridgeback', 'coldwater', 'northfield', 'seaboard'] as const)
+      (['pinyon', 'coldwater', 'northfield', 'seaboard'] as const)
         .filter((k) => d.crude[k] >= 0.5)
-        .map((k) => `${kbd(d.crude[k])} of ${{ ridgeback: 'Ridgeback Light', coldwater: 'Coldwater Heavy', northfield: 'Northfield Sour', seaboard: 'Seaboard Blend' }[k]}`),
+        .map((k) => `${kbd(d.crude[k])} of ${{ pinyon: 'Pinyon Light', coldwater: 'Coldwater Heavy', northfield: 'Northfield Sour', seaboard: 'Seaboard Blend' }[k]}`),
     );
 
   return (
     <LessonPage id="oil/7.2">
       <P>
         In <a href={lessonHref('oil/7.1')}>Lesson 7.1</a> the company planned its oil fields. Their crude reaches the market at Kessler, and from there much of
-        the basin’s oil travels down to Port Calder, where the company’s other big asset stands: the Calder refinery of Chapter 3. Calder buys{' '}
-        {kbd(f.calder.runs)} of crude and turns it into gasoline, jet fuel, diesel and the rest. Run through the five simulated years of Chapter 5, as{' '}
-        <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> ran it, it earns an average {perDay(f.calderHistory)}. This lesson asks what the company should
+        the basin’s oil travels down to Port Corran, where the company’s other big asset stands: the Corran refinery of Chapter 3. Corran buys{' '}
+        {kbd(f.corran.runs)} of crude and turns it into gasoline, jet fuel, diesel and the rest. Run through the five simulated years of Chapter 5, as{' '}
+        <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> ran it, it earns an average {perDay(f.corranHistory)}. This lesson asks what the company should
         build there.
       </P>
       <P>
         Every tool for the question is already in hand. The linear program of <a href={lessonHref('oil/3.5')}>Lesson 3.5</a> finds the best way to run any set of
         units at the reference prices — which crudes to buy, where each stream goes — and its <K c="price">shadow prices</K> say what one more barrel a day of
         each unit would add. To value an expansion, we take the plan the program chooses and run it through every week of the simulated history at that week’s
-        prices, as Calder’s own plan was run in Lesson 6.4. The difference from today’s Calder is the expansion’s <K c="price">gain</K>. Earned every day for{' '}
+        prices, as Corran’s own plan was run in Lesson 6.4. The difference from today’s Corran is the expansion’s <K c="price">gain</K>. Earned every day for{' '}
         {YEARS} years and discounted at {fmt(RATE * 100)}% a year, the rate of <a href={lessonHref('oil/2.5')}>Lesson 2.5</a>, the average gain less the capital
         is the expansion’s <K c="price">net present value</K>; the capital divided by a year’s gain is its <K c="price">payback</K>. Building costs, per thousand
         barrels a day of new capacity, are illustrative: {money(UNIT_CAPITAL.cdu)} for the crude unit or the hydrotreater, {money(UNIT_CAPITAL.reformer)} for the
         reformer, {money(UNIT_CAPITAL.fcc)} for the cracker and {money(UNIT_CAPITAL.coker)} for the coker, with {money(HYDROGEN_CAPITAL)} per million cubic feet a
         day of hydrogen and {money(SULFUR_CAPITAL)} per tonne a day of sulfur.
       </P>
+      <BusinessCard current="refinery" parts={['production', 'refinery']} />
       <P>
-        In the next demonstration, each slider sets one unit’s capacity, starting from Calder as it stands. The diagram is the program’s plan at the reference
+        In the next demonstration, each slider sets one unit’s capacity, starting from Corran as it stands. The diagram is the program’s plan at the reference
         prices. Whatever you build here is kept: the rest of this chapter runs the refinery you design:
       </P>
 
-      <Figure name="Refinery Builder" onReset={() => resetBusinessPart('refinery')}>
-        <BusinessCard current="refinery" parts={['refinery', 'production']} />
+      <Figure name="Refinery Builder" onReset={() => confirmResetPart('refinery')}>
         <RefineryFlow
           plan={day.plan}
           height={380}
@@ -377,9 +385,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: <K c="price">margin at reference prices</K>, value: perDay(day.margin), tone: 'green' },
-            { label: <K c="price">gain at reference prices</K>, value: perDay(gainRef), tone: tone(gainRef) },
-            { label: <K c="price">gain, simulated years</K>, value: perDay(value.gain), tone: tone(value.gain) },
+            { label: <K c="price">reference gain</K>, value: perDay(gainRef), tone: tone(gainRef) },
+            { label: <K c="price">five-year gain</K>, value: perDay(value.gain), tone: tone(value.gain) },
             { label: 'capital', value: money(capital) },
             { label: <K c="price">payback</K>, value: capital === 0 ? '—' : years(value.payback) },
             { label: <K c="price">net present value</K>, value: money(value.npv), tone: tone(value.npv) },
@@ -411,28 +418,30 @@ export default function Lesson() {
           display={`${fmt(config.sulfurPlant)} t/d`}
         />
         <Caption>
-          The plan runs {crudeText(day)}. Full units: {full.length ? listOf(full.map((u) => UNIT_NAME[u].toLowerCase())) : 'none'}
-          {full.length ? `; one more barrel a day of capacity would add ${listOf(full.map((u) => `${perBbl(sp[u])} (${UNIT_NAME[u].toLowerCase()})`))}` : ''}. The
-          hydrogen plant makes {fmt(day.plan.hydrogen.plant, 1)} of its {fmt(config.hydrogenPlant)} MMscf a day; the sulfur plant takes {fmt(day.plan.sulfurPlant)} of
+          {full.length
+            ? `Full units, and what one more barrel a day of each would add: ${listOf(full.map((u) => `${UNIT_NAME[u].toLowerCase()} ${perBbl(sp[u])}`))}.`
+            : 'No unit is full.'}{' '}
+          The hydrogen plant makes {fmt(day.plan.hydrogen.plant, 1)} of its {fmt(config.hydrogenPlant)} MMscf a day; the sulfur plant takes {fmt(day.plan.sulfurPlant)} of
           its {fmt(config.sulfurPlant)} tonnes.
         </Caption>
       </Figure>
 
       <P>
         Today three units are full: the crude unit, the coker and the hydrotreater. One more barrel a day of capacity would add {perBbl(f.sp.cdu)} to the daily
-        margin in the crude unit, {perBbl(f.sp.coker)} in the coker and {perBbl(f.sp.dht)} in the hydrotreater. The reformer and the cracker have room to spare,
-        the hydrogen plant runs at {fmt(f.calder.plan.hydrogen.plant, 1)} of its {fmt(CALDER.hydrogenPlant)} MMscf a day and the sulfur plant at{' '}
-        {fmt(f.calder.plan.sulfurPlant)} of its {fmt(CALDER.sulfurPlant)} tonnes, so expanding any of those buys nothing at all.
+        margin in the crude unit, {perBbl(f.sp.coker)} in the coker and {perBbl(f.sp.dht)} in the hydrotreater. The hydrotreater’s is the highest, but a shadow
+        price lasts only as long as the bottleneck does: past about {kbd(f.dht60Feed)}, as we’ll see, the program has nothing more to send it. The reformer and the cracker have room to spare,
+        the hydrogen plant runs at {fmt(f.corran.plan.hydrogen.plant, 1)} of its {fmt(CORRAN.hydrogenPlant)} MMscf a day and the sulfur plant at{' '}
+        {fmt(f.corran.plan.sulfurPlant)} of its {fmt(CORRAN.sulfurPlant)} tonnes, so expanding any of those buys nothing at all.
       </P>
       <P>
         Lesson 3.5 found the coker the best single expansion at the reference prices: {kbd(10)} more adds {perDay(f.cokerRefGain)}. The program
-        spends the new capacity on a swap, cutting Ridgeback Light from {kbd(f.calder.crude.ridgeback)} to {kbd(f.coker.crude.ridgeback)} and raising Coldwater Heavy from{' '}
-        {kbd(f.calder.crude.coldwater)} to {kbd(f.coker.crude.coldwater)}. But through the simulated years the same expansion gains only{' '}
+        spends the new capacity on a swap, cutting Pinyon Light from {kbd(f.corran.crude.pinyon)} to {kbd(f.coker.crude.pinyon)} and raising Coldwater Heavy from{' '}
+        {kbd(f.corran.crude.coldwater)} to {kbd(f.coker.crude.coldwater)}. But through the simulated years the same expansion gains only{' '}
         {perDay(f.cokerValue.gain)}. It would take {years(f.cokerValue.payback)} to repay its {money(f.cokerValue.capital)}, and its net present value is{' '}
-        {money(f.cokerValue.npv)}. The reference month flattered it twice. Coldwater’s discount to Ridgeback Light at Port Calder averaged{' '}
+        {money(f.cokerValue.npv)}. The reference month flattered it twice. Coldwater’s discount to Pinyon Light at Port Corran averaged{' '}
         {usd(f.histDiscount, 2)} over the five years against the reference month’s {usd(f.refDiscount, 2)}, so each barrel swapped saved less; and the swap gives
         up diesel and jet fuel, while diesel’s crack averaged {usd(f.histDieselCrack, 2)} against {usd(f.refDieselCrack, 2)}. Going further doesn’t help: at{' '}
-        {kbd(CALDER.capacity.coker + 15)} the gain at reference prices stops at {perDay(f.coker40RefGain)}, because the sulfur plant reaches its{' '}
+        {kbd(CORRAN.capacity.coker + 15)} the gain at reference prices stops at {perDay(f.coker40RefGain)}, because the sulfur plant reaches its{' '}
         {fmt(f.coker40Sulfur)} tonnes a day and becomes the bottleneck.
       </P>
 
@@ -464,14 +473,14 @@ export default function Lesson() {
       <H2>A bet on the heavy discount</H2>
       <P>
         An expansion’s value is a forecast of prices it will earn on, and the coker’s depends on one price more than any other. In the next demonstration, the upper chart
-        is the weekly gain of either the {kbd(10)} coker expansion or your own design over today’s Calder; the lower one is Coldwater Heavy’s discount to Ridgeback
-        Light at Port Calder. Next to them are two physical drivers from Chapter 6: a lasting widening of fuel oil’s discount to crude after year 2, like the one
-        in <a href={lessonHref('oil/6.2')}>Lesson 6.2</a>, and the seasonal swing in product demand:
+        is the weekly gain of either the {kbd(10)} coker expansion or your own design over today’s Corran; the lower one is Coldwater Heavy’s discount to Pinyon
+        Light at Port Corran. The slider is a physical driver from Chapter 6: a lasting widening of fuel oil’s discount to crude after year 2, like the one in{' '}
+        <a href={lessonHref('oil/6.2')}>Lesson 6.2</a>:
       </P>
 
       <Figure name="Refinery Builder · through the history" scenario={s2}>
         <Segmented
-          label="Compare today’s Calder with"
+          label="Compare today’s Corran with"
           value={st.compare}
           onChange={(v) => s2.set({ compare: v })}
           options={[
@@ -480,7 +489,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Weekly gain of ${compareName} over today’s Calder through five simulated years: between ${perDay(Math.min(...g2))} and ${perDay(Math.max(...g2))}, averaging ${perDay(v2.gain)}.`}
+          ariaLabel={`Weekly gain of ${compareName} over today’s Corran through five simulated years: between ${perDay(Math.min(...g2))} and ${perDay(Math.max(...g2))}, averaging ${perDay(v2.gain)}.`}
           height={190}
           x={[0, 5]}
           y={[gLo, gHi]}
@@ -488,14 +497,14 @@ export default function Lesson() {
           xFormat={yearTick}
           yTicks={niceTicks(gLo, gHi, 4)}
           yFormat={(v) => `$${fmt(v)}k`}
-          yLabel="Gain over today’s Calder, $ thousand a day"
+          yLabel="Gain over today’s Corran, $ thousand a day"
           series={[
             { points: gainPts, color: GAIN_COLOR, width: 1.5, fillTo: 0, fillOpacity: 0.12 },
           ]}
           refs={[{ axis: 'y', at: v2.gain / 1000, color: TEXT.green, dash: '4 4', label: `average ${money(v2.gain)}` }, ...shiftRef]}
         />
         <XYChart
-          ariaLabel={`Coldwater Heavy’s discount to Ridgeback Light at Port Calder, between ${usd(Math.min(...discPts.map((p) => p[1])), 2)} and ${usd(Math.max(...discPts.map((p) => p[1])), 2)} a barrel.`}
+          ariaLabel={`Coldwater Heavy’s discount to Pinyon Light at Port Corran, between ${usd(Math.min(...discPts.map((p) => p[1])), 2)} and ${usd(Math.max(...discPts.map((p) => p[1])), 2)} a barrel.`}
           height={130}
           x={[0, 5]}
           y={[dLo, dHi]}
@@ -503,7 +512,7 @@ export default function Lesson() {
           xFormat={yearTick}
           yTicks={niceTicks(dLo, dHi, 3)}
           yFormat={(v) => `$${fmt(v)}`}
-          yLabel="Coldwater Heavy’s discount to Ridgeback Light, $ per barrel"
+          yLabel="Coldwater Heavy’s discount to Pinyon Light, $ per barrel"
           series={[{ points: discPts, color: DISCOUNT_COLOR, width: 1.5 }]}
           refs={shiftRef.map((r) => ({ ...r, label: undefined }))}
         />
@@ -511,7 +520,6 @@ export default function Lesson() {
           items={[
             { label: <K c="price">average gain</K>, value: perDay(v2.gain), tone: tone(v2.gain) },
             { label: 'capital', value: money(v2.capital) },
-            { label: <K c="price">payback</K>, value: v2.capital === 0 ? '—' : years(v2.payback) },
             { label: <K c="price">net present value</K>, value: money(v2.npv), tone: tone(v2.npv) },
           ]}
         />
@@ -524,20 +532,10 @@ export default function Lesson() {
           onChange={(v) => s2.set({ shift: v })}
           display={st.shift === 0 ? 'no change' : `$${st.shift} wider`}
         />
-        <Slider
-          label="Seasonal swing in demand"
-          tone="red"
-          value={st.seasonality}
-          min={0}
-          max={2}
-          step={0.1}
-          onChange={(v) => s2.set({ seasonality: Math.round(v * 10) / 10 })}
-          display={`×${fmt(st.seasonality, 1)}${st.seasonality === HISTORY_DEFAULTS.seasonality ? ' (normal)' : ''}`}
-        />
         <Caption>
           {st.compare === 'yours' && capital === 0
-            ? 'Your design is still today’s Calder, so it gains nothing; build something in the first demonstration to compare it here.'
-            : `Over the five years, ${compareName} gains ${perDay(v2.gain)} on average over today’s Calder, against ${money(v2.capital)} of capital.`}
+            ? 'Your design is still today’s Corran, so it gains nothing; build something in the first demonstration to compare it here.'
+            : `Over the five years, ${compareName} gains ${perDay(v2.gain)} on average over today’s Corran, against ${money(v2.capital)} of capital.`}
         </Caption>
       </Figure>
 
@@ -545,30 +543,26 @@ export default function Lesson() {
         The coker’s gain follows the heavy discount week by week: their correlation over the five years is {fmt(f.corrDiscount, 2)}. In year 2, when Coldwater’s
         discount averaged {usd(f.year2Discount, 2)}, the coker gained only {perDay(f.year2Gain)}, and in its worst week it lost {perDay(-f.worstWeek)}. Now widen
         fuel oil’s discount by $10 after year 2. Coldwater’s price follows fuel oil’s, by a little over a third of every dollar (
-        <a href={lessonHref('oil/4.5')}>Lesson 4.5</a>), and the coker design runs {kbd(f.coker.crude.coldwater - f.calder.crude.coldwater)} more of it. Its average
+        <a href={lessonHref('oil/4.5')}>Lesson 4.5</a>), and the coker design runs {kbd(f.coker.crude.coldwater - f.corran.crude.coldwater)} more of it. Its average
         gain rises to {perDay(f.cokerShifted.gain)}, its payback falls to {years(f.cokerShifted.payback)}, and its net present value turns to{' '}
         {money(f.cokerShifted.npv)}. A design built on the crude unit and the hydrotreater hardly notices: the {kbd(EXAMPLE_CDU)} and {kbd(EXAMPLE_DHT)} pair
         gains {perDay(f.bothShifted.gain)} with the shift against {perDay(f.bothValue.gain)} without it. Build your own design in{' '}
-        <FigRef to="Refinery Builder">the first demonstration</FigRef> and compare it here to see which prices it depends on. A lasting change like the 2020 limit
-        on sulfur in ships’ fuel is exactly the kind of physical fact that decides whether a coker pays.
+        <FigRef to="Refinery Builder">the first demonstration</FigRef> and compare it here to see which prices it depends on. A lasting shift like the one the 2020
+        limit on sulfur in ships’ fuel threatened is exactly what decides whether a coker pays.
       </P>
 
       <Challenge
         id="b"
         figure="Refinery Builder · through the history"
-        question={`Compare the 10 kb/d coker expansion with the seasons at normal. What is the smallest lasting widening of fuel oil’s discount, to the nearest dollar, at which it pays back within ${PAYBACK_TARGET} years?`}
+        question={`Predict first. To repay its ${money(COKER_TEST_CAPITAL)} within ${PAYBACK_TARGET} years, the coker expansion must gain about ${perDay(Math.round(neededGain() / 1000) * 1000)}. From its gains with fuel oil’s discount unchanged and $10 wider, ${perDay(f.cokerValue.gain)} and ${perDay(f.cokerShifted.gain)}, estimate the smallest lasting widening, to the nearest dollar, that gets it there. Then set your estimate, with the coker expansion selected, to check it.`}
         solved={solvedB}
-        status={
-          st.compare !== 'coker' || st.seasonality !== HISTORY_DEFAULTS.seasonality
-            ? 'Choose the coker expansion and set the seasonal swing back to normal.'
-            : `With fuel oil’s discount ${st.shift === 0 ? 'unchanged' : `$${st.shift} wider`}, the coker pays back in ${years(v2.payback)}.`
-        }
-        success={`Solved: $${answerB}. The coker then gains ${perDay(designValue(COKER_TEST, historyParams({ shift: answerB, seasonality: HISTORY_DEFAULTS.seasonality })).gain)} on average and pays back in ${years(cokerPayback(answerB))}; a dollar less and it takes ${years(cokerPayback(answerB - 1))}. Building a coker is a bet that heavy, sour crude stays cheap.`}
+        status={st.compare !== 'coker' ? 'Choose the coker expansion.' : 'Work out your estimate from the two gains before you move the slider.'}
+        success={`Solved: $${answerB}. Each dollar of widening adds about ${perDay((f.cokerShifted.gain - f.cokerValue.gain) / 10)} to the coker’s gain, so about ${usd((neededGain() - f.cokerValue.gain) / ((f.cokerShifted.gain - f.cokerValue.gain) / 10), 1)} of widening reaches the ${perDay(Math.round(neededGain() / 1000) * 1000)} it needs. At $${answerB} it gains ${perDay(designValue(COKER_TEST, historyParams({ shift: answerB })).gain)} and pays back in ${years(cokerPayback(answerB))}; a dollar less and it takes ${years(cokerPayback(answerB - 1))}. Building a coker is a bet that heavy, sour crude stays cheap.`}
       />
 
       <P>
-        Whatever the design, almost every barrel it runs starts inland. The refinery you have built runs {crudeText(day)}. Ridgeback Light and Coldwater Heavy
-        both reach Port Calder through Kessler, down the Kessler–Calder line or by rail. When that line fills, as it did in the simulated years, Kessler’s price
+        Whatever the design, almost every barrel it runs starts inland. The refinery you have built runs {crudeText(day)}. Pinyon Light and Coldwater Heavy
+        both reach Port Corran through Kessler, down the Kessler–Corran line or by rail. When that line fills, as it did in the simulated years, Kessler’s price
         falls away from the coast’s, and the company’s own crude, sold at Kessler, falls with it. <a href={lessonHref('oil/7.3')}>Lesson 7.3</a> builds the logistics that connect the company’s fields to its refinery.
       </P>
     </LessonPage>

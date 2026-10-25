@@ -21,10 +21,11 @@ import {
   useScenario,
 } from '../../../framework';
 import { FUTURES_CONTRACT_MMBTU, futuresMarks, marginCalls } from '../../../engines/gas/contracts';
-import { forwardCurve, normalPlan, planInventory, simulateYear, type ForwardCurve, type StorageState, type YearDay } from '../../../engines/gas/market';
+import { SEASONAL_COSTS, forwardCurve, normalPlan, planInventory, simulateYear, type ForwardCurve, type StorageState, type YearDay } from '../../../engines/gas/market';
 import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, gasDayLabel, weatherYear } from '../../../model/gas/weather';
 import { XYChart } from '../shared/XYChart';
 import { basis as signedBasis, money } from '../shared/format';
+import { FORWARD_CURVES, WINTER_PATHS } from './forwardTable';
 
 // ---------------------------------------------------------------------------
 // Figure 1: the forward curve, as the market would draw it from a given day and storage level.
@@ -48,13 +49,21 @@ export function storageAtLevel(day: number, levelPct: number): StorageState {
   return { saltflat: (planInventory(plan, 'saltflat', day) * levelPct) / 100, hollowcreek: (planInventory(plan, 'hollowcreek', day) * levelPct) / 100 };
 }
 
+/** The expected forward curve (24 simulated weather years) drawn on `date` with storage at `levelPct` of plan, computed live (about 0.2 s). */
+export function computeCurve(date: CurveDate, levelPct: number): ForwardCurve {
+  return forwardCurve({ startDay: CURVE_DAY[date], startStorage: storageAtLevel(CURVE_DAY[date], levelPct) });
+}
+
 const curveCache = new Map<string, ForwardCurve>();
-/** The expected forward curve (24 simulated weather years) drawn on `date` with storage at `levelPct` of plan; cached. */
+/**
+ * The same curve, read from the table precomputed for every setting of the figure (forwardTable.ts) so
+ * the lesson paints at once; any other setting is computed and cached.
+ */
 export function curveAt(date: CurveDate, levelPct: number): ForwardCurve {
   const key = `${date}|${levelPct}`;
   let c = curveCache.get(key);
   if (!c) {
-    c = forwardCurve({ startDay: CURVE_DAY[date], startStorage: storageAtLevel(CURVE_DAY[date], levelPct) });
+    c = FORWARD_CURVES[key] ?? computeCurve(date, levelPct);
     curveCache.set(key, c);
   }
   return c;
@@ -119,39 +128,49 @@ export function expectedFebruary(startDay: number, storage: StorageState): numbe
   return s / SCENARIOS;
 }
 
-export type WinterId = 'cold' | 'ordinary' | 'mild';
-/** Three simulated winters, chosen for how much storage they used by late January. */
+export type WinterId = 'cold' | 'typical' | 'warm';
+/**
+ * Three simulated winters, chosen for how much storage they used by late January: the cold winter of
+ * Lesson 4.4, the typical winter of Lessons 4.1, 4.2 and 4.4, and a warm one seen only here.
+ */
 export const WINTERS: Record<WinterId, { seed: number; label: string }> = {
   cold: { seed: 29, label: 'A cold winter' },
-  ordinary: { seed: 31, label: 'An ordinary winter' },
-  mild: { seed: 61, label: 'A mild winter' },
+  typical: { seed: 3, label: 'A typical winter' },
+  warm: { seed: 61, label: 'A warm winter' },
 };
+/** A winter id from saved state, or the default if it names a winter no longer offered. */
+const winterOf = (id: string): WinterId => (id in WINTERS ? (id as WinterId) : 'typical');
 
-export interface WinterRun {
-  /** The realized market from November 1 to the end of February. */
-  days: YearDay[];
-  /** The February contract's price on each of MARK_DAYS. */
+/** The February contract's price on each of MARK_DAYS, and February's daily Calder and Metro prices. */
+export interface WinterPath {
   path: number[];
-  /** February's daily Calder and Metro prices, and their averages. */
   febCalder: number[];
   febMetro: number[];
+}
+export interface WinterRun extends WinterPath {
+  /** February's average Calder and Metro prices. */
   calderAvg: number;
   metroAvg: number;
 }
 
+/** The February contract along a winter's weather, from November 1 with storage as planned, computed live (about 0.3 s). */
+export function computeWinterPath(seed: number): WinterPath {
+  const start = storageAtLevel(214, 100);
+  const days: YearDay[] = simulateYear({ weather: weatherYear(seed), startDay: 214, days: FEB_END - 214, startStorage: start });
+  const path = MARK_DAYS.map((t) => expectedFebruary(t, t === 214 ? start : days[t - 214 - 1].storage));
+  const feb = days.slice(FEB_START - 214);
+  return { path, febCalder: feb.map((d) => d.price.calder), febMetro: feb.map((d) => d.price.metro) };
+}
+
 const winterCache = new Map<WinterId, WinterRun>();
-/** A winter's realized market and the February contract's price along it; cached. */
+/** A winter's February contract and February prices, from the precomputed table (or computed); cached. */
 export function winterRun(id: WinterId): WinterRun {
   let w = winterCache.get(id);
   if (!w) {
-    const start = storageAtLevel(214, 100);
-    const days = simulateYear({ weather: weatherYear(WINTERS[id].seed), startDay: 214, days: FEB_END - 214, startStorage: start });
-    const path = MARK_DAYS.map((t) => expectedFebruary(t, t === 214 ? start : days[t - 214 - 1].storage));
-    const feb = days.slice(FEB_START - 214);
-    const febCalder = feb.map((d) => d.price.calder);
-    const febMetro = feb.map((d) => d.price.metro);
+    const seed = WINTERS[id].seed;
+    const p = WINTER_PATHS[seed] ?? computeWinterPath(seed);
     const avg = (x: number[]) => x.reduce((a, b) => a + b, 0) / x.length;
-    w = { days, path, febCalder, febMetro, calderAvg: avg(febCalder), metroAvg: avg(febMetro) };
+    w = { ...p, calderAvg: avg(p.febCalder), metroAvg: avg(p.febMetro) };
     winterCache.set(id, w);
   }
   return w;
@@ -164,7 +183,7 @@ export const HEDGE_CONTRACTS = (UTILITY_MMBTU_PER_DAY * FEB_DAYS) / FUTURES_CONT
 /** Illustrative margins per contract, $. */
 export const INITIAL_MARGIN = 4000;
 export const MAINTENANCE_MARGIN = 3000;
-export const HEDGE_DEFAULTS = { winter: 'ordinary' as WinterId, contracts: 0, swap: false };
+export const HEDGE_DEFAULTS = { winter: 'typical' as WinterId, contracts: 0, swap: false };
 
 /** The price of a February Metro basis swap on November 1: the curve's expected Metro − Calder for February. */
 export function swapBasis(): number {
@@ -194,9 +213,26 @@ export function utilityCost(id: WinterId, contracts: number, swap: boolean): Uti
   return { unhedged: bill / volume, futuresGain, swapPayoff, net: (bill - futuresGain - swapPayoff) / volume };
 }
 
-/** The second challenge: the futures position covers exactly the utility's February gas. */
-export function hedgeSolved(s: { contracts: number }): boolean {
-  return s.contracts === HEDGE_CONTRACTS;
+/** The lowest and highest net cost per MMBtu across the three winters for a position. */
+export function costRange(contracts: number, swap: boolean): { lo: number; hi: number } {
+  const xs = (Object.keys(WINTERS) as WinterId[]).map((id) => utilityCost(id, contracts, swap).net);
+  return { lo: Math.min(...xs), hi: Math.max(...xs) };
+}
+
+/** The position, on the slider's steps of 10, that narrows the cost range across these three winters most: hindsight, not a hedge rule. */
+export function narrowestHedge(swap: boolean): number {
+  let best = 0;
+  for (let n = 0; n <= 200; n += 10) {
+    const r = costRange(n, swap);
+    const b = costRange(best, swap);
+    if (r.hi - r.lo < b.hi - b.lo) best = n;
+  }
+  return best;
+}
+
+/** The second challenge: futures covering exactly the utility's February gas, plus the basis swap. */
+export function hedgeSolved(s: { contracts: number; swap: boolean }): boolean {
+  return s.contracts === HEDGE_CONTRACTS && s.swap;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +250,6 @@ export default function Lesson() {
   const curve = curveAt(fs.date, fs.level);
   const k = Math.max(0, Math.min(11, Math.round(fs.month)));
   const st = strips(curve);
-  const bw = winterBackwardated(curve);
   const solvedCurve = curveChallengeSolved(fs);
   const xs = curve.months.map((_, i) => i);
   const lo = curve.calder.map((p, i) => p - curve.calderSd[i]);
@@ -228,36 +263,42 @@ export default function Lesson() {
   const APR = curveAt('apr1', 100);
   const baseStrips = strips(BASE);
   const shortStrips = strips(SHORT);
-  const summerBase = [0, 1, 2, 3, 4, 5].map((m) => BASE.calder[idx(BASE, m)]);
-  const SUMMER_LO = Math.min(...summerBase);
-  const SUMMER_HI = Math.max(...summerBase);
   const PLAN_FEB = normalPlan().price.calder[10];
   const at = (c: ForwardCurve, m: number) => c.calder[idx(c, m)];
+  /** A difference of two prices as shown, rounded to cents first, so the prose's arithmetic adds up. */
+  const gap = (a: number, b: number) => Math.round(a * 100) / 100 - Math.round(b * 100) / 100;
   const bAt = (c: ForwardCurve, m: number) => c.metro[idx(c, m)] - c.calder[idx(c, m)];
 
   // ---- Figure 2.
   const h = useScenario('hedge', HEDGE_DEFAULTS);
   const hs = h.state;
-  const w = winterRun(hs.winter);
+  const wid = winterOf(hs.winter);
+  const w = winterRun(wid);
   const entry = w.path[0];
   const final = w.path[w.path.length - 1];
   const marks = futuresMarks(hs.contracts, entry, w.path.slice(1));
   const calls = hs.contracts > 0 ? marginCalls(hs.contracts, marks.cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN) : [];
-  const cost = utilityCost(hs.winter, hs.contracts, hs.swap);
+  const cost = utilityCost(wid, hs.contracts, hs.swap);
   const solvedHedge = hedgeSolved(hs);
-  const range = (contracts: number, swap: boolean) => {
-    const xsC = (Object.keys(WINTERS) as WinterId[]).map((id) => utilityCost(id, contracts, swap).net);
-    return { lo: Math.min(...xsC), hi: Math.max(...xsC) };
-  };
-  const rNow = range(hs.contracts, hs.swap);
-  const rNone = range(0, false);
-  const rFull = range(HEDGE_CONTRACTS, false);
-  const rSwap = range(HEDGE_CONTRACTS, true);
+  const rNow = costRange(hs.contracts, hs.swap);
+  const rNone = costRange(0, false);
+  const rFull = costRange(HEDGE_CONTRACTS, false);
+  const rSwap = costRange(HEDGE_CONTRACTS, true);
   const COLD = winterRun('cold');
-  const MILD = winterRun('mild');
-  const ORD = winterRun('ordinary');
-  const MILD_CALLS = marginCalls(HEDGE_CONTRACTS, futuresMarks(HEDGE_CONTRACTS, MILD.path[0], MILD.path.slice(1)).cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN).length;
+  const WARM = winterRun('warm');
+  const TYP = winterRun('typical');
+  const OVER = narrowestHedge(false);
+  const OVER_SWAP = narrowestHedge(true);
+  const rOver = costRange(OVER, false);
+  const rOverSwap = costRange(OVER_SWAP, true);
+  /** From the warm winter to the cold one: how much the unhedged bill rose, and how much the contract's final price did, per MMBtu. */
+  const billSwing = utilityCost('cold', 0, false).unhedged - utilityCost('warm', 0, false).unhedged;
+  const futuresSwing = COLD.path[COLD.path.length - 1] - WARM.path[WARM.path.length - 1];
+  const WARM_CALLS = marginCalls(HEDGE_CONTRACTS, futuresMarks(HEDGE_CONTRACTS, WARM.path[0], WARM.path.slice(1)).cumulative, INITIAL_MARGIN, MAINTENANCE_MARGIN).length;
   const swapB = swapBasis();
+  /** What futures plus the swap lock in, $/MMBtu, and how far each winter's February spot ended from the contract's last price. */
+  const LOCKED = COLD.path[0] + swapB;
+  const miss = (r: WinterRun) => r.calderAvg - r.path[r.path.length - 1];
   const febDays = Array.from({ length: FEB_DAYS }, (_, i) => FEB_START + i + 0.5);
   const pTop = Math.max(6.5, Math.ceil(Math.max(...w.febCalder, ...w.path) * 2) / 2);
   const pBot = Math.min(3, Math.floor(Math.min(...w.febCalder, ...w.path) * 2) / 2);
@@ -265,16 +306,16 @@ export default function Lesson() {
   const curveStatus =
     fs.date !== 'nov1'
       ? `Draw the curve on November 1 first; it’s drawn on ${CURVE_DATE_LABEL[fs.date]}.`
-      : bw
-        ? `At ${fs.level}% of plan the winter is backwardated: December ${usd2(at(curve, 8))}, January ${usd2(at(curve, 9))}, February ${usd2(at(curve, 10))}. Is it still backwardated with more gas in storage?`
-        : `At ${fs.level}% of plan the winter is in contango: December ${usd2(at(curve, 8))}, January ${usd2(at(curve, 9))}, February ${usd2(at(curve, 10))}.`;
+      : fs.level === LEVEL_MAX
+        ? `Set storage to ${SHORT_LEVEL}% of plan to check your prediction, then keep going.`
+        : `Storage is at ${fs.level}% of plan; the caption gives December, January and February.`;
 
   return (
     <LessonPage id="gas/4.5">
       <P>
         <a href={lessonHref('gas/4.4')}>The previous lesson</a> watched storage carry gas from summer into winter, and a real winter wander away from the plan. Nobody
-        in the market waits until February to find out what February’s gas will cost. Buyers and sellers agree prices for future months today, and those prices — one for
-        every month ahead — are where the physical system’s expectations become numbers anyone can see.
+        in the market waits until February to find out what February’s gas will cost. Buyers and sellers agree prices for future months today, and those prices are
+        where the physical system’s expectations become numbers anyone can see.
       </P>
       <P>
         Three kinds of price are traded. The <b>spot</b> price is for gas delivered right away: in practice, tomorrow, bought and sold today. A <b>forward</b> is a price
@@ -285,9 +326,13 @@ export default function Lesson() {
       <P>
         What should a forward price be? If traders expect the weather to be like it has been and ask nothing extra for bearing risk, it should be the average spot price
         they expect that month. The next demonstration computes exactly that: it runs the region’s market from the chosen day through 24 simulated weather years, starting
-        from the gas in storage that day, and averages each month’s prices. The shaded band spans one standard deviation either side — how much the month’s average varied
-        from one simulated year to another. Choose the day the curve is drawn on and how much gas storage holds, compared with the plan of Lesson 4.4, and drag across the
-        chart to read any month:
+        from the gas in storage that day, and averages each month’s prices.
+      </P>
+      <P>
+        The 24 years don’t agree. The shaded band shows by how much, as one <b>standard deviation</b> either side of the curve: square how far each year’s average
+        for the month lies from the average of all 24, average the squares, and take the square root. That gives a typical distance from the average — for numbers
+        spread in a bell shape, about two in three lie within it. Choose the day the curve is drawn on and how much gas storage holds, as a share of the
+        plan of <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>, and drag across the chart to read any month:
       </P>
 
       <Figure name="Gas Forward Curve" scenario={f}>
@@ -342,18 +387,15 @@ export default function Lesson() {
           onChange={(v) => f.set({ level: v })}
           display={`${fs.level}% of plan`}
         />
-        <Caption>
-          {`December to February is in ${bw ? 'backwardation' : 'contango'}: ${usd2(at(curve, 8))}, ${usd2(at(curve, 9))}, ${usd2(at(curve, 10))}. Winter averages ${usd(st.winter - st.summer, 2)} more than summer.`}
-        </Caption>
+        <Caption>{`December ${usd2(at(curve, 8))}, January ${usd2(at(curve, 9))}, February ${usd2(at(curve, 10))}.`}</Caption>
       </Figure>
 
       <P>
         Drawn on November 1, with storage as full as the plan expects, the curve starts at {usd2(at(BASE, 8))} for December, climbs to {usd2(at(BASE, 9))} for
-        January and {usd2(at(BASE, 10))} for February, eases to {usd2(at(BASE, 11))} for March, and drops to {usd2(at(BASE, 0))} for April. From April to September it
-        stays between {usd2(SUMMER_LO)} and {usd2(SUMMER_HI)}, then rises again into next winter. Winter months average {usd2(baseStrips.winter)} and summer months{' '}
+        January and {usd2(at(BASE, 10))} for February, eases to {usd2(at(BASE, 11))} for March, and drops to {usd2(at(BASE, 0))} for April. Winter months average {usd2(baseStrips.winter)} and summer months{' '}
         {usd2(baseStrips.summer)}. Two things put the winter premium there. One is the scarcity rent of <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>: storage is
         full by November, so summer gas can’t all be carried into winter. The other is that prices answer the weather lopsidedly: a cold spell that drains storage raises
-        them more than an equally mild spell lowers them. So the average over all the winters the market might get comes out above the price of a perfectly ordinary
+        them more than an equally mild spell lowers them. So the average over all the winters the market might get comes out above the price of a perfectly average
         one — Lesson 4.4’s plan, with normal weather every day, put February at {usd2(PLAN_FEB)}. The band is widest in February, ±
         {usd2(BASE.calderSd[idx(BASE, 10)])}, because by then a whole winter’s luck has accumulated.
       </P>
@@ -361,26 +403,35 @@ export default function Lesson() {
         Traders have names for the curve’s shape. When later months cost more than nearer ones, the curve is in <b>contango</b>; when they cost less, it’s in{' '}
         <b>backwardation</b>. This curve is in contango from December to February, as the chance of a cold spell builds while storage empties and its wells deliver less
         (the ratchets of <a href={lessonHref('gas/3.4')}>Lesson 3.4</a>). It is backwardated from February into spring, nearly flat through the summer — storage, with
-        room to spare, keeps neighboring summer months within cents of each other — and in contango again toward the next winter. Storage can only move gas forward in
-        time, though. Gas held now can be sold later, but gas that hasn’t been produced yet can’t be sold now, so no arbitrage puts a floor under backwardation.
+        room to spare, holds summer months within cents of each other — and in contango again toward the next winter.
       </P>
       <P>
-        Now take gas out of storage. With only {SHORT_LEVEL}% of the planned gas on November 1, every month rises, winter most: December to{' '}
-        {usd2(at(SHORT, 8))}, February to {usd2(at(SHORT, 10))}, and the winter months average {usd2(shortStrips.winter)}. Next summer rises less, to an average of{' '}
-        {usd2(shortStrips.summer)}, because the region has to refill storage then. The dashed line is Metro: {signedBasis(bAt(BASE, 9))} over Calder in January and{' '}
-        {signedBasis(bAt(BASE, 10))} in February with storage as planned, more than the {usd2(bAt(BASE, 0))} it costs to move gas up Northline, because a cold February
-        can fill Northline (<a href={lessonHref('gas/4.2')}>Lesson 4.2</a>). With storage short, February’s Metro basis widens to {signedBasis(bAt(SHORT, 10))}.
-        Drawn on April 1 instead, the whole year lies ahead: summer near {usd2(at(APR, 3))} and February at {usd2(at(APR, 10))}.
+        That winter climb — {usd2(at(BASE, 9) - at(BASE, 8))} from December to January and {usd2(at(BASE, 10) - at(BASE, 9))} from January to February — is far
+        more than the {usd2(SEASONAL_COSTS.holdCostPerMonth)} a month of carry that <a href={lessonHref('gas/4.4')}>Lesson 4.4</a> found between neighboring
+        months. Carry sets the gap only while storage can shift gas between the months. By February the fields are partly empty and deliver less each day: in these simulated winters
+        Hollow Creek, which holds most of the region’s gas, is withdrawing as fast as it can on most February days. Then its deliverability, not carry, decides how
+        much gas it can give February, and the gap can grow. Nothing limits backwardation
+        either: storage carries gas forward in time, but gas that hasn’t been produced yet can’t be sold now, so a later month can fall any distance below an
+        earlier one.
       </P>
-
       <Challenge
         id="a"
         figure="Gas Forward Curve"
-        question="Drawn on November 1, at what storage level does the curve stop climbing into the winter? Find the highest level (in the slider’s steps) at which December costs more than January and January more than February."
+        question={`Predict first: if storage held only ${SHORT_LEVEL}% of the planned gas on November 1, would the climb from December to February get steeper or flatter? Check it, then find the highest storage level, in the slider’s steps, at which the winter tilts the other way: December dearer than January, and January dearer than February.`}
         solved={solvedCurve}
         status={curveStatus}
-        success={`Solved: ${fs.level}% of plan. December ${usd2(at(curve, 8))}, January ${usd2(at(curve, 9))}, February ${usd2(at(curve, 10))}. With that little gas in the ground, the market can’t count on storage to carry it through the late winter, so the gas it needs soonest is worth most, and the curve tilts down from the front. A step more storage and it tilts back up. A backwardated front of the curve is the market’s way of saying “we’re short now”.`}
+        success={`Solved: ${fs.level}% of plan — December ${usd2(at(curve, 8))}, January ${usd2(at(curve, 9))}, February ${usd2(at(curve, 10))}. Short of gas from the start, the fields can’t deliver freely even in December, so the nearest months rise most: the climb from December to February shrinks from ${usd2(gap(at(BASE, 10), at(BASE, 8)))} with storage as planned to ${usd2(gap(at(SHORT, 10), at(SHORT, 8)))} at ${SHORT_LEVEL}%, and here it tips over. A step more storage and the winter climbs again. A backwardated front of the curve is the market’s way of saying “we’re short now”.`}
       />
+
+      <P>
+        With only {SHORT_LEVEL}% of the planned gas on November 1, every month rises, and the nearest winter months most: December by{' '}
+        {usd2(gap(at(SHORT, 8), at(BASE, 8)))}, to {usd2(at(SHORT, 8))}, February by {usd2(gap(at(SHORT, 10), at(BASE, 10)))}, to {usd2(at(SHORT, 10))}. The winter months
+        average {usd2(shortStrips.winter)}; next summer rises less, to {usd2(shortStrips.summer)}, because the region has to refill storage then. The dashed line
+        is Metro: {signedBasis(bAt(BASE, 9))} over Calder in January and {signedBasis(bAt(BASE, 10))} in February with storage as planned, more than the{' '}
+        {usd2(bAt(BASE, 0))} it costs to move gas up Northline, because a cold February can fill Northline (<a href={lessonHref('gas/4.2')}>Lesson 4.2</a>).
+        With storage short, February’s Metro basis widens to {signedBasis(bAt(SHORT, 10))}. Drawn on April 1 instead, the whole year lies ahead: summer near{' '}
+        {usd2(at(APR, 3))} and February at {usd2(at(APR, 10))}.
+      </P>
 
       <H2>Futures</H2>
       <P>
@@ -393,15 +444,17 @@ export default function Lesson() {
         which pays the difference between that place’s price and the hub’s.
       </P>
       <P>
-        In the next demonstration, the February contract trades from November 1 until January 28, its last trading day here, through one of three simulated winters. Its
+        In the next demonstration, the February contract trades from November 1 until January 28, its last trading day here, through one of three simulated winters:
+        the cold winter of Lesson 4.4, the typical winter of Lessons 4.2 and 4.4, or a warm one. Its
         price on each date is the market’s expectation of February, recomputed from the gas then in storage, exactly as the curve in{' '}
-        <FigRef to="Gas Forward Curve">the first demonstration</FigRef> was. After trading stops, the dots are February’s actual daily prices. Metro’s gas utility will buy{' '}
+        <FigRef to="Gas Forward Curve">the first demonstration</FigRef> was. We mark it every second week, not every evening, and count margin calls only on
+        those dates. After trading stops, the dots are February’s actual daily prices. Metro’s gas utility will buy{' '}
         {fmt(UTILITY_MMBTU_PER_DAY)} MMBtu a day at Metro’s price through February; set how many February contracts it buys on November 1 and whether it adds a basis
         swap at the November 1 price of {signedBasis(swapB)}:
       </P>
 
       <Figure name="Gas Forward Curve · convergence" scenario={h}>
-        <Segmented label="Winter" value={hs.winter} onChange={(v) => h.set({ winter: v })} options={(Object.keys(WINTERS) as WinterId[]).map((id) => ({ value: id, label: WINTERS[id].label }))} />
+        <Segmented label="Winter" value={wid} onChange={(v) => h.set({ winter: v })} options={(Object.keys(WINTERS) as WinterId[]).map((id) => ({ value: id, label: WINTERS[id].label }))} />
         <XYChart
           xDomain={[214, FEB_END]}
           yDomain={[pBot, pTop]}
@@ -419,7 +472,7 @@ export default function Lesson() {
           hLines={[{ at: entry, color: '#9a9a9a', dash: '4 4', width: 1, label: `bought at ${usd2(entry)}`, labelAt: 'start' }]}
           vLines={[{ at: EXPIRY_DAY, color: '#777', dash: '3 4', width: 1, label: 'trading stops', labelAt: 'end' }]}
           markers={[{ x: EXPIRY_DAY, y: final, color: TEXT.green, r: 6, label: usd2(final), labelPos: 'left' }]}
-          ariaLabel={`${WINTERS[hs.winter].label}: the February contract trades at ${usd2(entry)} on November 1 and ${usd2(final)} on January 28. February’s daily Calder prices average ${usd2(w.calderAvg)}.`}
+          ariaLabel={`${WINTERS[wid].label}: the February contract trades at ${usd2(entry)} on November 1 and ${usd2(final)} on January 28. February’s daily Calder prices average ${usd2(w.calderAvg)}.`}
         />
         <Legend
           items={[
@@ -430,7 +483,6 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'futures at expiry', value: usd2(final), tone: 'green' },
             { label: 'February’s average spot', value: usd2(w.calderAvg), tone: 'orange' },
             { label: `gain on ${hs.contracts} contracts`, value: money(cost.futuresGain), tone: cost.futuresGain < 0 ? 'red' : 'green' },
             { label: 'margin calls', value: hs.contracts > 0 ? `${calls.length}` : '—' },
@@ -457,50 +509,54 @@ export default function Lesson() {
 
       <P>
         All three winters start from the same {usd2(entry)}. In the cold one, December and January drain storage faster than planned, every recalculation finds less gas
-        in the ground, and the contract climbs to {usd2(COLD.path[COLD.path.length - 1])} by January 28. In the mild one, storage stays fuller than planned and the price
-        slides to {usd2(MILD.path[MILD.path.length - 1])}. The futures price doesn’t jump to the answer; it drifts as the evidence arrives, because most of what decides
+        in the ground, and the contract climbs to {usd2(COLD.path[COLD.path.length - 1])} by January 28. In the warm one, storage stays fuller than planned and the price
+        slides to {usd2(WARM.path[WARM.path.length - 1])}. The futures price doesn’t jump to the answer; it drifts as the evidence arrives, because most of what decides
         February — February’s own weather — is still unknown until February.
       </P>
       <P>
         At expiry the contract becomes February gas bought for the whole month: the futures price has <b>converged</b> on the price of the gas it delivers. February’s
         daily prices still scatter around it as February’s weather arrives. In the cold winter they average {usd2(COLD.calderAvg)}, close to the final{' '}
-        {usd2(COLD.path[COLD.path.length - 1])}; in the ordinary one, {usd2(ORD.calderAvg)} against {usd2(ORD.path[ORD.path.length - 1])}; in the mild one{' '}
-        {usd2(MILD.calderAvg)}, a little below its {usd2(MILD.path[MILD.path.length - 1])}.
+        {usd2(COLD.path[COLD.path.length - 1])}; in the typical one, {usd2(TYP.calderAvg)} against {usd2(TYP.path[TYP.path.length - 1])}; in the warm one,{' '}
+        {usd2(WARM.calderAvg)} against {usd2(WARM.path[WARM.path.length - 1])}.
       </P>
 
       <Challenge
         id="b"
         figure="Gas Forward Curve · convergence"
-        question={`Metro’s utility wants to fix, on November 1, what it pays for February’s gas: ${fmt(UTILITY_MMBTU_PER_DAY)} MMBtu a day for ${FEB_DAYS} days. How many February contracts cover exactly that much gas?`}
+        question={`Metro’s utility wants to fix, on November 1, what it pays for February’s gas: ${fmt(UTILITY_MMBTU_PER_DAY)} MMBtu a day for ${FEB_DAYS} days, at Metro’s price. Predict first: with the February contract at ${usd2(COLD.path[0])} and the basis swap at ${signedBasis(swapB)}, what price per MMBtu would a perfect hedge lock in? Then build the hedge — contracts covering exactly that gas, plus the swap — and see how close the three winters come.`}
         solved={solvedHedge}
         status={
-          hs.contracts === 0
-            ? `With no futures, the utility’s February cost ranges from ${usd2(rNone.lo)} to ${usd2(rNone.hi)} per MMBtu across the three winters.`
-            : `With ${hs.contracts} contracts, the utility’s February cost ranges from ${usd2(rNow.lo)} to ${usd2(rNow.hi)} per MMBtu across the three winters; without any, from ${usd2(rNone.lo)} to ${usd2(rNone.hi)}.`
+          hs.contracts !== HEDGE_CONTRACTS
+            ? `${hs.contracts} contracts cover ${fmt(hs.contracts * FUTURES_CONTRACT_MMBTU)} MMBtu of the ${fmt(UTILITY_MMBTU_PER_DAY * FEB_DAYS)} the utility buys.`
+            : 'The futures cover the gas at Calder’s price, but the utility pays Metro’s: add the swap.'
         }
-        success={`Solved: ${HEDGE_CONTRACTS} contracts, ${fmt(UTILITY_MMBTU_PER_DAY)} × ${FEB_DAYS} ÷ ${fmt(FUTURES_CONTRACT_MMBTU)}. The futures gain in a cold winter offsets dearer gas, and the loss in a mild one gives back cheaper gas, so the cost range narrows from ${usd2(rNone.lo)}–${usd2(rNone.hi)} to ${usd2(rFull.lo)}–${usd2(rFull.hi)}. What’s left comes from Metro’s basis and from February’s own weather after trading stops. Adding the basis swap narrows it to ${usd2(rSwap.lo)}–${usd2(rSwap.hi)}; the rest is the weather.`}
+        success={`Solved: ${HEDGE_CONTRACTS} contracts (${fmt(UTILITY_MMBTU_PER_DAY)} × ${FEB_DAYS} ÷ ${fmt(FUTURES_CONTRACT_MMBTU)}) and the swap, which together lock in about ${usd2(COLD.path[0])} + ${usd2(swapB)} = ${usd2(LOCKED)}. The three winters land between ${usd2(rSwap.lo)} and ${usd2(rSwap.hi)}, against ${usd2(rNone.lo)}–${usd2(rNone.hi)} unhedged and ${usd2(rFull.lo)}–${usd2(rFull.hi)} with the futures alone. Each misses ${usd2(LOCKED)} by how far February’s spot price ended from the contract’s last price — ${signedBasis(miss(COLD))} in the cold winter, ${signedBasis(miss(TYP))} in the typical one, ${signedBasis(miss(WARM))} in the warm one: February’s own weather, after trading stopped.`}
       />
 
       <P>
-        Look at what the hedge costs, too. In the mild winter the utility loses {money(-utilityCost('mild', HEDGE_CONTRACTS, false).futuresGain)} on its futures — the
-        price of certainty, paid in exactly the year it turned out not to be needed — and meets {MILD_CALLS} margin call{MILD_CALLS === 1 ? '' : 's'} along the way,
-        each paid in cash before February’s gas is even bought. Hedgers need cash to survive the marks. A producer selling its winter output would take the
-        other side, and would have the same experience in reverse.
+        Keep adding contracts and the range keeps narrowing, to {usd2(rOver.hi - rOver.lo)} wide at {OVER}, or {usd2(rOverSwap.hi - rOverSwap.lo)} at {OVER_SWAP} with
+        the swap. That isn’t a better hedge. The first {HEDGE_CONTRACTS} contracts match the gas the utility buys; each one more is a bet that its bill moves
+        further than the futures price. In these three winters it did — from the warm winter to the cold one the bill rose {usd2(billSwing)} per MMBtu and the
+        contract only {usd2(futuresSwing)}, as Metro’s basis widened and February’s weather pushed the way the futures had drifted — but three winters are too few
+        to count on. A winter warm until late January and cold in February would make the extra contracts lose money just as the bill rose.
+      </P>
+      <P>
+        Look at what the hedge costs, too. In the warm winter the utility loses {money(-utilityCost('warm', HEDGE_CONTRACTS, false).futuresGain)} on its futures — the
+        price of certainty, paid in exactly the year it turned out not to be needed — and meets {WARM_CALLS} margin call{WARM_CALLS === 1 ? '' : 's'} on our
+        fortnightly marks, each paid in cash before February’s gas is even bought. Hedgers need cash to survive the marks.
       </P>
 
       <H2>From pipes to prices</H2>
       <P>
-        This chapter asked how physical constraints become prices, contracts and institutions. A single price balances the region’s supply against its most flexible uses
-        (<a href={lessonHref('gas/4.1')}>Lesson 4.1</a>). Hubs gather trade where pipelines and storage meet, and every other place prices against them by a basis that
-        stays at the cost of transport until a pipe fills (<a href={lessonHref('gas/4.2')}>Lesson 4.2</a>). The right to use a full pipe becomes property that can be
-        auctioned and resold (<a href={lessonHref('gas/4.3')}>Lesson 4.3</a>). Storage ties the months together and, when it fills, puts a premium on winter (
-        <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>). And forward and futures markets turn all of it into a curve of prices that moves with storage and weather, and
-        that anyone can buy or sell today.
+        This chapter asked how physical constraints become prices, contracts and institutions. A single price balances the region’s supply against its most flexible
+        uses (<a href={lessonHref('gas/4.1')}>Lesson 4.1</a>). Every place prices against a hub by a basis that stays at the cost of transport until a pipe fills (
+        <a href={lessonHref('gas/4.2')}>Lesson 4.2</a>). The right to use a full pipe becomes property that is auctioned and resold (
+        <a href={lessonHref('gas/4.3')}>Lesson 4.3</a>). Storage ties the months together and, when it fills, puts a premium on winter (
+        <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>). And forward and futures markets turn it all into a curve of prices that anyone can trade today.
       </P>
       <P>
-        Each of those prices differs from another — Metro from Calder, January from July, a cold winter’s February from a mild one’s — and each difference has a physical
-        cause. Some are steady, some arrive rarely and violently, and some are worth a great deal to whoever controls the asset that spans them. In{' '}
-        <a href={lessonHref('gas/5.1')}>Chapter 5</a> we take those differences one at a time, starting with the price gap between two places.
+        Each of those prices differs from another — Metro from Calder, January from July, a cold winter’s February from a warm one’s — and each difference has a
+        physical cause. In <a href={lessonHref('gas/5.1')}>Chapter 5</a> we take those differences one at a time, starting with the price gap between two places.
       </P>
     </LessonPage>
   );

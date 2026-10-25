@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import {
-  Button,
   Caption,
   Challenge,
   Checkbox,
@@ -168,6 +167,13 @@ export const CHEAPEST_COST = expansionCost({
   stations: { ...REGION_STATIONS, [CHEAPEST.id]: CHEAPEST.stations },
 });
 
+/** The design day with the new plant, served by the challenge's answer: flows and storage withdrawals. */
+const ANSWER_DAY = (() => {
+  const p = buildProblem({ ...BUILD_DEFAULTS, day: 'design', plant: true, sizes: { ...REGION_SIZES, [CHEAPEST.id]: CHEAPEST.size }, stations: { ...REGION_STATIONS, [CHEAPEST.id]: CHEAPEST.stations } });
+  const s = solveFlow(p);
+  return { flow: s.flow, hollow: s.supplied[p.supplies.findIndex((x) => x.id === 'hollowcreek')] };
+})();
+
 /** The challenge: the design day served, with the new plant, by the cheapest addition to the region's network. */
 export function expansionSolved(st: BuildState): boolean {
   if (st.day !== 'design' || !st.plant || !onlyAdds(st)) return false;
@@ -212,7 +218,6 @@ const DESIGN = solveDay('design');
 const total = (day: Day) => GAS_NODES.reduce((a, n) => a + REFERENCE_DAYS[day].demand[n.id], 0);
 const REGION_COST = networkCost(BUILD_DEFAULTS);
 const supplyOf = (r: typeof SUMMER, id: string) => r.s.supplied[r.p.supplies.findIndex((x) => x.id === id)] ?? 0;
-const EMPTY_SIZES: Record<string, number> = Object.fromEntries(CORRIDORS.map((c) => [c.id, 0]));
 const PRODUCTION = BASINS[0].productionBcfd + BASINS[1].productionBcfd;
 const NL = PIPELINE['calder-metro'];
 /** The design day without Hollow Creek: what no pipeline could supply, and what Metro lacks with the region's pipelines. */
@@ -274,8 +279,11 @@ export default function Lesson() {
   const status = (() => {
     if (!st.plant || st.day !== 'design') return 'Switch on Metro’s new power plant and choose the design day.';
     if (!onlyAdds(st)) return 'The region’s pipelines are already in the ground: add to them, but don’t remove one, shrink it or take away a station. Reset brings the region’s network back.';
-    if (shortPlaces.length)
-      return `On the design day ${listOf(shortPlaces.map((n) => n.name))} ${shortPlaces.length > 1 ? 'are' : 'is'} ${fmt(shortPlaces.reduce((a, n) => a + sol.unserved[n.id], 0), 2)} Bcf/d short. The full pipelines holding gas back: ${listOf(binding.map(corridorName)) || 'none — there isn’t enough gas'}.`;
+    if (shortPlaces.length) {
+      // Name the full lines into the short places: those are the ones holding their gas back.
+      const into = binding.filter((id) => shortPlaces.some((n) => CORRIDORS.find((c) => c.id === id)?.to === n.id));
+      return `On the design day ${listOf(shortPlaces.map((n) => n.name))} ${shortPlaces.length > 1 ? 'are' : 'is'} ${fmt(shortPlaces.reduce((a, n) => a + sol.unserved[n.id], 0), 2)} Bcf/d short. The full pipelines holding gas back: ${listOf((into.length ? into : binding).map(corridorName)) || 'none — there isn’t enough gas'}.`;
+    }
     return `That serves the design day for ${money(extra)} of new capital. Is there a cheaper way?`;
   })();
 
@@ -310,15 +318,7 @@ export default function Lesson() {
         stations, and switch between the days:
       </P>
 
-      <Figure
-        name="Pipeline Builder"
-        scenario={b}
-        actions={
-          <Button onClick={() => b.set({ sizes: EMPTY_SIZES })} label="Remove every pipeline">
-            Clear
-          </Button>
-        }
-      >
+      <Figure name="Pipeline Builder" scenario={b}>
         <Segmented label="Day" value={st.day} onChange={(v) => b.set({ day: v })} options={DAY_OPTIONS} />
         <GasMap
           ariaLabel={`The region’s gas network on ${REFERENCE_DAYS[st.day].name.toLowerCase()}, with ${built.length} pipeline${built.length === 1 ? '' : 's'} costing ${money(cost)}. ${fmt(served, 2)} of ${fmt(dayTotal, 2)} Bcf/d of demand is served${shortPlaces.length ? `; ${shortPlaces.map((n) => `${n.name} is ${fmt(sol.unserved[n.id], 2)} short`).join(', ')}` : ''}. Selected: ${corridorName(sel)}.`}
@@ -403,19 +403,13 @@ export default function Lesson() {
         months earlier and parked underground near the city. Storage near a market does two jobs at once: it supplies gas the basins can’t produce on the day, and it
         delivers it without using any pipeline capacity into the city.
       </P>
-      <P>
-        Try building from nothing. Press <i>Clear</i> and, on the design day, lay pipe until every place is served. It takes a lot of steel: Metro alone needs{' '}
-        {fmt(REFERENCE_DAYS.design.demand.metro - HOLLOW_CREEK_BCFD, 1)} Bcf/d brought in from somewhere, and the gas has to come from basins hundreds of miles away. See how
-        close you can get to the region’s {money(REGION_COST)}.
-      </P>
-
       <Challenge
         id="a"
         figure="Pipeline Builder"
-        question={`Metro’s utility signs up a new power plant that will burn ${fmt(PLANT_BCFD, 1)} Bcf/d on the design day. Starting from the region’s network (Reset brings it back), what is the cheapest addition that still serves every place on the design day? Pipelines already in the ground stay: you can add stations or lay new pipe, but adding a station to a line costs only the compression, while a different size means a whole new pipe.`}
+        question={`Metro’s utility signs up a new power plant that will burn ${fmt(PLANT_BCFD, 1)} Bcf/d on the design day. Starting from the region’s network (Reset brings it back), what is the cheapest addition that still serves every place on the design day? Pipelines already in the ground stay: you can add stations or lay new pipe, but adding a station to a line costs only the compression, while choosing a different size replaces the line with a new pipe, at a new pipe’s full cost.`}
         solved={solved}
         status={status}
-        success={`Solved: a fourth compressor station on the ${corridorName(best.id)}, for ${money(best.cost)}. It lifts the line from ${fmt(PIPELINE[best.id].capacityBcfd, 2)} to ${fmt(design(best.id, best.size, best.stations).capacityBcfd, 2)} Bcf/d, just enough. A fourth station on Northline would add more — ${fmt(design(NL.id, NL.sizeIn, 4).capacityBcfd - NL.capacityBcfd, 2)} Bcf/d — but cost ${money((design(NL.id, NL.sizeIn, 4).hp - NL_DESIGN.hp) * COMPRESSION_COST_PER_HP)}, and a new 20-inch line up the coast from Bayport ${money(design('bayport-metro', 20, 1).cost)}. The cheapest expansion relieves the constraint that binds, and when compression can do it, compression is far cheaper than steel.`}
+        success={`Solved: a fourth compressor station on the ${corridorName(best.id)}, for ${money(best.cost)}. It lifts the line from ${fmt(PIPELINE[best.id].capacityBcfd, 2)} to ${fmt(ANSWER_DAY.flow[best.id], 2)} Bcf/d, which covers ${fmt(ANSWER_DAY.flow[best.id] - PIPELINE[best.id].capacityBcfd, 2)} of the plant’s ${fmt(PLANT_BCFD, 2)}. Hollow Creek covers the rest by withdrawing ${fmt(ANSWER_DAY.hollow, 2)} Bcf/d instead of ${fmt(supplyOf(DESIGN, 'hollowcreek'), 2)}: all it can give, so on the design day Metro now has nothing left in reserve. A fourth station on Northline would add more — ${fmt(design(NL.id, NL.sizeIn, 4).capacityBcfd - NL.capacityBcfd, 2)} Bcf/d — but cost ${money((design(NL.id, NL.sizeIn, 4).hp - NL_DESIGN.hp) * COMPRESSION_COST_PER_HP)}, and a new 20-inch line up the coast from Bayport ${money(design('bayport-metro', 20, 1).cost)}. The cheapest expansion relieves the constraint that binds, and when compression can do it, compression is far cheaper than steel.`}
       />
 
       <H2>Bigger is cheaper — if it’s full</H2>
@@ -467,10 +461,10 @@ export default function Lesson() {
       <P>
         With three stations, a 20-inch pipe carries {fmt(design(NL.id, 20, 3).capacityBcfd, 2)} Bcf/d for {money(design(NL.id, 20, 3).cost)}, or{' '}
         {money(per(20, 3))} per Bcf/d of capacity. A 42-inch pipe carries {fmt(design(NL.id, 42, 3).capacityBcfd, 2)} Bcf/d for {money(design(NL.id, 42, 3).cost)} —{' '}
-        {money(per(42, 3))} per Bcf/d, {fmt(per(20, 3) / per(42, 3), 1)} times cheaper. Capacity grows with the diameter to the power 2.5, as in{' '}
-        <a href={lessonHref('gas/1.3')}>Lesson 1.3</a>, but the cost of laying it — steel, trenching, right of way — grows roughly in proportion to the diameter, which is why the industry quotes it per inch-mile. Compression trades the
-        same way, up to a point: on a 36-inch pipe each Bcf/d costs {money(per(36, 1))} with one station, {money(per(36, 3))} with three and {money(per(36, 4))} with four,
-        then {money(per(36, 5))} with five, as each extra station adds less capacity than the one before. And the stations burn gas for as long as the line runs (
+        {money(per(42, 3))} per Bcf/d, {pct(1 - per(42, 3) / per(20, 3))} less. Capacity grows with the diameter to the power 2.5, as in{' '}
+        <a href={lessonHref('gas/1.3')}>Lesson 1.3</a>, but the cost of laying it — steel, trenching, right of way — grows roughly in proportion to the diameter, which is why the industry quotes it per inch-mile. Compression helps
+        too, up to a point: on a 36-inch pipe each Bcf/d costs {money(per(36, 1))} with one station and {money(per(36, 3))} with three, but a fourth barely changes
+        it ({money(per(36, 4))}) and a fifth raises it to {money(per(36, 5))}, as each extra station adds less capacity than the one before. And the stations burn gas for as long as the line runs (
         <a href={lessonHref('gas/1.4')}>Lesson 1.4</a>), which the capital cost leaves out.
       </P>
       <P>

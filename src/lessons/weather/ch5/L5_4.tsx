@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
@@ -33,14 +33,14 @@ import {
   type TradeIdea,
 } from '../../../engines/weather/crossMarket';
 import { knownShare } from '../../../model/weather/archive';
-import { CALDER } from '../../../model/weather/region';
+import { FENWICK } from '../../../model/weather/region';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
 // The week, the view and the physics.
 
 /** Forecast error of each day of next week as the market sees it: a January forecast 6–12 days ahead (Lesson 3.5's spreads). */
-export const WEEK_SDS: number[] = Array.from({ length: 7 }, (_, i) => CALDER.winterSd * Math.sqrt(1 - knownShare(6 + i)));
+export const WEEK_SDS: number[] = Array.from({ length: 7 }, (_, i) => FENWICK.winterSd * Math.sqrt(1 - knownShare(6 + i)));
 const SD_TYPICAL = WEEK_SDS.reduce((s, v) => s + v, 0) / WEEK_SDS.length;
 
 export interface LabState {
@@ -130,12 +130,25 @@ export function bestBook(ideas: TradeIdea[], limit = RISK_LIMIT): { book: Book; 
   return top;
 }
 
-/** The second challenge: a book within the risk limit that earns within 1% of the best possible. */
+/** A book within the risk limit that earns within 1% of the best possible, at a state's settings. */
 export function bookSolved(st: LabState, b: Book): boolean {
   const ideas = labIdeas(st);
   const v = bookValue(ideas, b);
   const best = bestBook(ideas);
   return best.net > 0 && v.risk <= RISK_LIMIT && v.net >= 0.99 * best.net;
+}
+
+/** The second challenge's week: warmer than the start, where the lumps fall differently. */
+export const BOOK_WEEK = 30;
+
+export function atBookWeek(st: LabState): boolean {
+  const d = LAB_DEFAULTS;
+  return st.week === BOOK_WEEK && st.revision === d.revision && st.wind === d.wind && st.pipeline === d.pipeline;
+}
+
+/** The second challenge: at 30 °F, with everything else as it started, a book within 1% of the best. */
+export function bookChallengeSolved(st: LabState, b: Book): boolean {
+  return atBookWeek(st) && bookSolved(st, b);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,51 +289,12 @@ function CurvesChart({ st }: { st: LabState }) {
   );
 }
 
-function RatioBars({ ideas }: { ideas: TradeIdea[] }) {
-  const x = scale(-1.5, 1.5, 200, 600);
-  return (
-    <svg
-      className="chart"
-      viewBox="0 0 640 118"
-      role="img"
-      aria-label={`Expected profit after costs per unit of risk: ${ideas.map((i) => `${i.instrument.name} ${fmt(i.ratio, 2)}`).join(', ')}.`}
-    >
-      <text className="ax" x={200} y={12}>
-        Expected profit after costs, per dollar of risk
-      </text>
-      {[-1, 0, 1].map((v) => (
-        <g key={v}>
-          <line className={v === 0 ? 'base' : 'gl'} x1={x(v)} x2={x(v)} y1={20} y2={104} />
-          <text className="ax ax-m" x={x(v)} y={116}>
-            {fmt(v, 1)}
-          </text>
-        </g>
-      ))}
-      {ideas.map((idea, i) => {
-        const r = Math.max(-1.5, Math.min(1.5, idea.ratio));
-        const y0 = 26 + i * 26;
-        const pos = r >= 0;
-        return (
-          <g key={idea.instrument.id}>
-            <text className="lab" x={192} y={y0 + 13} textAnchor="end">
-              {idea.instrument.name}
-            </text>
-            <rect x={Math.min(x(0), x(r))} y={y0} width={Math.abs(x(r) - x(0))} height={18} fill={pos ? GRAPHIC.green : GRAPHIC.red} opacity={0.75} />
-            <text className="ax" x={pos ? x(r) + 6 : x(r) - 6} y={y0 + 13} textAnchor={pos ? 'start' : 'end'} style={{ fill: pos ? TEXT.green : TEXT.red, fontWeight: 600 }}>
-              {fmt(idea.ratio, 2)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
 const EDGE_UNIT: Record<string, (v: number) => string> = {
   hdd: (v) => `${fmt(v, 1)} HDD`,
   gas: (v) => `${usd(v, 2)}/MMBtu`,
   power: (v) => `${usd(v, 2)}/MWh`,
 };
+const SHORT_NAME: Record<string, string> = { hdd: 'HDD future', gas: 'Gas', power: 'Power' };
 
 function money(v: number): string {
   const a = Math.abs(v);
@@ -330,7 +304,7 @@ function money(v: number): string {
 
 const BOOK_COLORS = { hdd: GRAPHIC.orange, gas: GRAPHIC.green, power: GRAPHIC.gold } as const;
 
-function BookBars({ ideas, book, best }: { ideas: TradeIdea[]; book: Book; best: { net: number } }) {
+function BookBars({ ideas, book, best, showBest }: { ideas: TradeIdea[]; book: Book; best: { net: number }; showBest: boolean }) {
   const n = [book.hdd, book.gas, book.power];
   const ids = ['hdd', 'gas', 'power'] as const;
   const risks = ideas.map((x, i) => n[i] * x.riskPerContract);
@@ -353,7 +327,7 @@ function BookBars({ ideas, book, best }: { ideas: TradeIdea[]; book: Book; best:
       className="chart"
       viewBox="0 0 640 116"
       role="img"
-      aria-label={`The book: ${book.hdd} HDD futures, ${book.gas} gas contracts and ${book.power} power contracts. Risk ${money(riskTotal)} against a limit of ${money(RISK_LIMIT)}; expected profit after costs ${money(netTotal)}, against ${money(best.net)} for the best book within the limit.`}
+      aria-label={`The book: ${book.hdd} HDD futures, ${book.gas} gas contracts and ${book.power} power contracts. Risk ${money(riskTotal)} against a limit of ${money(RISK_LIMIT)}; expected profit after costs ${money(netTotal)}${showBest ? `, against ${money(best.net)} for the best book within the limit` : ''}.`}
     >
       <text className="lab" x={112} y={36} textAnchor="end">
         Risk
@@ -367,7 +341,7 @@ function BookBars({ ideas, book, best }: { ideas: TradeIdea[]; book: Book; best:
         Expected profit
       </text>
       {row(nets, 68)}
-      {best.net > 0 && (
+      {showBest && best.net > 0 && (
         <g>
           <line x1={x(best.net)} x2={x(best.net)} y1={60} y2={96} stroke="#333" strokeWidth={1.5} strokeDasharray="4 3" />
           <text className="ax" x={x(best.net) + 4} y={108}>
@@ -380,18 +354,29 @@ function BookBars({ ideas, book, best }: { ideas: TradeIdea[]; book: Book; best:
   );
 }
 
+/** True from the first time `flag` is true, for the rest of the visit. */
+function useLatched(flag: boolean): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    if (flag) setSeen(true);
+  }, [flag]);
+  return seen || flag;
+}
+
 export default function Lesson() {
   const s = useScenario('lab', LAB_DEFAULTS);
   const st = s.state;
   const ideas = useMemo(() => labIdeas(st), [st]);
   const [hddIdea, gasIdea] = ideas;
+  const bestIdea = ideas.reduce((a, x) => (x.ratio > a.ratio ? x : a), ideas[0]);
   const solved = useMemo(() => pipelineSolved(st), [st]);
 
   const b = useScenario('book', BOOK_DEFAULTS);
   const book = b.state;
   const value = bookValue(ideas, book);
   const best = useMemo(() => bestBook(ideas), [ideas]);
-  const solved2 = useMemo(() => bookSolved(st, book), [st, book]);
+  const solved2 = useMemo(() => bookChallengeSolved(st, book), [st, book]);
+  const showBest = useLatched(solved2);
 
   // Numbers the prose quotes, all from the same engines.
   const q = useMemo(() => {
@@ -419,7 +404,7 @@ export default function Lesson() {
       pipe185: at({ pipeline: 1.85 }),
       pipe200: at({ pipeline: 2 }),
       bestStart: bestBook(start),
-      bestMild: bestBook(at({ week: 34 })),
+      bookWeek: at({ week: BOOK_WEEK }),
     };
   }, []);
 
@@ -430,7 +415,7 @@ export default function Lesson() {
       <P>
         <a href={lessonHref('weather/5.3')}>The previous lesson</a> found an edge in information: a forecaster whose view of the coming days is fresher than the
         market’s can see the price of a degree-day contract move before it moves. Suppose it’s Monday in January and the latest forecast for next week has come in{' '}
-        {fmt(LAB_DEFAULTS.revision)} °F colder than the one the market is still trading on. The obvious trade is the one we’ve already met: buy Calder Bay’s HDD future.
+        {fmt(LAB_DEFAULTS.revision)} °F colder than the one the market is still trading on. The obvious trade is the one we’ve already met: buy Fenwick Bay’s HDD future.
         But the same six degrees will move other prices too. Every furnace in the city and every gas plant on the grid will feel them, and{' '}
         <a href={lessonHref('weather/4.2')}>Lesson 4.2</a> showed what that does to the gas and power markets. Which market should carry the view?
       </P>
@@ -449,7 +434,8 @@ export default function Lesson() {
         standard deviation of the profit if we hold to settlement, since even our sharper forecast is far from certain. Contracts this different in size can only
         be compared by their ratio: expected profit after costs per dollar of risk. In the next demonstration, the three panels show how a January day’s heating
         degree days, gas price and power price respond to its temperature. The gray bell is the market’s view of next week, the blue one ours, and the dashed
-        lines are what each expects. Change the week, our revision and the physics underneath:
+        lines are what each expects. The table sets each edge beside the half-spread it has to beat, then gives the ratio, the best highlighted. Change the week,
+        our revision and the physics underneath:
       </P>
 
       <Figure name="Weather-Energy Trading Lab" scenario={s}>
@@ -463,19 +449,19 @@ export default function Lesson() {
           ]}
         />
         <DataTable
-          caption="Each trade per contract: edge, profit before costs, the spread paid, profit after costs, risk and the ratio"
+          caption="Each trade: the edge and the half-spread it must beat, in the market's own units; then per contract the expected profit after costs, the risk, and their ratio. The best ratio is highlighted."
           rows={ideas}
           rowKey={(r) => r.instrument.id}
+          rowClass={(r) => (r === bestIdea && r.ratio > 0 ? 'hl' : '')}
           columns={[
-            { label: 'Market', cell: (r) => r.instrument.name },
+            { label: 'Market', cell: (r) => SHORT_NAME[r.instrument.id] },
             { label: 'Edge', cell: (r) => EDGE_UNIT[r.instrument.id](r.edge), align: 'right' },
-            { label: 'Gross', cell: (r) => money(r.grossPerContract), align: 'right' },
-            { label: 'Spread', cell: (r) => money(r.costPerContract), align: 'right' },
+            { label: 'Half-spread', cell: (r) => EDGE_UNIT[r.instrument.id](r.instrument.halfSpread), align: 'right' },
             { label: 'Net', cell: (r) => money(r.netPerContract), align: 'right' },
             { label: 'Risk', cell: (r) => money(r.riskPerContract), align: 'right' },
+            { label: 'Net ÷ risk', cell: (r) => fmt(r.ratio, 2), align: 'right' },
           ]}
         />
-        <RatioBars ideas={ideas} />
         <Slider label="Next week, as the market sees it" tone={WX.temperature} value={st.week} min={0} max={50} onChange={(v) => s.set({ week: v })} display={`${fmt(st.week)} °F`} />
         <Slider
           label="Our forecast is colder by"
@@ -519,10 +505,11 @@ export default function Lesson() {
         stays at {fmt(q.mild[0].edge)} degree days and its ratio at {ratioWord(q.mild[0])}. Gas notices everything. At {fmt(34)} °F the pipelines have room to spare,
         and the same six degrees move gas only {usd(q.mild[1].edge, 2)}; after the spread the trade makes {money(q.mild[1].netPerContract)} at a ratio of{' '}
         {ratioWord(q.mild[1])}. At 40 °F it doesn’t even pay its spread: {money(q.milder[1].netPerContract)}. Go the other way and gas takes over. At 13 °F its ratio
-        is {ratioWord(q.cold13[1])} against the future’s {ratioWord(q.cold13[0])}; at 10 °F, {ratioWord(q.cold10[1])}. (At 14 °F it is {ratioWord(q.cold14[1])},
-        just short.) Weeks that cold run the pipelines nearly full, on the steep part of 4.2’s curve. Colder still, the price runs into its $30 cap, set by trucked
-        gas and storage, and the edge shrinks
-        again: at 0 °F a six-degree revision moves gas only {usd(q.frozen[1].edge, 2)}, though with so little room left to move, its risk shrinks too.
+        is {ratioWord(q.cold13[1])} against the future’s {ratioWord(q.cold13[0])}; at 10 °F, {ratioWord(q.cold10[1])}. (At 14 °F it is {fmt(q.cold14[1].ratio, 3)}{' '}
+        against the future’s {fmt(q.cold14[0].ratio, 3)}, just short.) Weeks that cold run the pipelines nearly full, on the steep part of the gas curve of{' '}
+        <a href={lessonHref('weather/4.2')}>Lesson 4.2</a>. Colder still, the price runs into its $30 cap, set by trucked gas and storage, and the edge shrinks
+        again: at 0 °F a six-degree revision moves gas only {usd(q.frozen[1].edge, 2)}. But with so little room left to move, its risk shrinks faster, and its
+        ratio there, {ratioWord(q.frozen[1])}, is the best of the three.
       </P>
       <P>
         Power sits in between. It follows gas, because gas plants set its price, and it follows demand, so it also feels the wind of{' '}
@@ -538,29 +525,27 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Keep the week at ${LAB_DEFAULTS.week} °F, the revision at ${LAB_DEFAULTS.revision} °F and the wind at ${LAB_DEFAULTS.wind} m/s. What is the least pipeline capacity, to the nearest 0.05 million MMBtu a day, at which the gas trade no longer pays its spread?`}
+        question={`Keep the week at ${LAB_DEFAULTS.week} °F, the revision at ${LAB_DEFAULTS.revision} °F and the wind at ${LAB_DEFAULTS.wind} m/s. Predict first: how small can gas’s edge, in dollars per MMBtu, get before the trade stops paying for itself? Then, watching only the edge, find the least pipeline capacity, to the nearest 0.05 million MMBtu a day, at which it falls below that.`}
         solved={solved}
         status={
           st.week !== LAB_DEFAULTS.week || st.revision !== LAB_DEFAULTS.revision || st.wind !== LAB_DEFAULTS.wind
             ? `Set the week back to ${LAB_DEFAULTS.week} °F, the revision to ${LAB_DEFAULTS.revision} °F and the wind to ${LAB_DEFAULTS.wind} m/s.`
-            : gasIdea.netPerContract >= 0
-              ? `At ${fmt(st.pipeline, 2)} million MMBtu a day, the gas trade still nets ${money(gasIdea.netPerContract)} a contract.`
-              : `At ${fmt(st.pipeline, 2)} million the gas trade loses ${money(-gasIdea.netPerContract)} a contract. Is that the least capacity that does it?`
+            : `At ${fmt(st.pipeline, 2)} million MMBtu a day, gas’s edge is ${usd(gasIdea.edge, 2)} per MMBtu. Is that below the line you predicted — and is it the least capacity that puts it there?`
         }
-        success={`Solved. At ${fmt(st.pipeline, 2)} million MMBtu a day the cold week fills the pipelines so little that six degrees move gas by only ${usd(gasIdea.edge, 2)} — less than the $0.15 spread — and the trade loses ${money(-gasIdea.netPerContract)} a contract. The HDD future still nets ${usd(hddIdea.netPerContract)}. The weather view didn’t change; the physics that turned it into a gas price did.`}
+        success={`Solved. A trade pays only while its edge beats the half-spread it crosses to get in, $${fmt(INSTRUMENTS.gas.halfSpread, 2)} per MMBtu for gas. At ${fmt(st.pipeline, 2)} million MMBtu a day the cold week fills the pipelines so little that six degrees move gas by only ${usd(gasIdea.edge, 2)}, and the trade loses ${money(-gasIdea.netPerContract)} a contract; at ${fmt(st.pipeline - PIPELINE_STEP, 2)} million its edge was ${usd(q.pipe180[1].edge, 2)}, and it still made ${money(q.pipe180[1].netPerContract)}. The HDD future nets ${usd(hddIdea.netPerContract)} throughout. The weather view didn’t change; the physics that turned it into a gas price did.`}
       />
 
       <H2>Size, spreads and limits</H2>
       <P>
         A ratio says which trade is best per dollar of risk. It doesn’t say how much money a desk can make, because each market will only take so much, and each
         contract comes in a fixed size. Say the desk’s limit is {money(RISK_LIMIT)} of risk on next week. The three trades all win or lose on the same cold, so we’ll
-        add their risks as if they moved together, a cautious assumption. In the next demonstration, choose how many contracts to trade in each market, for the
-        week and physics set in <FigRef to="Weather-Energy Trading Lab">the first demonstration</FigRef>; the bars show the risk each takes and the profit each is
-        expected to make, against the limit and against the best book possible:
+        add their risks as if they moved together, a cautious assumption. In the next demonstration, choose how many contracts to trade in each market. It uses the
+        revision and the wind set in <FigRef to="Weather-Energy Trading Lab">the first demonstration</FigRef>, and repeats its week and pipeline controls; the bars
+        show the risk each market takes and the profit each is expected to make, against the limit:
       </P>
 
       <Figure name="Weather-Energy Trading Lab · sizing and limits" scenario={b}>
-        <BookBars ideas={ideas} book={book} best={best} />
+        <BookBars ideas={ideas} book={book} best={best} showBest={showBest} />
         <Legend
           items={[
             { label: 'HDD future', color: BOOK_COLORS.hdd },
@@ -572,7 +557,7 @@ export default function Lesson() {
           items={[
             { label: 'expected profit after costs', value: money(value.net), tone: value.net >= 0 ? WX.money : 'red' },
             { label: `risk, against a ${money(RISK_LIMIT)} limit`, value: money(value.risk), tone: value.risk > RISK_LIMIT ? 'red' : WX.probability },
-            { label: 'best book within the limit', value: money(best.net), tone: WX.money },
+            ...(showBest ? [{ label: 'best book within the limit', value: money(best.net), tone: WX.money }] : []),
           ]}
         />
         <Slider label="HDD futures" tone={WX.index} value={book.hdd} min={0} max={INSTRUMENTS.hdd.maxSize} onChange={(v) => b.set({ hdd: v })} display={`${book.hdd} contracts`} />
@@ -594,7 +579,10 @@ export default function Lesson() {
             ? `This book takes ${money(value.risk)} of risk, over the limit.`
             : best.net <= 0
               ? 'At these settings no trade pays its costs: the best book is no book.'
-              : `The best book within the limit is ${best.book.hdd} HDD futures, ${best.book.gas} gas and ${best.book.power} power contracts, expected to make ${money(best.net)} on ${money(best.risk)} of risk.`}
+              : showBest
+                ? `The best book within the limit is ${best.book.hdd} HDD futures, ${best.book.gas} gas and ${best.book.power} power contracts, expected to make ${money(best.net)} on ${money(best.risk)} of risk.`
+                : `This book leaves ${money(RISK_LIMIT - value.risk)} of the limit unused.`}{' '}
+          {`Our forecast is ${fmt(st.revision)} °F colder than the market’s, with ${fmt(st.wind, 1)} m/s of wind, as set in the first demonstration.`}
         </Caption>
       </Figure>
 
@@ -610,16 +598,18 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`Within the ${money(RISK_LIMIT)} risk limit, build a book expected to make within 1% of the most any book could.`}
+        question={`Now warm next week to ${BOOK_WEEK} °F, with the pipeline, the revision and the wind as they started. There one gas contract is expected to make ${money(q.bookWeek[1].netPerContract)} on ${money(q.bookWeek[1].riskPerContract)} of risk, one power contract ${money(q.bookWeek[2].netPerContract)} on ${money(q.bookWeek[2].riskPerContract)}, and each HDD future still ${usd(q.bookWeek[0].netPerContract)} on ${usd(q.bookWeek[0].riskPerContract)}. Predict the best book within the ${money(RISK_LIMIT)} limit first, then build it: it must earn within 1% of the most any book could.`}
         solved={solved2}
         status={
-          value.risk > RISK_LIMIT
-            ? `This book takes ${money(value.risk)} of risk, more than the limit allows.`
-            : best.net <= 0
-              ? 'At these settings nothing pays its costs. Make next week colder, or the revision bigger.'
-              : `This book is expected to make ${money(value.net)}; the best possible is ${money(best.net)}.`
+          !atBookWeek(st)
+            ? st.revision !== LAB_DEFAULTS.revision || st.wind !== LAB_DEFAULTS.wind
+              ? 'Put the revision and the wind in the first demonstration back as they started.'
+              : `Set next week to ${BOOK_WEEK} °F and the pipeline to ${fmt(LAB_DEFAULTS.pipeline, 2)} million MMBtu a day.`
+            : value.risk > RISK_LIMIT
+              ? `This book takes ${money(value.risk)} of risk, more than the limit allows.`
+              : `This book is expected to make ${money(value.net)} on ${money(value.risk)} of risk. Is there a better one within the limit?`
         }
-        success={`Solved: ${book.hdd} HDD futures, ${book.gas} gas and ${book.power} power contracts, expected to make ${money(value.net)} on ${money(value.risk)} of risk. The answer depends on the size of the contracts and the depth of each market as much as on the edge. Warm the week to 34 °F and the best book becomes ${q.bestMild.book.hdd} HDD futures and ${q.bestMild.book.power} power contracts, making ${money(q.bestMild.net)}: gas has nothing left to offer.`}
+        success={`Solved: ${book.hdd} HDD futures, ${book.gas} gas and ${book.power} power contracts, expected to make ${money(value.net)} on ${money(value.risk)} of risk; the best book is now shown. Fill the market with the best ratio first — the HDD futures take only ${money(INSTRUMENTS.hdd.maxSize * q.bookWeek[0].riskPerContract)} of the limit — then the energy contract with the better ratio, here power, whose contracts are small enough to use almost all the rest. A gas contract earns more on its own, but it takes twice the room. At ${LAB_DEFAULTS.week} °F the lumps fell the other way: the answer depends on the size of the contracts and the depth of each market as much as on the edge.`}
       />
 
       <P>
@@ -631,7 +621,8 @@ export default function Lesson() {
       <P>
         What none of this shows is whether the edge is real. We assumed our forecast was better than the market’s and that the market would be wrong in exactly the
         way we expected. A strategy has to be tested on history, decision by decision, using only what could have been known at the time — and the easiest way to
-        fool yourself is to let tomorrow’s forecast slip into today’s decision. That test, and the ways it goes wrong, are the subject of the next lesson.
+        fool yourself is to let tomorrow’s forecast slip into today’s decision. That test — of this trade, and of the rule of <a href={lessonHref('weather/5.3')}>Lesson 5.3</a> — and the ways it goes
+        wrong are the subject of the next lesson.
       </P>
     </LessonPage>
   );

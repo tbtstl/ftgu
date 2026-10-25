@@ -1,5 +1,5 @@
 // The reader's oil business: one plan that Chapter 7 builds lesson by lesson and keeps in the
-// browser. 7.1 sets the production plan, 7.2 the refinery, 7.3 the firm space on the Kessler–Calder
+// browser. 7.1 sets the production plan, 7.2 the refinery, 7.3 the firm space on the Kessler–Corran
 // line, and 7.5 the hedges; 7.4 reads the whole plan. Each lesson owns its own part, so it can be
 // reset alone. Storage can be unavailable (private windows, blocked site data), so every access is
 // guarded and the plan then lasts for the visit only.
@@ -73,6 +73,31 @@ export function resetBusinessPart(part: BusinessPart) {
 
 export function resetBusiness() {
   write(BUSINESS_DEFAULTS);
+}
+
+/** How a reset prompt names each part. */
+const PART_NAME: Record<BusinessPart, string> = {
+  production: 'production plan',
+  refinery: 'refinery design',
+  logistics: 'firm space',
+  hedges: 'hedges',
+};
+
+/**
+ * A figure's Reset for a lesson that owns `part`: if the reader has changed that part of the plan,
+ * it asks before putting it back (the later lessons use it), and touches no other part. Returns
+ * whether to go ahead, so the figure resets its own settings only when the plan was reset too.
+ */
+export function confirmResetPart(part: BusinessPart): boolean {
+  if (!partChanged(read(), part)) return true;
+  let ok = false;
+  try {
+    ok = window.confirm(`Reset puts your ${PART_NAME[part]} back to the starting plan, and the later lessons will use that. Reset it?`);
+  } catch {
+    ok = false;
+  }
+  if (ok) resetBusinessPart(part);
+  return ok;
 }
 
 /** Whether a part of the plan differs from its starting value. */

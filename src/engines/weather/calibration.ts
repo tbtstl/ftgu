@@ -4,7 +4,7 @@
 // forecast here was issued before its target day and is judged only against what then happened.
 
 import { dayIndex, dayInfo, expectedTemp, forecastTemp, LEAD_MAX, tempF } from '../../model/weather/archive';
-import { CALDER, anomalySd } from '../../model/weather/region';
+import { FENWICK, anomalySd } from '../../model/weather/region';
 import { brierScore, brierSkill, crpsNormal, draw, ensembleProbBelow, rankHistogram, reliability, type ReliabilityBin } from './verify';
 
 /** Winter y runs from December 1 of year y through February 28 of year y + 1: 90 days. */
@@ -47,12 +47,12 @@ export function plume(issue: number, n: number, spread = 1): Plume {
   const climSd: number[] = [];
   for (let lead = 1; lead <= LEAD_MAX; lead++) {
     const d = issue + lead;
-    const f = forecastTemp('calder', d, lead);
+    const f = forecastTemp('fenwick', d, lead);
     mean.push(f.mean);
     sd.push(f.sd);
-    outcome.push(tempF('calder', d));
-    climMean.push(expectedTemp('calder', d));
-    climSd.push(anomalySd(CALDER, dayInfo(d).doy));
+    outcome.push(tempF('fenwick', d));
+    climMean.push(expectedTemp('fenwick', d));
+    climSd.push(anomalySd(FENWICK, dayInfo(d).doy));
   }
   const phi = MEMBER_PERSISTENCE;
   const members = Array.from({ length: n }, (_, m) => {
@@ -88,8 +88,8 @@ export function winterCases(lead: number): WinterCase[] {
     for (let y = 1; y <= WINTERS; y++) {
       for (let i = 0; i < WINTER_DAYS; i++) {
         const d = winterDay(y, i);
-        const f = forecastTemp('calder', d, lead);
-        c.push({ d, mean: f.mean, sd: f.sd, outcome: tempF('calder', d) });
+        const f = forecastTemp('fenwick', d, lead);
+        c.push({ d, mean: f.mean, sd: f.sd, outcome: tempF('fenwick', d) });
       }
     }
     caseCache.set(lead, c);

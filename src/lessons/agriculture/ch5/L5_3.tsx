@@ -75,6 +75,11 @@ export function charterSolved(cents: number): boolean {
   return avg(cents) > 0 && avg(cents + 1) <= 0;
 }
 
+/** The charter's average profit as unsigned cents: one decimal, or two when it is within a tenth of a cent of zero, so a hair's loss never reads as 0.0¢. */
+export function avgCents(avg: number): string {
+  return centsPlain(Math.abs(avg), Math.abs(avg) < 0.001 ? 2 : 1);
+}
+
 const SEASON_DAYS = EXPIRY.Jul - HARVEST_SALE - 4;
 
 function basisFill(b: number): string {
@@ -176,15 +181,16 @@ export default function Lesson() {
   return (
     <LessonPage id="agriculture/5.3">
       <P>
-        In Chapter 4 a bushel at Fairview was worth less than a bushel at the port by what it cost to get it there. Now that difference has a name. Our futures are
-        for corn on a ship at Port Sable, so each elevator’s <K tone="teal">basis</K> — its cash bid less the futures price — begins with the journey to the port,
-        and takes off everything else that lies between the elevator and a ship. Five things, in our valley:
+        In Chapter 4 a bushel at Fairview was worth less than a bushel at the port by what it cost to get it there. <a href={lessonHref('agriculture/5.1')}>Lesson
+        5.1</a> named the gap between a cash price and futures the basis; at Port Sable it was only the carry to December. Our futures are for corn on a ship at
+        Port Sable, so at an elevator the basis — its cash bid less the futures price — begins with the journey to the port, and takes off everything else that
+        lies between the elevator and a ship. Five things, in our valley:
       </P>
       <P>
         First the <i>network</i>: the freight to the port by the routes of <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a>, and, when the network is full,
-        its congestion. Then the elevator’s handling margin. Then <i>harvest pressure</i>, the extra the elevator takes off in the rush to ration its bins, as in{' '}
-        <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a>. Then <i>carry</i>: corn in October is quoted against December futures, and it costs something to
-        hold it until December, as far as the curve of <a href={lessonHref('agriculture/5.2')}>the last lesson</a> pays. Last, quality: corn worse than No. 2
+        its congestion. Then the elevator’s handling margin. Then <i>harvest pressure</i>, the extra the elevator takes off in the rush to ration its bins: its
+        harvest spread of <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> less the handling margin. Then <i>carry</i>: corn in October is quoted against
+        December futures, and it costs something to hold it until December, as far as the curve of <a href={lessonHref('agriculture/5.2')}>the last lesson</a> pays. Last, quality: corn worse than No. 2
         takes the discounts of <a href={lessonHref('agriculture/4.1')}>Lesson 4.1</a>. In the next demonstration each district is labeled with its elevator’s basis,
         and the bars take apart the basis of the one you choose. Change the valley’s harvest, the date and the grade:
       </P>
@@ -202,7 +208,7 @@ export default function Lesson() {
         <PartsBars p={p} />
         <Readouts
           items={[
-            { label: `${PLACE[hub].name}, ${dateLabel(date)}`, value: `${usd(p.total, 2)} under ${p.contract}`, tone: 'teal' },
+            { label: `${PLACE[hub].name}, ${dateLabel(date)}`, value: `${usd(-p.total, 2)} under ${p.contract}`, tone: 'teal' },
             { label: `${p.contract} futures`, value: usd(p.futures, 2), tone: 'violet' },
             { label: 'cash bid', value: usd(p.futures + p.total, 2), tone: 'gold' },
           ]}
@@ -232,7 +238,13 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Keep the date at harvest, Fairview, and No. 2 corn. Raise the valley’s harvest from its average: at what harvest, to the nearest 10 million bushels, does Fairview’s basis first fall more than 50 cents under its average-year level?"
+        question={
+          <>
+            Keep the date at harvest, Fairview, and No. 2 corn. Raise the valley’s harvest from its average: at what harvest, to the nearest 10 million bushels,
+            does Fairview’s basis first fall more than 50 cents under its average-year level? Predict it first from where the network of{' '}
+            <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a> filled, then check.
+          </>
+        }
         solved={solved1}
         status={
           s.state.day !== 0 || s.state.district !== 'prairie' || s.state.grade !== 'no2'
@@ -248,16 +260,16 @@ export default function Lesson() {
         Because a cash price has two parts, a farmer can fix them separately. A <i>hedge-to-arrive</i> contract with the elevator fixes the futures part now and
         leaves the basis to be set later; a <i>basis contract</i> does the opposite, fixing the basis and leaving the futures price open. Choosing between them is a
         view on which part will move. In a summer when the crop looks big enough to fill the network, a farmer who fixes the basis before harvest steps around the
-        cliff. Quality is part of the bid too: switch the grade to the frosted corn of Lesson 4.3 and every elevator takes off another{' '}
+        cliff. Quality is part of the bid too: switch the grade to the frosted corn of <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> and every elevator takes off another{' '}
         {centsPlain(FROSTED_DISCOUNT)}, the same at Ashby as at Dunmore, because grade discounts come from the buyer’s schedule, not from geography.
       </P>
 
       <H2>Owning the route</H2>
       <P>
         Who earns the gap between the valley and the port? Whoever owns the way out. A grain merchant who charters barges buys corn at Crane Landing at its basis
-        and sells it at Port Sable at the futures price, hedging the price in between; per bushel it earns the difference between the two places — the export
-        basis — less the cost of the barge. In a normal year that difference is 87 cents: the 45-cent barge freight plus the 42 cents a bushel of room on the full
-        river is worth, its scarcity value in Lesson 4.4. But a charter is booked before anyone knows the crop. In the next demonstration
+        and sells it at Port Sable at the futures price, hedging the price in between; per bushel it earns the difference between the two places — the{' '}
+        <K tone="teal">export basis</K> — less the cost of the barge. In a normal year that difference is 87 cents: the 45-cent barge freight plus the 42 cents a bushel of room on the full
+        river is worth, its scarcity value in <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a>. But a charter is booked before anyone knows the crop. In the next demonstration
         each bar is one simulated year’s profit per bushel on a charter booked in advance, and the dots under it are the valley’s harvest. Set the charter rate:
       </P>
 
@@ -271,7 +283,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'average profit', value: `${avg >= 0 ? '' : '−'}${centsPlain(Math.abs(avg), 1)} a bushel`, tone: avg >= 0 ? 'green' : 'red' },
+            { label: 'average profit', value: `${avg >= 0 ? '' : '−'}${avgCents(avg)} a bushel`, tone: avg >= 0 ? 'green' : 'red' },
             { label: 'years it paid', value: `${profits.filter((v) => v > 0.005).length} of ${MARKET_YEARS}` },
             { label: 'best year', value: usd(Math.max(...profits), 2), tone: 'green' },
             { label: 'worst year', value: usd(Math.min(...profits), 2), tone: 'red' },
@@ -281,20 +293,20 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The export basis takes only a few values. It is about 87 cents in 27 of the sixty years; 65 to 71 cents in 22 short crops, when the river has room to spare
-        for Upland Ridge’s corn; 45 cents in the two shortest crops, when the river isn’t full at all; and $1.50 in the eight years the valley’s harvest filled the
-        network. A charter at 60 cents paid in 58 of the sixty years, one at 80 cents in only 36 — but the eight big years pay so much that they make up for most
-        of the rest. On the
-        real Mississippi, barge freight rates rise and fall with exactly this scarcity value, and a merchant who books barges or owns a river terminal is, among other
+        The export basis takes only a handful of values. It is about 87 cents in 27 of the sixty years; 65 to 71 cents in 22 short crops, when the river has room
+        to spare for Upland Ridge’s corn; 45 cents in the two shortest crops, when the river isn’t full at all; and $1.50 in the eight years the valley’s harvest
+        filled the network. The one year left over, year 19, brought 567 million bushels, right at the network’s capacity, and an export basis of $1.12. A
+        charter at 60 cents paid in 58 of the sixty years, one at 80 cents in only 36 — but the big years pay so much that they make up for most of the
+        rest. On the real Mississippi, barge freight rates rise and fall with exactly this scarcity value, and a merchant who books barges or owns a river terminal is, among other
         things, betting on the size of the crop.
       </P>
 
       <Challenge
         id="b"
-        question="What is the highest charter rate, to the cent, at which the charter earned money on average over the sixty years?"
+        question="Estimate it first from the handful of values the export basis takes, then check: what is the highest charter rate, to the cent, at which the charter earned money on average over the sixty years?"
         solved={solved2}
-        status={avg > 0 ? `At ${ch.state.cents}¢ the charter earned ${centsPlain(avg, 1)} a bushel on average. Could it pay more?` : `At ${ch.state.cents}¢ the charter lost ${centsPlain(-avg, 1)} a bushel on average.`}
-        success={`Solved: at ${ch.state.cents}¢ the charter just paid, earning ${centsPlain(avg, 1)} a bushel on average. That is almost exactly the normal year’s export basis: the big years, when the network filled, and the short ones, when the river ran empty, came close to canceling. The charter is worth the average scarcity of the river — and only a forecast of the crop could tell a merchant when to pay more.`}
+        status={avg > 0 ? `At ${ch.state.cents}¢ the charter earned ${avgCents(avg)} a bushel on average. Could it pay more?` : `At ${ch.state.cents}¢ the charter lost ${avgCents(avg)} a bushel on average.`}
+        success={`Solved: at ${ch.state.cents}¢ the charter just paid, earning ${avgCents(avg)} a bushel on average. That is almost exactly the normal year’s export basis: the big years, when the network filled, and the short ones, when the river ran empty, came close to canceling. The charter is worth the average scarcity of the river — and only a forecast of the crop could tell a merchant when to pay more.`}
       />
 
       <P>

@@ -193,7 +193,7 @@ export interface Customer {
   id: string;
   name: string;
   workload: WorkloadId;
-  /** Average A-class-equivalent GPUs it wants when the price is at its value. */
+  /** A-class equivalents all its buyers together want in an average weekday hour, before price. */
   size: number;
   /** Daily swing, as a share of the average (interactive work peaks mid-afternoon). */
   swing: number;
@@ -355,6 +355,8 @@ export interface OpsResult {
   /** Revenue by customer. */
   revenueBy: Record<string, number>;
   utilization: Record<GpuId, number>;
+  /** Hours of the fleet's own GPUs each customer used, by accelerator. */
+  gpuHoursBy: Record<string, Record<GpuId, number>>;
   hours: HourOps[];
 }
 
@@ -449,6 +451,7 @@ export function operateWith(ctx: OpsContext, ops: OpsPlan, opts: OperateOptions 
   const servedSum: number[] = off.map(() => 0);
   const wantedSum: number[] = off.map(() => 0);
   const revenueBy: number[] = off.map(() => 0);
+  const ownedBy: Array<Record<GpuId, number>> = off.map(() => ({ L: 0, A: 0, B: 0 }));
   const busy: Record<GpuId, number> = { L: 0, A: 0, B: 0 };
   const hours: HourOps[] = [];
   const idxOf = new Map(off.map((o, i) => [o.customer.id, i]));
@@ -478,6 +481,7 @@ export function operateWith(ctx: OpsContext, ops: OpsPlan, opts: OperateOptions 
         const use = Math.min(avail, need / p);
         need -= use * p;
         busy[c.gpu] += use;
+        ownedBy[i][c.gpu] += use;
         powerCost += use * ev.powerPerBusyHour[c.gpu] * (1 - IDLE_POWER_SHARE);
         tally.owned += use * p;
         idleCommitted[c.gpu] += avail - use;
@@ -517,6 +521,7 @@ export function operateWith(ctx: OpsContext, ops: OpsPlan, opts: OperateOptions 
           revenueBy[i] += rev;
           if (kind === 'owned') {
             busy[ch.gpu] += gpus;
+            ownedBy[i][ch.gpu] += gpus;
             powerCost += gpus * ev.powerPerBusyHour[ch.gpu] * (1 - IDLE_POWER_SHARE);
             tally.owned += gpus * p;
           } else tally.rented += gpus * p;
@@ -547,9 +552,11 @@ export function operateWith(ctx: OpsContext, ops: OpsPlan, opts: OperateOptions 
   const fixedCost = (ev.fixedPerYear * H) / 8760;
   const served: Record<string, number> = {};
   const revBy: Record<string, number> = {};
+  const gpuHoursBy: Record<string, Record<GpuId, number>> = {};
   off.forEach((o, i) => {
     served[o.customer.id] = wantedSum[i] > 0 ? servedSum[i] / wantedSum[i] : 0;
     revBy[o.customer.id] = revenueBy[i];
+    gpuHoursBy[o.customer.id] = ownedBy[i];
   });
   return {
     revenue,
@@ -562,6 +569,7 @@ export function operateWith(ctx: OpsContext, ops: OpsPlan, opts: OperateOptions 
     served,
     revenueBy: revBy,
     utilization: { L: f.gpus.L > 0 ? busy.L / (f.gpus.L * H) : 0, A: f.gpus.A > 0 ? busy.A / (f.gpus.A * H) : 0, B: f.gpus.B > 0 ? busy.B / (f.gpus.B * H) : 0 },
+    gpuHoursBy,
     hours,
   };
 }

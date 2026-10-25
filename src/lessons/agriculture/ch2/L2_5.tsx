@@ -62,9 +62,17 @@ export function acreBudget(crop: Crop, price: number, yieldBu: number, fertMult:
   };
 }
 
-/** The challenge: the lowest corn price (5¢ steps) at which a rented acre of corn breaks even at its expected yield. */
+/** The challenge's rent, $ per acre: the landlord asks $35 more. */
+export const RAISED_RENT = 300;
+
+/** Whether the acre is set up for the challenge: corn at its expected yield, today's fertilizer, the raised rent. */
+export function atRaisedRent(crop: Crop, yieldBu: number, fertMult: number, rent: number): boolean {
+  return crop === 'corn' && Math.abs(yieldBu - Math.round(EXPECTED.corn)) < 1e-6 && Math.abs(fertMult - 1) < 1e-6 && rent === RAISED_RENT;
+}
+
+/** The challenge: at the raised rent, the lowest corn price (5¢ steps) at which a rented acre of corn breaks even at its expected yield. */
 export function breakevenSolved(crop: Crop, price: number, yieldBu: number, fertMult: number, rent: number): boolean {
-  if (crop !== 'corn' || Math.abs(yieldBu - Math.round(EXPECTED.corn)) > 1e-6 || Math.abs(fertMult - 1) > 1e-6 || rent !== RENT) return false;
+  if (!atRaisedRent(crop, yieldBu, fertMult, rent)) return false;
   return acreBudget('corn', price, yieldBu, 1, rent).profit >= 0 && acreBudget('corn', Math.round((price - 0.05) * 100) / 100, yieldBu, 1, rent).profit < 0;
 }
 
@@ -104,7 +112,24 @@ export function farmProfits(k: FarmKnobs, economic = false): number[] {
 }
 
 const BASE_KNOBS: FarmKnobs = { corn: PLAN_PRICE.corn, wheat: PLAN_PRICE.wheat, yieldMult: 1, fertMult: 1, rent: RENT };
+const HIST_STEP = 300000;
+
+/** The profit histogram's range: ±$600k, widened in $300k steps when the seasons run past it. */
+export function profitRange(profits: number[]): { lo: number; hi: number } {
+  return {
+    lo: Math.min(-2 * HIST_STEP, Math.floor(Math.min(...profits) / HIST_STEP) * HIST_STEP),
+    hi: Math.max(2 * HIST_STEP, Math.ceil(Math.max(...profits) / HIST_STEP) * HIST_STEP),
+  };
+}
 const SPIDER = [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3];
+
+/** How far a 30% rise in each driver moves the average profit per acre at the plan prices, $ (a fall moves it as far the other way). */
+export function swings(): Record<'price' | 'yield' | 'fert' | 'rent', number> {
+  const d = spider(BASE_KNOBS);
+  const i0 = SPIDER.indexOf(0);
+  const i30 = SPIDER.indexOf(0.3);
+  return { price: d.price[i30] - d.price[i0], yield: d.yield[i30] - d.yield[i0], fert: d.fert[i0] - d.fert[i30], rent: d.rent[i0] - d.rent[i30] };
+}
 
 /** Mean farm profit per acre when one driver moves by each step in SPIDER, the others at their base. */
 export function spider(base: FarmKnobs): Record<'price' | 'yield' | 'fert' | 'rent', number[]> {
@@ -216,6 +241,10 @@ export default function Lesson() {
   const st = s.state;
   const b = acreBudget(st.crop, st.price, st.yieldBu, st.fertMult, st.rent);
   const solved = breakevenSolved(st.crop, st.price, st.yieldBu, st.fertMult, st.rent);
+  // The breakeven price stays hidden on a corn acre at any rent but today's until the challenge is solved.
+  const hideBreakeven = st.crop === 'corn' && st.rent !== RENT && !solved;
+  const base = acreBudget('corn', PLAN_PRICE.corn, Math.round(EXPECTED.corn), 1, RENT);
+  const dearFert = acreBudget('corn', PLAN_PRICE.corn, Math.round(EXPECTED.corn), 1.3, RENT);
 
   const f = useScenario('farm', { corn: PLAN_PRICE.corn, wheat: PLAN_PRICE.wheat });
   const knobs = useMemo(() => ({ ...BASE_KNOBS, corn: f.state.corn, wheat: f.state.wheat }), [f.state]);
@@ -226,6 +255,8 @@ export default function Lesson() {
   const avg = mean(profits);
   const p10 = sorted[Math.floor(0.1 * (sorted.length - 1))];
   const lossShare = profits.filter((p) => p < 0).length / profits.length;
+  const range = profitRange(profits);
+  const swing = useMemo(() => swings(), []);
 
   return (
     <LessonPage id="agriculture/2.5">
@@ -239,7 +270,9 @@ export default function Lesson() {
         <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> — seed, fertilizer, chemicals, fuel, insurance, interest — are spent only if the crop is planted. The
         hauling and drying scale with the bushels. And the fixed costs are owed regardless: the machinery and buildings, the family’s labor and management, and the
         rent, ${RENT} an acre for prime prairie land. Divide the total by the expected yield and you get the <K tone="green">breakeven price</K>, the price at which
-        the acre just pays for itself; divide it by the price instead and you get the breakeven yield. In the next demonstration, choose a crop and move its price,
+        the acre just pays for itself; divide it by the price instead and you get the breakeven yield. The seed and fertilizer lines are Cedar Bend’s budget,
+        32,000 seeds and 150 pounds of nitrogen — a little more of each than pays best in <a href={lessonHref('agriculture/2.2')}>Lesson 2.2</a>, a rounding up
+        that lesson explains. In the next demonstration, choose a crop and move its price,
         yield and costs:
       </P>
 
@@ -265,7 +298,9 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'profit per acre', value: usd(b.profit), tone: b.profit >= 0 ? 'green' : 'red' },
-            { label: 'breakeven price', value: perBu(b.breakevenPrice), tone: 'green' },
+            hideBreakeven
+              ? { label: 'breakeven price: the challenge asks', value: '?', tone: 'green' }
+              : { label: 'breakeven price', value: perBu(b.breakevenPrice), tone: 'green' },
             { label: 'breakeven yield', value: buAc(b.breakevenYield), tone: st.crop === 'corn' ? 'gold' : 'orange' },
           ]}
         />
@@ -277,25 +312,29 @@ export default function Lesson() {
 
       <P>
         At its expected yield of {fmt(Math.round(EXPECTED.corn))} bushels, an acre of corn on rented prairie ground costs about $835 to grow and brings in about $810:
-        it loses about $25. Its breakeven price is $4.74, and at $4.60 it would need 182 bushels. Its variable costs, though, are covered with $358 to spare, and
+        it loses about $25. Its breakeven price is $4.74, and at $4.60 it would need 182 bushels. Make fertilizer, its biggest variable cost, 30% dearer and the
+        acre costs {usd(dearFert.cost - base.cost, 2)} more, which lifts the breakeven to {usd(dearFert.breakevenPrice, 2)}. Its variable costs, though, are covered with $358 to spare, and
         that difference matters. A farmer who has already signed the lease and bought the planter loses less by planting than by leaving the field empty, so in a
         single bad year the crop goes in anyway. Only over years, when leases come up for renewal and machinery wears out, do the fixed costs become choices too.
         Wheat looks far worse on this land — 67 bushels worth $402 against $554 of costs, a loss of $152 an acre — but recall from{' '}
-        <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> that wheat earns part of its keep in the next year’s corn, which yields 10% more after it.
+        <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> that wheat earns part of its keep in the next year’s corn, which would lose 10% of its yield
+        without it.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the acre of corn at its expected yield, today’s fertilizer price and the $265 rent. What is the lowest corn price, in 5-cent steps, at which it breaks even?"
+        question="The landlord asks $35 more, raising the rent from $265 to $300 an acre. Predict first: spread over the acre’s 176 bushels, how far does that lift the breakeven price? Then set the rent to $300, keep the expected yield and today’s fertilizer, and find the lowest corn price, in 5-cent steps, at which the acre breaks even. The breakeven readout stays hidden until you do."
         solved={solved}
         status={
           st.crop !== 'corn'
             ? 'Choose the acre of corn.'
-            : st.yieldBu !== Math.round(EXPECTED.corn) || Math.abs(st.fertMult - 1) > 1e-6 || st.rent !== RENT
-              ? `Set the yield back to ${fmt(Math.round(EXPECTED.corn))} bushels, fertilizer to 100% and rent to $265.`
-              : `At ${perBu(st.price)}, the acre ${b.profit >= 0 ? 'makes' : 'loses'} ${usd(Math.abs(b.profit))}.`
+            : st.yieldBu !== Math.round(EXPECTED.corn) || Math.abs(st.fertMult - 1) > 1e-6
+              ? `Set the yield back to ${fmt(Math.round(EXPECTED.corn))} bushels and fertilizer to 100%.`
+              : st.rent !== RAISED_RENT
+                ? `The rent is ${usd(st.rent)} an acre. Set it to ${usd(RAISED_RENT)}.`
+                : `At ${perBu(st.price)}, the acre ${b.profit >= 0 ? 'makes' : 'loses'} ${usd(Math.abs(b.profit), 2)}.`
         }
-        success={`Solved: at ${perBu(st.price)} the acre makes ${usd(b.profit)}; five cents less and it loses money. Every grain farm carries a number like this in its head, and it’s the first thing that comes to mind when the price moves: above it, the year is paying; below it, the farm is spending its savings or its equity.`}
+        success={`Solved: at ${perBu(st.price)} the acre makes ${usd(b.profit, 2)}; five cents less and it loses money. The extra ${usd(RAISED_RENT - RENT)}, spread over ${fmt(st.yieldBu)} bushels, adds ${fmt(((RAISED_RENT - RENT) / st.yieldBu) * 100)} cents a bushel and lifts the breakeven from ${usd(base.breakevenPrice, 2)} to ${usd(b.breakevenPrice, 2)}. Every grain farm carries a number like this in its head, and it’s the first thing that comes to mind when the price moves: above it, the year is paying; below it, the farm is spending its savings or its equity.`}
       />
 
       <H2>A whole farm, across many seasons</H2>
@@ -309,11 +348,11 @@ export default function Lesson() {
       <Figure name="Farm Profit Simulator · 200 seasons" scenario={f}>
         <HistogramChart
           values={profits}
-          lo={-600000}
-          hi={600000}
-          bins={24}
+          lo={range.lo}
+          hi={range.hi}
+          bins={Math.round((range.hi - range.lo) / 50000)}
           color={GRAPHIC.green}
-          xTicks={[-600000, -300000, 0, 300000, 600000]}
+          xTicks={Array.from({ length: Math.round((range.hi - range.lo) / HIST_STEP) + 1 }, (_, i) => range.lo + i * HIST_STEP)}
           xFormat={(v) => (v === 0 ? '$0' : `${v < 0 ? '−' : ''}$${fmt(Math.abs(v) / 1000)}k`)}
           xLabel="Cedar Bend’s profit in a season"
           marks={[
@@ -350,17 +389,20 @@ export default function Lesson() {
         the farm is still there to plant the next one.
       </P>
       <P>
-        The lower chart shows which numbers matter. A 30% swing in grain prices moves the average profit from $145 an acre of loss to $237 of profit; the same
-        swing in yields, from a $137 loss to $229 of profit. A 30% change in fertilizer prices moves it by only about $36, and in cash rent by about $30. Prices and
-        yields dominate, and in this demonstration they move separately. In the real valley they don’t: when its harvest is short, grain gets scarce and the price
-        tends to rise, which softens a bad year for the farmer. That link between yields and prices is where Chapter 5 begins.
+        The lower chart shows which numbers matter. A 30% rise in grain prices adds about {usd(swing.price)} an acre to the average profit, and a 30% fall takes as
+        much away; the same move in yields shifts it by about {usd(swing.yield)}. A 30% move in fertilizer prices shifts it by only about {usd(swing.fert)}, and
+        in cash rent by about {usd(swing.rent)}. Prices and yields dominate, and in this demonstration they move separately. In the real valley they don’t: when
+        its harvest is short, grain gets scarce and the price tends to rise, which softens a bad year for the farmer. <a href={lessonHref('agriculture/4.5')}>Lesson
+        4.5</a> shows how a short harvest raises the price, and <a href={lessonHref('agriculture/5.5')}>Lesson 5.5</a> how that link works as a hedge the farm
+        already owns.
       </P>
 
       <P>
         So how much food a region produces economically comes down to the two halves of this chapter: the biology of Chapter 1, which sets what each acre can yield,
-        and the prices and costs that decide which acres get planted, with what, and how intensively. Both are uncertain, and the biggest single source of that
+        and the prices and costs that decide which acres get planted — the staircase of{' '}
+        <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> — with what, and how intensively. Both are uncertain, and the biggest single source of that
         uncertainty is the weather. In <FigRef to="Farm Profit Simulator · 200 seasons">the farm’s seasons</FigRef> it was hidden inside a histogram. Chapter 3 brings
-        it into the open, starting with the map: why some places suit corn, others wheat, and others neither.
+        it into the open, starting with the map: why some places suit corn, others wheat, and in others neither crop has a clear edge.
       </P>
     </LessonPage>
   );

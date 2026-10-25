@@ -32,6 +32,7 @@ import {
 import {
   FORMATS,
   FORMAT_IDS,
+  RETENTION_HALVING_C,
   SENSE_THRESHOLD,
   bitsOf,
   cellCharge,
@@ -45,8 +46,10 @@ import {
   survivesRefresh,
   type FormatId,
 } from '../../../engines/compute/memory';
+import { arrayMultiplier } from '../../../engines/compute/logic';
 import { ACCELERATORS } from '../../../model/compute/hardware';
 import { MODELS, paramCount } from '../../../model/compute/models';
+import { useRevealed } from './reveal';
 
 // ---------------------------------------------------------------------------
 // The DRAM cell: the weakest cell's charge over half a second, with refresh.
@@ -58,12 +61,15 @@ const SIM_SPEED = 128;
 export const INTERVAL = { min: 8, max: 256, step: 2 } as const;
 export const TEMP = { min: 25, max: 105, step: 1 } as const;
 export const CELL_DEFAULTS = { cell: 'dram' as 'dram' | 'sram', interval: 64, temp: 85 };
-/** The first challenge's temperature, °C. */
-export const CHALLENGE_TEMP = 95;
+/** The standard refresh interval the first challenge holds fixed, ms. */
+export const STANDARD_INTERVAL = 64;
 
-/** The first challenge: at 95 °C, the longest refresh interval on the slider's grid that keeps the bit. */
-export function longestIntervalSolved(cell: 'dram' | 'sram', temp: number, interval: number): boolean {
-  return cell === 'dram' && temp === CHALLENGE_TEMP && survivesRefresh(interval, temp) && !survivesRefresh(interval + INTERVAL.step, temp);
+/**
+ * The first challenge: with the standard 64 ms refresh, the hottest whole degree at which the weakest
+ * cell keeps its bit. The halving rule predicts it: 85 + 10 × log₂(100/64) ≈ 91.4, so 91 °C.
+ */
+export function hottestAt64Solved(cell: 'dram' | 'sram', temp: number, interval: number): boolean {
+  return cell === 'dram' && interval === STANDARD_INTERVAL && survivesRefresh(interval, temp) && !survivesRefresh(interval, temp + TEMP.step);
 }
 
 /** Fraction of full voltage on the weakest cell `t` ms after a 1 was written, refreshed every `interval` ms. */
@@ -194,7 +200,8 @@ function SramCell() {
 // ---------------------------------------------------------------------------
 // Number formats.
 
-export const FORMAT_DEFAULTS = { value: Math.PI, neg: false, format: 'bf16' as FormatId };
+/** Starts in FP16, so the second challenge needs a deliberate switch to the format with the range. */
+export const FORMAT_DEFAULTS = { value: Math.PI, neg: false, format: 'fp16' as FormatId };
 const LOG_MIN = -8;
 const LOG_MAX = 6;
 const PRESETS: Array<{ label: string; value: number }> = [
@@ -209,6 +216,12 @@ export function sixteenBitSolved(value: number, format: FormatId): boolean {
   const f = FORMATS[format];
   return f.bits === 16 && Math.abs(value) > FORMATS.fp16.max && !encode(value, f).overflow;
 }
+
+/** Milliseconds the A-class takes to read its whole memory once at full bandwidth (GB ÷ TB/s = ms; about 24). */
+export const READ_ALL_MS = ACCELERATORS.A.memoryGB / ACCELERATORS.A.bandwidthTBs;
+
+/** The number the prose rounds into each format: a repeating fraction in binary. */
+export const TENTH = 0.1;
 
 /** The 70B model's weights in each format, bytes. */
 export function modelBytes(format: FormatId): number {
@@ -308,7 +321,7 @@ function ModelBars({ format }: { format: FormatId }) {
       className="chart"
       viewBox="0 0 640 142"
       role="img"
-      aria-label={`The 70B model’s weights take ${fmt(gb, gb < 100 ? 2 : 0)} GB in ${FORMATS[format].name}, against the ${cap} GB of one A-class GPU: ${gb <= cap ? 'they fit' : 'they don’t fit'}.`}
+      aria-label={`The 70B model’s weights take ${fmt(gb)} GB in ${FORMATS[format].name}, against the ${cap} GB of one A-class GPU: ${gb <= cap ? 'they fit' : 'they don’t fit'}.`}
     >
       <text className="ax" x={76} y={14}>
         The 70B model’s weights
@@ -327,7 +340,7 @@ function ModelBars({ format }: { format: FormatId }) {
             </text>
             <rect x={MX(0)} y={y} width={MX(v) - MX(0)} height={ROW_H - 8} fill={on ? (fits ? GRAPHIC.violet : GRAPHIC.red) : tint(GRAPHIC.violet, 0.25)} />
             <text x={lx} y={y + 13} style={{ fontSize: 12, fontWeight: on ? 600 : 400, fill: on ? (fits ? TEXT.violet : TEXT.red) : '#6f6f6f' }}>
-              {fmt(v, v < 100 ? 2 : 0)} GB
+              {fmt(v)} GB
             </text>
           </g>
         );
@@ -362,7 +375,9 @@ export default function Lesson() {
     : `M${CX(0)} ${CY(1)} L${CX(SPAN_MS)} ${CY(1)}`;
   const ticks: number[] = [];
   if (dram) for (let k = interval; k <= SPAN_MS + 1e-9; k += interval) ticks.push(k);
-  const solvedA = longestIntervalSolved(cell, temp, interval);
+  const solvedA = hottestAt64Solved(cell, temp, interval);
+  // How long the weakest cell lasts would answer the challenge, so it stays hidden until it's solved.
+  const revealedA = useRevealed('compute/1.4', 'a', solvedA);
 
   // Figure 2: number formats.
   const nf = useScenario('formats', FORMAT_DEFAULTS);
@@ -401,8 +416,8 @@ export default function Lesson() {
       <P>
         The second cell is much smaller: one transistor and one capacitor, a pair of conducting plates that hold electric charge. A charged capacitor is a 1 and an
         empty one is a 0, and the transistor is a door. When the <i>word line</i> raises its gate, the capacitor is connected to the <i>bit line</i>, which writes
-        it or reads it. This is <b>dynamic RAM</b>, or DRAM. Its capacitor holds only tens of thousands of electrons, and the door is never quite shut — the same
-        off-state leakage — so the charge drains away. Reading it is delicate, too: a sense amplifier compares the small voltage the cell puts on the bit line with a
+        it or reads it. This is <b>dynamic RAM</b>, or DRAM. Its capacitor holds only tens of thousands of electrons, and they seep away: through the p–n junction
+        where the cell meets the silicon around it, and a little through the door, which is never quite shut. Reading it is delicate, too: a sense amplifier compares the small voltage the cell puts on the bit line with a
         reference. In our model, a cell holding less than half of its full <K c="voltage">voltage</K> reads as 0.
       </P>
       <P>
@@ -427,7 +442,7 @@ export default function Lesson() {
           role="img"
           aria-label={
             dram
-              ? `A DRAM cell at ${temp} °C, refreshed every ${interval} ms. The weakest cell keeps a readable 1 for ${duration(retention)}, so the stored 1 is ${keeps ? 'kept' : 'lost'}. Refreshing takes ${pct(overhead, 1)} of the chip’s time.`
+              ? `A DRAM cell at ${temp} °C, refreshed every ${interval} ms. ${revealedA ? `The weakest cell keeps a readable 1 for ${duration(retention)}, so t` : 'T'}he stored 1 is ${keeps ? 'kept' : 'lost'}. Refreshing takes ${pct(overhead, 1)} of the chip’s time.`
               : 'An SRAM cell: two inverters in a loop hold a 1 for as long as the cell has power, with no refresh.'
           }
         >
@@ -480,22 +495,21 @@ export default function Lesson() {
           items={
             dram
               ? [
-                  { label: 'the weakest cell keeps a 1 for', value: duration(retention), tone: 'blue' },
+                  // Hidden until the challenge is solved: it would answer it.
+                  { label: 'the weakest cell keeps a 1 for', value: revealedA ? duration(retention) : '?', tone: 'blue' },
                   { label: 'time spent refreshing', value: pct(overhead, 1), tone: 'teal' },
-                  { label: 'the stored 1', value: keeps ? 'kept' : 'lost', tone: keeps ? 'ink' : 'red' },
                 ]
               : [
-                  { label: 'transistors per bit', value: '6' },
-                  { label: 'refresh needed', value: 'none' },
-                  { label: 'the stored 1', value: 'kept while powered' },
+                  { label: 'the cell keeps a 1', value: 'while powered', tone: 'blue' },
+                  { label: 'time spent refreshing', value: 'none', tone: 'teal' },
                 ]
           }
         />
         <Caption>
           {dram
             ? keeps
-              ? `Each refresh finds the weakest cell still at ${pct(cellCharge(interval, temp))} of full voltage, reads a 1 and writes it back at full strength.`
-              : `The weakest cell falls below the threshold after ${duration(retention)}, before the refresh at ${interval} ms arrives. The refresh reads a 0 and writes back a 0.`
+              ? `Each refresh finds the weakest cell still ${revealedA ? `at ${pct(cellCharge(interval, temp))} of full voltage` : 'above the threshold'}, reads a 1 and writes it back at full strength.`
+              : `The weakest cell falls below the threshold${revealedA ? ` after ${duration(retention)}` : ''}, before the refresh at ${interval} ms arrives. The refresh reads a 0 and writes back a 0: the bit is lost.`
             : 'Each inverter’s output holds up the other’s input, so the 1 never fades. The price is six transistors for every bit.'}
         </Caption>
       </Figure>
@@ -508,44 +522,49 @@ export default function Lesson() {
       <P>
         Most cells hold their charge far longer than this one, but a memory chip is only as good as its weakest cell, so it’s refreshed for the worst. A common
         standard asks for every row of cells to be refreshed within 64 ms. Our example chip, which follows it, handles that as 8,192 refresh commands spread across
-        the window, each keeping it busy for 350 ns, so it spends {pct(refreshOverhead(64), 1)} of its time refreshing instead of answering reads and writes. Halve
+        the window, each keeping it busy for 350 ns, so it spends {pct(refreshOverhead(64), 1)} of its time refreshing rather than serving reads and writes. Halve
         the interval and that share doubles.
       </P>
       <P>
-        Now raise the temperature. Leakage roughly doubles for every 10 °C, so the time a cell can hold its charge halves: {duration(retentionMs(45))} at 45 °C,{' '}
+        Now raise the temperature. The leak from a DRAM cell roughly doubles for every 10 °C, so the time it can hold its charge halves: {duration(retentionMs(45))} at 45 °C,{' '}
         {duration(retentionMs(85))} at 85 °C, {duration(retentionMs(95))} at 95 °C. Real DRAM standards allow for this by halving the refresh interval, to 32 ms,
         when the chip runs above 85 °C. That matters for GPUs, which run hot with their memory packed right beside them.
       </P>
 
       <Challenge
         id="a"
-        question="Heat the chip to 95 °C. Then find the longest refresh interval at which the weakest cell still keeps its bit."
+        question={`Predict first, from the halving rule: how much hotter than 85 °C can our chip run before the standard ${STANDARD_INTERVAL} ms refresh is too slow for its weakest cell? Then, with the interval at ${STANDARD_INTERVAL} ms, find the hottest temperature, to the degree, at which the bit survives. How long the cell lasts stays hidden until you do.`}
         solved={solvedA}
         status={
           !dram
             ? 'Switch back to the DRAM cell: the SRAM cell needs no refresh.'
-            : temp !== CHALLENGE_TEMP
-              ? `The chip is at ${temp} °C. Set it to 95 °C first.`
+            : interval !== STANDARD_INTERVAL
+              ? `The chip is refreshed every ${interval} ms. Set it back to ${STANDARD_INTERVAL} ms.`
               : keeps
-                ? `At ${interval} ms the bit is kept. Could the chip wait longer between refreshes?`
-                : `At ${interval} ms the bit is lost. Refresh more often.`
+                ? `At ${temp} °C the bit survives. Could the chip run hotter?`
+                : `At ${temp} °C the bit is lost.`
         }
-        success={`Solved. At 95 °C the weakest cell drops to the threshold after exactly ${duration(retentionMs(95))}, so a refresh every ${duration(retentionMs(95))} catches it just in time, and any longer is too late. That costs ${pct(refreshOverhead(retentionMs(95)), 1)} of the chip’s time — and a real chip would leave a margin, which is why the standard asks for 32 ms.`}
+        success={`Solved. At ${temp} °C the weakest cell keeps its 1 for ${duration(retentionMs(temp))}, just long enough; one degree hotter, ${duration(retentionMs(temp + TEMP.step))}, and the refresh comes too late. The rule predicts it: ${STANDARD_INTERVAL} ms is ${duration(retentionMs(85))} halved ${fmt(Math.log2(retentionMs(85) / STANDARD_INTERVAL), 2)} times over, and each halving takes ${RETENTION_HALVING_C} °C, so the limit is ${fmt(RETENTION_HALVING_C * Math.log2(retentionMs(85) / STANDARD_INTERVAL), 1)} °C above 85. A straight line from ${duration(retentionMs(85))} at 85 °C to ${duration(retentionMs(95))} at 95 °C would have said ${fmt(85 + (RETENTION_HALVING_C * (retentionMs(85) - STANDARD_INTERVAL)) / (retentionMs(85) - retentionMs(95)))} °C, a degree too hot: retention halves with each ${RETENTION_HALVING_C} °C rather than falling by equal amounts.`}
       />
 
       <H2>Two memories in one GPU</H2>
       <P>
         Switch <FigRef to="Memory Cell Lab">the first demonstration</FigRef> back and forth between the two cells and the trade is plain. SRAM is quick and needs no
         refreshing, but six transistors take far more room than one transistor and a capacitor, so it’s used where speed matters most and only a little is needed. A
-        GPU keeps its registers and caches in SRAM, right beside the arithmetic. Its main memory is DRAM. The A-class 80 GB — the workhorse GPU of this course, a
-        fictional part with realistic specifications — carries {ACCELERATORS.A.memoryGB} GB of DRAM in stacks of memory chips beside the processor, called{' '}
-        <b>high-bandwidth memory</b>, or HBM. Its largest block of SRAM, the L2 cache, holds {ACCELERATORS.A.l2MB} MB:{' '}
+        GPU keeps its registers and caches in SRAM, right beside the arithmetic. Its main memory is DRAM.
+      </P>
+      <P>
+        The GPU this course is built around is the <b>A-class 80 GB</b>, a fictional part with the specifications of a real data-center accelerator. It carries{' '}
+        {ACCELERATORS.A.memoryGB} GB of DRAM in stacks beside the processor, called <b>high-bandwidth memory</b>, or HBM, and reads from them at{' '}
+        {fmt(ACCELERATORS.A.bandwidthTBs, 2)} terabytes (trillion bytes) a second: its <K tone="violet">memory bandwidth</K>, {fmt(ACCELERATORS.A.bandwidthTBs, 2)}{' '}
+        TB/s. At that rate, reading all {ACCELERATORS.A.memoryGB} GB once takes about {fmt(READ_ALL_MS)} milliseconds. Its largest block of SRAM, the L2 cache, holds {ACCELERATORS.A.l2MB} MB:{' '}
         {fmt((ACCELERATORS.A.memoryGB * 1000) / ACCELERATORS.A.l2MB)} times less.
       </P>
       <P>
         That gap, between a little fast memory and a lot of slow memory, runs through the rest of the course. Bringing a number in from off-chip DRAM takes on the
-        order of a hundred times as much energy as multiplying it once it arrives, and it takes time. Chapter 2 will show that for many of the jobs that matter most, a
-        GPU spends more of its time waiting for memory than doing arithmetic (<a href={lessonHref('compute/2.4')}>Lesson 2.4</a>).
+        order of a hundred times as much energy as multiplying it once it arrives, and the bandwidth caps how many numbers can arrive each second. Chapter 2 will show
+        that for many of the jobs that matter most, a GPU spends more of its time waiting for memory than doing arithmetic (
+        <a href={lessonHref('compute/2.4')}>Lesson 2.4</a>).
       </P>
 
       <H2>What the bits mean</H2>
@@ -589,8 +608,6 @@ export default function Lesson() {
         </Eq>
         <Readouts
           items={[
-            { label: 'the number you chose', value: num(x) },
-            { label: `stored in ${f.name}`, value: num(enc.value), tone: 'blue' },
             { label: 'rounding error', value: errorText(x, format), tone: enc.overflow || enc.underflow ? 'red' : 'ink' },
             { label: `largest number in ${f.name}`, value: num(f.max, 4) },
           ]}
@@ -623,43 +640,51 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Store π in FP32, the standard 32-bit format, and you get {num(encode(Math.PI, FORMATS.fp32).value)}, off by about 1 part in{' '}
-        {fmt(1 / relativeError(Math.PI, FORMATS.fp32) / 1e6)} million. BF16 and FP16, both 16 bits, give {num(encode(Math.PI, FORMATS.bf16).value)}, about 1 part in{' '}
-        {fmt(Math.round(1 / relativeError(Math.PI, FORMATS.bf16) / 100) * 100)}. FP8 gives {num(encode(Math.PI, FORMATS.fp8).value)}, off by 1 part in{' '}
-        {fmt(1 / relativeError(Math.PI, FORMATS.fp8))}. Every format rounds to the nearest number it can represent, and fewer mantissa bits mean coarser steps: near 1,
-        FP32’s steps are {num(epsilon(FORMATS.fp32), 2)} apart and FP8’s are {num(epsilon(FORMATS.fp8))}. Some ordinary numbers can’t be stored exactly in any of
-        them. 0.1 is a repeating fraction in binary, as ⅓ is in decimal.
+        Some ordinary numbers can’t be stored exactly in any format. 0.1 is a repeating fraction in binary, as ⅓ is in decimal, so every format rounds it to the
+        nearest number it can represent. FP32, the standard 32-bit format, stores {num(encode(TENTH, FORMATS.fp32).value)}, off by about 1 part in{' '}
+        {fmt(1 / relativeError(TENTH, FORMATS.fp32) / 1e6)} million. FP16 stores {num(encode(TENTH, FORMATS.fp16).value)}, 1 part in{' '}
+        {fmt(1 / relativeError(TENTH, FORMATS.fp16))}; BF16, though also 16 bits, {num(encode(TENTH, FORMATS.bf16).value)}, 1 part in{' '}
+        {fmt(1 / relativeError(TENTH, FORMATS.bf16))}; FP8, {num(encode(TENTH, FORMATS.fp8).value)}, 1 part in {fmt(1 / relativeError(TENTH, FORMATS.fp8))}. Fewer mantissa bits mean coarser steps: near 1, FP32’s steps are {num(epsilon(FORMATS.fp32), 2)} apart and
+        FP8’s are {num(epsilon(FORMATS.fp8))}.
       </P>
 
       <H2>Range against precision</H2>
       <P>
         FP16 and BF16 spend their 16 bits differently. FP16 gives 10 bits to the mantissa and 5 to the exponent. BF16 gives only 7 to the mantissa but keeps all 8 of
-        FP32’s exponent bits. So FP16 is the more precise of the two, but its largest number is {num(FORMATS.fp16.max)}, while BF16 reaches about{' '}
-        {num(FORMATS.bf16.max, 2)} — the same range as FP32.
+        FP32’s exponent bits. So FP16 is the more precise of the two, and its largest number is {num(FORMATS.fp16.max)}. The exponent sets how far a
+        format reaches; the mantissa, how finely it steps on the way.
       </P>
 
       <Challenge
         id="b"
         figure="Memory Cell Lab · number formats"
-        question="Store 70,000 — or any number larger than 65,504 — in a 16-bit format without it overflowing."
+        question="Predict first, from how the two 16-bit formats split their bits: which one can hold 70,000, more than FP16’s 65,504, and does it reach far beyond that or only a little? Then store 70,000 — or any number larger than 65,504 — in a 16-bit format without it overflowing."
         solved={solvedB}
         status={statusB}
-        success={`Solved. BF16 holds ${num(Math.abs(x))} as ${num(Math.abs(encode(x, FORMATS.bf16).value))}: rounded to its 7 mantissa bits, but in range. FP16 would have clamped it to 65,504, an error of ${pct(relativeError(70000, FORMATS.fp16), 1)} for 70,000.`}
+        success={`Solved. BF16 holds ${num(Math.abs(x))} as ${num(Math.abs(encode(x, FORMATS.bf16).value))}: rounded to its 7 mantissa bits, but in range. FP16 would have clamped it to 65,504, an error of ${pct(relativeError(70000, FORMATS.fp16), 1)} for 70,000. With all 8 of FP32’s exponent bits, BF16 reaches about ${num(FORMATS.bf16.max, 2)} — the same range as FP32.`}
       />
 
       <P>
-        That range is why BF16 — “brain floating point,” a format designed for neural networks — became the usual format for training them. During training, some
+        BF16 reaches about {num(FORMATS.bf16.max, 2)} — the same range as FP32 — and that range is why BF16, “brain floating point,” a format designed for neural
+        networks, became the usual format for training them. During training, some
         numbers grow very large and others very small, and one that overflows or vanishes to zero can ruin the calculation, while one that’s slightly rounded does
         little harm. Once a model is trained, its weights can often be stored in 8 bits with little loss of quality, which brings us back to memory.
       </P>
       <P>
-        Look at the bars under the bits. The 70B model, one of the three language models this course will use, has {fmt(paramCount(MODELS['70B']) / 1e9, 2)} billion
+        Now look at the bars. The 70B model, one of the three language models this course will use, has about {fmt(paramCount(MODELS['70B']) / 1e9)} billion
         weights. In FP32 they take {fmt(gb70('fp32'))} GB; in BF16, {fmt(gb70('bf16'))} GB — nearly two A-class GPUs’ worth of memory before the model has done
-        anything. In FP8 they take {fmt(gb70('fp8'), 2)} GB and fit on a single {ACCELERATORS.A.memoryGB} GB card, leaving {fmt(spare, 2)} GB for everything else a
-        running model needs, which Chapter 3 will show isn’t much. Fewer bits also mean less arithmetic hardware. As Lesson 1.3 found, a multiplier grows with the
-        square of its width, and FP8’s 4-bit mantissa (3 stored bits and an implicit leading 1) needs a far smaller multiplier than BF16’s 8 bits or FP32’s 24.
-        It’s one reason the A-class performs {fmt(ACCELERATORS.A.fp8Tflops)} trillion FP8 operations a second, but {fmt(ACCELERATORS.A.bf16Tflops)} trillion in
-        BF16: halving the bits doubles the rate.
+        anything. In FP8 they take {fmt(gb70('fp8'))} GB and fit on a single {ACCELERATORS.A.memoryGB} GB card, leaving about {fmt(spare)} GB for everything else a
+        running model needs, which Chapter 3 will show isn’t much.
+      </P>
+      <P>
+        Fewer bits also mean less arithmetic hardware. As <a href={lessonHref('compute/1.3')}>Lesson 1.3</a> found, a multiplier grows with the square of its
+        width: in that lesson’s design, one for FP8’s 4-bit mantissa (3 stored bits and an implicit leading 1) takes {fmt(arrayMultiplier(4).transistors)}{' '}
+        transistors, and one for BF16’s 8 bits takes {fmt(arrayMultiplier(8).transistors)}, about{' '}
+        {fmt(arrayMultiplier(8).transistors / arrayMultiplier(4).transistors, 1)} times as many. Chips count their arithmetic in <b>FLOPs</b>, floating-point
+        operations — each multiplication or addition is one — and their speed in <b>TFLOPS</b>, trillions of FLOPs a second. The A-class’s matrix units, circuits
+        built to multiply whole arrays of numbers at once, reach {fmt(ACCELERATORS.A.fp8Tflops)} TFLOPS in FP8 and {fmt(ACCELERATORS.A.bf16Tflops)} in BF16:
+        twice the rate, not four or five times. Every operand has to reach the multipliers and every result leave them, over wires sized in bits: halve the bits
+        and the same wires carry twice as many numbers. That delivery, more than the multipliers, sets the matrix units’ pace.
       </P>
       <P>
         Every one of these operations — each transistor that switches, each capacitor charged and refreshed, each number fetched from memory — costs a little

@@ -28,9 +28,22 @@ import {
 } from '../../../framework';
 import { zFactor } from '../../../engines/gas/eos';
 import { rankine } from '../../../engines/gas/properties';
-import { WELLBORE_RADIUS_FT, drainageRadius, gasFVF, gasInPlace, gasViscosity, wellRate, type Rock } from '../../../engines/gas/reservoir';
+import {
+  LINEAR_FLOW_CONSTANT,
+  WELLBORE_RADIUS_FT,
+  drainageRadius,
+  fractureFaceArea,
+  fractureFlowDistance,
+  fracturedWellRate,
+  gasFVF,
+  gasInPlace,
+  gasViscosity,
+  wellRate,
+  type FracturedWell,
+  type Rock,
+} from '../../../engines/gas/reservoir';
 import { PIPELINE } from '../../../model/gas/world';
-import { RIDGEBACK_PI, RIDGEBACK_ROCK, SANDHILL_PI, SANDHILL_P_NOW, SANDHILL_ROCK } from '../../../model/gas/production';
+import { RIDGEBACK_FRACS, RIDGEBACK_PI, RIDGEBACK_ROCK, SANDHILL_PI, SANDHILL_P_NOW, SANDHILL_ROCK } from '../../../model/gas/production';
 
 // ---------------------------------------------------------------------------
 // The first demonstration: one square mile of rock, 50 ft thick, at 180 °F.
@@ -152,7 +165,7 @@ function PoreView({ porosity, logK, rate }: { porosity: number; logK: number; ra
   );
 }
 
-/** The cross-section: a seal over the reservoir layer, and a vertical well drawing gas in from both sides. */
+/** The cross-section: a seal over the reservoir layer, and a vertical well drawing gas in from both sides. The rate itself is in the readouts. */
 function Section({ gip, rate }: { gip: number; rate: number }) {
   const x0 = 358;
   const x1 = 624;
@@ -177,10 +190,7 @@ function Section({ gip, rate }: { gip: number; rate: number }) {
       <rect x={xw - 9} y={20} width={18} height={10} fill="#555" />
       <path d={`M${x0 + 4} 168 L${xw - 4} 168`} className="flow-dots" stroke={GRAPHIC.orange} strokeWidth={3.5} style={dotStyle(rate)} />
       <path d={`M${x1 - 4} 168 L${xw + 4} 168`} className="flow-dots" stroke={GRAPHIC.orange} strokeWidth={3.5} style={dotStyle(rate)} />
-      <text x={xw - 12} y={52} textAnchor="end" style={{ fontSize: 14, fontWeight: 500, fill: TEXT.orange }}>
-        {rateText(rate)}
-      </text>
-      <text className="ax ax-e" x={xw - 12} y={68}>
+      <text className="ax ax-e" x={xw - 12} y={52}>
         a vertical well
       </text>
     </g>
@@ -287,11 +297,112 @@ function FieldsChart({ rows, selected }: { rows: Array<Field & { gip: number; ra
   );
 }
 
+// ---------------------------------------------------------------------------
+// The third demonstration: a horizontal well in Ridgeback's shale, fractured in stages.
+
+/** Most stages the slider allows: two miles of horizontal well. */
+export const STAGES_MAX = 24;
+export const HORIZONTAL_DEFAULTS = { stages: 12 };
+
+/** The Ridgeback horizontal well with `stages` fracture stages. */
+export function horizontalWell(stages: number): FracturedWell {
+  return { stages, ...RIDGEBACK_FRACS };
+}
+
+/** Its rate (MMcf/d) at Ridgeback's discovery pressure, with the vertical well's flowing pressure. */
+export function horizontalRate(stages: number): number {
+  return fracturedWellRate(RIDGEBACK_ROCK, RIDGEBACK_PI, PWF, horizontalWell(stages));
+}
+
+/** Plan view: two miles of well across the strip, starting at the heel. */
+const HX0 = 24;
+const FT_PX = 592 / (STAGES_MAX * RIDGEBACK_FRACS.stageSpacingFt);
+const HY = 70;
+/** Rate bars: log scale from 1 Mcf/d to 100,000 Mcf/d. */
+const HRX0 = 176;
+const HRX1 = 620;
+const hrx = (mmcfd: number) => HRX0 + (clamp(Math.log10(Math.max(mmcfd * 1000, 1e-9)), 0, 5) / 5) * (HRX1 - HRX0);
+const FRACTURE = '#666';
+const DRAINED = tint(GRAPHIC.gold, 0.45);
+
+function HorizontalWellView({ stages, rate, vertical }: { stages: number; rate: number; vertical: number }) {
+  const sp = RIDGEBACK_FRACS.stageSpacingFt * FT_PX;
+  const half = RIDGEBACK_FRACS.halfLengthFt * FT_PX;
+  const toe = HX0 + stages * sp;
+  const mile = 5280 * FT_PX;
+  const rows = [
+    { label: 'A vertical well', q: vertical },
+    { label: 'This horizontal well', q: rate },
+  ];
+  return (
+    <svg
+      className="diagram"
+      viewBox="0 0 640 252"
+      role="img"
+      aria-label={`From above: a horizontal well ${fmt(stages * RIDGEBACK_FRACS.stageSpacingFt)} feet long in Ridgeback’s shale with ${stages} fracture stage${stages === 1 ? '' : 's'}, ${fmt(RIDGEBACK_FRACS.stageSpacingFt)} feet apart, each reaching ${fmt(RIDGEBACK_FRACS.halfLengthFt)} feet into the rock on either side. It flows ${rateText(rate)}, against ${rateText(vertical)} for a vertical well.`}
+    >
+      <text className="ax" x={16} y={16}>
+        The shale from above: the well’s horizontal section and its fractures
+      </text>
+      <rect x={16} y={HY - 40} width={608} height={80} fill="#f1eee6" />
+      <rect x={HX0} y={HY - half} width={toe - HX0} height={2 * half} fill={DRAINED} />
+      {Array.from({ length: stages }, (_, i) => {
+        const x = HX0 + (i + 0.5) * sp;
+        return <line key={i} x1={x} x2={x} y1={HY - half} y2={HY + half} stroke={FRACTURE} strokeWidth={2} />;
+      })}
+      <line x1={HX0} x2={toe} y1={HY} y2={HY} stroke="#555" strokeWidth={4} />
+      <path d={`M${toe - 2} ${HY} L${HX0 + 2} ${HY}`} className="flow-dots" stroke={GRAPHIC.orange} strokeWidth={3} style={dotStyle(rate)} />
+      <circle cx={HX0} cy={HY} r={6} fill="#555" />
+      {[0, 1, 2].map((m) => (
+        <g key={m}>
+          <line className="base" x1={HX0 + m * mile} x2={HX0 + m * mile} y1={HY + 44} y2={HY + 50} />
+          <text className={m === 0 ? 'ax' : m === 2 ? 'ax ax-e' : 'ax ax-m'} x={HX0 + m * mile + (m === 0 ? -3 : 0)} y={HY + 64}>
+            {m === 0 ? '0' : m === 1 ? '1 mile' : '2 miles'}
+          </text>
+        </g>
+      ))}
+      <line className="base" x1={HX0} x2={HX0 + 2 * mile} y1={HY + 47} y2={HY + 47} />
+      {[0.001, 0.01, 0.1, 1, 10, 100].map((v, i) => (
+        <g key={'t' + v}>
+          <line className={i ? 'gl' : 'base'} x1={hrx(v)} x2={hrx(v)} y1={146} y2={214} />
+          <text className="ax ax-m" x={hrx(v)} y={230}>
+            {['1 Mcf', '10', '100', '1 MMcf', '10', '100'][i]}
+          </text>
+        </g>
+      ))}
+      {rows.map((r, i) => {
+        const y = 150 + i * 32;
+        const inside = hrx(r.q) > HRX1 - 70;
+        return (
+          <g key={r.label}>
+            <text x={166} y={y + 16} textAnchor="end" style={{ fontSize: 13, fontWeight: i ? 600 : 400, fill: '#333' }}>
+              {r.label}
+            </text>
+            <rect x={hrx(0.001)} y={y + 4} width={Math.max(0, hrx(r.q) - hrx(0.001))} height={16} fill={GRAPHIC.orange} opacity={i ? 1 : 0.6} />
+            <text
+              x={inside ? hrx(r.q) - 5 : hrx(r.q) + 5}
+              textAnchor={inside ? 'end' : 'start'}
+              y={y + 16}
+              style={{ fontSize: 12, fill: inside ? '#fff' : TEXT.orange, fontWeight: i ? 600 : 400 }}
+            >
+              {rateText(r.q)}
+            </text>
+          </g>
+        );
+      })}
+      <text className="ax ax-e" x={HRX1} y={246}>
+        per day
+      </text>
+    </svg>
+  );
+}
+
 // Numbers quoted in the prose.
 const DEF = rockOf(ROCK_DEFAULTS);
 const DEF_GIP = gasInPlace(DEF, ROCK_DEFAULTS.pressure) / 1e9;
 const DEF_SCF = 1 / gasFVF(ROCK_DEFAULTS.pressure, BASE_ROCK.tempF);
-const DEF_RATE = explorerRate(ROCK_DEFAULTS);
+/** A vertical well's rate at the starting 1 md: the challenge is predicted from it. */
+export const DEF_RATE = explorerRate(ROCK_DEFAULTS);
 const GIP_6000 = gasInPlace(DEF, 6000) / 1e9;
 const Z_3000 = zFactor(3000, BASE_ROCK.tempF);
 const Z_6000 = zFactor(6000, BASE_ROCK.tempF);
@@ -303,6 +414,11 @@ const RATE_RATIO = SAND_D.rate / RIDGE.rate;
 const SAND_D_MU = gasViscosity((SANDHILL_PI + PWF) / 2, SANDHILL_ROCK.tempF);
 const NORTHLINE_BCFD = PIPELINE['calder-metro'].capacityBcfd;
 const RIDGE_YEARS = (RIDGE.gip * 1e9) / (RIDGE.rate * 1e6) / 365.25;
+const H_DEF = horizontalRate(HORIZONTAL_DEFAULTS.stages);
+const H_DEF_AREA = fractureFaceArea(RIDGEBACK_ROCK, horizontalWell(HORIZONTAL_DEFAULTS.stages));
+const H_PER_STAGE = horizontalRate(1);
+const HALF_SPACING = RIDGEBACK_FRACS.stageSpacingFt / 2;
+const H_DIST = fractureFlowDistance(horizontalWell(1));
 /** The challenge's answer, computed from the grid. */
 const ANSWER = (() => {
   for (let i = -40; i <= 30; i++) {
@@ -332,12 +448,24 @@ export default function Lesson() {
   const geom = Math.log(drainageRadius(sel.rock.areaAcres) / WELLBORE_RADIUS_FT) - 0.75;
   const selRate = wellRate(sel.rock, sel.pressure, pwf);
 
+  const h = useScenario('horizontal', HORIZONTAL_DEFAULTS);
+  const stages = h.state.stages;
+  const hWell = horizontalWell(stages);
+  const hRate = horizontalRate(stages);
+  const hArea = fractureFaceArea(RIDGEBACK_ROCK, hWell);
+  const hDist = fractureFlowDistance(hWell);
+  const hPAvg = (RIDGEBACK_PI + PWF) / 2;
+  const hMu = gasViscosity(hPAvg, RIDGEBACK_ROCK.tempF);
+  const hZ = zFactor(hPAvg, RIDGEBACK_ROCK.tempF);
+
   const status =
     pressure !== CHALLENGE_PRESSURE
       ? `Set the reservoir pressure back to ${fmt(CHALLENGE_PRESSURE)} psia first; it’s at ${fmt(pressure)}.`
-      : rate >= TARGET_MMCFD
-        ? `At ${permText(k)} the well flows ${rateText(rate)}. Would less permeable rock still do?`
-        : `At ${permText(k)} the well flows only ${rateText(rate)}.`;
+      : logK === ROCK_DEFAULTS.logK
+        ? `Work out your answer from the rate at ${permText(permOf(ROCK_DEFAULTS.logK))} before you move the slider.`
+        : rate >= TARGET_MMCFD
+          ? `At ${permText(k)} the well flows enough, but so would tighter rock.`
+          : `At ${permText(k)} the well flows too little.`;
 
   return (
     <LessonPage id="gas/2.1">
@@ -346,7 +474,7 @@ export default function Lesson() {
         can deliver gas cheaply for decades while another needs thousands of wells — we have to start with the rock that holds it.
       </P>
       <P>
-        Most of the gas that is produced began as the remains of microscopic plants and animals that settled into fine mud on ancient sea and lake floors. As more sediment piled on top,
+        Most gas began as the remains of microscopic plants and animals that settled into mud on ancient sea and lake floors. As more sediment piled on top,
         the mud was buried thousands of feet deep and slowly hardened into a dark rock called shale, and the organic matter in it was heated. Over millions of years the
         heat broke it down, first into oil and then, as the rock grew hotter still, into gas. The shale where this happens is the <b>source rock</b>.
       </P>
@@ -357,10 +485,10 @@ export default function Lesson() {
         one. And some gas never leaves the source rock at all. The Ridgeback basin produces gas straight out of the shale that made it.
       </P>
       <P>
-        Rock looks solid, but a reservoir rock is a packing of grains with spaces between them. The share of the rock’s volume that is space is its <b>porosity</b>. The
+        A reservoir rock is a packing of grains with spaces between them. The share of the rock’s volume that is space is its <b>porosity</b>. The
         rock was laid down under water, and some water stays behind, clinging to the grains, so gas fills only part of each pore; our rock is {pct(BASE_ROCK.waterSat)}{' '}
         water. In the next demonstration, a square mile of rock {BASE_ROCK.thicknessFt} feet thick sits beneath a seal at {BASE_ROCK.tempF} °F, with a vertical well drilled
-        into the middle of it. The magnified slice shows sand grains cemented together, with water in blue and gas in gold in the pores between them. Set the rock’s porosity, its{' '}
+        into the middle of it. The magnified slice shows the grains, and the water and gas between them. Set the rock’s porosity, its{' '}
         <K tone="violet">permeability</K> and the <K tone="blue">pressure</K> of the gas in its pores:
       </P>
 
@@ -386,9 +514,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'gas in place, per square mile', value: `${fmt(gip, 1)} Bcf`, tone: 'gold' },
             { label: 'standard cubic feet per cubic foot of pore space', value: fmt(1 / bg), tone: 'blue' },
-            { label: `a vertical well’s rate at ${fmt(PWF)} psia`, value: rateText(rate), tone: 'orange' },
+            { label: `a vertical well’s rate, with ${fmt(PWF)} psia held at its bottom`, value: rateText(rate), tone: 'orange' },
           ]}
         />
         <Slider label="Porosity" value={porosity} min={0.02} max={0.3} step={0.01} onChange={(v) => s.set({ porosity: v })} display={pct(porosity)} />
@@ -431,33 +558,33 @@ export default function Lesson() {
       <P>
         Now move the permeability slider. The gas in place doesn’t change at all — but the well’s rate does, in exact proportion. <K tone="violet">Permeability</K> measures
         how easily a fluid moves through the connected pores of a rock, and porosity says nothing about it: a rock can be full of pores that barely connect. It’s
-        measured in darcies, after Henry Darcy, the French engineer who in the 1850s measured how water flows through beds of sand for the fountains of Dijon. Oil and gas
+        measured in darcies, after Henry Darcy, the French engineer who in the 1850s measured water flowing through sand. Oil and gas
         rocks are counted in thousandths of a darcy, millidarcies (md). A good conventional sandstone measures from a few millidarcies to more than a thousand; the shales
         that hold gas, tens to hundreds of billionths of a darcy, nanodarcies.
       </P>
       <P>
-        At the starting {permText(permOf(ROCK_DEFAULTS.logK))}, the vertical well flows {rateText(DEF_RATE)}, drawing the pressure around it down toward the {fmt(PWF)} psia held at its bottom.
-        Halve the permeability and the rate halves; set it to Ridgeback’s {permText(RIDGEBACK_ROCK.permMd)} and the same square mile, with the same gas in it, gives up a
-        trickle. Raising the pressure helps the rate as well as the gas in place, since a well, like a pipe in <a href={lessonHref('gas/1.3')}>Lesson 1.3</a>, flows with the
+        At the starting {permText(permOf(ROCK_DEFAULTS.logK))}, the vertical well flows {rateText(DEF_RATE)}, drawing the pressure around it down toward the {fmt(PWF)} psia held at its
+        bottom while it flows, its <K tone="blue">flowing pressure</K>. Halve the permeability and the rate halves; turn it down to about Ridgeback’s{' '}
+        {permText(RIDGEBACK_ROCK.permMd)} and the same square mile, with the same gas in it, gives up a trickle. Raising the pressure helps the rate as well as the gas in place, since a well, like a pipe in <a href={lessonHref('gas/1.3')}>Lesson 1.3</a>, flows with the
         difference of the squared pressures. Porosity decides how much gas there is; permeability decides how fast it can come out.
       </P>
 
       <Challenge
         id="a"
         figure="Reservoir Explorer"
-        question={`A vertical well here needs to flow at least ${TARGET_MMCFD} MMcf/d to pay for itself. With the reservoir at ${fmt(CHALLENGE_PRESSURE)} psia, what’s the least permeable rock it can be drilled into?`}
+        question={`A vertical well here needs to flow at least ${TARGET_MMCFD} MMcf/d to pay for itself. With the reservoir at ${fmt(CHALLENGE_PRESSURE)} psia, what’s the least permeable rock it can be drilled into? Predict it from the ${rateText(DEF_RATE)} the well flows at ${permText(permOf(ROCK_DEFAULTS.logK))}, then set the permeability to check.`}
         solved={solved}
         status={status}
-        success={`Solved: ${permText(ANSWER.k)}, where the well flows ${rateText(ANSWER.rate)}; one step less permeable, it flows ${rateText(ANSWER.below)}. Porosity made no difference — it changes how much gas there is to produce, not how fast it moves. Even this marginal rock is about ${fmt(Math.round(ANSWER.k / RIDGEBACK_ROCK.permMd / 10) * 10)} times as permeable as Ridgeback’s shale.`}
+        success={`Solved: ${permText(ANSWER.k)}. The rate is proportional to permeability, so a well that flows ${rateText(DEF_RATE)} at ${permText(permOf(ROCK_DEFAULTS.logK))} flows ${TARGET_MMCFD} MMcf/d at ${TARGET_MMCFD} ÷ ${fmt(DEF_RATE, 1)} = ${fmt(TARGET_MMCFD / DEF_RATE, 2)} md. The slider’s ${permText(ANSWER.k)} gives ${rateText(ANSWER.rate)}; one step tighter, it gives ${rateText(ANSWER.below)}. Porosity made no difference — it changes how much gas there is, not how fast it moves. Even this marginal rock is about ${fmt(Math.round(ANSWER.k / RIDGEBACK_ROCK.permMd / 10) * 10)} times as permeable as Ridgeback’s shale.`}
       />
 
       <H2>Two fields</H2>
       <P>
-        The region’s two fields sit at opposite ends of the sliders in <FigRef to="Reservoir Explorer">the first demonstration</FigRef>. Sandhill is a {SANDHILL_ROCK.thicknessFt}-foot sandstone with {pct(SANDHILL_ROCK.porosity)} porosity
+        The region’s two fields sit far apart on the permeability slider of <FigRef to="Reservoir Explorer">the first demonstration</FigRef>. Sandhill is a {SANDHILL_ROCK.thicknessFt}-foot sandstone with {pct(SANDHILL_ROCK.porosity)} porosity
         and a permeability of {permText(SANDHILL_ROCK.permMd)}, discovered at {fmt(SANDHILL_PI)} psia and produced for decades since, so its pressure today is down to{' '}
         {fmt(SANDHILL_P_NOW)}. Ridgeback is a {RIDGEBACK_ROCK.thicknessFt}-foot shale with{' '}
         {pct(RIDGEBACK_ROCK.porosity)} porosity, deeper and hotter, at {fmt(RIDGEBACK_PI)} psia — and {fmt(PERM_RATIO)} times less permeable. The next demonstration puts
-        a square mile of each side by side, with the vertical well’s flow equation written out for the field you choose. Change the pressure at the bottom of the well:
+        a square mile of each side by side, with the vertical well’s flow equation written out for the field you choose. Change the flowing pressure:
       </P>
 
       <Figure name="Reservoir Explorer · two fields" scenario={f}>
@@ -504,7 +631,7 @@ export default function Lesson() {
           <K tone="orange">{fmt(selRate * 1000, selRate * 1000 >= 10 ? 0 : 1)} Mcf/d</K>
         </Eq>
         <Slider
-          label="Pressure at the bottom of the well"
+          label="Flowing pressure"
           tone="blue"
           value={pwf}
           min={200}
@@ -516,7 +643,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Read the bars together. A square mile of Ridgeback holds {fmt(RIDGE.gip)} Bcf, {fmt(RIDGE.gip / SAND_D.gip, 1)} times what Sandhill held at discovery: the shale
+        A square mile of Ridgeback holds {fmt(RIDGE.gip)} Bcf, {fmt(RIDGE.gip / SAND_D.gip, 1)} times what Sandhill held at discovery: the shale
         is far thicker, and its high pressure packs the gas tightly. Yet a vertical well into Sandhill flowed {rateText(SAND_D.rate)} at discovery, and one into Ridgeback
         flows {rateText(RIDGE.rate)} — about {fmt(Math.round(RATE_RATIO / 10) * 10)} times less. At that rate, the well would take some{' '}
         {fmt(Math.round(RIDGE_YEARS / 1000) * 1000)} years to produce the gas beneath its square mile.
@@ -524,25 +651,90 @@ export default function Lesson() {
       <P>
         The equation is Darcy’s law, worked out for gas flowing inward from all sides to a well. The rate is the permeability times the thickness — the rock’s ability to
         conduct — times the difference of the squared pressures, divided by terms that resist the flow: the gas’s absolute temperature in degrees Rankine, its viscosity
-        (about {fmt(SAND_D_MU, 3)} centipoise for Sandhill’s gas at discovery; water at room temperature is about 1), its compressibility factor Z, and a geometric term for
+        (about {fmt(SAND_D_MU, 3)} centipoise for Sandhill’s gas, against about 1 for water), its compressibility factor Z, and a geometric term for
         gas converging on a hole {fmt(WELLBORE_RADIUS_FT * 24, 1)} inches across from a circle{' '}
         {fmt(drainageRadius(640))} feet in radius. The 1,422 makes the field units come out in thousands of cubic feet a day. The equation assumes the pressure has
-        settled into a steady pattern across the whole square mile, which in shale would take a very long time; <a href={lessonHref('gas/2.3')}>Lesson 2.3</a> looks at
+        settled into a steady pattern across the whole square mile, which in shale would take centuries; <a href={lessonHref('gas/2.3')}>Lesson 2.3</a> looks at
         what happens before then. But no version of the arithmetic rescues a vertical well in rock that tight.
       </P>
       <P>
         Sandhill’s problem is different. Its rock still conducts well, but {fmt(SAND_D.gip - SAND_N.gip, 1)} Bcf of every square mile’s {fmt(SAND_D.gip, 1)} have already
-        been produced, the pressure has fallen with it, and a well flows {rateText(SAND_N.rate)} where it once flowed {rateText(SAND_D.rate)}. Lowering the pressure at
-        the bottom of the well helps a little, since the well flows on the difference of the squares, but it can’t restore what depletion took away.
+        been produced, the pressure has fallen with it, and a well flows {rateText(SAND_N.rate)} where it once flowed {rateText(SAND_D.rate)}. Lowering the flowing
+        pressure helps a little, since the well flows on the difference of the squares, but it can’t restore what depletion took away.
       </P>
 
       <H2>Reaching more rock</H2>
       <P>
-        Since the rate grows with the area of rock the well touches, the answer for shale was to touch vastly more of it. Two techniques, combined and refined in the 1990s
-        and 2000s, did that. <b>Horizontal drilling</b> turns the well sideways once it reaches the shale and runs it along the layer for a mile or two, instead of crossing
-        its {RIDGEBACK_ROCK.thicknessFt} feet. <b>Hydraulic fracturing</b> then pumps water and sand down the well at high pressure, in stage after stage along that horizontal section,
-        cracking the rock; the sand props the cracks open, so gas a few feet from a crack has only a few feet of nanodarcy rock to cross. Together they turned source rock
-        that no one could produce into the largest source of gas in the United States.
+        The flow equation’s rate grows with k × h, the permeability times the thickness: the height of the rock face the gas flows into. For a vertical well that
+        face is the wall of an {fmt(WELLBORE_RADIUS_FT * 24, 1)}-inch hole, and the gas has to converge on it from thousands of feet away. The answer for shale was to
+        give the gas a vastly larger face. Two techniques, combined and refined in the 1990s and 2000s, did that.{' '}
+        <b>Horizontal drilling</b> turns the well sideways once it reaches the shale and runs it along the layer for a mile or two, instead of crossing its{' '}
+        {RIDGEBACK_ROCK.thicknessFt} feet. <b>Hydraulic fracturing</b> then pumps water and sand down the well at high pressure, in stage after stage along that horizontal
+        section, cracking the rock; the sand props the cracks open.
+      </P>
+      <P>
+        In the next demonstration, a horizontal well runs through Ridgeback’s shale with a fracture stage every {fmt(RIDGEBACK_FRACS.stageSpacingFt)} feet, each crack
+        reaching {fmt(RIDGEBACK_FRACS.halfLengthFt)} feet into the rock on either side, through the whole layer. As before, {fmt(PWF)} psia is held at its bottom. Add
+        stages:
+      </P>
+
+      <Figure name="Reservoir Explorer · horizontal well" scenario={h}>
+        <HorizontalWellView stages={stages} rate={hRate} vertical={RIDGE.rate} />
+        <Legend
+          items={[
+            { label: 'The well, turning sideways at the dot', color: '#555', kind: 'line' },
+            { label: 'Fractures', color: FRACTURE, kind: 'line' },
+            { label: 'Rock between the fractures', color: DRAINED },
+            { label: 'Gas flowing to the surface', color: GRAPHIC.orange, kind: 'line', dashed: true },
+          ]}
+        />
+        <Readouts
+          items={[
+            { label: 'rock face the gas flows into', value: `${fmt(hArea / 1e6, 1)} million ft²` },
+            { label: 'times a vertical well’s rate', value: `${fmt(hRate / RIDGE.rate)}×`, tone: 'orange' },
+          ]}
+        />
+        <Slider
+          label="Fracture stages"
+          value={stages}
+          min={1}
+          max={STAGES_MAX}
+          step={1}
+          onChange={(v) => h.set({ stages: v })}
+          display={`${stages} · ${fmt(stages * RIDGEBACK_FRACS.stageSpacingFt)} ft of well`}
+        />
+        <Eq
+          label={`Rate equals ${permText(RIDGEBACK_ROCK.permMd)} times ${fmt(hArea)} square feet times (${fmt(RIDGEBACK_PI)} squared minus ${fmt(PWF)} squared), over 8935 times ${fmt(rankine(RIDGEBACK_ROCK.tempF), 1)} times ${fmt(hMu, 4)} centipoise times Z of ${fmt(hZ, 3)} times ${fmt(hDist, 1)} feet: ${rateText(hRate)}`}
+        >
+          <K tone="orange">q</K>
+          <Op>=</Op>
+          <Frac
+            top={
+              <span>
+                <K tone="violet">{Number(RIDGEBACK_ROCK.permMd.toPrecision(2))}</K> × {fmt(hArea)} × (<K tone="blue">{fmt(RIDGEBACK_PI)}</K>
+                <Sup>2</Sup> − <K tone="blue">{fmt(PWF)}</K>
+                <Sup>2</Sup>)
+              </span>
+            }
+            bottom={
+              <span>
+                {fmt(LINEAR_FLOW_CONSTANT)} × <K tone="teal">{fmt(rankine(RIDGEBACK_ROCK.tempF), 1)}</K> × {fmt(hMu, 4)} × {fmt(hZ, 3)} × {fmt(hDist, 1)}
+              </span>
+            }
+          />
+          <Op>=</Op>
+          <K tone="orange">{fmt(hRate * 1000)} Mcf/d</K>
+        </Eq>
+      </Figure>
+
+      <P>
+        With {HORIZONTAL_DEFAULTS.stages} stages along a mile, the well opens {fmt(H_DEF_AREA / 1e6, 1)} million square feet of rock face to the gas, and no gas between the
+        fractures is more than {fmt(HALF_SPACING)} feet from one. It flows {rateText(H_DEF)}, about {fmt(Math.round(H_DEF / RIDGE.rate / 10) * 10)} times a vertical
+        well’s {rateText(RIDGE.rate)}, and each stage adds the same face and the same {fmt(H_PER_STAGE, 2)} MMcf/d. The equation is Darcy’s law again, written for gas moving
+        straight toward a flat face instead of converging on a hole: the permeability times the face’s area, times the difference of the squared pressures, over the same
+        resisting terms and the distance the gas crosses — effectively {fmt(H_DIST)} feet, a third of the {fmt(HALF_SPACING)}, since most of the gas starts nearer a face.
+        (The {fmt(LINEAR_FLOW_CONSTANT)} is 2π × 1,422.) It too assumes the flow has settled, but across {fmt(HALF_SPACING)} feet of shale that takes a few years, not
+        centuries. Together, the two techniques made source rock that no one could produce the largest source of gas in the United States.
       </P>
       <P>
         A well like that doesn’t produce at a steady rate, though, and neither does one in Sandhill’s sandstone. Every cubic foot that flows out lowers the pressure that

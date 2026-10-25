@@ -1,6 +1,6 @@
-// The weather course's fictional world: the Calder region, on the east coast of a mid-latitude
+// The weather course's fictional world: the Fenwick region, on the east coast of a mid-latitude
 // continent at about 41°N, where the prevailing westerlies arrive over land. Its port city,
-// Calder Bay, is where the course's weather contracts settle; the plains around Marlow grow corn;
+// Fenwick Bay, is where the course's weather contracts settle; the plains around Marlow grow corn;
 // the wind farm sits on Hollin Ridge. Every station's climate comes from one small set of rules
 // (latitude, distance from the sea, elevation), so a reader can build a new station in the same
 // world and get a climate that behaves like the others.
@@ -35,7 +35,7 @@ export interface ClimateInput {
   latitude: number;
   /**
    * 0 = a coast where the prevailing wind blows in off the sea; 1 = deep in a continent's
-   * interior. Calder Bay is on a coast, but the westerlies reach it over land, so it's 0.8.
+   * interior. Fenwick Bay is on a coast, but the westerlies reach it over land, so it's 0.8.
    */
   continentality: number;
   /** Meters above sea level. */
@@ -104,13 +104,13 @@ export interface Station extends ClimateInput {
   y: number;
 }
 
-export type StationId = 'calder' | 'marlow' | 'ridge';
+export type StationId = 'fenwick' | 'marlow' | 'ridge';
 
 /** The region's three weather stations. */
 export const STATIONS: Record<StationId, Station> = {
-  calder: {
-    id: 'calder',
-    name: 'Calder Bay',
+  fenwick: {
+    id: 'fenwick',
+    name: 'Fenwick Bay',
     role: 'The port city’s airport station. The course’s degree-day contracts settle on its readings.',
     latitude: 41,
     continentality: 0.8,
@@ -143,13 +143,13 @@ export const STATIONS: Record<StationId, Station> = {
   },
 };
 
-export const CALDER = climateOf(STATIONS.calder);
+export const FENWICK = climateOf(STATIONS.fenwick);
 export const MARLOW = climateOf(STATIONS.marlow);
 export const RIDGE = climateOf(STATIONS.ridge);
 
 /** Climate of a named station. */
 export function stationClimate(id: StationId): Climate {
-  return id === 'calder' ? CALDER : id === 'marlow' ? MARLOW : RIDGE;
+  return id === 'fenwick' ? FENWICK : id === 'marlow' ? MARLOW : RIDGE;
 }
 
 /** Day-of-year index of a month's first day and its length. */

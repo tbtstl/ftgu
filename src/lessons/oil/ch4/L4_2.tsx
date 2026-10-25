@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
-  Checkbox,
   Eq,
   FigRef,
   Figure,
@@ -28,12 +27,12 @@ import {
   useScenario,
 } from '../../../framework';
 import { cheapestSpeed, fuelPerDay, voyage, type Voyage } from '../../../engines/oil/tanker';
-import { BUNKER_PRICE, CALDER_DOCK_LIMIT, LIGHTERING_COST, PORT_DAYS, ROUTES, VESSELS, type RouteId, type VesselId } from '../../../model/oil/logistics';
+import { BUNKER_PRICE, CORRAN_DOCK_LIMIT, LIGHTERING_COST, PORT_DAYS, ROUTES, VESSELS, type RouteId, type VesselId } from '../../../model/oil/logistics';
 import { StackedBar, XYChart } from '../shared/charts';
 
 const VESSEL_IDS: VesselId[] = ['aframax', 'suezmax', 'vlcc'];
 const ROUTE_IDS: RouteId[] = ['northport', 'eastbay', 'seaboard'];
-const ROUTE_LABEL: Record<RouteId, string> = { northport: 'Calder → Northport', eastbay: 'Calder → Eastbay', seaboard: 'Seaboard → Calder' };
+const ROUTE_LABEL: Record<RouteId, string> = { northport: 'Corran → Northport', eastbay: 'Corran → Eastbay', seaboard: 'Seaboard → Corran' };
 const VESSEL_COLOR: Record<VesselId, string> = { aframax: '#8fb8d8', suezmax: '#4590ce', vlcc: '#2f5f8f' };
 const HIRE_COLOR = '#6d9c37';
 const FUEL_COLOR = '#c99a1e';
@@ -59,26 +58,38 @@ export function voyageOf(st: VoyageState): Voyage {
   return voyage({ vessel: st.vessel, route: st.route, speed: st.speed, hire: st.hire, bunker: st.bunker });
 }
 
-/** Challenge a: a VLCC to Eastbay at the default hire and bunker price, sailing at the cheapest speed (to a tenth of a knot). */
+/** Challenge a's market: ships scarce and fuel dear. */
+export const CHALLENGE_HIRE = 100000;
+export const CHALLENGE_BUNKER = 800;
+
+/**
+ * Challenge a: a VLCC to Eastbay with hire at $100,000 a day and bunkers at $800 a tonne, sailing
+ * at the cheapest speed to the nearest tenth of a knot.
+ */
 export function cheapestSpeedSolved(st: VoyageState): boolean {
-  if (st.vessel !== 'vlcc' || st.route !== 'eastbay' || st.hire !== VESSELS.vlcc.hire || st.bunker !== BUNKER_PRICE) return false;
-  return Math.abs(st.speed - cheapestSpeed('vlcc')) < 0.075;
+  if (st.vessel !== 'vlcc' || st.route !== 'eastbay' || st.hire !== CHALLENGE_HIRE || st.bunker !== CHALLENGE_BUNKER) return false;
+  return Math.abs(st.speed - cheapestSpeed('vlcc', CHALLENGE_HIRE, CHALLENGE_BUNKER)) <= SPEED_STEP / 2;
+}
+
+/** Whether the hire and bunker price are the ship's reference ones, where the prose quotes the cheapest speed. */
+export function atReferencePrices(st: VoyageState): boolean {
+  return st.hire === VESSELS[st.vessel].hire && st.bunker === BUNKER_PRICE;
 }
 
 /**
  * Freight per barrel for a class on a route at its own cheapest speed (default hire and bunker
- * price), with a chosen lightering cost for cargo above Port Calder's dock limit, or none if the
- * channel has been dredged.
+ * price), with a chosen lightering cost for cargo above Port Corran's dock limit — whether the ship
+ * loads there or discharges there — or none if the channel has been dredged.
  */
 export function scaleCost(vessel: VesselId, route: RouteId, lightering: number, dredged: boolean): number {
-  const base = voyage({ vessel, route, speed: cheapestSpeed(vessel), loadsAtCalder: false });
-  const atCalder = ROUTES[route].from === 'Port Calder';
-  const extra = atCalder && !dredged ? Math.max(0, VESSELS[vessel].cargo - CALDER_DOCK_LIMIT) * lightering : 0;
+  const base = voyage({ vessel, route, speed: cheapestSpeed(vessel), atCorran: false });
+  const atCorran = ROUTES[route].from === 'Port Corran' || ROUTES[route].to === 'Port Corran';
+  const extra = atCorran && !dredged ? Math.max(0, VESSELS[vessel].cargo - CORRAN_DOCK_LIMIT) * lightering : 0;
   return (base.total + extra) / base.cargo;
 }
 
 /** Challenge b: the lowest lightering cost (on 5¢ steps) at which a Suezmax carries crude to Northport more cheaply than a VLCC. */
-export function lighteringSolved(lightering: number, dredged: boolean): boolean {
+export function lighteringSolved(lightering: number, dredged = false): boolean {
   if (dredged) return false;
   const suez = scaleCost('suezmax', 'northport', lightering, false);
   const prev = Math.round((lightering - LIGHTERING_STEP) * 100) / 100;
@@ -97,16 +108,17 @@ function kusd(x: number): string {
 // The map: places and routes as cubic Bézier curves (schematic, not to scale).
 
 type Pt = [number, number];
+const MAP_H = 232;
 const PLACES: Record<string, { at: Pt; label: string; anchor: 'start' | 'end' | 'middle'; dx: number; dy: number }> = {
-  calder: { at: [150, 128], label: 'Port Calder', anchor: 'end', dx: -10, dy: -8 },
-  seaboard: { at: [74, 196], label: 'Seaboard field', anchor: 'start', dx: 10, dy: 18 },
-  northport: { at: [476, 52], label: 'Northport', anchor: 'start', dx: 10, dy: 4 },
-  eastbay: { at: [586, 196], label: 'Eastbay', anchor: 'end', dx: 0, dy: -12 },
+  corran: { at: [150, 114], label: 'Port Corran', anchor: 'end', dx: -10, dy: -8 },
+  seaboard: { at: [74, 178], label: 'Seaboard field', anchor: 'start', dx: 10, dy: 18 },
+  northport: { at: [476, 40], label: 'Northport', anchor: 'start', dx: 10, dy: 4 },
+  eastbay: { at: [586, 178], label: 'Eastbay', anchor: 'end', dx: 0, dy: -12 },
 };
 const CURVES: Record<RouteId, [Pt, Pt, Pt, Pt]> = {
-  northport: [PLACES.calder.at, [260, 104], [360, 36], PLACES.northport.at],
-  eastbay: [PLACES.calder.at, [210, 330], [560, 330], PLACES.eastbay.at],
-  seaboard: [PLACES.seaboard.at, [92, 160], [120, 136], PLACES.calder.at],
+  northport: [PLACES.corran.at, [260, 90], [360, 24], PLACES.northport.at],
+  eastbay: [PLACES.corran.at, [220, 226], [540, 226], PLACES.eastbay.at],
+  seaboard: [PLACES.seaboard.at, [92, 146], [120, 122], PLACES.corran.at],
 };
 
 function bezier([a, b, c, d]: [Pt, Pt, Pt, Pt], t: number): Pt {
@@ -173,18 +185,18 @@ function VoyageMap({ st, v, day }: { st: VoyageState; v: Voyage; day: number }) 
   return (
     <svg
       className="diagram"
-      viewBox="0 0 640 262"
+      viewBox={`0 0 640 ${MAP_H}`}
       role="img"
       aria-label={`Schematic map, not to scale: a ${VESSELS[st.vessel].name} on the ${fmt(ROUTES[st.route].nm)}-nautical-mile route from ${from} to ${to} and back, at ${fmt(st.speed, 1)} knots: a round voyage of ${fmt(v.days, 1)} days. It is on day ${shown}, ${ship.inPort ? `in port, ${ship.inPort}` : ship.laden ? 'sailing laden' : 'returning in ballast'}.`}
     >
-      <rect x={0} y={0} width={640} height={262} fill="#eef4f8" />
-      <path d="M0 0 L140 0 Q170 70 158 118 Q150 150 112 168 Q60 186 0 176 Z" fill="#ece6d8" />
-      <path d="M430 0 L640 0 L640 92 Q560 98 520 66 Q486 40 430 0 Z" fill="#ece6d8" />
-      <path d="M600 150 Q640 150 640 160 L640 262 L588 262 Q574 220 600 150 Z" fill="#ece6d8" />
+      <rect x={0} y={0} width={640} height={MAP_H} fill="#eef4f8" />
+      <path d="M0 0 L140 0 Q170 56 158 104 Q150 136 112 154 Q60 172 0 162 Z" fill="#ece6d8" />
+      <path d="M430 0 L640 0 L640 80 Q560 86 520 54 Q486 28 430 0 Z" fill="#ece6d8" />
+      <path d="M600 132 Q640 132 640 142 L640 232 L588 232 Q574 196 600 132 Z" fill="#ece6d8" />
       {ROUTE_IDS.map((r) => (
         <path key={r} d={pathD(r)} fill="none" stroke={r === st.route ? '#2f5f8f' : '#b9c7d3'} strokeWidth={r === st.route ? 2.5 : 1.5} strokeDasharray={r === st.route ? undefined : '5 5'} />
       ))}
-      <text x={mid[0]} y={mid[1] + (st.route === 'eastbay' ? 18 : -8)} textAnchor="middle" style={{ fontSize: 12, fontWeight: 500, fill: '#2f5f8f' }}>
+      <text x={st.route === 'eastbay' ? 420 : mid[0]} y={st.route === 'eastbay' ? 187 : mid[1] - 8} textAnchor="middle" style={{ fontSize: 12, fontWeight: 500, fill: '#2f5f8f' }}>
         {fmt(ROUTES[st.route].nm)} nautical miles each way
       </text>
       {Object.entries(PLACES).map(([id, p]) => (
@@ -198,10 +210,10 @@ function VoyageMap({ st, v, day }: { st: VoyageState; v: Voyage; day: number }) 
       <g transform={`translate(${pos.at[0].toFixed(1)} ${pos.at[1].toFixed(1)}) rotate(${angle.toFixed(1)})`}>
         <path d="M-13 -5 L9 -5 L14 0 L9 5 L-13 5 Z" fill={ship.laden ? '#ad5310' : '#fcfcfb'} stroke="#333" strokeWidth={1.5} />
       </g>
-      <text className="ax" x={12} y={250}>
+      <text className="ax" x={12} y={MAP_H - 12}>
         Day {shown} of {fmt(v.days, 1)} · {ship.inPort ? `in port, ${ship.inPort}` : ship.laden ? `laden, ${fmt(VESSELS[st.vessel].cargo)} barrels aboard` : 'in ballast, empty'}
       </text>
-      <text className="ax ax-e" x={628} y={250}>
+      <text className="ax ax-e" x={628} y={MAP_H - 12}>
         schematic, not to scale
       </text>
     </svg>
@@ -209,7 +221,7 @@ function VoyageMap({ st, v, day }: { st: VoyageState; v: Voyage; day: number }) 
 }
 
 /** Freight per barrel for each class on each route, at each class's cheapest speed. */
-function ScaleBars({ lightering, dredged }: { lightering: number; dredged: boolean }) {
+function ScaleBars({ lightering }: { lightering: number }) {
   const X0 = 56;
   const X1 = 624;
   const Y0 = 210;
@@ -218,7 +230,7 @@ function ScaleBars({ lightering, dredged }: { lightering: number; dredged: boole
   const sy = (v: number) => Y0 - (v / max) * (Y0 - Y1);
   const groupW = (X1 - X0) / ROUTE_IDS.length;
   const barW = 40;
-  const rows = ROUTE_IDS.flatMap((r) => VESSEL_IDS.map((v) => ({ r, v, total: scaleCost(v, r, lightering, dredged), base: scaleCost(v, r, 0, true) })));
+  const rows = ROUTE_IDS.flatMap((r) => VESSEL_IDS.map((v) => ({ r, v, total: scaleCost(v, r, lightering, false), base: scaleCost(v, r, 0, true) })));
   return (
     <svg
       className="chart"
@@ -284,41 +296,56 @@ export default function Lesson() {
   const ys = curve.map((p) => p[1]);
   const [y0, y1] = niceDomain(Math.min(...ys) * 0.97, Math.max(...ys) * 1.01, 4);
   const solvedA = cheapestSpeedSolved(st);
+  // Away from the reference prices the cheapest speed is challenge a's answer, so the figure marks it only once the challenge has been solved.
+  const [revealedA, setRevealedA] = useState(false);
+  useEffect(() => {
+    if (solvedA) setRevealedA(true);
+  }, [solvedA]);
+  const showBest = revealedA || atReferencePrices(st);
 
-  const s2 = useScenario('scale', { lightering: LIGHTERING_COST, dredged: false });
-  const { lightering, dredged } = s2.state;
-  const solvedB = lighteringSolved(lightering, dredged);
-  const vlccNp = scaleCost('vlcc', 'northport', lightering, dredged);
-  const suezNp = scaleCost('suezmax', 'northport', lightering, dredged);
+  const s2 = useScenario('scale', { lightering: LIGHTERING_COST });
+  const { lightering } = s2.state;
+  const solvedB = lighteringSolved(lightering);
+  const vlccNp = scaleCost('vlcc', 'northport', lightering, false);
+  const suezNp = scaleCost('suezmax', 'northport', lightering, false);
 
   // Reference numbers for the prose.
   const af13 = voyage({ vessel: 'aframax', route: 'northport', speed: 13 });
   const vl13 = voyage({ vessel: 'vlcc', route: 'eastbay', speed: 13 });
   const vlBest = voyage({ vessel: 'vlcc', route: 'eastbay', speed: cheapestSpeed('vlcc') });
+  // Challenge a's market: the best speed there, and what the old best speed would cost in it.
+  const dear = { hire: CHALLENGE_HIRE, bunker: CHALLENGE_BUNKER };
+  const dearSpeed = cheapestSpeed('vlcc', dear.hire, dear.bunker);
+  const dearBest = voyage({ vessel: 'vlcc', route: 'eastbay', speed: dearSpeed, ...dear });
+  const dearAtOld = voyage({ vessel: 'vlcc', route: 'eastbay', speed: cheapestSpeed('vlcc'), ...dear });
   const NORTHPORT_PRICE = 79;
   const ref = (vessel: VesselId, route: RouteId) => scaleCost(vessel, route, LIGHTERING_COST, false);
   const refFree = (vessel: VesselId, route: RouteId) => scaleCost(vessel, route, LIGHTERING_COST, true);
-  const tie = (scaleCost('suezmax', 'northport', 0, false) - scaleCost('vlcc', 'northport', 0, false)) / ((VESSELS.vlcc.cargo - CALDER_DOCK_LIMIT) / VESSELS.vlcc.cargo);
+  const tie = (scaleCost('suezmax', 'northport', 0, false) - scaleCost('vlcc', 'northport', 0, false)) / ((VESSELS.vlcc.cargo - CORRAN_DOCK_LIMIT) / VESSELS.vlcc.cargo);
 
   return (
     <LessonPage id="oil/4.2">
       <P>
-        <a href={lessonHref('oil/4.1')}>Lesson 4.1</a> pumped crude 500 miles down the Kessler–Calder line to the coast. That is where pipelines stop. Seaboard Blend
-        reaches Port Calder in tankers, and whatever crude or fuel the Calder region has to spare leaves in tankers too, for refineries and markets across the ocean.
+        <a href={lessonHref('oil/4.1')}>Lesson 4.1</a> pumped crude 500 miles down the Kessler–Corran line to the coast. That is where pipelines stop. Seaboard Blend
+        reaches Port Corran in tankers, and whatever crude or fuel the Corran region has to spare leaves in tankers too, for refineries and markets across the ocean.
         Most of the crude oil traded between countries travels this way. A ship, unlike a pipeline, can go anywhere there’s water deep enough for it, so what a cargo
         costs to move depends mostly on how far it goes, how big the ship is, and how fast it sails.
       </P>
       <P>
         Crude tankers come in a few standard sizes. In our world they are the <b>Aframax</b>, carrying about {fmt(VESSELS.aframax.cargo)} barrels; the{' '}
         <b>Suezmax</b>, about {fmt(VESSELS.suezmax.cargo)} — named as the largest tanker that can pass through the Suez Canal fully laden; and the <b>VLCC</b>, or very
-        large crude carrier, about {fmt(VESSELS.vlcc.cargo)}. Port Calder’s tankers sail {fmt(ROUTES.northport.nm)} nautical miles to Northport, a refining center
-        across the ocean, or {fmt(ROUTES.eastbay.nm)} to Eastbay, a distant importer; Seaboard Blend comes {fmt(ROUTES.seaboard.nm)} miles from its offshore field.
+        large crude carrier, about {fmt(VESSELS.vlcc.cargo)}. Port Corran’s tankers sail {fmt(ROUTES.northport.nm)} nautical miles to Northport, a refining center
+        across the ocean, or {fmt(ROUTES.eastbay.nm)} to Eastbay, a distant importer; Seaboard Blend comes {fmt(ROUTES.seaboard.nm)} nautical miles from its offshore
+        field.
       </P>
       <P>
-        A company that needs a cargo moved <b>charters</b> a ship and pays three kinds of cost. <K c="price">Hire</K> is a daily rate for the ship and its crew, paid for
-        every day of the voyage. <K c="energy">Fuel</K>, called bunkers, is paid by the tonne. And every call at a port has its charges. A voyage is a round trip: out
-        laden, back empty “in ballast,” with {PORT_DAYS} days in port for loading and discharging. All of the rates here are the course’s simulated ones, for a calm
-        market. In the next demonstration, choose a ship and a route, and set the speed and the two prices that matter most, the daily hire and the price of fuel:
+        A company that needs a cargo moved <b>charters</b> a ship. On a <b>time charter</b>, the kind we’ll assume, it pays three kinds of cost.{' '}
+        <K c="price">Hire</K> is a daily rate for the ship and its crew, paid for every day of the voyage. <K c="energy">Fuel</K>, called bunkers, is paid by the tonne.
+        And every call at a port has its charges. One more cost appears only for a VLCC calling at Port Corran, whose channel is too shallow for one fully laden: part
+        of its cargo has to be moved between it and smaller ships offshore, which is called <b>lightering</b>, and the end of the lesson comes back to it. A voyage is a
+        round trip: out laden, back empty “in ballast,” with {PORT_DAYS} days in port for loading and discharging. All of the rates here are the course’s simulated
+        ones, for a calm market. In the next demonstration, choose a ship and a route, and set the speed and the two prices that matter most, the daily hire and the
+        price of fuel:
       </P>
 
       <Figure name="Tanker Voyage Planner" scenario={s} play={play}>
@@ -332,7 +359,6 @@ export default function Lesson() {
         <VoyageMap st={st} v={v} day={day} />
         <Readouts
           items={[
-            { label: 'round voyage', value: `${fmt(v.days, 1)} days` },
             { label: <K c="energy">fuel burned</K>, value: `${fmt(v.fuelTonnes)} t`, tone: 'gold' },
             { label: <K c="price">freight per barrel</K>, value: perBbl(v.perBbl), tone: 'green' },
           ]}
@@ -349,7 +375,7 @@ export default function Lesson() {
           format={(x) => usd(x, 2)}
         />
         <XYChart
-          ariaLabel={`Freight per barrel against speed for this ship and route. At ${fmt(st.speed, 1)} knots it is ${perBbl(v.perBbl)}; the cheapest speed is ${fmt(vs, 2)} knots, at ${perBbl(best.perBbl)}.`}
+          ariaLabel={`Freight per barrel against speed for this ship and route. At ${fmt(st.speed, 1)} knots it is ${perBbl(v.perBbl)}${showBest ? `; the cheapest speed is ${fmt(vs, 2)} knots, at ${perBbl(best.perBbl)}` : ''}.`}
           height={190}
           x={[9, 16]}
           y={[y0, y1]}
@@ -361,7 +387,7 @@ export default function Lesson() {
           series={[{ points: curve, color: HIRE_COLOR, width: 2.5 }]}
           refs={[{ axis: 'x', at: st.speed, cursor: true }]}
           markers={[
-            ...(vs >= 9 && vs <= 16 ? [{ x: vs, y: best.perBbl, color: '#3f7a1e', r: 5, hollow: true, label: 'cheapest', labelDy: 18, labelDx: -8, labelAnchor: 'end' as const }] : []),
+            ...(showBest && vs >= 9 && vs <= 16 ? [{ x: vs, y: best.perBbl, color: '#3f7a1e', r: 5, hollow: true, label: 'cheapest', labelDy: 18, labelDx: -8, labelAnchor: 'end' as const }] : []),
             { x: st.speed, y: v.perBbl, color: '#3f7a1e', r: 6 },
           ]}
         />
@@ -369,8 +395,10 @@ export default function Lesson() {
         <Slider label="Charter hire" tone="green" value={st.hire} min={10000} max={150000} step={1000} onChange={(x) => s.set({ hire: x })} display={`${usd(st.hire)} a day`} />
         <Slider label="Bunker fuel" tone="gold" value={st.bunker} min={300} max={1000} step={10} onChange={(x) => s.set({ bunker: x })} display={`${usd(st.bunker)} a tonne`} />
         <Caption>
-          At {fmt(st.speed, 1)} knots this {VESSELS[st.vessel].name} burns {fmt(fuelPerDay(VESSELS[st.vessel], st.speed), 1)} tonnes of fuel a day at sea. The cheapest
-          speed at these prices is {fmt(vs, 2)} knots{vs < 9 || vs > 16 ? ', outside the slider’s range' : ''}.
+          At {fmt(st.speed, 1)} knots this {VESSELS[st.vessel].name} burns {fmt(fuelPerDay(VESSELS[st.vessel], st.speed), 1)} tonnes of fuel a day at sea.{' '}
+          {showBest
+            ? `The cheapest speed at these prices is ${fmt(vs, 2)} knots${vs < 9 || vs > 16 ? ', outside the slider’s range' : ''}.`
+            : 'The figure marks the cheapest speed at these prices once challenge a is solved.'}
         </Caption>
       </Figure>
 
@@ -417,51 +445,46 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Find the cheapest speed, to a tenth of a knot, for a VLCC sailing from Port Calder to Eastbay at the default hire and bunker price."
+        question={`Now suppose ships are scarce and fuel is dear at once: hire at ${usd(CHALLENGE_HIRE)} a day and bunkers at ${usd(CHALLENGE_BUNKER)} a tonne. Predict first, with the formula: does a VLCC to Eastbay sail faster or slower than ${fmt(cheapestSpeed('vlcc'), 2)} knots, and how fast? Then set those prices in this demonstration, and the speed to your answer, to the nearest tenth of a knot.`}
         solved={solvedA}
         status={
           st.vessel !== 'vlcc' || st.route !== 'eastbay'
             ? 'Choose the VLCC and the route to Eastbay.'
-            : st.hire !== VESSELS.vlcc.hire || st.bunker !== BUNKER_PRICE
-              ? `Reset the hire to ${usd(VESSELS.vlcc.hire)} a day and bunkers to ${usd(BUNKER_PRICE)} a tonne.`
-              : `At ${fmt(st.speed, 1)} knots, freight is ${usd(v.perBbl, 3)} a barrel.`
+            : st.hire !== CHALLENGE_HIRE || st.bunker !== CHALLENGE_BUNKER
+              ? `Set the hire to ${usd(CHALLENGE_HIRE)} a day and bunkers to ${usd(CHALLENGE_BUNKER)} a tonne.`
+              : `At ${fmt(st.speed, 1)} knots, freight is ${usd(v.perBbl, 3)} a barrel. The bottom of the curve is too flat to read to a tenth of a knot, so use the formula: a VLCC burns ${fmt(VESSELS.vlcc.fuelAt14)} tonnes a day at 14 knots.`
         }
-        success={`Solved: ${fmt(st.speed, 1)} knots, ${usd(v.perBbl, 3)} a barrel. The curve is very flat near its bottom — a tenth of a knot either way changes freight by a fraction of a cent — but sailing at 13 knots instead costs ${usd(vl13.perBbl - vlBest.perBbl, 3)} a barrel more, ${kusd((vl13.perBbl - vlBest.perBbl) * VESSELS.vlcc.cargo)} on a two-million-barrel cargo.`}
+        success={`Solved: ${fmt(st.speed, 1)} knots — faster; the exact answer is ${fmt(dearSpeed, 2)}. Hire rose ${fmt(CHALLENGE_HIRE / VESSELS.vlcc.hire, 1)} times and fuel only ${fmt(CHALLENGE_BUNKER / BUNKER_PRICE, 2)} times, and the cheapest speed moves with the cube root of their ratio: ∛${fmt(CHALLENGE_HIRE / VESSELS.vlcc.hire / (CHALLENGE_BUNKER / BUNKER_PRICE), 2)} = ${fmt(dearSpeed / cheapestSpeed('vlcc'), 2)}. Sailing at the old ${fmt(cheapestSpeed('vlcc'), 2)} knots in this market would cost ${usd(dearAtOld.perBbl - dearBest.perBbl, 2)} a barrel more, ${kusd((dearAtOld.perBbl - dearBest.perBbl) * VESSELS.vlcc.cargo)} on a two-million-barrel cargo.`}
       />
 
       <P>
-        The cheapest speed moves with prices. With bunkers at $400 a tonne, the VLCC’s best speed rises to {fmt(cheapestSpeed('vlcc', VESSELS.vlcc.hire, 400), 1)}{' '}
-        knots; at $800, it falls to {fmt(cheapestSpeed('vlcc', VESSELS.vlcc.hire, 800), 1)}. When ships are scarce and hire climbs to $100,000 a day, every day saved
-        is worth more, and the best speed rises to {fmt(cheapestSpeed('vlcc', 100000, BUNKER_PRICE), 1)}. That has a consequence for the market as a whole: a fleet that
-        slows down carries less. At its cheapest speed, a VLCC on the Eastbay run makes {fmt(365 / vlBest.days, 2)} round trips a year instead of{' '}
-        {fmt(365 / vl13.days, 2)} at 13 knots — {fmt((1 - vl13.days / vlBest.days) * 100)}% fewer barrels delivered by the same ships.
+        Each price pulls its own way. With only the fuel price changed, at $400 a tonne the VLCC’s best speed rises to{' '}
+        {fmt(cheapestSpeed('vlcc', VESSELS.vlcc.hire, 400), 1)} knots, and at $800 it falls to {fmt(cheapestSpeed('vlcc', VESSELS.vlcc.hire, 800), 1)}. With only the
+        hire changed, to $100,000 a day, every day saved is worth more, and the best speed rises to {fmt(cheapestSpeed('vlcc', 100000, BUNKER_PRICE), 1)}. That has a
+        consequence for the market as a whole: a fleet that slows down carries less. At its cheapest speed, a VLCC on the Eastbay run makes{' '}
+        {fmt(365 / vlBest.days, 2)} round trips a year instead of {fmt(365 / vl13.days, 2)} at 13 knots — {fmt((1 - vl13.days / vlBest.days) * 100)}% fewer barrels
+        delivered by the same ships.
       </P>
 
       <H2>Bigger ships, deeper water</H2>
       <P>
         A VLCC carries almost three times an Aframax’s cargo, but its hire and fuel are nowhere near three times as much: a hull’s cost and resistance grow more slowly
         than the volume it encloses. So bigger ships move a barrel more cheaply — as long as they can get into port. A fully laden VLCC draws about 20 meters of water,
-        and many harbors, including much of the U.S. Gulf Coast, are too shallow for one. There, a VLCC loads what it can at the dock and is topped up offshore from
-        smaller ships, a costly operation called <b>reverse lightering</b>. In our world, Port Calder’s channel lets a tanker load at most{' '}
-        {fmt(CALDER_DOCK_LIMIT)} barrels at the dock; anything more costs {usd(LIGHTERING_COST, 2)} a barrel to top up. In the next demonstration, each ship sails at its
-        own cheapest speed. Change what lightering costs, or dredge the channel:
+        and many harbors, including much of the U.S. Gulf Coast, are too shallow for one. A VLCC bringing crude in is lightered, unloading part of its cargo into
+        smaller ships offshore before it can enter; one taking crude away loads what it can at the dock and is topped up offshore from smaller ships, which is called{' '}
+        <b>reverse lightering</b>. Both are costly. In our world, Port Corran’s channel takes a tanker with at most {fmt(CORRAN_DOCK_LIMIT)} barrels aboard; every
+        barrel beyond that costs {usd(LIGHTERING_COST, 2)} to move offshore, whether the ship is loading or unloading. In the next demonstration, each ship sails at its
+        own cheapest speed. Change what lightering costs; at $0, it is as if the channel had been dredged deep enough for a fully laden VLCC:
       </P>
 
       <Figure name="Tanker Voyage Planner · scale" scenario={s2}>
         <Legend
           items={[
             ...VESSEL_IDS.map((id) => ({ label: VESSELS[id].name, color: VESSEL_COLOR[id] })),
-            { label: 'Topping up offshore (lightering)', color: LIGHTER_COLOR },
+            { label: 'Lightering at Port Corran', color: LIGHTER_COLOR },
           ]}
         />
-        <ScaleBars lightering={lightering} dredged={dredged} />
-        <Readouts
-          items={[
-            { label: <K c="price">VLCC to Northport</K>, value: perBbl(vlccNp), tone: 'green' },
-            { label: <K c="price">Suezmax to Northport</K>, value: perBbl(suezNp), tone: 'green' },
-            { label: 'cheaper ship on this route', value: vlccNp <= suezNp ? 'VLCC' : 'Suezmax' },
-          ]}
-        />
+        <ScaleBars lightering={lightering} />
         <Slider
           label="Lightering cost"
           tone="green"
@@ -472,29 +495,28 @@ export default function Lesson() {
           onChange={(x) => s2.set({ lightering: Math.round(x * 100) / 100 })}
           display={`${usd(lightering, 2)} a barrel`}
         />
-        <Checkbox label="Dredge Port Calder’s channel so a VLCC can load fully at the dock" checked={dredged} onChange={(d) => s2.set({ dredged: d })} />
       </Figure>
 
       <P>
         Without the port limit, the economies of scale are large. To Northport, at each ship’s cheapest speed, freight runs {perBbl(refFree('aframax', 'northport'))} a
         barrel by Aframax, {perBbl(refFree('suezmax', 'northport'))} by Suezmax and {perBbl(refFree('vlcc', 'northport'))} by VLCC; to Eastbay,{' '}
         {perBbl(refFree('aframax', 'eastbay'))}, {perBbl(refFree('suezmax', 'eastbay'))} and {perBbl(refFree('vlcc', 'eastbay'))}. The longer the voyage, the more the
-        size of the ship matters. At Port Calder, lightering the second million barrels at {usd(LIGHTERING_COST, 2)} adds{' '}
-        {usd((LIGHTERING_COST * (VESSELS.vlcc.cargo - CALDER_DOCK_LIMIT)) / VESSELS.vlcc.cargo, 2)} to every barrel of a VLCC cargo, so the VLCC to Northport costs{' '}
-        {perBbl(ref('vlcc', 'northport'))} — still well below the Suezmax. Seaboard Blend’s offshore terminal has no such limit, and a VLCC brings it to Calder for{' '}
-        {perBbl(ref('vlcc', 'seaboard'))} a barrel.
+        size of the ship matters. At Port Corran, lightering the second million barrels at {usd(LIGHTERING_COST, 2)} adds{' '}
+        {usd((LIGHTERING_COST * (VESSELS.vlcc.cargo - CORRAN_DOCK_LIMIT)) / VESSELS.vlcc.cargo, 2)} to every barrel of a VLCC cargo, so the VLCC to Northport costs{' '}
+        {perBbl(ref('vlcc', 'northport'))} — still well below the Suezmax. Imports pay at the other end. Seaboard Blend’s offshore terminal can load a VLCC fully, but
+        the ship can’t enter Port Corran with all of it aboard, so the second million barrels are lightered offshore: {perBbl(ref('vlcc', 'seaboard'))} a barrel instead
+        of {perBbl(refFree('vlcc', 'seaboard'))}. On so short a voyage that{' '}
+        {ref('vlcc', 'seaboard') < ref('suezmax', 'seaboard')
+          ? `leaves the VLCC only just ahead of the Suezmax, at ${perBbl(ref('suezmax', 'seaboard'))}.`
+          : `hands the advantage to the Suezmax, at ${perBbl(ref('suezmax', 'seaboard'))}.`}
       </P>
 
       <Challenge
         id="b"
-        question="How expensive would lightering have to get before a Suezmax became the cheaper way to send crude from Port Calder to Northport? Find the lowest lightering cost, to the nearest 5 cents, at which it is."
+        question={`Estimate first, from the freights without the port limit: a VLCC loading at Port Corran tops up the million barrels above the dock limit, half its cargo. How much would lightering have to cost, per barrel topped up, before a Suezmax became the cheaper way to send crude to Northport? Then set the lightering cost to your estimate, to the nearest 5 cents, and check.`}
         solved={solvedB}
-        status={
-          dredged
-            ? 'Leave the channel as it is: with no dock limit there is no lightering.'
-            : `At ${usd(lightering, 2)} a barrel, the VLCC costs ${usd(vlccNp, 3)} and the Suezmax ${usd(suezNp, 3)}.`
-        }
-        success={`Solved: ${usd(lightering, 2)}. The VLCC’s advantage on this route is worth about ${usd(tie, 2)} for each barrel it has to top up offshore. That is why ports spend heavily on deeper channels and offshore loading terminals: they let the cheapest ships call fully loaded, and the saving shows up in what a barrel of crude at the port is worth.`}
+        status={`At ${usd(lightering, 2)} a barrel, the VLCC costs ${usd(vlccNp, 3)} and the Suezmax ${usd(suezNp, 3)} to Northport.`}
+        success={`Solved: ${usd(lightering, 2)}. With a free channel the VLCC is ${usd(refFree('suezmax', 'northport') - refFree('vlcc', 'northport'), 2)} a barrel ahead of the Suezmax; spread over the half of its cargo it tops up, lightering has to cost about twice that, ${usd(tie, 2)} a barrel, to erase the lead. That is why ports spend heavily on deeper channels and offshore loading terminals: they let the cheapest ships call fully loaded, and the saving shows up in what a barrel of crude at the port is worth.`}
       />
 
       <P>

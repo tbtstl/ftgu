@@ -22,9 +22,8 @@ import {
   useScenario,
 } from '../../../framework';
 import { equilibrium, type MarketConditions } from '../../../engines/shipping/market';
-import { TC_ROUTES, monthAverage, routeTceAt } from '../../../engines/shipping/indices';
-import { dailyIndex } from '../../../engines/shipping/ffa';
-import { routeSeries, spreadTrade } from '../../../engines/shipping/strategies';
+import { DAYS_PER_MONTH, TC_ROUTES, monthAverage, routeTceAt } from '../../../engines/shipping/indices';
+import { REVERSION, dailyIndex, longRun } from '../../../engines/shipping/ffa';
 import { sharesAt } from '../../../engines/shipping/forecast';
 import { HISTORY_EVENTS, HISTORY_MONTHS, monthLabel, standardHistory } from '../../../model/shipping/history';
 import type { ClassId } from '../../../model/shipping/trades';
@@ -127,54 +126,107 @@ const ROT_OPEN = ROT_EDGE(false);
 const ROT_CLOSED = ROT_EDGE(true);
 const CAPE_MILE = equilibrium('cape', conditions(DRIVER_DEFAULTS, 'cape')).ballastMileCost;
 const CAPE_MILE_HALF = equilibrium('cape', conditions({ ...DRIVER_DEFAULTS, brazilOre: 0.5 }, 'cape')).ballastMileCost;
+const CAPE_MILE_MORE = equilibrium('cape', conditions({ ...DRIVER_DEFAULTS, brazilOre: 1.5 }, 'cape')).ballastMileCost;
+/** Ballast miles between a Capesize open at Rotterdam and one open at Qingdao, at a given strength of Brazil's ore. */
+export function capeFronthaulMiles(brazilOre: number): number {
+  const e = equilibrium('cape', conditions({ ...DRIVER_DEFAULTS, brazilOre }, 'cape'));
+  return (e.plan.open.ROT ?? 0) - (e.plan.open.QIN ?? 0);
+}
 
 // ---------------------------------------------------------------------------
-// Demonstration 2: a spread trade on the simulated history.
+// Demonstration 2: a spread trade on the simulated history, each leg an FFA agreed at its forward
+// price (Lesson 4.5) and settled on its index's average for the contract month.
 
 const HIST = standardHistory();
-const CAPE_INDEX = dailyIndex('cape');
-const KMAX_INDEX = dailyIndex('kmax');
 const MONTHS = Array.from({ length: HISTORY_MONTHS }, (_, t) => t);
-const CAPE_M = MONTHS.map((t) => monthAverage(CAPE_INDEX, t));
-const KMAX_M = MONTHS.map((t) => monthAverage(KMAX_INDEX, t));
-const CFH = routeSeries(HIST.cls.cape, 'C-FH', 'cape');
-const CTP = routeSeries(HIST.cls.cape, 'C-TP', 'cape');
-const KFH = routeSeries(HIST.cls.kmax, 'P-FH', 'kmax');
-const KTP = routeSeries(HIST.cls.kmax, 'P-TP', 'kmax');
+
+/** One leg of a spread: a daily index (a class's timecharter average, or one route's assessment). */
+export interface Leg {
+  cls: ClassId;
+  route?: string;
+  daily: number[];
+  /** The index's average in each month of the history, $/day. */
+  monthly: number[];
+  /** The level the leg's forward price reverts to, by calendar month, $/day. */
+  longRun: number[];
+}
+
+function makeLeg(cls: ClassId, routeId?: string): Leg {
+  const daily = routeId ? dailyIndex(cls, TC_ROUTES[cls].map((r) => (r.id === routeId ? 1 : 0))) : dailyIndex(cls);
+  // A class index reverts to the class's long-run level, as in Lesson 4.5; a route's adds the
+  // route's usual premium over a round voyage, as the baseline market pays it that month.
+  const lr = Array.from({ length: 12 }, (_, m) => {
+    if (!routeId) return longRun(cls, m);
+    const eq = equilibrium(cls, { month: m });
+    return longRun(cls, m) + routeTceAt(eq, route(cls, routeId)) - eq.tce;
+  });
+  return { cls, route: routeId, daily, monthly: MONTHS.map((t) => monthAverage(daily, t)), longRun: lr };
+}
+
+/**
+ * A leg's forward price on index day `day` for a later contract month: today's index pulled back
+ * toward the leg's long-run level, exactly as engines/shipping/ffa.ts's forwardPrice does for a
+ * class index (the trades here are always agreed before their contract month starts).
+ */
+export function legForward(leg: Leg, day: number, month: number): number {
+  const now = Math.floor(day / DAYS_PER_MONTH);
+  const ahead = Math.max(0, month + 0.5 - (day + 0.5) / DAYS_PER_MONTH);
+  return leg.longRun[month % 12] + (leg.daily[day] - leg.longRun[now % 12]) * REVERSION ** ahead;
+}
 
 export type Legs = 'class' | 'capeRoute' | 'kmaxRoute';
-export const LEGS: Record<Legs, { name: string; long: string; short: string; series: [number[], number[]] }> = {
-  class: { name: 'Capesize − Kamsarmax', long: 'Capesize index', short: 'Kamsarmax index', series: [CAPE_M, KMAX_M] },
-  capeRoute: { name: 'Capesize fronthaul − transpacific', long: 'Capesize fronthaul', short: 'Capesize transpacific', series: [CFH, CTP] },
-  kmaxRoute: { name: 'Kamsarmax fronthaul − transpacific', long: 'Kamsarmax fronthaul', short: 'Kamsarmax transpacific', series: [KFH, KTP] },
+export const LEGS: Record<Legs, { name: string; long: string; short: string; legs: [Leg, Leg] }> = {
+  class: { name: 'Capesize − Kamsarmax', long: 'Capesize index', short: 'Kamsarmax index', legs: [makeLeg('cape'), makeLeg('kmax')] },
+  capeRoute: { name: 'Capesize fronthaul − transpacific', long: 'Capesize fronthaul', short: 'Capesize transpacific', legs: [makeLeg('cape', 'C-FH'), makeLeg('cape', 'C-TP')] },
+  kmaxRoute: { name: 'Kamsarmax fronthaul − transpacific', long: 'Kamsarmax fronthaul', short: 'Kamsarmax transpacific', legs: [makeLeg('kmax', 'P-FH'), makeLeg('kmax', 'P-TP')] },
 };
+const CAPE_M = LEGS.class.legs[0].monthly;
+const KMAX_M = LEGS.class.legs[1].monthly;
 
 export interface TradeState {
   legs: Legs;
   side: 'long' | 'short';
+  /** Month of the history at whose last index day the trade is agreed. */
   entry: number;
+  /** How many months later the contract month is. */
   held: number;
   days: number;
 }
 
-/** A spread trade's result: long buys the first leg and sells the second; short the reverse. */
+/**
+ * A spread trade: long buys the first leg's FFA and sells the second's, short the reverse, both at
+ * their forward prices on the last index day of the entry month; both settle on their indices'
+ * averages for the contract month.
+ */
 export function tradeResult(s: TradeState) {
-  const [a, b] = LEGS[s.legs].series;
-  const exit = Math.min(HISTORY_MONTHS - 1, s.entry + s.held);
-  const r = spreadTrade(a, b, s.entry, exit, s.days);
-  return { ...r, exitMonth: exit, pnl: (s.side === 'long' ? 1 : -1) * r.pnl };
+  const [a, b] = LEGS[s.legs].legs;
+  const contract = Math.min(HISTORY_MONTHS - 1, s.entry + s.held);
+  const day = (s.entry + 1) * DAYS_PER_MONTH - 1;
+  const path = a.monthly.map((v, i) => v - b.monthly[i]);
+  /** The forward spread when the trade is agreed, and the spread it settles at, $/day. */
+  const entry = legForward(a, day, contract) - legForward(b, day, contract);
+  const exit = path[contract];
+  return { path, entry, exit, exitMonth: contract, pnl: (s.side === 'long' ? 1 : -1) * (exit - entry) * s.days };
 }
 
 /** The month the news reaches the market in the challenge: April of Year 6. */
 export const NEWS_MONTH = 63;
-export const TARGET = 300_000;
+export const NEWS_DAYS = 30;
+export const TARGET = 200_000;
 
 /**
- * The challenge: trade the class spread on the news of Brazil's mine disruption — entered in
- * April of Year 6, held at most six months — and make at least $300,000.
+ * The challenge: trade the class spread on the news of Brazil's mine disruption — agreed at the end
+ * of April in Year 6, 30 days a leg, for a contract month at most six months ahead — and make at
+ * least $200,000.
  */
 export function newsTradeSolved(s: TradeState): boolean {
-  return s.legs === 'class' && s.entry === NEWS_MONTH && s.held <= 6 && tradeResult(s).pnl >= TARGET - 1e-6;
+  return s.legs === 'class' && s.entry === NEWS_MONTH && s.held <= 6 && s.days === NEWS_DAYS && tradeResult(s).pnl >= TARGET - 1e-6;
+}
+
+/** Share of all entry months in which a 30-day short of the class spread `ahead` months out made money. */
+export function shortClassWinShare(ahead: number): number {
+  const entries = MONTHS.filter((t) => t + ahead < HISTORY_MONTHS);
+  return entries.filter((t) => tradeResult({ legs: 'class', side: 'short', entry: t, held: ahead, days: NEWS_DAYS }).pnl > 0).length / entries.length;
 }
 
 const CLASS_SPREAD = CAPE_M.map((c, t) => c - KMAX_M[t]);
@@ -199,7 +251,9 @@ function sdChange(a: number[]) {
   const m = d.reduce((s, x) => s + x, 0) / d.length;
   return Math.sqrt(d.reduce((s, x) => s + (x - m) ** 2, 0) / (d.length - 1));
 }
-const CORR = corr(CAPE_M, KMAX_M);
+const changes = (a: number[]) => a.slice(1).map((x, i) => x - a[i]);
+/** Correlation of the two class indices' month-to-month changes. */
+export const CORR_CHANGES = corr(changes(CAPE_M), changes(KMAX_M));
 const SD_CAPE = sdChange(CAPE_M);
 const SD_KMAX = sdChange(KMAX_M);
 const SD_SPREAD = sdChange(CLASS_SPREAD);
@@ -221,8 +275,17 @@ const PANAMA_EVENT = HISTORY_EVENTS.find((e) => e.closed?.includes('panama'))!;
 const BRAZIL_CAPE = eventEffects('cape', BRAZIL_EVENT.label);
 const BRAZIL_KMAX = eventEffects('kmax', BRAZIL_EVENT.label);
 const PANAMA_KMAX = eventEffects('kmax', PANAMA_EVENT.label);
-const NEWS_BEST = tradeResult({ legs: 'class', side: 'short', entry: NEWS_MONTH, held: 1, days: 90 });
-const NEWS_LATE = tradeResult({ legs: 'class', side: 'short', entry: NEWS_MONTH, held: 5, days: 90 });
+const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+/** The challenge's plainest trade: short May's class spread at the end of April, 30 days a leg. */
+export const NEWS_MAY = tradeResult({ legs: 'class', side: 'short', entry: NEWS_MONTH, held: 1, days: NEWS_DAYS });
+/** May's class spread had Brazil's mines not been disrupted: each leg's index with the month re-solved without the event. */
+const MAY_EVENT = NEWS_MONTH + 1 - BRAZIL_EVENT.from;
+export const MAY_SPREAD_NO_EVENT = CAPE_M[NEWS_MONTH + 1] / (1 + BRAZIL_CAPE[MAY_EVENT]) - KMAX_M[NEWS_MONTH + 1] / (1 + BRAZIL_KMAX[MAY_EVENT]);
+export const NEWS_MAY_NO_EVENT = (NEWS_MAY.entry - MAY_SPREAD_NO_EVENT) * NEWS_DAYS;
+/** The Capesize curve's long-run level against what the history's index averaged, $/day. */
+const CAPE_ANCHOR = mean(LEGS.class.legs[0].longRun);
+const CAPE_AVG = mean(CAPE_M);
+const SHORT6_WINS = shortClassWinShare(6);
 
 const EVENT_SHORT: Record<string, string> = {
   [HISTORY_EVENTS[0].label]: 'China ports',
@@ -353,14 +416,7 @@ export default function Lesson() {
 
       <Figure name="Freight Spread Trader" scenario={dr}>
         <SpreadBars now={now} base={base} month={s.month} />
-        <Readouts
-          items={[
-            { label: 'Capesize earnings', value: perDay(now.cape), tone: 'green' },
-            { label: 'Kamsarmax earnings', value: perDay(now.kmax), tone: 'green' },
-            { label: 'class spread', value: money(now.cls), tone: now.cls < 0 ? 'red' : 'green' },
-            { label: 'change in the class spread', value: signedDay(now.cls - base.cls) },
-          ]}
-        />
+        <Readouts items={[{ label: `change in the class spread from ${MONTH_NAMES[s.month]}’s baseline`, value: signedDay(now.cls - base.cls) }]} />
         <Slider label="Month" tone="teal" value={s.month} min={0} max={11} onChange={(v) => dr.set({ month: v })} display={MONTH_NAMES[s.month]} />
         <Slider label="Brazil’s iron-ore exports" tone="orange" value={s.brazilOre} min={0.5} max={1.5} step={0.05} onChange={(v) => dr.set({ brazilOre: v })} display={pct(s.brazilOre)} />
         <Slider label="Australia’s iron-ore exports" tone="orange" value={s.ausOre} min={0.5} max={1.5} step={0.05} onChange={(v) => dr.set({ ausOre: v })} display={pct(s.ausOre)} />
@@ -392,10 +448,9 @@ export default function Lesson() {
       <P>
         Geography isn’t the only cause. Halving Brazil’s ore lowers the Capesize route spread from {perDay(BASE.capeRoute)} to {perDay(HALF_BRAZIL.capeRoute)}{' '}
         without moving a single ballast mile: a mile costs less when ships earn less, {fmt(CAPE_MILE_HALF)} dollars instead of {fmt(CAPE_MILE)}, because most of its
-        cost is the ship’s time. Push Brazil’s ore to 150% instead and the Capesize route spread climbs to {perDay(MORE_BRAZIL.capeRoute)}: more ore loads in
-        the Atlantic, more ships must ballast there to fetch it, and every mile of that ballast is dearer because Capesizes now earn{' '}
-        {perDay(MORE_BRAZIL.cape)}. And four extra days of waiting at Qingdao (<a href={lessonHref('shipping/3.2')}>Lesson 3.2</a>) take ships out of both markets at
-        once, raising Capesize earnings to {perDay(QIN4.cape)}, Kamsarmax earnings to {perDay(QIN4.kmax)} and both route spreads with them. The class spread moves
+        cost is the ship’s time. Push Brazil’s ore to 150% instead and the Capesize route spread climbs to {perDay(MORE_BRAZIL.capeRoute)}, again over the same
+        ballast miles: each mile now costs {fmt(CAPE_MILE_MORE)} dollars, because Capesizes earn {perDay(MORE_BRAZIL.cape)}. And four extra days of waiting at
+        Qingdao (<a href={lessonHref('shipping/3.2')}>Lesson 3.2</a>) take ships out of both markets at once, raising Capesize earnings to {perDay(QIN4.cape)}, Kamsarmax earnings to {perDay(QIN4.kmax)} and both route spreads with them. The class spread moves
         by only {signedDay(QIN4.cls - BASE.cls)}, less than either leg: congestion is a cause both legs share, and a spread cancels most of it.
       </P>
 
@@ -403,10 +458,12 @@ export default function Lesson() {
       <P>
         Nobody needs to own ships to hold a spread. Forward freight agreements trade on routes and on class averages (<a href={lessonHref('shipping/4.5')}>Lesson
         4.5</a>), so a trader can buy one leg and sell the other: long the spread if they expect it to widen, short if they expect it to narrow. Each leg is its own
-        contract, settled on its own index’s monthly average, so the profit is the change in the spread times the days traded. Being right about where Capesize
-        earnings go earns nothing if Kamsarmax earnings go the same way; the trade is paid only for the difference. In the next
-        demonstration, take a spread position on the twelve simulated years of history, settled on each month’s average, and choose the legs, the side, when to
-        enter, how long to hold and how many days of each leg to trade:
+        contract, agreed at its forward price on the day of the trade and settled on its own index’s average for the contract month, so the profit is the settled
+        spread minus the <K tone="green">forward spread</K> at entry, times the days traded. The forward spread isn’t today’s spread: each leg’s forward price
+        drifts from today’s index toward that leg’s long-run level, as the curve of Lesson 4.5 does, so a spread far from its usual size is already expected to move
+        back. Being right about where Capesize earnings go earns nothing if Kamsarmax earnings go the same way, or if the curve already expected it; the trade is
+        paid only for the part of the difference the curve didn’t see. In the next demonstration, trade a spread on the twelve simulated years of history: choose
+        the legs, the side, the month at whose end you trade, how far ahead the contract month is, and how many days of each leg to trade:
       </P>
 
       <Figure name="Freight Spread Trader · history" scenario={tr}>
@@ -430,7 +487,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`${leg.name}, month by month over twelve simulated years, from ${money(Math.min(...leg.series[0].map((a, i) => a - leg.series[1][i])))} to ${money(Math.max(...leg.series[0].map((a, i) => a - leg.series[1][i])))} a day. ${t.side === 'long' ? 'Long' : 'Short'} from ${monthLabel(t.entry)} to ${monthLabel(res.exitMonth)}: the spread goes from ${money(res.entry)} to ${money(res.exit)}, and the trade makes ${money(res.pnl)}.`}
+          ariaLabel={`${leg.name}, month by month over twelve simulated years, from ${money(Math.min(...res.path))} to ${money(Math.max(...res.path))} a day. ${t.side === 'long' ? 'Long' : 'Short'} at the end of ${monthLabel(t.entry)} for ${monthLabel(res.exitMonth)}: the forward spread is ${money(res.entry)}, the spread settles at ${money(res.exit)}, and the trade makes ${money(res.pnl)}.`}
           series={[{ xs, ys: res.path, color: GRAPHIC.green, width: 2 }]}
           xMin={0}
           xMax={12}
@@ -444,24 +501,25 @@ export default function Lesson() {
             { from: t.entry / 12, to: res.exitMonth / 12, color: tint(GRAPHIC.teal, 0.22) },
           ]}
           markers={[
-            { x: t.entry / 12, y: res.entry, color: TEXT.teal, label: 'in', anchor: 'end' },
-            { x: res.exitMonth / 12, y: res.exit, color: TEXT.teal, label: 'out', anchor: 'start' },
+            { x: t.entry / 12, y: res.entry, color: TEXT.teal, label: 'forward', anchor: 'end' },
+            { x: res.exitMonth / 12, y: res.exit, color: TEXT.teal, label: 'settled', anchor: 'start' },
           ]}
           height={230}
         />
         <Readouts
           items={[
-            { label: `spread on entry, ${monthLabel(t.entry)}`, value: money(res.entry), tone: 'green' },
-            { label: `spread on exit, ${monthLabel(res.exitMonth)}`, value: money(res.exit), tone: 'green' },
+            { label: `forward spread at entry, for ${monthLabel(res.exitMonth)}`, value: money(res.entry), tone: 'green' },
+            { label: `settled spread, ${monthLabel(res.exitMonth)}`, value: money(res.exit), tone: 'green' },
             { label: `${t.side === 'long' ? 'long' : 'short'} ${t.days} days a leg`, value: money(res.pnl), tone: res.pnl < 0 ? 'red' : 'green' },
           ]}
         />
-        <Slider label="Enter in" tone="teal" value={t.entry} min={0} max={HISTORY_MONTHS - 2} onChange={(v) => tr.set({ entry: v })} display={monthLabel(t.entry)} />
-        <Slider label="Hold for" tone="teal" value={t.held} min={1} max={12} onChange={(v) => tr.set({ held: v })} display={`${t.held} month${t.held === 1 ? '' : 's'}`} />
+        <Slider label="Trade at the end of" tone="teal" value={t.entry} min={0} max={HISTORY_MONTHS - 2} onChange={(v) => tr.set({ entry: v })} display={monthLabel(t.entry)} />
+        <Slider label="Contract month" tone="teal" value={t.held} min={1} max={12} onChange={(v) => tr.set({ held: v })} display={`${t.held} month${t.held === 1 ? '' : 's'} ahead`} />
         <Slider label="Days of each leg" value={t.days} min={15} max={90} step={15} onChange={(v) => tr.set({ days: v })} display={`${t.days} days`} />
         <Caption>
-          {t.side === 'long' ? `Long buys the ${leg.long} and sells the ${leg.short}` : `Short sells the ${leg.long} and buys the ${leg.short}`}; the result is the change in the spread
-          times the days traded. Shaded: the history’s three disruptions.
+          {t.side === 'long' ? `Long buys the ${leg.long} and sells the ${leg.short}` : `Short sells the ${leg.long} and buys the ${leg.short}`}, each at its forward price on the last
+          index day of {monthLabel(t.entry)}; both settle on their averages for {monthLabel(res.exitMonth)}. The result is the settled spread minus the forward spread, times
+          the days traded.{t.legs === 'class' ? '' : ' A route’s forward reverts to the class’s long-run level plus the route’s usual premium.'} Shaded: the history’s three disruptions.
         </Caption>
       </Figure>
 
@@ -469,15 +527,16 @@ export default function Lesson() {
         Over the history the class spread runs from {money(SPREAD_MIN)} to {money(SPREAD_MAX)} a day. The disruptions leave their marks where the physics says
         they should — the same causes you switched on and off in <FigRef to="Freight Spread Trader">the first demonstration</FigRef>. While Brazil’s mines are disrupted, from {monthLabel(BRAZIL_EVENT.from)}, Capesize earnings run {pct(-Math.max(...BRAZIL_CAPE))} to{' '}
         {pct(-Math.min(...BRAZIL_CAPE))} below what the same months would have paid without it, and Kamsarmax earnings{' '}
-        {BRAZIL_KMAX.every((x) => Math.abs(x) < 0.005) ? 'not at all' : `by up to ${pct(Math.max(...BRAZIL_KMAX.map(Math.abs)))}`}. When drought restricts the Panama
+        {BRAZIL_KMAX.every((x) => Math.abs(x) < 0.005) ? 'not at all' : `by up to ${pct(Math.max(...BRAZIL_KMAX.map(Math.abs)))}`}. When drought closes the Panama
         Canal from {monthLabel(PANAMA_EVENT.from)}, Kamsarmax earnings run {pct(Math.min(...PANAMA_KMAX))} to {pct(Math.max(...PANAMA_KMAX))} higher, and the
         Kamsarmax route spread with them. Switch the legs and look.
       </P>
       <P>
-        Spreads are not a quiet trade, though. In our history the two classes’ monthly indices have a correlation of only {fmt(CORR, 2)}, and the class spread moves
-        more from month to month than either leg does on its own: a typical monthly change of {perDay(SD_SPREAD)}, against {perDay(SD_CAPE)} for the Capesize index
-        and {perDay(SD_KMAX)} for the Kamsarmax. A spread removes what the legs share; what remains is the specific cause, plus everything else that happens to
-        move one leg — a harvest, a season, a disruption in the other trade. The trade pays only if its cause actually happens, and only while it lasts.
+        Spreads are not a quiet trade, though. In our history the two classes’ indices move together only loosely — their month-to-month changes have a correlation
+        of only {fmt(CORR_CHANGES, 2)} — so the class spread moves more from month to month than either leg does on its own: a typical monthly change of{' '}
+        {perDay(SD_SPREAD)}, against {perDay(SD_CAPE)} for the Capesize index and {perDay(SD_KMAX)} for the Kamsarmax. A spread removes what the legs share; what
+        remains is the specific cause, plus everything else that happens to move one leg — a harvest, a season, a disruption in the other trade. The trade pays
+        only if its cause actually happens, and only if the forward curve didn’t already expect it.
       </P>
 
       <P>
@@ -489,18 +548,20 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`News of trouble at Brazil’s iron-ore mines reaches the market at the end of April, Year 6. Trade the class spread on it: enter that month, hold for at most six months, and make at least ${money(TARGET)}.`}
+        question={`News of trouble at Brazil’s iron-ore mines reaches the market at the end of April, Year 6, before it shows in any index. Predict first which leg the news hits, and so which side to take. Then trade the class spread on it, ${NEWS_DAYS} days a leg: agree the trade at the end of that month, for a contract month at most six months ahead, and make at least ${money(TARGET)}.`}
         solved={solved}
         status={
           t.legs !== 'class'
             ? 'Choose the Capesize − Kamsarmax legs first.'
             : t.entry !== NEWS_MONTH
-              ? `Enter in ${monthLabel(NEWS_MONTH)}; you’re entering in ${monthLabel(t.entry)}.`
+              ? `Trade at the end of ${monthLabel(NEWS_MONTH)}; you’re trading at the end of ${monthLabel(t.entry)}.`
               : t.held > 6
-                ? 'Hold for six months or less.'
-                : `${t.side === 'long' ? 'Long' : 'Short'} for ${t.held} month${t.held === 1 ? '' : 's'} at ${t.days} days a leg makes ${money(res.pnl)}.`
+                ? 'Choose a contract month six months ahead or nearer.'
+                : t.days !== NEWS_DAYS
+                  ? `Trade ${NEWS_DAYS} days a leg.`
+                  : `${t.side === 'long' ? 'Long' : 'Short'} the ${monthLabel(res.exitMonth)} spread at a forward ${signedDay(res.entry)} makes ${money(res.pnl)}.`
         }
-        success={`Solved. Fewer Brazilian cargoes hit only the Capesize leg, so the trade is short the spread, and it has to be big: the spread falls from ${money(NEWS_BEST.entry)} in April to ${money(NEWS_BEST.exit)} in May, ${money(NEWS_BEST.entry - NEWS_BEST.exit)} a day, so only 75 or 90 days a leg clear the target. Timing matters as much as direction: held for five months, into the end of the soybean season, the same position ${NEWS_LATE.pnl < 0 ? `loses ${money(-NEWS_LATE.pnl)}` : `makes only ${money(NEWS_LATE.pnl)}`}, because the Kamsarmax leg falls too.`}
+        success={`Solved. Fewer Brazilian cargoes hit only the Capesize leg, so the trade is short the spread. The curve knew nothing of the news: at the end of April it priced May’s spread at ${signedDay(NEWS_MAY.entry)}, expecting Capesize earnings to drift back up toward their long-run level, and May settled at ${signedDay(NEWS_MAY.exit)} — ${money(NEWS_MAY.pnl)} on ${NEWS_DAYS} days. Remove the cause and the trade almost vanishes: without the disruption, May would have settled near ${signedDay(MAY_SPREAD_NO_EVENT)}, and the same short would have made ${money(NEWS_MAY_NO_EVENT)}. Contracts further out paid more, but not all of that is the news. The curve pulls Capesize earnings toward a long-run level that averages ${perDay(CAPE_ANCHOR)}, well above the ${perDay(CAPE_AVG)} this history averaged, so a short class spread six months ahead made money from ${pct(SHORT6_WINS)} of all entry months.`}
       />
 
       <P>

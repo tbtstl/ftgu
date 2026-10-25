@@ -11,7 +11,7 @@ import {
   K,
   LessonPage,
   P,
-  Readouts,
+  Segmented,
   Slider,
   TEXT,
   fmt,
@@ -27,6 +27,7 @@ import {
   CUSTOMERS_DEFAULT,
   WORLD_DEFAULT,
   evaluateFleet,
+  fleetProductivity,
   operate,
   type BusinessResult,
   type Customer,
@@ -36,9 +37,10 @@ import {
   type WorldScenario,
 } from '../../../engines/compute/cloud';
 import { LEVERS_DEFAULT, businessUnder, type Levers } from '../../../engines/compute/strategyChallenge';
-import { ACCELERATORS, GPU_IDS } from '../../../model/compute/hardware';
 import { SITES } from '../../../model/compute/sites';
-import { clearAttempts, defaultCloud, saveAttempt, updateCloud, useAttempts, useCloud, type Attempt, type CloudDesign } from '../shared/cloudStore';
+import { WORKLOAD_IDS } from '../../../model/compute/workloads';
+import { clearAttempts, confirmReplaceCloud, confirmed, defaultCloud, othersAtStart, saveAttempt, useAttempts, useCloud, type Attempt, type CloudDesign } from '../shared/cloudStore';
+import { SoFar } from '../shared/SoFar';
 
 // ---------------------------------------------------------------------------
 // The test: the reader's whole design, run through three uncertain years, many times.
@@ -55,8 +57,13 @@ export interface WorldState {
   failure: number;
   /** Multiplier on the site's electricity price. */
   energy: number;
-  /** Years the servers must pay for themselves in. */
+  /**
+   * Years the servers and network are paid off over. Only the first three are simulated: a longer life
+   * charges the three-year window less, on the assumption that the servers keep earning afterwards.
+   */
   life: number;
+  /** How much of each customer's work a B-class GPU does, as a share of Chapter 3's figures, %. */
+  bWork: number;
 }
 
 export const WORLD_STATE_DEFAULTS: WorldState = {
@@ -66,19 +73,27 @@ export const WORLD_STATE_DEFAULTS: WorldState = {
   failure: Math.round(WORLD_DEFAULT.failureShare * 100),
   energy: LEVERS_DEFAULT.energyScale,
   life: LEVERS_DEFAULT.serverLifeYears,
+  bWork: 100,
 };
 
 export const NEXT_GEN_MIN = 2;
 export const NEXT_GEN_MAX = 14;
-/** The challenge's target: a risk-adjusted value of at least this, $. */
-export const TARGET = 10e6;
+/** The challenge's target: a risk-adjusted value of at least this, $ (above the best fleets at the list prices). */
+export const TARGET = 18e6;
+/** The B-class work slider's range, % of Chapter 3's figures. */
+export const BWORK_MIN = 60;
+export const BWORK_MAX = 120;
+/** The least and most A-class GPUs' worth of work a B-class GPU does for any workload, at full speed. */
+const PROD_START = fleetProductivity(defaultCloud().fleet);
+const PROD_B = WORKLOAD_IDS.map((w) => PROD_START[w].B);
+export const B_RANGE = { min: Math.min(...PROD_B), max: Math.max(...PROD_B) };
 
 export function worldOf(s: WorldState): WorldScenario {
   return { ...WORLD_DEFAULT, nextGenQuarter: s.nextGen, nextGenDrop: s.drop / 100, growthSigma: s.sigma / 100, failureShare: s.failure / 100 };
 }
 
 export function leversOf(s: WorldState): Levers {
-  return { energyScale: s.energy, serverLifeYears: s.life };
+  return { energyScale: s.energy, serverLifeYears: s.life, bWork: s.bWork / 100 };
 }
 
 export function isStartingWorld(s: WorldState): boolean {
@@ -112,9 +127,19 @@ export function runStrategy(d: Strategy, w: WorldState = WORLD_STATE_DEFAULTS): 
   return r;
 }
 
-/** Challenge a: against the starting customers and world, a buildable design worth at least $10M risk-adjusted. */
+/** Challenge a: against the starting customers and world, a fleet passing all four checks, worth at least $18M risk-adjusted. */
 export function targetSolved(d: Strategy, w: WorldState): boolean {
-  return isStartingWorld(w) && customersAreStarting(d.customers) && evaluateFleet(d.fleet).ok && runStrategy(d, w).riskAdjusted >= TARGET;
+  return isStartingWorld(w) && customersAreStarting(d.customers) && evaluateFleet(d.fleet).checks.every((c) => c.ok) && runStrategy(d, w).riskAdjusted >= TARGET;
+}
+
+/** How far apart two strategies' numbers must be to count as a trade (visible in the table's $0.01M). */
+export const TRADE_GAP = 0.05e6;
+
+/** Challenge b: two saved strategies (starting customers) that trade one for the other — one with the higher mean, the other the higher 5th percentile. */
+export function tradeFound<A extends Pick<Attempt, 'mean' | 'p5' | 'design'>>(attempts: A[]): [A, A] | null {
+  const ok = attempts.filter((a) => customersAreStarting(a.design.customers));
+  for (const a of ok) for (const b of ok) if (a.mean > b.mean + TRADE_GAP && b.p5 > a.p5 + TRADE_GAP) return [a, b];
+  return null;
 }
 
 /** Challenge b: a saved strategy (same customers) beating the starting design on both its mean and its 5th percentile. */
@@ -135,6 +160,12 @@ export const RIGHT_SIZED: Strategy = {
   ops: { ...STARTING.ops, policy: 'tiered' },
 };
 
+/** One answer to challenge a: the smaller fleet with the reserved B-class at its substitute's price and the on-demand B-class raised (Lesson 7.3). */
+export const PRICED: Strategy = {
+  ...RIGHT_SIZED,
+  prices: { ...RIGHT_SIZED.prices, reserved: { ...RIGHT_SIZED.prices.reserved, B: 5 }, onDemand: { ...RIGHT_SIZED.prices.onDemand, B: 6 } },
+};
+
 let startCache: BusinessResult | null = null;
 function START(): BusinessResult {
   return (startCache ??= runStrategy(STARTING));
@@ -149,6 +180,8 @@ function computeNumbers() {
   const rightWeek = operate(RIGHT_SIZED.customers, RIGHT_SIZED.prices, RIGHT_SIZED.fleet, RIGHT_SIZED.ops);
   const startEv = evaluateFleet(STARTING.fleet);
   const rightEv = evaluateFleet(RIGHT_SIZED.fleet);
+  const prod = fleetProductivity(STARTING.fleet);
+  const lWork = STARTING.customers.map((c) => prod[c.workload].L);
   return {
     start,
     right,
@@ -164,6 +197,16 @@ function computeNumbers() {
     early: runStrategy(RIGHT_SIZED, { ...W, nextGen: 2, drop: 50 }),
     energy3: runStrategy(RIGHT_SIZED, { ...W, energy: 3 }),
     fail10: runStrategy(RIGHT_SIZED, { ...W, failure: 10 }),
+    priced: runStrategy(PRICED),
+    priced95: runStrategy(PRICED, { ...W, bWork: 95 }),
+    priced110: runStrategy(PRICED, { ...W, bWork: 110 }),
+    /** The frontier lab's substitute ceiling for a reserved B-class hour when the B-class does 95% of its work. */
+    ceiling95: STARTING.prices.reserved.A * prod.frontier400.B * 0.95,
+    right80: runStrategy(RIGHT_SIZED, { ...W, bWork: 80 }),
+    right120: runStrategy(RIGHT_SIZED, { ...W, bWork: 120 }),
+    /** A-class hours of each starting customer's work an L-class hour does: the most, and how many customers get none. */
+    lMax: Math.max(...lWork),
+    lNone: lWork.filter((x) => x <= 0).length,
   };
 }
 
@@ -197,8 +240,8 @@ const RED = GRAPHIC.red;
 function Histogram({ r }: { r: BusinessResult }) {
   const x0 = 64;
   const x1 = 616;
-  const top = 58;
-  const bot = 150;
+  const top = 76;
+  const bot = 168;
   const lo = r.npvs[0] / 1e6;
   const hi = r.npvs[r.npvs.length - 1] / 1e6;
   const [d0, d1] = niceDomain(Math.min(lo, -1), Math.max(hi, 1), 6);
@@ -210,6 +253,12 @@ function Histogram({ r }: { r: BusinessResult }) {
   const sx = scale(d0, d1, x0, x1);
   const sy = scale(0, cmax, bot, top);
   const ticks = niceTicks(d0, d1, 6);
+  // One standard deviation either side of the mean, as a bracket above the bars (clipped to the axis).
+  const clip = (v: number) => Math.max(d0, Math.min(d1, v));
+  const sdL = sx(clip((r.mean - r.stdev) / 1e6));
+  const sdR = sx(clip((r.mean + r.stdev) / 1e6));
+  const sdY = 66;
+  const sdLabelX = Math.max(x0 + 120, Math.min(x1 - 120, sx(clip(r.mean / 1e6))));
   const marks = [
     { v: r.mean / 1e6, label: 'mean', color: '#333', dash: undefined as string | undefined },
     { v: r.riskAdjusted / 1e6, label: 'risk-adjusted', color: TEXT.green, dash: '2 3' },
@@ -218,9 +267,9 @@ function Histogram({ r }: { r: BusinessResult }) {
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 188"
+      viewBox="0 0 640 206"
       role="img"
-      aria-label={`Net present value of the business over ${fmt(r.npvs.length)} simulated three-year paths: mean ${m$(r.mean)}, 5th percentile ${m$(r.p5)}, risk-adjusted value ${m$(r.riskAdjusted)}; ${pctOf(r.probLoss)} of paths lose money.`}
+      aria-label={`Net present value of the business over ${fmt(r.npvs.length)} simulated three-year paths: mean ${m$(r.mean)}, standard deviation ${m$(r.stdev)}, 5th percentile ${m$(r.p5)}, risk-adjusted value ${m$(r.riskAdjusted)} (the mean minus half the standard deviation); ${pctOf(r.probLoss)} of paths lose money.`}
     >
       <text className="ax" x={x0} y={12}>
         Paths, by the business’s net present value over three years
@@ -231,6 +280,14 @@ function Histogram({ r }: { r: BusinessResult }) {
       })}
       <line className="base" x1={x0} x2={x1} y1={bot} y2={bot} />
       <line x1={sx(0)} x2={sx(0)} y1={top - 8} y2={bot} stroke="#999" strokeWidth={1} />
+      <g stroke="#555" strokeWidth={1.25}>
+        <line x1={sdL} x2={sdR} y1={sdY} y2={sdY} />
+        <line x1={sdL} x2={sdL} y1={sdY - 4} y2={sdY + 4} />
+        <line x1={sdR} x2={sdR} y1={sdY - 4} y2={sdY + 4} />
+      </g>
+      <text className="ax" x={sdLabelX} y={sdY - 6} style={{ textAnchor: 'middle', fill: '#555' }}>
+        mean ± 1 standard deviation ({m$(r.stdev)})
+      </text>
       {marks.map((mk, i) => {
         const right = sx(mk.v) < x1 - 170;
         return (
@@ -243,11 +300,11 @@ function Histogram({ r }: { r: BusinessResult }) {
         );
       })}
       {ticks.map((t) => (
-        <text key={t} className="ax ax-m" x={sx(t)} y={166}>
+        <text key={t} className="ax ax-m" x={sx(t)} y={bot + 16}>
           {t === 0 ? '$0' : `${t < 0 ? '−' : ''}$${fmt(Math.abs(t), Number.isInteger(t) ? 0 : 1)}M`}
         </text>
       ))}
-      <text className="ax ax-e" x={x1} y={182}>
+      <text className="ax ax-e" x={x1} y={bot + 32}>
         losing paths in red: {pctOf(r.probLoss)}
       </text>
     </svg>
@@ -299,27 +356,6 @@ function QuarterChart({ r, nextGen }: { r: BusinessResult; nextGen: number }) {
   );
 }
 
-/** One line describing the reader's design, with where each part is set. */
-function DesignLine({ d }: { d: CloudDesign }) {
-  const f = d.fleet;
-  const site = SITES[f.site].name;
-  const gpus = GPU_IDS.filter((g) => f.gpus[g] > 0)
-    .map((g) => `${fmt(f.gpus[g])} ${ACCELERATORS[g].short}`)
-    .join(', ');
-  const changed = (a: unknown, b: unknown) => json(a) !== json(b);
-  const start = defaultCloud();
-  return (
-    <p className="cap" style={{ paddingTop: 0 }}>
-      Your cloud: {gpus || 'no GPUs'} at {site}, {f.cooling === 'liquid' ? 'liquid' : 'air'}-cooled (<a href={lessonHref('compute/7.1')}>7.1</a>);{' '}
-      {changed(d.customers, start.customers) ? 'your own customers' : 'the starting customers'} (<a href={lessonHref('compute/7.2')}>7.2</a>);{' '}
-      {changed(d.prices, start.prices) ? 'your own prices' : 'the starting prices'} (<a href={lessonHref('compute/7.3')}>7.3</a>);{' '}
-      {d.ops.policy === 'tiered' ? 'on-demand before spot' : 'first come, first served'}
-      {GPU_IDS.some((g) => d.ops.rented[g] > 0) ? ', renting GPUs' : ''}
-      {d.ops.burst ? ', bursting' : ''} (<a href={lessonHref('compute/7.4')}>7.4</a>).
-    </p>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Figure 2: saved strategies compared.
 
@@ -329,6 +365,8 @@ interface Point {
   mean: number;
   p5: number;
   kind: 'start' | 'saved' | 'current';
+  /** Where its label goes when it sits close to another point. */
+  below?: boolean;
 }
 
 function CompareChart({ points }: { points: Point[] }) {
@@ -374,7 +412,7 @@ function CompareChart({ points }: { points: Point[] }) {
             ) : (
               <circle cx={cx} cy={cy} r={5} fill={p.kind === 'start' ? '#9a9a9a' : GREEN} stroke="#fcfcfb" strokeWidth={1.5} />
             )}
-            <text className="ax" x={cx + (right ? 10 : -10)} y={cy + 4} style={{ textAnchor: right ? 'start' : 'end', fill: p.kind === 'saved' ? TEXT.green : '#333' }}>
+            <text className="ax" x={cx + (right ? 10 : -10)} y={cy + (p.below ? 16 : 4)} style={{ textAnchor: right ? 'start' : 'end', fill: p.kind === 'saved' ? TEXT.green : '#333' }}>
               {p.label}
             </text>
           </g>
@@ -386,46 +424,64 @@ function CompareChart({ points }: { points: Point[] }) {
 
 // ---------------------------------------------------------------------------
 
+type View = 'yours' | 'start' | 'smaller';
+/** Saved strategies listed in the table (the chart shows them all), to keep the figure compact. */
+const TABLE_ROWS = 7;
+const SMALLER_DESIGN: CloudDesign = { ...defaultCloud(), ...RIGHT_SIZED };
+
 export default function Lesson() {
-  const design = useCloud();
+  const saved = useCloud();
   const attempts = useAttempts();
   const world = useScenario('world', WORLD_STATE_DEFAULTS);
+  const pick = useScenario('view', { view: 'yours' as View });
+  const view = pick.state.view;
   const w = world.state;
+  const shown: CloudDesign = view === 'start' ? defaultCloud() : view === 'smaller' ? SMALLER_DESIGN : saved;
   const dw = useDeferredValue(w);
-  const dd = useDeferredValue(design);
+  const ds = useDeferredValue(shown);
+  const dSaved = useDeferredValue(saved);
   const N = useMemo(() => lessonNumbers(), []);
 
-  const result = useMemo(() => runStrategy(dd, dw), [dd, dw]);
-  const ev = useMemo(() => evaluateFleet(design.fleet), [design.fleet]);
-  const standard = useMemo(() => runStrategy(dd), [dd]);
-  const site = SITES[design.fleet.site];
+  const result = useMemo(() => runStrategy(ds, dw), [ds, dw]);
+  const ev = useMemo(() => evaluateFleet(shown.fleet), [shown.fleet]);
+  const mine = useMemo(() => runStrategy(dSaved), [dSaved]);
+  const mineEv = useMemo(() => evaluateFleet(saved.fleet), [saved.fleet]);
+  const site = SITES[shown.fleet.site];
 
-  // Challenge a.
-  const solvedA = targetSolved(design, w);
+  // Challenge a: always your own design, against the starting world.
+  const solvedA = targetSolved(saved, w);
   let statusA: string;
   if (!isStartingWorld(w)) statusA = 'The test is against the starting world: press Reset under the first demonstration.';
-  else if (!customersAreStarting(design.customers)) statusA = 'The test uses the starting customers, and yours have been changed in Lesson 7.2. Reset them there.';
-  else if (!ev.ok) statusA = `This fleet fails a check in Lesson 7.1: ${ev.checks.filter((c) => !c.ok && (c.id === 'racks' || c.id === 'grid')).map((c) => c.text).join(' ')}`;
-  else statusA = `Your strategy is worth ${m$(result.riskAdjusted)} risk-adjusted: ${m$(Math.max(0, TARGET - result.riskAdjusted))} short.`;
+  else if (!customersAreStarting(saved.customers)) statusA = 'The test uses the starting customers, and yours have been changed in Lesson 7.2. Reset them there.';
+  else if (!mineEv.checks.every((c) => c.ok)) statusA = `Your fleet fails a check in Lesson 7.1: ${mineEv.checks.filter((c) => !c.ok).map((c) => c.text).join(' ')}`;
+  else statusA = `Your design is worth ${m$(mine.riskAdjusted)} risk-adjusted: ${m$(Math.max(0, TARGET - mine.riskAdjusted))} short.`;
 
   // Challenge b.
-  const solvedB = beatsStart(attempts);
+  const trade = tradeFound(attempts);
   const save = () => {
-    const r = runStrategy(design);
-    saveAttempt({ design, riskAdjusted: r.riskAdjusted, mean: r.mean, p5: r.p5, probLoss: r.probLoss });
+    const r = runStrategy(shown);
+    saveAttempt({ design: shown, riskAdjusted: r.riskAdjusted, mean: r.mean, p5: r.p5, probLoss: r.probLoss });
   };
 
   const points: Point[] = [
     { key: 'start', label: 'starting design', mean: N.start.mean, p5: N.start.p5, kind: 'start' },
+    { key: 'smaller', label: 'smaller fleet', mean: N.right.mean, p5: N.right.p5, kind: 'start' },
     ...attempts.map((a) => ({ key: a.id, label: a.name, mean: a.mean, p5: a.p5, kind: 'saved' as const })),
-    { key: 'current', label: 'your design now', mean: standard.mean, p5: standard.p5, kind: 'current' },
+    { key: 'current', label: 'your design now', mean: mine.mean, p5: mine.p5, kind: 'current', below: true },
   ];
 
-  const caption = !ev.ok
-    ? `This fleet fails a check in Lesson 7.1, so it couldn’t be built; the numbers assume it could.`
-    : result.probLoss === 0
-      ? `Every one of the ${fmt(result.npvs.length)} paths makes money; the worst 5% still earn ${m$(result.p5)} or more.`
-      : `${pctOf(result.probLoss)} of paths lose money. On average the business is worth ${m$(result.mean)}, but the worst 5% end at ${m$(result.p5)} or below.`;
+  const same = othersAtStart(saved, null);
+  const caption = `${
+    view === 'start'
+      ? 'The starting design: the defaults of Lessons 7.1–7.4.'
+      : view === 'smaller'
+        ? 'The smaller fleet: no L-class, 512 A-class and 320 B-class GPUs, on demand before spot, at the list prices.'
+        : same
+          ? 'Your design, so far the same as the starting design.'
+          : 'Your design, from Lessons 7.1–7.4. The text quotes the starting design and the smaller fleet: choose them to compare.'
+  }${ev.checks.every((c) => c.ok) ? '' : ' This fleet fails a check in Lesson 7.1, so it couldn’t be built as it is; the numbers assume it could.'}`;
+  const bLabel = (pctOfStart: number) => `${fmt((B_RANGE.min * pctOfStart) / 100, 1)}–${fmt((B_RANGE.max * pctOfStart) / 100, 1)} A-class GPUs`;
+  const load = (d: CloudDesign, what: string) => confirmReplaceCloud(d, what);
 
   return (
     <LessonPage id="compute/7.5">
@@ -436,44 +492,49 @@ export default function Lesson() {
         capital is committed for years (<a href={lessonHref('compute/4.5')}>Lesson 4.5</a>), its customers’ demand will grow by amounts nobody can promise (
         <a href={lessonHref('compute/5.3')}>5.3</a>), and somewhere a newer generation of accelerators will arrive and lower what customers will pay for this fleet’s work (
         <a href={lessonHref('compute/5.2')}>5.2</a>, <a href={lessonHref('compute/6.5')}>6.5</a>). This lesson runs the whole business through three such years,
-        many times over, and scores it.
+        many times over, and scores it. Here is the design you built:
       </P>
+      <SoFar parts={['fleet', 'customers', 'prices', 'ops']} title="Your cloud" />
       <P>
         Nothing in the test is new. Each simulated path is twelve quarters. In each, every customer’s demand grows by its expected rate, give or take an uncertain
         amount; the cloud runs a representative weekday and weekend day exactly as in Lesson 7.4 — reserved customers on their committed GPUs, then on-demand and spot
         customers by the plan’s policy — and the two days are scaled up to the quarter’s 65 weekdays and 26 weekend days; failures take away a share of the GPU-hours; once the next generation arrives, customers will pay
         less; and the fleet’s fixed cost, Lesson 4.5’s capital recovery and upkeep, is paid whether the GPUs are busy or not. Each path’s quarters are discounted at
         10% a year and summed into a net present value, as for the contract of Lesson 6.5. The score is the <K c="price">risk-adjusted value</K>: the mean over{' '}
-        {fmt(WORLD_DEFAULT.paths)} paths minus half their standard deviation. It rewards a strategy for what it earns on average and charges it for how widely its
+        {fmt(WORLD_DEFAULT.paths)} paths minus half their standard deviation. The standard deviation measures how far the paths typically land from their mean — the
+        square root of the average squared distance, the spread of <a href={lessonHref('compute/6.5')}>Lesson 6.5</a>’s contract outcomes put into one number — and
+        the histogram marks one standard deviation either side of the mean. The score rewards a strategy for what it earns on average and charges it for how widely its
         outcomes spread.
       </P>
       <P>
-        In the next demonstration, the bars count the paths by their net present value, losses in red, and the lower chart is each quarter’s median profit. The
-        strategy is the design you built in Lessons 7.1–7.4, or the starting design if you skipped them; the sliders don’t change it. They change the world it meets:
+        In the next demonstration, the bars count the paths by their net present value, losses in red, and the lower chart is each quarter’s median profit. It shows
+        your design, or, for comparison, the starting design or a smaller fleet the text discusses. The sliders don’t change the design. They change the world it meets:
         when the next generation arrives and how much it cuts what customers pay, how uncertain growth is, how many GPU-hours are lost to failures, the price of
-        energy, and how many years the servers must pay for themselves in:
+        energy, how many years the servers are paid off over, which sets how much of their cost the three simulated years must carry, and how much of each customer’s
+        work a B-class GPU does:
       </P>
 
       <Figure
         name="GPU Cloud Strategy Challenge"
         onReset={world.reset}
         actions={
-          <Button onClick={save} label="Save this strategy to compare it later">
+          <Button onClick={save} label="Save the strategy shown, to compare it later">
             Save strategy
           </Button>
         }
       >
-        <DesignLine d={design} />
-        <Histogram r={result} />
-        <QuarterChart r={result} nextGen={w.nextGen} />
-        <Readouts
-          items={[
-            { label: 'risk-adjusted value', value: m$(result.riskAdjusted), tone: result.riskAdjusted >= 0 ? 'green' : 'red' },
-            { label: 'mean net present value', value: m$(result.mean), tone: 'green' },
-            { label: '5th percentile', value: m$(result.p5), tone: result.p5 >= 0 ? 'green' : 'red' },
-            { label: 'chance of a loss', value: pctOf(result.probLoss), tone: result.probLoss > 0 ? 'red' : 'ink' },
+        <Segmented<View>
+          label="Which design the demonstration shows"
+          value={view}
+          onChange={(v) => pick.set({ view: v })}
+          options={[
+            { value: 'yours', label: 'Your design' },
+            { value: 'start', label: 'Starting design' },
+            { value: 'smaller', label: 'Smaller fleet' },
           ]}
         />
+        <Histogram r={result} />
+        <QuarterChart r={result} nextGen={w.nextGen} />
         <Slider
           label="Next generation arrives"
           tone="teal"
@@ -496,14 +557,24 @@ export default function Lesson() {
           onChange={(v) => world.set({ energy: v })}
           display={`$${fmt(site.powerPrice * w.energy)} per MWh`}
         />
-        <Slider label="Servers pay for themselves in" tone="green" value={w.life} min={3} max={7} onChange={(v) => world.set({ life: v })} display={`${w.life} years`} />
+        <Slider label="Servers paid off over" tone="green" value={w.life} min={3} max={7} onChange={(v) => world.set({ life: v })} display={`${w.life} years`} />
+        <Slider
+          label="B-class work per GPU"
+          tone="orange"
+          value={w.bWork}
+          min={BWORK_MIN}
+          max={BWORK_MAX}
+          step={5}
+          onChange={(v) => world.set({ bWork: v })}
+          display={`${bLabel(w.bWork)} (${w.bWork}%)`}
+        />
         <Caption>{caption}</Caption>
       </Figure>
 
       <P>
-        The starting design — the defaults of the four previous lessons — is worth {million(N.start.mean)} on average, but {pctOf(N.start.probLoss)} of its paths
-        lose money, the worst 5% lose {million(-N.start.p5)} or more, and its risk-adjusted value is {million(N.start.riskAdjusted)}. Its first week in Lesson 7.4
-        showed why. Its {fmt(N.startGpus)} GPUs cost {usd(N.startFixedWeek)} a week to own before any of them does a thing, and while every B-class GPU was busy,{' '}
+        Choose the starting design — the defaults of the four previous lessons. It is worth {million(N.start.mean)} on average, but {pctOf(N.start.probLoss)} of its
+        paths lose money, the worst 5% lose {million(-N.start.p5)} or more, and its risk-adjusted value is {million(N.start.riskAdjusted)}. Its first week in Lesson
+        7.4 showed why. Its {fmt(N.startGpus)} GPUs cost {usd(N.startFixedWeek)} a week to own before any of them does a thing, and while every B-class GPU was busy,{' '}
         {pctOf(N.startWeek.utilization.A)} of the A-class hours and only {pctOf(N.startWeek.utilization.L)} of the L-class hours were. Revenue of{' '}
         {usd(N.startWeek.revenue)} a week left a loss of {usd(-N.startWeek.profit)}. Growth slowly fills the idle hours, and the business makes money on average;
         but a path with slow growth and an early new generation never fills them.
@@ -513,59 +584,66 @@ export default function Lesson() {
       <P>
         The cure comes from three earlier lessons at once. A GPU-hour is mostly capital, so what matters is how many of a fleet’s hours are sold (Lesson 4.5). For
         every one of these customers, a B-class hour does the work for less than an A-class hour, at these prices (<a href={lessonHref('compute/5.1')}>Lesson 5.1</a>
-        ), and an L-class hour does almost none of their work at all (<a href={lessonHref('compute/3.5')}>Lesson 3.5</a>). And when the fleet is full, the
-        on-demand customers should be served before spot work (<a href={lessonHref('compute/6.1')}>Lesson 6.1</a>). Consider a fleet of no L-class, 512 A-class and
-        320 B-class GPUs, run on-demand before spot: {fmt(N.rightGpus)} GPUs instead of {fmt(N.startGpus)}. Its week takes in less, {usd(N.rightWeek.revenue)}, because
-        it turns more work away: it serves {pctOf(N.rightWeek.served.c1)} of what the chat startup wants and {pctOf(N.rightWeek.served.c6)} of the document processor’s
-        batch work. But it costs {usd(N.rightFixedWeek)} a week to own, its A-class GPUs are {pctOf(N.rightWeek.utilization.A)} busy, and the week ends{' '}
+        ), while an L-class hour does at most {fmt(N.lMax, 2)} of an A-class hour’s work for any of them and none of the frontier lab’s, so wherever it can run at
+        all, its work costs the most of the three (<a href={lessonHref('compute/3.5')}>Lesson 3.5</a>). And when the fleet is full, the
+        on-demand customers should be served before spot work (<a href={lessonHref('compute/6.1')}>Lesson 6.1</a>). Choose the smaller fleet: no L-class, 512 A-class and
+        320 B-class GPUs, run on-demand before spot, {fmt(N.rightGpus)} GPUs instead of {fmt(N.startGpus)}. Its week takes in less, {usd(N.rightWeek.revenue)}, because
+        it turns more work away: it serves {pctOf(N.rightWeek.served.c1)} of what the chat startup wants, {pctOf(N.rightWeek.served.c5)} of the fine-tuning shop’s and{' '}
+        {pctOf(N.rightWeek.served.c6)} of the document processor’s batch work. But it costs {usd(N.rightFixedWeek)} a week to own, its A-class GPUs are {pctOf(N.rightWeek.utilization.A)} busy, and the week ends{' '}
         {usd(N.rightWeek.profit)} ahead. Over three years it is worth {million(N.right.mean)} on average, the worst 5% still make {million(N.right.p5)}, no path
         loses money, and its risk-adjusted value is {million(N.right.riskAdjusted)}. Served first come, first served, the same fleet is worth{' '}
         {million(N.rightFirstCome.riskAdjusted)}.
       </P>
       <P>
         Selling less and earning more is not a paradox. Each hour a GPU sits idle costs nearly as much as a busy one (Lesson 4.5). The work this smaller fleet turns
-        away is the document processor’s spot work, which pays least for each GPU-hour, and the chat startup’s busiest afternoon hours, which would need GPUs that sit
-        idle the rest of the day. A real cloud might win some of that demand back later, adding capacity as demand actually grows rather than buying it all up front
-        against a forecast.
+        away is mostly the document processor’s spot work, which pays least for each GPU-hour, the chat startup’s busiest afternoon hours, which would need GPUs that sit
+        idle the rest of the day, and part of the fine-tuning shop’s, which finds the B-class full and the A-class nearly so.
       </P>
 
       <Challenge
         id="a"
-        question={`Against the starting world and the starting customers, find a strategy — a fleet that passes Lesson 7.1’s checks, prices and an operating plan — whose risk-adjusted value is at least ${m$(TARGET, 0)}. Change the design in Lessons 7.1, 7.3 and 7.4, then come back.`}
+        question={`Against the starting world and the starting customers, find a strategy for your cloud — a fleet that passes all four of Lesson 7.1’s checks, prices and an operating plan — worth at least ${m$(TARGET, 0)} risk-adjusted. At the list prices even the best fleets fall short, so you’ll need Lesson 7.3’s prices as well as Lessons 7.1 and 7.4: change your design there, then come back.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved: ${m$(result.riskAdjusted)} risk-adjusted. A fleet sized to the demand it can sell, leaning on the accelerator that does these customers’ work most cheaply, keeps its capital busy — the utilization of Lesson 4.5 and the comparative advantage of Lessons 3.5 and 6.1, priced over three uncertain years.`}
+        success={`Solved: your strategy is worth ${m$(mine.riskAdjusted)} risk-adjusted. A fleet sized to the demand it can sell keeps its capital busy (Lesson 4.5), and prices set against each accelerator’s substitute and each customer’s buyers (Lesson 7.3) earn more from every hour it sells.`}
       />
 
       <H2>What can still break it</H2>
       <P>
         A strategy is only as good as the world it meets, and the sliders in the{' '}
-        <FigRef to="GPU Cloud Strategy Challenge">first demonstration</FigRef> are that world. Take the smaller fleet. The single most powerful driver is one no
-        engineer controls: how long the servers’ hours keep their value. Paid off over 3 years instead of 5, it is worth {million(N.life3.riskAdjusted)} risk-adjusted
-        and {pctOf(N.life3.probLoss)} of its paths lose money; over 7 years, {million(N.life7.riskAdjusted)}. That is the server-life bet of Lesson 4.5 and the
-        contract risk of Lesson 6.5. Bring the next generation forward to around Q3 and let it cut what customers pay by half, and the same fleet is worth{' '}
-        {million(N.early.riskAdjusted)}, losing money on {pctOf(N.early.probLoss)} of paths: the supply chain of Lesson 5.2 decides when the fleet’s hours lose
-        their value.
+        <FigRef to="GPU Cloud Strategy Challenge">first demonstration</FigRef> are that world. Take the smaller fleet. Two drivers dominate. The first is the server life
+        the business assumes: the years its servers are paid off over, which set how much of their cost the three simulated years must carry. Paid off over 3
+        years instead of 5, it is worth {million(N.life3.riskAdjusted)} risk-adjusted and {pctOf(N.life3.probLoss)} of its paths lose money; over 7 years,{' '}
+        {million(N.life7.riskAdjusted)}. But the test runs for twelve quarters only. A 7-year life doesn’t show the servers earning for seven years; it charges the first
+        three less on the assumption that they will keep earning for four more, which no path here simulates. That is the server-life bet of Lesson 4.5, and the
+        contract risk of Lesson 6.5. The second is the next generation. Bring it forward to around Q3 and let it cut what customers pay by half, and the same fleet is
+        worth {million(N.early.riskAdjusted)}, losing money on {pctOf(N.early.probLoss)} of paths. Tripling the price of electricity, by contrast, takes it only to{' '}
+        {million(N.energy3.riskAdjusted)} (<a href={lessonHref('compute/6.4')}>Lesson 6.4</a>), and losing 10% of the GPU-hours to failures to{' '}
+        {million(N.fail10.riskAdjusted)}.
       </P>
       <P>
-        Other drivers matter less. Triple the price of electricity and the smaller fleet’s risk-adjusted value falls to {million(N.energy3.riskAdjusted)}: a real
-        cost, but, as Lessons 4.5 and <a href={lessonHref('compute/6.4')}>6.4</a> found, electricity is a small share of what a GPU-hour costs. Lose 10% of the
-        GPU-hours to failures instead of 3% and it is worth {million(N.fail10.riskAdjusted)}. A strategy built for one world can still be tested in another; the
-        robust ones are those whose worst cases you can live with.
+        The last slider changes the hardware itself. Every strategy here leans on a B-class GPU doing {fmt(B_RANGE.min, 1)} to {fmt(B_RANGE.max, 1)} A-class GPUs’ worth
+        of these customers’ work, a ratio set by memory, bandwidth and links (<a href={lessonHref('compute/2.4')}>Lessons 2.4</a> and{' '}
+        <a href={lessonHref('compute/3.2')}>3.2</a>) that a change in the customers’ models could move. One answer to the challenge is the smaller fleet with the reserved
+        B-class at $5.00 and the on-demand B-class at $6.00, worth {million(N.priced.riskAdjusted)}. Let the B-class do 5% less of the work and the frontier lab’s
+        substitute ceiling falls to {usd(N.ceiling95, 2)}: at $5.00 the lab moves to the A-class, and the strategy is worth {million(N.priced95.riskAdjusted)}. A
+        better B-class hurts it too — at 110%, {million(N.priced110.riskAdjusted)} — because the lab then needs fewer B-class GPUs for the same work and, at an hourly
+        price, pays for fewer. A price set at a physical ratio is only as good as the ratio. The robust strategies are those whose worst cases you can live with.
       </P>
 
       <H2>Comparing strategies</H2>
       <P>
         Each strategy you save with the first demonstration’s Save strategy button is scored against the starting world, so that saved strategies compare fairly. In
-        the next demonstration, each point is a strategy, placed by its mean outcome and by its 5th percentile, the bad case; the gray point is the starting design
-        and the ring is your design as it stands. A strategy up and to the right of another is better on both counts. Load any of them to restore its whole design:
+        the next demonstration, each point is a strategy, placed by its mean outcome and by its 5th percentile, the bad case; the gray points are the starting design
+        and the smaller fleet, and the ring is your design as it stands. A strategy up and to the right of another is better on both counts. Load any of them to make it
+        your design (you’ll be asked first):
       </P>
 
       <Figure
         name="GPU Cloud Strategy Challenge · compare"
         actions={
           attempts.length > 0 ? (
-            <Button onClick={clearAttempts} label="Delete every saved strategy">
+            <Button onClick={() => confirmed('Delete every saved strategy?') && clearAttempts()} label="Delete every saved strategy">
               Clear saved
             </Button>
           ) : undefined
@@ -588,19 +666,24 @@ export default function Lesson() {
               </tr>
             </thead>
             <tbody>
-              <tr className="dim">
-                <td>Starting design</td>
-                <td>{m$(N.start.riskAdjusted)}</td>
-                <td>{m$(N.start.mean)}</td>
-                <td>{m$(N.start.p5)}</td>
-                <td>{pctOf(N.start.probLoss)}</td>
-                <td>
-                  <Button onClick={() => updateCloud(() => defaultCloud())} label="Load the starting design">
-                    Load
-                  </Button>
-                </td>
-              </tr>
-              {attempts.map((a) => (
+              {[
+                { key: 'start', name: 'Starting design', r: N.start, design: defaultCloud(), what: 'the starting design' },
+                { key: 'smaller', name: 'Smaller fleet', r: N.right, design: SMALLER_DESIGN, what: 'the smaller fleet' },
+              ].map((row) => (
+                <tr key={row.key} className="dim">
+                  <td>{row.name}</td>
+                  <td>{m$(row.r.riskAdjusted)}</td>
+                  <td>{m$(row.r.mean)}</td>
+                  <td>{m$(row.r.p5)}</td>
+                  <td>{pctOf(row.r.probLoss)}</td>
+                  <td>
+                    <Button onClick={() => load(row.design, row.what)} label={`Load ${row.what} as your design`}>
+                      Load
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+              {attempts.slice(-TABLE_ROWS).map((a) => (
                 <tr key={a.id}>
                   <td>{a.name}</td>
                   <td>{m$(a.riskAdjusted)}</td>
@@ -608,7 +691,7 @@ export default function Lesson() {
                   <td>{m$(a.p5)}</td>
                   <td>{pctOf(a.probLoss)}</td>
                   <td>
-                    <Button onClick={() => updateCloud(() => a.design)} label={`Load ${a.name}`}>
+                    <Button onClick={() => load(a.design, a.name)} label={`Load ${a.name} as your design`}>
                       Load
                     </Button>
                   </td>
@@ -620,21 +703,25 @@ export default function Lesson() {
         <Caption>
           {attempts.length === 0
             ? 'No strategies saved yet. Use Save strategy under the first demonstration.'
-            : `${attempts.length} saved. Your design now: ${m$(standard.riskAdjusted)} risk-adjusted against the starting world.`}
+            : `${attempts.length} saved${attempts.length > TABLE_ROWS ? `, the ${TABLE_ROWS} most recent listed` : ''}. Your design now: ${m$(mine.riskAdjusted)} risk-adjusted against the starting world.`}
         </Caption>
       </Figure>
 
       <Challenge
         id="b"
         figure="GPU Cloud Strategy Challenge · compare"
-        question="With the starting customers, save a strategy that beats the starting design on both its mean outcome and its 5th percentile."
-        solved={solvedB}
+        question="Predict first: does the strategy with the higher mean always have the better bad case too? Then save two strategies, with the starting customers, that trade one for the other: one with the higher mean outcome, the other with the higher 5th percentile."
+        solved={trade !== null}
         status={
-          attempts.length === 0
-            ? 'No strategy saved yet.'
-            : `None of your ${attempts.length} saved ${attempts.length === 1 ? 'strategy beats' : 'strategies beat'} the starting design’s ${m$(N.start.mean)} mean and ${m$(N.start.p5)} 5th percentile together.`
+          attempts.length < 2
+            ? `Save at least two strategies to compare (${attempts.length} saved so far).`
+            : `None of your ${attempts.length} saved strategies trade one for the other: in every pair, one is better on both counts, or the two are too close to tell apart.`
         }
-        success="Solved. Better on average and better in the bad case: a strategy that dominates the one you started with. Most improvements trade one against the other; the best find both."
+        success={
+          trade
+            ? `Solved: ${trade[0].name} earns more on average (${m$(trade[0].mean)} against ${m$(trade[1].mean)}), but ${trade[1].name} does better in the bad case (${m$(trade[1].p5)} against ${m$(trade[0].p5)}). Neither is simply better. Which to choose depends on how much risk the business can carry, and the risk-adjusted score is one way to weigh the two.`
+            : ''
+        }
       />
 
       <H2>What the course has built</H2>

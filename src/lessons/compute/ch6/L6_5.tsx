@@ -28,8 +28,9 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { CONTRACT_DEFAULTS, dropFromRatio, runContract, type ContractParams, type ContractResult } from '../../../engines/compute/contracts';
+import { CONTRACT_DEFAULTS, HOURS_PER_QUARTER, dropFromRatio, runContract, type ContractParams, type ContractResult } from '../../../engines/compute/contracts';
 import { breakEvenMarketPrice, rankedPaths, type PathDetail } from '../../../engines/compute/contractPaths';
+import { PHYSICS_DEFAULTS, productivityUnder } from '../../../engines/compute/yieldManager';
 import { ACCELERATORS, GPU_COLOR } from '../../../model/compute/hardware';
 import { PRICES } from '../../../model/compute/prices';
 import { PLANNER_DEFAULTS, costOf } from '../ch4/L4_5';
@@ -50,7 +51,7 @@ export interface DeskState {
   hedgePrice: number;
   /** 0-based quarter in which the B-class is expected to reach volume (± 2 quarters). */
   arrival: number;
-  /** A-class GPUs’ worth of work one B-class GPU does. */
+  /** A-class GPUs’ worth of work one B-class GPU does (Lesson 6.1's measure). */
   ratio: number;
   /** Share of GPU-hours lost to failures and repairs, %. */
   failure: number;
@@ -58,12 +59,20 @@ export interface DeskState {
   resale: number;
 }
 
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+const PROD = productivityUnder(PHYSICS_DEFAULTS);
+/** A-class hours of the chat assistant's work one B-class GPU does (Lesson 6.1). */
+export const CHAT_RATIO = round2(PROD.chat70.B);
+/** The same for the frontier assistant (Lesson 6.1). */
+export const FRONTIER_RATIO = round2(PROD.frontier400.B);
+
 export const DESK_DEFAULTS: DeskState = {
   price: CONTRACT_DEFAULTS.contractPrice,
   hedge: 0,
   hedgePrice: CONTRACT_DEFAULTS.hedgePrice,
   arrival: CONTRACT_DEFAULTS.bArrival,
-  ratio: 2.67,
+  ratio: CHAT_RATIO,
   failure: CONTRACT_DEFAULTS.failureShare * 100,
   resale: CONTRACT_DEFAULTS.resaleShare * 100,
 };
@@ -73,10 +82,25 @@ export const ARRIVAL_MIN = 2;
 export const ARRIVAL_MAX = 14;
 export const PRICE_STEP = 0.01;
 export const HEDGE_STEP = 5;
-/** The first challenge's limit on the chance of losing money. */
-export const LOSS_LIMIT = 0.1;
 
-/** The fall in an A-class hour's price once B-class hours are plentiful (Lesson 5.1's parity). */
+/** GPU-hours the reseller pays for over the term. */
+export const TERM_HOURS = CONTRACT_DEFAULTS.gpus * HOURS_PER_QUARTER * CONTRACT_DEFAULTS.termQuarters;
+/**
+ * What one cent off the contract price adds to every path's net present value: a cent on each
+ * contracted GPU-hour, each quarter's discounted as the engine discounts its cash, $.
+ */
+export const CENT_VALUE = (() => {
+  const q = (1 + CONTRACT_DEFAULTS.rate) ** 0.25;
+  let d = 0;
+  for (let i = 0; i < CONTRACT_DEFAULTS.termQuarters; i++) d += 1 / q ** (i + 1);
+  return CONTRACT_DEFAULTS.gpus * HOURS_PER_QUARTER * d * 0.01;
+})();
+
+/**
+ * The fall in an A-class hour's price once B-class hours are plentiful: at list prices, how far below
+ * the A-class's price a B-class hour costs per A-class hour of work (Lesson 5.1's parity). The engine
+ * applies it as that proportional fall to whatever the A-class hour fetches by then.
+ */
 export function dropOf(ratio: number): number {
   return dropFromRatio(B_PRICE, ratio, A_PRICE);
 }
@@ -107,27 +131,38 @@ export function deskRun(s: DeskState): ContractResult {
   return r;
 }
 
-const round2 = (x: number) => Math.round(x * 100) / 100;
-
-/** Challenge a: unhedged, the highest contract price (to the cent) whose chance of loss is at most 10%. */
-export function priceSolved(s: DeskState): boolean {
-  if (s.hedge !== 0) return false;
-  if (deskRun(s).probLoss > LOSS_LIMIT) return false;
-  return deskRun({ ...s, price: round2(s.price + PRICE_STEP) }).probLoss > LOSS_LIMIT;
+/** The world as it starts: the B-class's arrival and ratio, failures and resales. */
+export function startingWorld(s: DeskState): boolean {
+  const D = DESK_DEFAULTS;
+  return s.arrival === D.arrival && s.ratio === D.ratio && s.failure === D.failure && s.resale === D.resale;
 }
 
-/** Challenge b: the smallest share sold forward (in 5% steps) that keeps the 5th-percentile outcome from losing money. */
+/** Challenge a: unhedged, in the starting world, the highest contract price (to the cent) at which the 5th-percentile path doesn't lose money. */
+export function priceSolved(s: DeskState): boolean {
+  if (s.hedge !== 0 || !startingWorld(s)) return false;
+  if (deskRun(s).p5 < 0) return false;
+  return deskRun({ ...s, price: round2(s.price + PRICE_STEP) }).p5 < 0;
+}
+
+/** The contract price, the forward price and the world as they start: the conditions challenge b sets. */
+export function startingTerms(s: DeskState): boolean {
+  const D = DESK_DEFAULTS;
+  return s.price === D.price && s.hedgePrice === D.hedgePrice && s.arrival === D.arrival && s.ratio === D.ratio && s.failure === D.failure && s.resale === D.resale;
+}
+
+/** Challenge b: with the starting prices and world, the smallest share sold forward (in 5% steps) that keeps the 5th-percentile outcome from losing money. */
 export function hedgeSolved(s: DeskState): boolean {
+  if (!startingTerms(s)) return false;
   if (deskRun(s).p5 < 0) return false;
   return s.hedge === 0 || deskRun({ ...s, hedge: s.hedge - HEDGE_STEP }).p5 < 0;
 }
 
-/** The highest price that solves challenge a in a given world, searched on the cent grid. */
+/** The highest price on the cent grid at which the unhedged 5th-percentile path doesn't lose money, in a given world. */
 export function priceAnswer(s: DeskState): number {
   let best = NaN;
   for (let p = 0.8; p <= 2.0 + 1e-9; p += PRICE_STEP) {
     const price = round2(p);
-    if (deskRun({ ...s, price, hedge: 0 }).probLoss <= LOSS_LIMIT) best = price;
+    if (deskRun({ ...s, price, hedge: 0 }).p5 >= 0) best = price;
   }
   return best;
 }
@@ -194,6 +229,9 @@ export const LESSON_NUMBERS = {
   hedgePrice: D.hedgePrice,
   ownerCost: OWNER_COST,
   mean: BASE.mean,
+  sd: BASE.sd,
+  /** Share of paths within one standard deviation of the mean. */
+  withinSd: BASE.npvs.filter((x) => Math.abs(x - BASE.mean) <= BASE.sd).length / BASE.npvs.length,
   p5: BASE.p5,
   p95: BASE.p95,
   probLoss: BASE.probLoss,
@@ -206,15 +244,22 @@ export const LESSON_NUMBERS = {
   never: deskRun({ ...D, arrival: ARRIVAL_MAX }).probLoss,
   ratioArith: RATIO_ARITH,
   arithLoss: deskRun({ ...D, ratio: round2(RATIO_ARITH) }).probLoss,
-  ratio3Loss: deskRun({ ...D, ratio: 3 }).probLoss,
-  ratio3Drop: dropOf(3),
+  ratioFrontier: FRONTIER_RATIO,
+  ratioFrontierLoss: deskRun({ ...D, ratio: FRONTIER_RATIO }).probLoss,
+  ratioFrontierDrop: dropOf(FRONTIER_RATIO),
   fail10Loss: deskRun({ ...D, failure: 10 }).probLoss,
   resale70Loss: deskRun({ ...D, resale: 70 }).probLoss,
   resale90Loss: deskRun({ ...D, resale: 90 }).probLoss,
+  termHours: TERM_HOURS,
+  centValue: CENT_VALUE,
+  /** Challenge a: the price at which the 5th-percentile path just breaks even, and the cent grid's answer. */
+  priceExact: D.price + BASE.p5 / (CENT_VALUE * 100),
   priceAnswer: PRICE_ANSWER,
+  priceAnswerP5: deskRun({ ...D, price: PRICE_ANSWER }).p5,
+  priceNextP5: deskRun({ ...D, price: round2(PRICE_ANSWER + PRICE_STEP) }).p5,
   priceAnswerLoss: deskRun({ ...D, price: PRICE_ANSWER }).probLoss,
   priceAnswerMean: deskRun({ ...D, price: PRICE_ANSWER }).mean,
-  priceNextLoss: deskRun({ ...D, price: round2(PRICE_ANSWER + PRICE_STEP) }).probLoss,
+  priceAnswerSd: deskRun({ ...D, price: PRICE_ANSWER }).sd,
   hedge50Mean: deskRun({ ...D, hedge: 50 }).mean,
   hedge50Loss: deskRun({ ...D, hedge: 50 }).probLoss,
   hedge100: deskRun({ ...D, hedge: 100 }).mean,
@@ -222,6 +267,7 @@ export const LESSON_NUMBERS = {
   hedgeAnswerP5: deskRun({ ...D, hedge: HEDGE_ANSWER }).p5,
   hedgeAnswerMean: deskRun({ ...D, hedge: HEDGE_ANSWER }).mean,
   hedgeAnswerLoss: deskRun({ ...D, hedge: HEDGE_ANSWER }).probLoss,
+  hedgeAnswerSd: deskRun({ ...D, hedge: HEDGE_ANSWER }).sd,
   hedgeBelowP5: deskRun({ ...D, hedge: HEDGE_ANSWER - HEDGE_STEP }).p5,
   firstProfitable: firstProfitableRank(D),
 };
@@ -297,7 +343,7 @@ function Histogram({ r }: { r: ContractResult }) {
           <g key={mk.label}>
             <line x1={sx(mk.v)} x2={sx(mk.v)} y1={top - 4} y2={bot} stroke={mk.color} strokeWidth={1.5} strokeDasharray={mk.dash} />
             <text className="ax" x={sx(mk.v) + (right ? 4 : -4)} y={top + 6 + i * 13} style={{ textAnchor: right ? 'start' : 'end', fill: mk.color }}>
-              {mk.label} {m$(mk.v * 1e6)}
+              {mk.label}
             </text>
           </g>
         );
@@ -308,7 +354,7 @@ function Histogram({ r }: { r: ContractResult }) {
         </text>
       ))}
       <text className="ax ax-e" x={x1} y={168}>
-        losing paths in red: {pctOf(r.probLoss, 1)}
+        losing paths in red
       </text>
     </svg>
   );
@@ -453,28 +499,27 @@ export default function Lesson() {
   const statusA =
     s.hedge !== 0
       ? 'Set the share sold forward to 0%: this challenge is about the contract on its own.'
-      : r.probLoss > LOSS_LIMIT
-        ? `At ${usd(s.price, 2)}, ${pctOf(r.probLoss, 1)} of paths lose money: over the 10% limit. Lower the price.`
-        : `At ${usd(s.price, 2)}, ${pctOf(r.probLoss, 1)} of paths lose money. Could you pay a little more and stay within 10%?`;
+      : !startingWorld(s)
+        ? 'Return the world to its starting settings first (Reset restores everything).'
+        : s.price === DESK_DEFAULTS.price
+          ? 'Make your prediction, then set the contract price to it.'
+          : `At ${usd(s.price, 2)} the 5th percentile is ${m$(r.p5)}. Is this the price you predicted? Check a cent either side.`;
   const below = s.hedge >= HEDGE_STEP ? deskRun({ ...s, hedge: s.hedge - HEDGE_STEP }) : null;
-  const statusB =
-    r.p5 < 0
+  const statusB = !startingTerms(s)
+    ? `Return the contract price to ${usd(DESK_DEFAULTS.price, 2)}, the forward price to ${usd(DESK_DEFAULTS.hedgePrice, 2)} and the world to its starting settings first (Reset restores everything; then raise the share sold forward).`
+    : r.p5 < 0
       ? `Selling ${fmt(s.hedge)}% forward, the 5th-percentile outcome is ${m$(r.p5)}: still a loss.`
       : below
         ? `The 5th percentile is ${m$(r.p5)}, and it stays at ${m$(below.p5)} with ${fmt(s.hedge - HEDGE_STEP)}% sold forward. Could you sell less?`
         : `The 5th percentile is ${m$(r.p5)}.`;
   const statusC = !Number.isFinite(firstProfit)
     ? 'In this world every path loses money. Lower the contract price or sell some capacity forward in the first demonstration.'
-    : path.npv < 0
-      ? `Path ${rank} loses ${m$(-path.npv)}. Look further toward the better paths.`
-      : `Path ${rank} makes ${m$(path.npv)}. Is there a worse path that still makes money?`;
+    : rank === 51
+      ? 'Make your prediction from the chance of loss, then set the path to it.'
+      : `Path ${rank} ${path.npv < 0 ? 'loses' : 'makes'} money. Is it the path you predicted, and does the one below it lose?`;
 
-  const caption =
-    r.probLoss === 0
-      ? `Every one of the ${fmt(r.npvs.length)} paths makes money; the worst makes ${m$(r.npvs[0])}.`
-      : r.mean < 0
-        ? `On average the contract loses ${m$(-r.mean)}, and ${pctOf(r.probLoss, 1)} of paths lose money.`
-        : `On average the contract makes ${m$(r.mean)}, but ${pctOf(r.probLoss, 1)} of paths lose money, and the worst 5% lose ${m$(-r.p5)} or more.`;
+  /** What the second demonstration is showing: the contract as the first demonstration left it. */
+  const terms = `${usd(s.price, 2)} an hour, ${fmt(s.hedge)}% sold forward${s.hedge > 0 ? ` at ${usd(s.hedgePrice, 2)}` : ''}${startingWorld(s) ? ', the starting world' : ', a changed world'}`;
 
   return (
     <LessonPage id="compute/6.5">
@@ -488,15 +533,19 @@ export default function Lesson() {
         will pay <K c="price">{usd(N.contractPrice, 2)}</K> for every hour of every GPU, whether or not it can use them, and it will resell their hours at whatever the
         market pays. It is the reserved contract of <a href={lessonHref('compute/5.4')}>Lesson 5.4</a> seen from the buyer that has to fill it, and the twin of the
         procurement problem of <a href={lessonHref('compute/6.2')}>Lesson 6.2</a>: there the buyer had work and needed capacity; here the reseller has capacity and needs
-        work. There is no exchange to lay such a contract off on. Deals like this are struck privately, and every price here is simulated.
+        work. There is no deep, liquid exchange to lay such a contract off on. Deals like this are struck privately, and every price here is simulated.
       </P>
       <P>
         What the reseller earns depends on four things the earlier chapters measured. The market price of an A-class hour starts at {usd(N.startPrice, 2)} and drifts
-        down {pctOf(N.drift)} a quarter, with {pctOf(N.vol)} of quarterly volatility. When the B-class reaches the market in volume — around Q6, give or take{' '}
-        {fmt(N.spread)} quarters, since supply arrives through whichever stage is narrowest (<a href={lessonHref('compute/5.2')}>Lesson 5.2</a>) — no buyer will pay
-        more for an A-class hour than a B-class hour costs for the same work (<a href={lessonHref('compute/5.1')}>Lesson 5.1</a>). If a B-class GPU at{' '}
-        {usd(N.bPrice, 2)} does the work of {fmt(N.ratio, 2)} A-class GPUs, that is {usd(N.aAfter, 2)} per A-class hour, and the price falls by{' '}
-        {pctOf(N.drop)}. On average {pctOf(N.resale)} of the hours can be resold, varying from quarter to quarter as demand does (
+        down {pctOf(N.drift)} a quarter, with a quarterly <K tone="ink">volatility</K> of {pctOf(N.vol)}. Volatility is the <K tone="ink">standard deviation</K> of
+        the price’s quarterly moves: the square root of their average squared distance from the drift, a measure of how far a typical quarter strays. For moves shaped
+        like a bell, about two in three land within one standard deviation, so in about two quarters out of three the price ends within {pctOf(N.vol)} of where the drift
+        alone would take it. When the B-class reaches the market in volume — around Q{CONTRACT_DEFAULTS.bArrival + 1}, give or take {fmt(N.spread)} quarters, since
+        supply arrives through whichever stage is narrowest (<a href={lessonHref('compute/5.2')}>Lesson 5.2</a>) — buyers compare what each costs per unit of work (
+        <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>). For the chat assistant, the largest buyer beside the users, a B-class GPU at {usd(N.bPrice, 2)} does the work of {fmt(N.ratio, 2)} A-class GPUs (
+        <a href={lessonHref('compute/6.1')}>Lesson 6.1</a>), so it sells that work for{' '}
+        {usd(N.aAfter, 2)} per A-class hour, {pctOf(N.drop)} under the A-class’s {usd(N.startPrice, 2)}. We model its arrival as a {pctOf(N.drop)} fall in whatever an
+        A-class hour fetches by then, as if the B-class’s own price drifts down with the market’s. On average {pctOf(N.resale)} of the hours can be resold, varying from quarter to quarter as demand does (
         <a href={lessonHref('compute/5.3')}>Lesson 5.3</a>), and {pctOf(N.failure)} are lost to failures and repairs. Each quarter’s cash is discounted at{' '}
         {pctOf(N.rate)} a year, and {fmt(N.paths)} simulated paths through those uncertainties give the contract’s range of outcomes.
       </P>
@@ -511,9 +560,9 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'mean net present value', value: m$(r.mean), tone: r.mean < 0 ? 'red' : 'green' },
+            { label: 'standard deviation', value: m$(r.sd) },
             { label: '5th percentile', value: m$(r.p5), tone: r.p5 < 0 ? 'red' : 'green' },
-            { label: '95th percentile', value: m$(r.p95), tone: 'green' },
-            { label: 'chance of losing money', value: pctOf(r.probLoss, 1), tone: r.probLoss > LOSS_LIMIT ? 'red' : 'ink' },
+            { label: 'chance of losing money', value: pctOf(r.probLoss, 1), tone: r.probLoss > 0 ? 'red' : 'ink' },
           ]}
         />
         <Slider label="Contract price" tone="green" value={s.price} min={0.8} max={2} step={PRICE_STEP} onChange={(v) => desk.set({ price: round2(v) })} display={`${usd(s.price, 2)} per GPU-hour`} />
@@ -523,12 +572,14 @@ export default function Lesson() {
         <Slider label="B-class work per GPU" tone="orange" value={s.ratio} min={2} max={3.2} step={0.01} onChange={(v) => desk.set({ ratio: round2(v) })} display={`${fmt(s.ratio, 2)} A-class GPUs`} />
         <Slider label="Hours lost to failures" tone="red" value={s.failure} min={0} max={10} step={0.5} onChange={(v) => desk.set({ failure: v })} display={`${fmt(s.failure, 1)}%`} />
         <Slider label="Hours resold" value={s.resale} min={50} max={95} onChange={(v) => desk.set({ resale: v })} display={`${fmt(s.resale)}% on average`} />
-        <Caption>{caption}</Caption>
       </Figure>
 
       <P>
         At the starting terms the contract is worth {million(N.mean)} on average, which sounds like a good deal until the bars are read. The paths run from{' '}
-        {million(N.worst)} to {million(N.best)}; one in twenty loses {million(-N.p5)} or more, and {pctOf(N.probLoss, 1)} of them lose money. The fan shows why. Resold
+        {million(N.worst)} to {million(N.best)}, with a standard deviation of {million(N.sd)}: {pctOf(N.withinSd)} of them land within that distance of the mean. One
+        in twenty loses {million(-N.p5)} or more — the 5th percentile, the same one-in-twenty bad outcome that <a href={lessonHref('compute/6.2')}>Lesson 6.2</a>{' '}
+        called a bad year — and {pctOf(N.probLoss, 1)} of them lose money. A cautious buyer can weigh the mean against the spread, scoring a contract by its mean less
+        some part of its standard deviation; the final chapter scores whole businesses that way. The fan shows why so many paths lose. Resold
         hours cover the contract only while an A-class hour fetches more than {usd(N.breakEven, 2)}: the {usd(N.contractPrice, 2)} paid for every hour, divided by the{' '}
         {pctOf(N.resale)} resold and the {pctOf(1 - N.failure)} that don’t fail.
       </P>
@@ -548,24 +599,26 @@ export default function Lesson() {
       <P>
         Every one of those numbers comes from physics, and the lower sliders change the physics. Bring the B-class’s arrival forward to Q{ARRIVAL_MIN + 1} — a supply
         chain whose packaging and memory came through sooner — and {pctOf(N.early, 1)} of paths lose money; push it past the term and only {pctOf(N.never, 1)} do.
-        Make the B-class better at the work: at 3 A-class GPUs’ worth, the frontier assistant’s ratio in <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>, the price
-        falls by {pctOf(N.ratio3Drop)} when it arrives and the chance of loss is {pctOf(N.ratio3Loss, 1)}. At {fmt(N.ratioArith, 2)}, its edge in raw arithmetic (
+        Make the B-class better at the work: at {fmt(N.ratioFrontier, 2)} A-class GPUs’ worth, the frontier assistant’s ratio in Lesson 6.1, the price
+        falls by {pctOf(N.ratioFrontierDrop)} when it arrives and the chance of loss is {pctOf(N.ratioFrontierLoss, 1)}. At {fmt(N.ratioArith, 2)}, its edge in raw arithmetic (
         <a href={lessonHref('compute/2.4')}>Lesson 2.4</a>), only {pctOf(N.arithLoss, 1)}. Hardware that fails more — {pctOf(0.1)} of hours lost instead of{' '}
-        {pctOf(N.failure)} — takes it to {pctOf(N.fail10Loss, 1)}. And demand matters most of all: resell {pctOf(0.7)} of the hours instead of {pctOf(N.resale)} and{' '}
+        {pctOf(N.failure)} — takes it to {pctOf(N.fail10Loss, 1)}. Demand matters as well: resell {pctOf(0.7)} of the hours instead of {pctOf(N.resale)} and{' '}
         {pctOf(N.resale70Loss, 1)} of paths lose; resell {pctOf(0.9)} and {pctOf(N.resale90Loss, 1)} do. A contract on GPU-hours is a bet on the next generation’s
         timing and speed, on the hardware’s reliability, and on how busy the customers keep it.
       </P>
       <P>
-        Return the world to its starting settings (Reset restores everything) and turn to the one lever the reseller controls: the price it agrees to pay. Lower prices mean fewer losing paths, and
-        a reseller can decide in advance how much risk it will take.
+        Return the world to its starting settings (Reset restores everything) and turn to the one lever the reseller controls: the price it agrees to pay. The price
+        moves the distribution in the simplest way. The reseller pays it on every one of the term’s {fmt(N.termHours / 1e6, 1)} million GPU-hours, whatever the
+        market does, so a cent off the price adds the same amount to every path: a cent an hour, discounted, about {usd(Math.round(N.centValue / 1000) * 1000)}. The
+        histogram slides without changing its shape, and the standard deviation doesn’t move.
       </P>
 
       <Challenge
         id="a"
-        question="Without selling any capacity forward, find the highest contract price, to the cent, at which no more than 10% of paths lose money."
+        question={`Predict first: at ${usd(DESK_DEFAULTS.price, 2)} the 5th-percentile path loses ${million(-N.p5)}. Without selling any capacity forward, and in the starting world, what is the highest contract price, to the cent, at which even the 5th-percentile path doesn’t lose money? Then set it and check.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved. At ${usd(s.price, 2)} the chance of loss is ${pctOf(r.probLoss, 1)}; a cent more and it would pass 10%. In the starting world the answer is ${usd(N.priceAnswer, 2)}, with ${pctOf(N.priceAnswerLoss, 1)} of paths losing and a mean of ${million(N.priceAnswerMean)}. That is well below the ${usd(N.ownerCost, 2)} an hour the owner needs to pay off an A-class GPU over five years (Lesson 4.5): the gap is the price of the risk, and whoever signs takes it.`}
+        success={`Solved: ${usd(N.priceAnswer, 2)}. Making up ${million(-N.p5)} at about ${usd(Math.round(N.centValue / 1000) * 1000)} a cent takes ${fmt(-N.p5 / N.centValue, 1)} cents off the price, so ${usd(N.priceExact, 3)} just breaks even; at ${usd(N.priceAnswer, 2)} the 5th percentile makes ${m$(N.priceAnswerP5)}, and at a cent more it loses ${m$(-N.priceNextP5)}. Only ${pctOf(N.priceAnswerLoss, 1)} of paths now lose money and the mean rises to ${million(N.priceAnswerMean)}, but the standard deviation is still ${million(N.priceAnswerSd)}: a lower price moves the outcomes without narrowing them. It is also well below the ${usd(N.ownerCost, 2)} an hour the owner needs to pay off an A-class GPU over five years (Lesson 4.5): the gap is the price of the risk, and whoever signs takes it.`}
       />
 
       <H2>Selling some of it forward</H2>
@@ -580,10 +633,10 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Compute Contract Desk"
-        question="Keeping the contract price and the forward price where they started, sell forward the smallest share of the GPUs (in steps of 5%) that keeps even the 5th-percentile path from losing money."
+        question="With the contract price, the forward price and the world as they started, sell forward the smallest share of the GPUs (in steps of 5%) that keeps even the 5th-percentile path from losing money."
         solved={solvedB}
         status={statusB}
-        success={`Solved. In the starting world, ${fmt(N.hedgeAnswer)}% sold forward lifts the 5th percentile to ${m$(N.hedgeAnswerP5)}, where ${fmt(N.hedgeAnswer - HEDGE_STEP)}% leaves it at ${m$(N.hedgeBelowP5)}. The mean falls from ${m$(N.mean)} to ${m$(N.hedgeAnswerMean)} and the chance of loss to ${pctOf(N.hedgeAnswerLoss, 1)}: the reseller pays about ${m$(N.mean - N.hedgeAnswerMean)} of expected profit to remove most of its downside.`}
+        success={`Solved. In the starting world, ${fmt(N.hedgeAnswer)}% sold forward lifts the 5th percentile to ${m$(N.hedgeAnswerP5)}, where ${fmt(N.hedgeAnswer - HEDGE_STEP)}% leaves it at ${m$(N.hedgeBelowP5)}. The mean falls from ${m$(N.mean)} to ${m$(N.hedgeAnswerMean)} and the chance of loss to ${pctOf(N.hedgeAnswerLoss, 1)}: the reseller pays about ${m$(N.mean - N.hedgeAnswerMean)} of expected profit to remove most of its downside. Where challenge a’s lower price slid every path along and left the standard deviation at ${m$(N.sd)}, the forward sale narrows the paths: ${m$(N.hedgeAnswerSd)}.`}
       />
 
       <P>
@@ -618,20 +671,19 @@ export default function Lesson() {
         />
         <Slider label="Path, worst to best" value={rank} min={1} max={paths.length} onChange={(v) => one.set({ rank: v })} display={`${fmt(rank)} of ${fmt(paths.length)}`} />
         <Caption>
-          On path {fmt(rank)}, the market price ends the term at {usd(path.quarters[path.quarters.length - 1].price, 2)}, and the contract {path.npv < 0 ? 'loses' : 'makes'}{' '}
-          {m$(Math.abs(path.npv))}.
+          The contract as the first demonstration left it: {terms}. {pctOf(r.probLoss, 1)} of its {fmt(paths.length)} paths lose money.
         </Caption>
       </Figure>
 
       <P>
         Most losing paths share a shape. The B-class arrives early, the price slides below {usd(N.breakEven, 2)} soon after, and from then on every quarter costs money, while
         the early profit was too small to pay for the later losses. Winning paths keep the A-class’s price up for longer: a late arrival, or a few lucky quarters of
-        strong demand. Slide toward the middle of the ranking and watch where the losses stop.
+        strong demand. Somewhere along the ranking, the losses stop.
       </P>
 
       <Challenge
         id="c"
-        question="Find the worst path that still makes money."
+        question="Predict first, from the chance of loss the caption gives: counting from the worst, which path is the worst one that still makes money? Then set the path to your prediction and check it."
         solved={solvedC}
         status={statusC}
         success={`Solved. Path ${fmt(rank)} is the first from the bottom to make money, so the ${fmt(rank - 1)} below it all lose: ${pctOf((rank - 1) / paths.length, 1)} of ${fmt(paths.length)}, exactly the chance of loss in the first demonstration. In the starting world it is path ${fmt(N.firstProfitable)}.`}
@@ -641,7 +693,7 @@ export default function Lesson() {
       <P>
         A block of GPU capacity, committed for years, behaves like a financial asset whose value is driven by physics. Its income depends on how much useful work its
         hours can do against the next generation’s, on how often the hardware fails, and on how busy its customers keep it; its risk can be priced, shared out in
-        forward sales, or simply accepted in return for a higher expected profit. Unlike electricity, there is no exchange where such risk is traded every day, so these
+        forward sales, or simply accepted in return for a higher expected profit. Unlike electricity, there is no deep, liquid exchange where such risk is traded every day, so these
         contracts are written one at a time, between parties who each have to model the same physics this course has built up.
       </P>
       <P>

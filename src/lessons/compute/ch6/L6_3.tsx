@@ -28,6 +28,9 @@ import { SITES, SITE_IDS, type SiteId } from '../../../model/compute/sites';
 // ---------------------------------------------------------------------------
 // Prices: Lesson 5.5's market, cleared with the round trip the chat and frontier assistants accept.
 
+/** The round trip the assistants accept in Lesson 5.5's reference market, ms. */
+export const REF_LAT = 30;
+
 const INTERACTIVE = new Set(['chat70', 'frontier400']);
 const marketCache = new Map<number, Clearing>();
 
@@ -60,11 +63,14 @@ export interface RouteState {
 
 export function routeOf(s: RouteState): MoveRoute {
   const m = marketAtLatency(s.lat);
-  return { from: 'techpark', to: 'northfield', priceFrom: m.prices.techpark.A, priceTo: m.prices.northfield.A, linkGbps: LINKS[s.link], egressPerGB: s.egress / 100 };
+  // Prices within half a cent are the same price (the market solves to a few parts in a trillion).
+  const near = m.prices.techpark.A;
+  const far = Math.abs(near - m.prices.fernhill.A) < 0.005 ? near : m.prices.fernhill.A;
+  return { from: 'techpark', to: 'fernhill', priceFrom: near, priceTo: far, linkGbps: LINKS[s.link], egressPerGB: s.egress / 100 };
 }
 
 // ---------------------------------------------------------------------------
-// The first demonstration: one job, Tech Park or Northfield.
+// The first demonstration: one job, Tech Park or Fernhill.
 
 export type JobId = 'pretrain' | 'batch' | 'tune' | 'chat';
 export const JOB_IDS: JobId[] = ['pretrain', 'batch', 'tune', 'chat'];
@@ -89,9 +95,20 @@ export interface JobState extends RouteState {
 
 export const JOB_DEFAULTS: JobState = { job: 'pretrain', data: defaultData('pretrain'), link: 6, egress: 5, lat: 30 };
 
-/** The job as set: its own GPU-hours, deadline and latency, with the dataset from the slider (results keep the job's own share of it). */
-export function jobOf(s: Pick<JobState, 'job' | 'data'>): DayJob {
-  const b = baseJob(s.job);
+/** Day jobs whose round-trip limit is the chat assistant's, which the "Assistants accept" slider sets. */
+export const ASSISTANT_JOBS = new Set(['chat']);
+
+/** A day job with the assistants' round-trip limit set to `lat` (other jobs keep their own). */
+export function withLatency(j: DayJob, lat: number): DayJob {
+  return ASSISTANT_JOBS.has(j.id) ? { ...j, maxRttMs: lat } : j;
+}
+
+/**
+ * The job as set: its own GPU-hours and deadline, the assistants' latency limit if it is one of them,
+ * and the dataset from the slider (results keep the job's own share of it).
+ */
+export function jobOf(s: Pick<JobState, 'job' | 'data'> & Partial<Pick<JobState, 'lat'>>): DayJob {
+  const b = withLatency(baseJob(s.job), s.lat ?? REF_LAT);
   if (b.dataInTB <= 0) return b;
   const tb = DATA_TB[s.data];
   return { ...b, dataInTB: tb, dataOutTB: (tb * b.dataOutTB) / b.dataInTB };
@@ -101,9 +118,12 @@ export function runJob(s: JobState): MoveResult {
   return moveJob(jobOf(s), routeOf(s));
 }
 
-/** Challenge a: at the starting link and fee, with Northfield out of the assistants' reach, the largest dataset that still saves money. */
+/** Challenge a's egress fee, cents per GB: double the starting fee. */
+export const CHALLENGE_EGRESS = 10;
+
+/** Challenge a: at the starting link and double the fee, with Fernhill out of the assistants' reach, the largest dataset that still saves money. */
 export function largestSolved(s: JobState): boolean {
-  if (s.job !== 'pretrain' || s.link !== JOB_DEFAULTS.link || s.egress !== JOB_DEFAULTS.egress || s.lat >= SITES.northfield.rttMs) return false;
+  if (s.job !== 'pretrain' || s.link !== JOB_DEFAULTS.link || s.egress !== CHALLENGE_EGRESS || s.lat >= SITES.fernhill.rttMs) return false;
   const r = runJob(s);
   if (!r.feasible || r.saving <= 0) return false;
   if (s.data >= DATA_TB.length - 1) return true;
@@ -116,14 +136,19 @@ export function largestSolved(s: JobState): boolean {
 
 export const DAY_DEFAULTS: RouteState = { link: 6, egress: 5, lat: 30 };
 
+/** The day's jobs, the chat assistant accepting the slider's round trip. */
+export function dayJobs(lat: number): DayJob[] {
+  return DAY_JOBS.map((j) => withLatency(j, lat));
+}
+
 export function dayOf(s: RouteState): DaySchedule {
-  return scheduleDay(DAY_JOBS, routeOf(s));
+  return scheduleDay(dayJobs(s.lat), routeOf(s));
 }
 
 /** Jobs that would save money moving on their own, with the fastest link (no queue, no copy limits). */
 export function worthMoving(s: RouteState): string[] {
   const route = { ...routeOf(s), linkGbps: LINKS[LINKS.length - 1] };
-  return DAY_JOBS.filter((j) => {
+  return dayJobs(s.lat).filter((j) => {
     const r = moveJob(j, route);
     return r.feasible && r.saving > 0;
   }).map((j) => j.id);
@@ -135,30 +160,39 @@ function movesAll(s: RouteState): boolean {
   return worth.length > 0 && worth.every((id) => day.rows.find((r) => r.job.id === id)!.decision === 'move');
 }
 
-/** Challenge b: the slowest link on the slider that still lets the scheduler move every job worth moving. */
+/** The day as it starts: the fee and the assistants' limit that challenge b's prediction is made from. */
+export function startingDay(s: RouteState): boolean {
+  return s.egress === DAY_DEFAULTS.egress && s.lat === DAY_DEFAULTS.lat;
+}
+
+/** Challenge b: on the starting day, the slowest link on the slider that still lets the scheduler move every job worth moving. */
 export function slowestSolved(s: RouteState): boolean {
-  return movesAll(s) && (s.link === 0 || !movesAll({ ...s, link: s.link - 1 }));
+  return startingDay(s) && movesAll(s) && (s.link === 0 || !movesAll({ ...s, link: s.link - 1 }));
 }
 
 // ---------------------------------------------------------------------------
 // Numbers the prose quotes, all from the engines.
 
-/** The round trip the assistants accept in Lesson 5.5's reference market, ms. */
-export const REF_LAT = 30;
 const REF = marketAtLatency(REF_LAT);
-const OPEN = marketAtLatency(SITES.northfield.rttMs);
+const OPEN = marketAtLatency(SITES.fernhill.rttMs);
 const PRE = runJob(JOB_DEFAULTS);
 const PRE_JOB = jobOf(JOB_DEFAULTS);
 const ROUTE = routeOf(JOB_DEFAULTS);
 const PRE_BE = breakEvenDataTB(PRE_JOB, ROUTE, PRE_JOB.dataOutTB / PRE_JOB.dataInTB);
-const bestIdx = (() => {
+/** The pretraining slice at challenge a's fee. */
+const AT_FEE = { ...JOB_DEFAULTS, egress: CHALLENGE_EGRESS };
+const PRE_BE_FEE = breakEvenDataTB(PRE_JOB, routeOf(AT_FEE), PRE_JOB.dataOutTB / PRE_JOB.dataInTB);
+/** The largest dataset on the slider that still saves money, for a state. */
+function largestIdx(s: JobState): number {
   let best = -1;
   for (let i = 0; i < DATA_TB.length; i++) {
-    const r = runJob({ ...JOB_DEFAULTS, data: i });
+    const r = runJob({ ...s, data: i });
     if (r.feasible && r.saving > 0) best = i;
   }
   return best;
-})();
+}
+const bestIdx = largestIdx(JOB_DEFAULTS);
+const bestIdxFee = largestIdx(AT_FEE);
 const BATCH = { ...JOB_DEFAULTS, job: 'batch' as JobId, data: defaultData('batch') };
 const BATCH_AT = (link: number) => runJob({ ...BATCH, link });
 const batchSlowest = LINKS.findIndex((_, i) => BATCH_AT(i).feasible);
@@ -167,16 +201,20 @@ const DAY_SLOW = dayOf({ ...DAY_DEFAULTS, link: LINKS.indexOf(10) });
 const DAY_1 = dayOf({ ...DAY_DEFAULTS, link: 0 });
 const DAY_HIGH_FEE = dayOf({ ...DAY_DEFAULTS, egress: 9 });
 const slowestAll = LINKS.findIndex((_, i) => slowestSolved({ ...DAY_DEFAULTS, link: i }));
+const DAY_AT_SLOWEST = dayOf({ ...DAY_DEFAULTS, link: slowestAll });
+const DAY_BELOW_SLOWEST = dayOf({ ...DAY_DEFAULTS, link: slowestAll - 1 });
+/** How challenge b's success names a job left home for want of link time. */
+const STAY_LABEL: Record<string, string> = { pretrain: 'pretraining slice', embed: 'embedding job', batch: 'overnight batch', tune: 'fine-tuning job', eval: 'evaluation sweep' };
 const video = DAY.rows.find((r) => r.job.id === 'video')!;
 const embed = DAY.rows.find((r) => r.job.id === 'embed')!;
 
 export const LESSON_NUMBERS = {
   near: REF.prices.techpark.A,
-  far: REF.prices.northfield.A,
-  bayport: REF.prices.bayport.A,
-  gap: REF.prices.techpark.A - REF.prices.northfield.A,
+  far: REF.prices.fernhill.A,
+  marston: REF.prices.marston.A,
+  gap: REF.prices.techpark.A - REF.prices.fernhill.A,
   open: OPEN.prices.techpark.A,
-  openFar: OPEN.prices.northfield.A,
+  openFar: OPEN.prices.fernhill.A,
   preGpuHours: PRE_JOB.gpuHours,
   preGpus: PRE_JOB.gpus,
   preIn: PRE_JOB.dataInTB,
@@ -188,11 +226,15 @@ export const LESSON_NUMBERS = {
   preSaving: PRE.saving,
   preCopyH: PRE.transferH,
   preBreakEven: PRE_BE,
+  /** The largest dataset on the slider that still saves at the starting fee. */
   preBestTB: DATA_TB[bestIdx],
-  preBestSaving: runJob({ ...JOB_DEFAULTS, data: bestIdx }).saving,
-  preNextTB: DATA_TB[bestIdx + 1],
-  preNextSaving: runJob({ ...JOB_DEFAULTS, data: bestIdx + 1 }).saving,
-  preOpenSaving: runJob({ ...JOB_DEFAULTS, lat: SITES.northfield.rttMs }).saving,
+  /** Challenge a: the break-even at double the fee, and the largest dataset on the slider that still saves there. */
+  preBreakEvenFee: PRE_BE_FEE,
+  feeBestTB: DATA_TB[bestIdxFee],
+  feeBestSaving: runJob({ ...AT_FEE, data: bestIdxFee }).saving,
+  feeNextTB: DATA_TB[bestIdxFee + 1],
+  feeNextSaving: runJob({ ...AT_FEE, data: bestIdxFee + 1 }).saving,
+  preOpenSaving: runJob({ ...JOB_DEFAULTS, lat: SITES.fernhill.rttMs }).saving,
   batchIn: baseJob('batch').dataInTB + baseJob('batch').dataOutTB,
   batchRunH: BATCH_AT(JOB_DEFAULTS.link).runH,
   batchDeadline: baseJob('batch').deadlineHours,
@@ -208,12 +250,16 @@ export const LESSON_NUMBERS = {
   day1Moved: DAY_1.moved,
   day1Saving: DAY_1.saving,
   highFeeMoved: DAY_HIGH_FEE.moved,
-  videoGapSaving: video.job.gpuHours * (REF.prices.techpark.A - REF.prices.northfield.A),
+  videoGapSaving: video.job.gpuHours * (REF.prices.techpark.A - REF.prices.fernhill.A),
   videoEgress: video.result.egressCost,
   videoTB: video.job.dataInTB + video.job.dataOutTB,
   embedSaving: embed.result.saving,
   chatSaving: DAY.rows.find((r) => r.job.id === 'chat')!.result.saving,
   slowestAllLink: LINKS[slowestAll],
+  slowestAllLinkH: DAY_AT_SLOWEST.linkHours,
+  belowSlowestLink: LINKS[slowestAll - 1],
+  /** The jobs worth moving that one step slower leaves home for want of link time. */
+  belowSlowestStuck: DAY_BELOW_SLOWEST.rows.filter((r) => r.why === 'link busy').map((r) => r.job.id),
 };
 const N = LESSON_NUMBERS;
 
@@ -242,14 +288,14 @@ const SITE_Y = 150;
 function RouteMap({ s, r, job }: { s: JobState; r: MoveResult; job: DayJob }) {
   const m = marketAtLatency(s.lat);
   const tp = RX(SITES.techpark.rttMs);
-  const nf = RX(SITES.northfield.rttMs);
+  const nf = RX(SITES.fernhill.rttMs);
   const limitX = RX(s.lat);
   const moving = r.feasible && r.saving > 0;
   const arc = `M${tp} ${SITE_Y - 32} C ${tp + 60} 30, ${nf - 80} 30, ${nf} ${SITE_Y - 32}`;
   // Dots move faster on a faster link (the log of its rate, so 1 and 400 Gb/s both stay visible).
   const speed = 6 + 10 * Math.log10(LINKS[s.link]);
   const tbMoved = job.dataInTB + job.dataOutTB;
-  const label = `Tech Park, ${SITES.techpark.rttMs} ms from the users, sells an A-class hour for ${usd(m.prices.techpark.A, 2)}; Northfield, ${SITES.northfield.rttMs} ms away, for ${usd(m.prices.northfield.A, 2)}. The chat and frontier assistants accept ${s.lat} ms. ${JOB_LABEL[s.job]}: ${moving ? `moving it saves ${money(r.saving)}` : r.feasible ? `moving it would cost ${money(-r.saving)} more` : 'it can’t move'}.`;
+  const label = `Tech Park, ${SITES.techpark.rttMs} ms from the users, sells an A-class hour for ${usd(m.prices.techpark.A, 2)}; Fernhill, ${SITES.fernhill.rttMs} ms away, for ${usd(m.prices.fernhill.A, 2)}. The chat and frontier assistants accept ${s.lat} ms. ${JOB_LABEL[s.job]}: ${moving ? `moving it saves ${money(r.saving)}` : r.feasible ? `moving it would cost ${money(-r.saving)} more` : 'it can’t move'}.`;
   return (
     <svg className="diagram" viewBox="0 0 640 236" role="img" aria-label={label}>
       <text className="ax" x={74} y={14}>
@@ -273,7 +319,7 @@ function RouteMap({ s, r, job }: { s: JobState; r: MoveResult; job: DayJob }) {
       <text x={40} y={SITE_Y + 4} textAnchor="middle" style={{ fontSize: 12, fontWeight: 500, fill: '#333' }}>
         Users
       </text>
-      {/* The wide-area link from Tech Park to Northfield. */}
+      {/* The wide-area link from Tech Park to Fernhill. */}
       <path d={arc} fill="none" stroke={moving ? GRAPHIC.blue : '#d0d0cc'} strokeWidth={3} strokeLinecap="round" />
       {moving && <path d={arc} className="flow-dots" stroke={GRAPHIC.blue} strokeWidth={7} style={{ animationDuration: `${(18 / speed).toFixed(3)}s` }} />}
       <text x={(tp + nf) / 2} y={40} textAnchor="middle" style={{ fontSize: 12, fill: moving ? TEXT.blue : '#777' }}>
@@ -282,9 +328,9 @@ function RouteMap({ s, r, job }: { s: JobState; r: MoveResult; job: DayJob }) {
       {SITE_IDS.map((id: SiteId) => {
         const x = RX(SITES[id].rttMs);
         const far = SITES[id].rttMs > s.lat;
-        const big = id !== 'bayport';
-        const anchor = id === 'bayport' ? 'end' : 'middle';
-        const dx = id === 'bayport' ? -8 : 0;
+        const big = id !== 'marston';
+        const anchor = id === 'marston' ? 'end' : 'middle';
+        const dx = id === 'marston' ? -8 : 0;
         return (
           <g key={id}>
             <circle cx={x} cy={SITE_Y} r={big ? 8 : 5} fill={far ? '#fff' : '#333'} stroke="#333" strokeWidth={1.5} />
@@ -330,7 +376,7 @@ function CostChart({ r, job }: { r: MoveResult; job: DayJob }) {
         {money(r.stayCost)}
       </text>
       <text x={142} y={68} textAnchor="end" style={{ fontSize: 13, fill: '#333' }}>
-        Move to Northfield
+        Move to Fernhill
       </text>
       <g opacity={blocked ? 0.3 : 1}>
         <rect x={x(0)} y={55} width={x(moveGpu) - x(0)} height={18} fill={GRAPHIC.green} opacity={0.75} />
@@ -373,12 +419,17 @@ const WHY_TEXT: Record<string, string> = {
   'link busy': 'stays: no link time left today',
 };
 
+/** Why a job stays or moves; a job with no data and no price gap has simply nothing to gain. */
+function whyText(r: DaySchedule['rows'][number]): string {
+  return r.why === 'costs more to move' && r.result.egressCost <= 0 ? 'stays: nothing to gain by moving' : WHY_TEXT[r.why];
+}
+
 function DayChart({ day }: { day: DaySchedule }) {
   const rowH = 30;
   const top = 34;
   const x = scale(0, 24, 214, 452);
   const h = top + day.rows.length * rowH + 22;
-  const label = day.rows.map((r) => `${r.job.name}: ${WHY_TEXT[r.why]}${r.decision === 'move' ? `, saving ${money(r.result.saving)}, copying from hour ${fmt(r.copyStart, 1)}` : ''}`).join('; ');
+  const label = day.rows.map((r) => `${r.job.name}: ${whyText(r)}${r.decision === 'move' ? `, saving ${money(r.result.saving)}, copying from hour ${fmt(r.copyStart, 1)}` : ''}`).join('; ');
   return (
     <svg className="chart" viewBox={`0 0 640 ${h}`} role="img" aria-label={`A day of jobs at Tech Park. ${label}. The link copies for ${hoursText(day.linkHours)}.`}>
       <text className="ax" x={0} y={14}>
@@ -415,7 +466,7 @@ function DayChart({ day }: { day: DaySchedule }) {
               <rect x={x(start)} y={y + 2} width={Math.max(2, x(end) - x(start))} height={16} fill={GRAPHIC.blue} />
             ) : (
               <text x={x(0) + 4} y={y + 15} style={{ fontSize: 12, fill: '#777' }}>
-                {WHY_TEXT[r.why]}
+                {whyText(r)}
               </text>
             )}
             <text x={640} y={y + 15} textAnchor="end" style={{ fontSize: 13, fill: moved ? TEXT.green : '#999' }}>
@@ -437,7 +488,7 @@ export default function Lesson() {
   const r = runJob(st);
   const route = routeOf(st);
   const m = marketAtLatency(st.lat);
-  const gap = m.prices.techpark.A - m.prices.northfield.A;
+  const gap = m.prices.techpark.A - m.prices.fernhill.A;
   const outShare = job.dataInTB > 0 ? job.dataOutTB / job.dataInTB : 0;
   const be = job.dataInTB > 0 ? breakEvenDataTB(job, route, outShare) : Infinity;
   const solvedA = largestSolved(st);
@@ -451,26 +502,27 @@ export default function Lesson() {
   const caption1 = !r.feasible
     ? r.reason?.includes('deadline')
       ? `Copying ${tbText(job.dataInTB + job.dataOutTB)} over ${fmt(LINKS[st.link])} Gb/s takes ${hoursText(r.transferH)}; with ${hoursText(r.runH)} of running, the job would miss its ${hoursText(job.deadlineHours)} deadline.`
-      : `${JOB_LABEL[st.job]} answers people and tolerates ${job.maxRttMs} ms; Northfield is ${SITES.northfield.rttMs} ms away, so it can’t move at any price.`
+      : `${JOB_LABEL[st.job]} answers people and tolerates ${job.maxRttMs} ms; Fernhill is ${SITES.fernhill.rttMs} ms away, so it can’t move at any price.`
     : gap <= 0.005
-      ? `The assistants can now reach Northfield, so an A-class hour costs ${usd(m.prices.northfield.A, 2)} at both sites. Moving only adds ${money(r.egressCost)} of egress.`
+      ? `The assistants can now reach Fernhill, so an A-class hour costs ${usd(m.prices.fernhill.A, 2)} at both sites. ${r.egressCost > 0 ? `Moving only adds ${money(r.egressCost)} of egress.` : 'Moving gains nothing.'}`
       : r.saving > 0
-        ? `Moving saves ${money(r.saving)}: ${fmt(job.gpuHours)} GPU-hours at ${usd(gap, 2)} less each, minus ${money(r.egressCost)} of egress. It stops paying above ${tbText(be)} of data.`
+        ? `Moving saves ${money(r.saving)}: ${fmt(job.gpuHours)} GPU-hours at ${usd(gap, 2)} less each, minus ${money(r.egressCost)} of egress.${solvedA ? ` It stops paying above ${tbText(be)} of data.` : ''}`
         : `Egress of ${money(r.egressCost)} outweighs the ${money(job.gpuHours * gap)} saved on GPU-hours: the data is too heavy to move.`;
 
   const statusA = (() => {
     if (st.job !== 'pretrain') return 'Choose the pretraining slice first.';
-    if (st.link !== JOB_DEFAULTS.link || st.egress !== JOB_DEFAULTS.egress) return `Set the link back to ${fmt(LINKS[JOB_DEFAULTS.link])} Gb/s and egress to ${JOB_DEFAULTS.egress}¢ per GB.`;
-    if (st.lat >= SITES.northfield.rttMs) return `At ${st.lat} ms the assistants can reach Northfield and the price gap is gone. Bring the limit back under ${SITES.northfield.rttMs} ms.`;
-    if (!r.feasible || r.saving <= 0) return `At ${tbText(job.dataInTB)} moving no longer saves money (${signedMoney(r.saving)}). Try a smaller dataset.`;
-    return `At ${tbText(job.dataInTB)} moving still saves ${money(r.saving)}. Could a bigger dataset still pay?`;
+    if (st.link !== JOB_DEFAULTS.link || st.egress !== CHALLENGE_EGRESS) return `Make your prediction, then set the link to ${fmt(LINKS[JOB_DEFAULTS.link])} Gb/s and the egress fee to ${CHALLENGE_EGRESS}¢ per GB.`;
+    if (st.lat >= SITES.fernhill.rttMs) return `At ${st.lat} ms the assistants can reach Fernhill and the price gap is gone. Bring the limit back under ${SITES.fernhill.rttMs} ms.`;
+    return `At ${CHALLENGE_EGRESS}¢ per GB: set the dataset to the largest one on the slider that your prediction says still pays, and check the saving.`;
   })();
 
   const statusB = (() => {
     if (!worth.length) return 'With these settings no job is worth moving at all. Tighten the assistants’ latency limit or lower the fee.';
+    if (!startingDay(dt)) return `The prediction is about the day as it starts: set the fee back to ${DAY_DEFAULTS.egress}¢ per GB and the assistants’ limit to ${DAY_DEFAULTS.lat} ms.`;
+    if (dt.link === DAY_DEFAULTS.link) return 'Make your prediction from the copy hours, then set the link to it.';
     const missing = worth.filter((id) => day.rows.find((row) => row.job.id === id)!.decision !== 'move');
     if (missing.length) return `At ${fmt(LINKS[dt.link])} Gb/s, ${missing.length} of the ${worth.length} jobs worth moving stay home.`;
-    return `At ${fmt(LINKS[dt.link])} Gb/s every job worth moving moves. Would a slower link do?`;
+    return `At ${fmt(LINKS[dt.link])} Gb/s every job worth moving moves. Is this the link you predicted?`;
   })();
 
   return (
@@ -479,20 +531,22 @@ export default function Lesson() {
         The previous lesson decided how much capacity a buyer should commit to. This one asks where the work should run.{' '}
         <a href={lessonHref('compute/5.5')}>Lesson 5.5</a> left a gap in the market: with the chat
         and frontier assistants accepting a {REF_LAT} ms round trip, an A-class hour at Tech Park cleared at <K c="price">{usd(N.near, 2)}</K> and the same
-        hour in Northfield at {usd(N.far, 2)}, a difference of {usd(N.gap, 2)}. Nothing about the chips explains it. Northfield
-        is {SITES.northfield.rttMs} ms of round trip from the users, too far for replies that people are waiting on (<a href={lessonHref('compute/3.4')}>Lesson 3.4</a>), so its
-        GPUs can serve only work that nobody is waiting on, and the least valuable of that work, the overnight batch, sets their price. Its cheap hydro power, its cold air
+        hour in Fernhill at {usd(N.far, 2)}, a difference of {usd(N.gap, 2)}. Nothing about the chips explains it. Fernhill
+        is {SITES.fernhill.rttMs} ms of round trip from the users, too far for replies that people are waiting on (<a href={lessonHref('compute/3.4')}>Lesson 3.4</a>), so its
+        GPUs can serve only work that nobody is waiting on, and their price is set, through a short chain of substitutions, by the least valuable of that work, batch
+        summarization (Lesson 5.5). Its cheap hydro power, its cold air
         (<a href={lessonHref('compute/4.3')}>Lesson 4.3</a>) and its room to grow (<a href={lessonHref('compute/4.2')}>Lesson 4.2</a>) only add to the supply.
       </P>
       <P>
         Work that doesn’t need to be near its users can follow the cheap hours. Buying a good where it is cheap and using it where it would be dear is arbitrage, and here the
-        good is a GPU-hour and the trip is the job’s. But a job brings its data. Before a training run can start in Northfield, its training data and its latest checkpoint
+        good is a GPU-hour and the trip is the job’s. But a job brings its data. Before a training run can start in Fernhill, its training data and its latest checkpoint
         must be copied there, and its results copied back. The copy takes time — the dataset’s size divided by the speed of the wide-area <K tone="blue">link</K> between the
-        sites, the same arithmetic as the GPU links of <a href={lessonHref('compute/2.5')}>Lesson 2.5</a>, at a much larger scale — and it can cost money: fees of a few cents
+        sites, which a long copy runs at about 80% of its rated speed: the same arithmetic as the GPU links of <a href={lessonHref('compute/2.5')}>Lesson 2.5</a>, at a
+        much larger scale. And it can cost money: fees of a few cents
         per gigabyte are common for data leaving a cloud region, called <K c="price">egress</K>. Ours is a simulated 5¢ per GB.
       </P>
       <P>
-        In the next demonstration, a job at Tech Park can stay or move to Northfield. The sites sit at their round trip from the users, as in Lesson 5.5, with each one’s
+        In the next demonstration, a job at Tech Park can stay or move to Fernhill. The sites sit at their round trip from the users, as in Lesson 5.5, with each one’s
         A-class price; the arc is the link, carrying the job’s data when moving pays. Below, the bars compare what the job costs at home with what it costs away, egress
         included, and the timeline checks that the copies leave time to finish by the deadline. Choose a job, then change its dataset, the link, the egress fee, and the round
         trip the assistants accept — which decides the prices:
@@ -510,9 +564,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'saved by moving', value: r.feasible ? signedMoney(r.saving) : 'can’t move', tone: r.feasible && r.saving > 0 ? 'green' : 'red' },
-            { label: 'copying there and back', value: hoursText(r.transferH), tone: 'blue' },
-            { label: 'egress fees', value: money(r.egressCost), tone: 'green' },
-            { label: 'moving stops paying above', value: Number.isFinite(be) ? tbText(be) : '—', tone: 'blue' },
+            ...(solvedA ? [{ label: 'moving stops paying above', value: Number.isFinite(be) ? tbText(be) : '—', tone: 'blue' as const }] : []),
           ]}
         />
         <Slider
@@ -533,7 +585,7 @@ export default function Lesson() {
 
       <P>
         It starts with a slice of a pretraining run: {fmt(N.preGpuHours)} GPU-hours on {fmt(N.preGpus)} A-class GPUs, about {fmt(N.preRunH / 24)} days of running, with{' '}
-        {tbText(N.preIn)} of data and checkpoints to copy in and {tbText(N.preOut)} of checkpoints to copy back. At Tech Park it costs {money(N.preStay)}. In Northfield the same
+        {tbText(N.preIn)} of data and checkpoints to copy in and {tbText(N.preOut)} of checkpoints to copy back. At Tech Park it costs {money(N.preStay)}. In Fernhill the same
         GPU-hours cost {money(N.preMoveGpu)}, the egress {money(N.preEgress)}, and the job saves {money(N.preSaving)}. Over a 100 Gb/s link the copies take{' '}
         {hoursText(N.preCopyH)}, against more than a week of computing: for a training run, the data is light.
       </P>
@@ -544,17 +596,17 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Moving the pretraining slice over the 100 Gb/s link at 5¢ per GB, with Northfield still out of the assistants’ reach, find the largest dataset on the slider that still saves money."
+        question={`Predict first: double the egress fee to ${CHALLENGE_EGRESS}¢ per GB. Above what size of dataset does moving the pretraining slice stop paying now? Then check it: with the 100 Gb/s link and Fernhill still out of the assistants’ reach, find the largest dataset on the slider that still saves money at ${CHALLENGE_EGRESS}¢.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved. At ${tbText(N.preBestTB)} moving still saves ${money(N.preBestSaving)}; at ${tbText(N.preNextTB)} the egress outweighs the ${usd(N.gap, 2)}-an-hour gap and moving costs ${money(-N.preNextSaving)} more. The exact break-even is about ${tbText(N.preBreakEven)}: the GPU-hours saved, divided by what each terabyte costs to send there and back.`}
+        success={`Solved: about ${tbText(N.preBreakEvenFee)}, half the ${tbText(N.preBreakEven)} at ${JOB_DEFAULTS.egress}¢. The saving is fixed by the job’s GPU-hours, ${fmt(N.preGpuHours)} at ${usd(N.gap, 2)} less each, while each terabyte’s egress doubles, so the break-even halves. On the slider, ${tbText(N.feeBestTB)} still saves ${money(N.feeBestSaving)}; at ${tbText(N.feeNextTB)} moving costs ${money(-N.feeNextSaving)} more.`}
       />
 
       <H2>Work that can’t travel</H2>
       <P>
         Now choose the chat assistant. It runs {fmt(baseJob('chat').gpuHours)} GPU-hours a day, so moving it would save {money(N.chatSaving)} a day — but it answers
-        people, who notice every millisecond of round trip on top of the wait for a reply, and it accepts at most {baseJob('chat').maxRttMs} ms. Northfield’s {SITES.northfield.rttMs} ms rule it out at any
-        price. Most interactive work is like this: the latency limit is not a preference that a discount can buy off.
+        people, who notice a slower reply, and it accepts the round trip the slider sets for both assistants: {REF_LAT} ms at the start. Fernhill’s{' '}
+        {SITES.fernhill.rttMs} ms rule it out at any price. Most interactive work is like this: the latency limit is not a preference that a discount can buy off.
       </P>
       <P>
         Deadlines bind in a different way. The overnight summaries must be done in {hoursText(N.batchDeadline)}; they take {hoursText(N.batchRunH)} to run on 500 GPUs, and
@@ -563,13 +615,13 @@ export default function Lesson() {
         {money(N.batchSaving)}. A fast link is what turns a price gap into an opportunity for short jobs.
       </P>
       <P>
-        Then break the opportunity at its source. Loosen the round trip the assistants accept to {SITES.northfield.rttMs} ms, Northfield’s own distance. They can now be served
-        from Northfield, the market of Lesson 5.5 sends some of their work there, and the gap closes: an A-class hour costs {usd(N.open, 2)} at Tech Park and{' '}
-        {usd(N.openFar, 2)} in Northfield. Moving the pretraining slice now only costs its egress, {money(-N.preOpenSaving)}. The arbitrage existed because of a physical
-        limit on where some work can run; take the limit away and the opportunity goes with it.
+        Then break the opportunity at its source. Loosen the round trip the assistants accept to {SITES.fernhill.rttMs} ms, Fernhill’s own distance. They can now be served
+        from Fernhill, the market of Lesson 5.5 sends some of their work there, and the gap closes: an A-class hour costs {usd(N.open, 2)} at Tech Park and{' '}
+        {usd(N.openFar, 2)} in Fernhill. Moving the pretraining slice now only costs its egress, {money(-N.preOpenSaving)}, and the chat assistant, free to move at last,
+        has nothing to gain by it. The arbitrage existed because of a physical limit on where some work can run; take the limit away and the opportunity goes with it.
       </P>
       <P>
-        Moving work also erodes the gap on its own. Each job sent to Northfield is more demand there and less at Tech Park, and, just as building GPUs near the users did in
+        Moving work also erodes the gap on its own. Each job sent to Fernhill is more demand there and less at Tech Park, and, just as building GPUs near the users did in
         Lesson 5.5, enough of it would pull the two prices together. A single job, small next to the market, can take the prices as given; a cloud that moves everything that
         can move is changing them.
       </P>
@@ -602,7 +654,8 @@ export default function Lesson() {
         With a 100 Gb/s link, the scheduler moves {N.dayMoved} jobs and saves {money(N.daySaving)}, {pct(N.daySaving / N.dayStay)} of the{' '}
         {money(N.dayStay)} that all eight would cost at home, while the link spends {hoursText(N.dayLinkH)} copying. The video library stays: transcribing it on cheaper GPUs
         would save {money(N.videoGapSaving)}, but sending its {tbText(N.videoTB)} costs {money(N.videoEgress)} in egress. The embedding job, with a larger share of results to
-        send back, saves only {money(N.embedSaving)}, and at 9¢ per GB it stays too, leaving {N.highFeeMoved} jobs moving. The two services stay whatever the settings.
+        send back, saves only {money(N.embedSaving)}, and at 9¢ per GB it stays too, leaving {N.highFeeMoved} jobs moving. The two services stay whatever the settings: code completion, which accepts only {DAY_JOBS.find((j) => j.id === 'code')!.maxRttMs} ms, is always too far
+        from its users, and the chat assistant is too far until the limit reaches {SITES.fernhill.rttMs} ms, when moving no longer gains anything.
       </P>
       <P>
         Now slow the link. At 10 Gb/s the scheduler can still move {N.daySlowMoved} jobs and save {money(N.daySlowSaving)} — the pretraining slice carries most of the day’s
@@ -613,16 +666,16 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Multi-Region Scheduler · a day of jobs"
-        question="Find the slowest link on the slider at which the scheduler moves every job that is worth moving."
+        question={`Predict first, from the copy hours: at 100 Gb/s the link spends ${hoursText(N.dayLinkH)} copying the ${N.dayMoved} jobs worth moving, and every copy takes longer in proportion as the link slows. The link has 24 hours in a day. What is the slowest link on the slider that can still carry all of them? Then check it with the starting fee and latency limit.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved. At ${fmt(LINKS[dt.link])} Gb/s every job that saves money on its own gets its data across in time; one step slower, the queue on the link makes at least one of them miss its deadline or run out of link time. At the starting fee and latency limit the answer is ${fmt(N.slowestAllLink)} Gb/s.`}
+        success={`Solved: ${fmt(N.slowestAllLink)} Gb/s. The copies take ${fmt(N.dayLinkH, 1)} hours at 100 Gb/s, so fitting them into 24 hours takes at least 100 × ${fmt(N.dayLinkH, 1)} ÷ 24, about ${fmt((N.dayLinkH * 100) / 24)} Gb/s. At ${fmt(N.slowestAllLink)} Gb/s they take ${fmt(N.slowestAllLinkH, 1)} hours and every deadline is met; at ${fmt(N.belowSlowestLink)} Gb/s they would need ${fmt((N.dayLinkH * 100) / N.belowSlowestLink, 1)} hours, more than the day has, and the ${STAY_LABEL[N.belowSlowestStuck[0]] ?? 'last job in the queue'} stays home for want of link time.`}
       />
 
       <H2>What the strategy rests on</H2>
       <P>
         Every part of this strategy can be traced to a physical cause. The price gap exists because interactive work must be near its users (
-        <a href={lessonHref('compute/3.4')}>Lesson 3.4</a>), the sites near them are short of megawatts (<a href={lessonHref('compute/4.2')}>Lesson 4.2</a>), and Northfield has
+        <a href={lessonHref('compute/3.4')}>Lesson 3.4</a>), the sites near them are short of megawatts (<a href={lessonHref('compute/4.2')}>Lesson 4.2</a>), and Fernhill has
         power, cold air and room (<a href={lessonHref('compute/4.3')}>Lesson 4.3</a>). Which work can exploit it depends on its round-trip limit, its deadline and its data, and
         how much of it can move each day is set by the bandwidth between the sites (<a href={lessonHref('compute/2.5')}>Lessons 2.5</a> and{' '}
         <a href={lessonHref('compute/4.4')}>4.4</a>). Change any of them in <FigRef to="Multi-Region Scheduler">the first demonstration</FigRef> and the opportunity grows,
@@ -630,7 +683,7 @@ export default function Lesson() {
         job across two sites. But the arithmetic of price gap against data and deadline is the core of it.
       </P>
       <P>
-        Northfield’s cheap electricity helped make its hours cheap, but electricity was only a few percent of what an hour costs to produce (
+        Fernhill’s cheap electricity helped make its hours cheap, but electricity was only a few percent of what an hour costs to produce (
         <a href={lessonHref('compute/4.5')}>Lesson 4.5</a>). Its price also changes hour by hour. The next lesson asks how much a GPU cloud can gain by timing its work, and its
         power, to that price.
       </P>

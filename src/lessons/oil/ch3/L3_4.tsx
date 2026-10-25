@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import {
   Button,
   Caption,
@@ -25,7 +25,7 @@ import {
   usd,
   useScenario,
 } from '../../../framework';
-import { BLEND_STREAMS, SUMMER, WINTER, blendProps, meetsSpec, optimizeBlend, type BlendStreamId, type GasolineSpec } from '../../../engines/oil/refining';
+import { BLEND_STREAMS, SUMMER, WINTER, blendProps, meetsSpec, optimizeBlend, type BlendResult, type BlendStreamId, type GasolineSpec } from '../../../engines/oil/refining';
 import { StackedBar, XYChart } from '../shared/charts';
 
 const STREAM: Record<BlendStreamId, (typeof BLEND_STREAMS)[number]> = Object.fromEntries(BLEND_STREAMS.map((s) => [s.id, s])) as Record<
@@ -51,12 +51,13 @@ export function optimumCost(volume: number, spec: GasolineSpec = SUMMER): number
 }
 
 /**
- * Challenge a: a hand-made blend (not the optimizer's own answer) of at least 60 kb/d, using all the
- * FCC gasoline, meeting the summer spec, at no more than $0.25/bbl above the optimizer's cost for a
- * pool of the same size.
+ * Challenge a: a hand-made blend of at least 60 kb/d, using all the FCC gasoline, meeting the summer
+ * spec, at no more than $0.25/bbl above the optimizer's cost for a pool of the same size. `peeked`
+ * is set by pressing Optimize before solving it, and stays set (nudging the optimizer's blend isn't
+ * a hand blend) until the figure is reset.
  */
-export function handBlendSolved(vols: Vols, optimized: boolean): boolean {
-  if (optimized) return false;
+export function handBlendSolved(vols: Vols, peeked: boolean): boolean {
+  if (peeked) return false;
   const r = blendProps(vols);
   if (r.volume < TARGET_VOLUME - 1e-6 || vols.fccGasoline < FCC.available - 1e-6) return false;
   return meetsSpec(r, SUMMER) && r.costPerBbl <= optimumCost(r.volume) + COST_TOLERANCE;
@@ -76,6 +77,9 @@ export function butaneFiveSolved(limit: number, volume: number): boolean {
 }
 
 const DEFAULT_VOLS: Vols = { butane: 6, lightNaphtha: 10, reformate: 16, fccGasoline: FCC.available, alkylate: 0 };
+
+/** Butane the cheapest 60 kb/d blend takes for each extra psi of allowed vapor pressure, just above the summer limit, kb/d. */
+export const BUTANE_PER_PSI = butaneAt(SUMMER.rvp + 1) - butaneAt(SUMMER.rvp);
 
 /** Cleanest streams carry 1 ppm: the least of them that dilutes all the FCC gasoline to the sulfur limit, kb/d. */
 const MIN_CLEAN = (FCC.available * (FCC.sulfur - SUMMER.sulfur)) / (SUMMER.sulfur - 1);
@@ -101,26 +105,85 @@ function aki(v: number): string {
   return fmt(v, 1);
 }
 
-/** Pass/fail table against a specification. */
-function SpecTable({ r, spec }: { r: ReturnType<typeof blendProps>; spec: GasolineSpec }) {
-  const rows = [
-    { key: 'aki', label: <K tone="violet">Octane, (R+M)/2</K>, blend: r.volume ? aki(r.aki) : '—', limit: `at least ${spec.aki}`, ok: r.volume > 0 && r.aki >= spec.aki - 1e-9 },
-    { key: 'rvp', label: <K tone="blue">Vapor pressure</K>, blend: r.volume ? `${fmt(r.rvp, 1)} psi` : '—', limit: `at most ${fmt(spec.rvp, 1)} psi`, ok: r.volume > 0 && r.rvp <= spec.rvp + 1e-9 },
-    { key: 'sulfur', label: <K tone="gold">Sulfur</K>, blend: r.volume ? `${fmt(r.sulfur, 1)} ppm` : '—', limit: `at most ${spec.sulfur} ppm`, ok: r.volume > 0 && r.sulfur <= spec.sulfur + 1e-9 },
+/** A small gap, to enough digits that it doesn't read as zero. */
+function gap(x: number): string {
+  return fmt(x, x < 0.1 ? 2 : 1);
+}
+
+/** "a, b and c". */
+function listOf(items: string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+function verdict(text: string, ok: boolean): ReactNode {
+  return <Tn tone={ok ? 'green' : 'red'}>{`${text} · ${ok ? 'meets' : 'fails'}`}</Tn>;
+}
+
+interface TableRow {
+  key: string;
+  name: ReactNode;
+  aki: ReactNode;
+  rvp: ReactNode;
+  sulfur: ReactNode;
+  value: ReactNode;
+  cls?: 'hl' | 'dim';
+}
+
+/** The five streams' properties, then the blend's (checked) and the specification's limits. */
+function BlendTable({ r, spec }: { r: BlendResult; spec: GasolineSpec }) {
+  const has = r.volume > 0;
+  const rows: TableRow[] = [
+    ...BLEND_STREAMS.map((st) => ({
+      key: st.id,
+      name: st.name,
+      aki: aki((st.ron + st.mon) / 2),
+      rvp: `${fmt(st.rvp)} psi`,
+      sulfur: `${fmt(st.sulfur)} ppm`,
+      value: st.value ? usd(st.value) : 'no other outlet',
+    })),
+    {
+      key: 'blend',
+      name: <b>This blend</b>,
+      aki: has ? verdict(aki(r.aki), r.aki >= spec.aki - 1e-9) : '—',
+      rvp: has ? verdict(`${fmt(r.rvp, 1)} psi`, r.rvp <= spec.rvp + 1e-9) : '—',
+      sulfur: has ? verdict(`${fmt(r.sulfur, 1)} ppm`, r.sulfur <= spec.sulfur + 1e-9) : '—',
+      value: '',
+      cls: 'hl',
+    },
+    { key: 'limit', name: 'Summer limit', aki: `at least ${spec.aki}`, rvp: `at most ${fmt(spec.rvp, 1)} psi`, sulfur: `at most ${spec.sulfur} ppm`, value: '' },
   ];
   return (
     <DataTable
-      caption="The blend against the summer specification"
+      caption="Each stream’s properties, the blend’s, and the summer specification"
       rows={rows}
       rowKey={(row) => row.key}
+      rowClass={(row) => row.cls}
       columns={[
-        { label: 'Specification', cell: (row) => row.label },
-        { label: 'This blend', cell: (row) => row.blend, align: 'right' },
-        { label: 'Limit', cell: (row) => row.limit, align: 'right' },
-        { label: 'Result', cell: (row) => <Tn tone={row.ok ? 'green' : 'red'}>{row.ok ? 'meets it' : 'fails'}</Tn>, align: 'right' },
+        { label: 'Stream', cell: (row) => row.name },
+        { label: <K tone="violet">Octane</K>, cell: (row) => row.aki, align: 'right' },
+        { label: <K tone="blue">Vapor pressure</K>, cell: (row) => row.rvp, align: 'right' },
+        { label: <K tone="orange">Sulfur</K>, cell: (row) => row.sulfur, align: 'right' },
+        { label: 'Value, $/bbl', cell: (row) => row.value, align: 'right' },
       ]}
     />
   );
+}
+
+/** What the blend gives away, or how far off spec it is. */
+function blendCaption(r: BlendResult, optimized: boolean): string {
+  if (r.volume <= 0) return 'The tank is empty.';
+  if (!meetsSpec(r, SUMMER)) {
+    const gaps: string[] = [];
+    if (r.aki < SUMMER.aki - 1e-9) gaps.push(`${gap(SUMMER.aki - r.aki)} octane points short`);
+    if (r.rvp > SUMMER.rvp + 1e-9) gaps.push(`${gap(r.rvp - SUMMER.rvp)} psi over the vapor-pressure limit`);
+    if (r.sulfur > SUMMER.sulfur + 1e-9) gaps.push(`${gap(r.sulfur - SUMMER.sulfur)} ppm over the sulfur limit`);
+    return `Off spec: ${listOf(gaps)}.`;
+  }
+  const give = r.aki - SUMMER.aki;
+  const room = SUMMER.rvp - r.rvp;
+  const octane = give < 0.005 ? 'gives away no octane' : `gives away ${gap(give)} octane points`;
+  const vapor = room < 0.005 ? 'has its vapor pressure at the limit' : `leaves ${gap(room)} psi of vapor pressure unused`;
+  return `On spec. The blend ${octane} and ${vapor}.${optimized ? ' This is the optimizer’s blend.' : ''}`;
 }
 
 function BlendBar({ vols, title }: { vols: Vols; title: string }) {
@@ -139,16 +202,17 @@ function BlendBar({ vols, title }: { vols: Vols; title: string }) {
 
 export default function Lesson() {
   // ---- Figure 1: the blend tank.
-  const s1 = useScenario('blend', { ...DEFAULT_VOLS, optimized: false });
+  const s1 = useScenario('blend', { ...DEFAULT_VOLS, optimized: false, peeked: false });
   const vols: Vols = { butane: s1.state.butane, lightNaphtha: s1.state.lightNaphtha, reformate: s1.state.reformate, fccGasoline: s1.state.fccGasoline, alkylate: s1.state.alkylate };
   const r = blendProps(vols);
   const ok = meetsSpec(r, SUMMER);
   const best = useMemo(() => optimumCost(r.volume), [r.volume]);
-  const solvedA = handBlendSolved(vols, s1.state.optimized);
-  const optimize = () => s1.set({ ...SUMMER_OPT, optimized: true });
+  const solvedA = handBlendSolved(vols, s1.state.peeked);
+  // Pressing Optimize before the challenge is solved marks the blend as the optimizer's until Reset.
+  const optimize = () => s1.set({ ...SUMMER_OPT, optimized: true, peeked: s1.state.peeked || !solvedA });
 
   let statusA: string;
-  if (s1.state.optimized) statusA = 'That’s the optimizer’s blend. Move any slider and find one of your own.';
+  if (s1.state.peeked) statusA = 'You’ve seen the optimizer’s answer, so this blend isn’t yours. Press Reset to start again from the original tank and blend by hand.';
   else if (r.volume < TARGET_VOLUME - 1e-6) statusA = `The tank gets ${kbd(r.volume)}; it needs at least ${TARGET_VOLUME}.`;
   else if (vols.fccGasoline < FCC.available - 1e-6) statusA = `Use all ${fmt(FCC.available)} kb/d of FCC gasoline: it has nowhere else to go.`;
   else if (!ok) statusA = `${kbd(r.volume)}, but the blend fails the summer specification.`;
@@ -184,14 +248,14 @@ export default function Lesson() {
         high in octane, and so volatile that it boils below room temperature. <b>Light naphtha</b>, straight from the crude unit, is mostly straight chains, which, as{' '}
         <a href={lessonHref('oil/1.1')}>Lesson 1.1</a> showed, knock easily. <b>Reformate</b>, from the reformer, is rich in aromatics: high in octane, low in
         volatility, and expensive. <b>FCC gasoline</b>, from the catalytic cracker of <a href={lessonHref('oil/3.2')}>Lesson 3.2</a>, has a fair octane but still
-        carries some sulfur. <b>Alkylate</b> is made by joining small molecules from a cracker into branched ones like iso-octane; Calder has no alkylation unit and buys
+        carries some sulfur. <b>Alkylate</b> is made by joining small molecules from a cracker into branched ones like iso-octane; Corran has no alkylation unit and buys
         it from a neighbor, at the highest price of the five.
       </P>
       <P>
         Regular gasoline in the United States must meet many specifications, and three of them shape the blend. Its <K tone="violet">octane</K>, posted at the pump as
         (R+M)/2 — the average of two laboratory ratings, the research and motor octane numbers — must be at least 87. Its <K tone="blue">vapor pressure</K>, the Reid
         vapor pressure measured at 100 °F, is capped in summer, at 9.0 psi for conventional gasoline under federal rules and lower in some places, because gasoline
-        vapor helps form ground-level ozone. And its <K tone="gold">sulfur</K> must average no more than 10 parts per million. Most American gasoline also contains
+        vapor helps form ground-level ozone. And its <K tone="orange">sulfur</K> must average no more than 10 parts per million. Most American gasoline also contains
         about 10% ethanol, added at the terminal; to keep things simple, our blender works with hydrocarbon streams alone.
       </P>
       <P>
@@ -222,14 +286,15 @@ export default function Lesson() {
         <Sup>1/1.25</Sup>
       </Eq>
       <P>
-        In the next demonstration, set how many thousand barrels a day of each stream go into the tank. The table checks the blend against the summer specification.
+        In the next demonstration, set how many thousand barrels a day of each stream go into the tank. The table lists each stream’s properties and checks the blend
+        against the summer specification.
         The cost is the blend’s opportunity cost: what each stream could have earned if it were sold some other way, at the course’s simulated prices — butane as LPG,
         light naphtha to a chemical plant, and so on. FCC gasoline has no other outlet, so it counts as nothing, and all of it has to go into gasoline:
       </P>
 
       <Figure name="Fuel Blending Optimizer" scenario={s1} actions={<Button onClick={optimize}>Optimize</Button>}>
         <BlendBar vols={vols} title="The blend, thousand barrels a day" />
-        <SpecTable r={r} spec={SUMMER} />
+        <BlendTable r={r} spec={SUMMER} />
         <Readouts
           items={[
             { label: <K tone="orange">volume</K>, value: kbd(r.volume), tone: 'orange' },
@@ -240,7 +305,7 @@ export default function Lesson() {
         {BLEND_STREAMS.map((st) => (
           <Slider
             key={st.id}
-            label={`${st.name} · ${fmt((st.ron + st.mon) / 2, 1)} octane, ${fmt(st.rvp)} psi, ${fmt(st.sulfur)} ppm, ${st.value ? `${usd(st.value)}/bbl` : 'no other outlet'}`}
+            label={st.name}
             tone="orange"
             value={vols[st.id]}
             min={0}
@@ -250,13 +315,7 @@ export default function Lesson() {
             display={kbd(vols[st.id])}
           />
         ))}
-        <Caption>
-          {r.volume <= 0
-            ? 'The tank is empty.'
-            : ok
-              ? `On spec: ${aki(r.aki)} octane, ${fmt(r.rvp, 1)} psi, ${fmt(r.sulfur, 1)} ppm.${s1.state.optimized ? ' This is the optimizer’s blend.' : ''}`
-              : `Off spec. Octane ${aki(r.aki)}, vapor pressure ${fmt(r.rvp, 1)} psi, sulfur ${fmt(r.sulfur, 1)} ppm.`}
-        </Caption>
+        <Caption>{blendCaption(r, s1.state.optimized)}</Caption>
       </Figure>
 
       <P>
@@ -274,10 +333,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`By hand, blend at least ${TARGET_VOLUME} kb/d of summer gasoline that uses all the FCC gasoline, meets every specification, and costs no more than ${usd(COST_TOLERANCE, 2)} a barrel above the cheapest blend of the same size.`}
+        question={`Predict first which of the three limits the cheapest blend will press against. Then, by hand, blend at least ${TARGET_VOLUME} kb/d of summer gasoline that uses all the FCC gasoline, meets every specification, and costs no more than ${usd(COST_TOLERANCE, 2)} a barrel above the cheapest blend of the same size.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved: ${kbd(r.volume)} at ${perBbl(r.costPerBbl)} a barrel, within ${usd(Math.max(0, r.costPerBbl - best), 2)} of the best possible. Notice which limits you ended up pressed against: the octane at ${aki(r.aki)} and the vapor pressure at ${fmt(r.rvp, 1)} psi.`}
+        success={`Solved: ${kbd(r.volume)} at ${perBbl(r.costPerBbl)} a barrel, within ${usd(Math.max(0, r.costPerBbl - best), 2)} of the best possible, with ${gap(Math.max(0, r.aki - SUMMER.aki))} octane points given away and ${gap(Math.max(0, SUMMER.rvp - r.rvp))} psi of vapor pressure unused. Getting closer means pressing harder against those two limits: octane and vapor pressure are the ones that bind, while sulfur sits at ${fmt(r.sulfur, 1)} ppm with room to spare.`}
       />
 
       <H2>A blend as a linear program</H2>
@@ -341,7 +400,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: <K c="price">cost per barrel</K>, value: perBbl(optP?.costPerBbl ?? NaN), tone: 'green' },
-            { label: 'butane used', value: kbd(opt?.butane ?? 0), tone: 'orange' },
             { label: `saving against the ${fmt(SUMMER.rvp, 1)} psi summer limit`, value: optP ? perBbl(summerAtVol - optP.costPerBbl) : '—', tone: 'green' },
           ]}
         />
@@ -372,16 +430,16 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`For a ${TARGET_VOLUME} kb/d pool, find the lowest vapor-pressure limit, to the nearest 0.1 psi, at which the cheapest blend uses at least ${BUTANE_TARGET} kb/d of butane.`}
+        question={`The cheapest ${TARGET_VOLUME} kb/d summer blend uses ${fmt(SUMMER_OPT.butane, 2)} kb/d of butane, and each extra psi the limit allows lets in about ${fmt(BUTANE_PER_PSI, 2)} kb/d more. Predict the lowest vapor-pressure limit, to the nearest 0.1 psi, at which the cheapest blend uses at least ${BUTANE_TARGET} kb/d of butane, then set it to check.`}
         solved={solvedB}
         status={volume !== TARGET_VOLUME ? `Set the gasoline pool to ${TARGET_VOLUME} kb/d.` : `At ${fmt(limit, 1)} psi, the cheapest blend uses ${kbd(butaneAt(limit))} of butane.`}
-        success={`Solved: ${fmt(limit, 1)} psi. Each step in the limit lets the blender swap a little more reformate for butane, about ${fmt((butaneAt(10) - butaneAt(9)), 2)} kb/d per psi near the summer limit — the vapor-pressure index, not the octane, decides how much butane fits.`}
+        success={`Solved: ${fmt(limit, 1)} psi. The prediction: ${fmt(BUTANE_TARGET - SUMMER_OPT.butane, 2)} kb/d more butane at ${fmt(BUTANE_PER_PSI, 2)} kb/d per psi needs ${fmt((BUTANE_TARGET - SUMMER_OPT.butane) / BUTANE_PER_PSI, 1)} psi more than the ${fmt(SUMMER.rvp, 1)} psi summer limit. The butane line is nearly straight, so each step in the limit lets the blender swap about the same amount of reformate for butane — the vapor-pressure index, not the octane, decides how much butane fits.`}
       />
 
       <P>
         The blender’s problem is a small version of the refinery’s. Every unit upstream of the tank faces the same kind of choice: which stream to send where, given the
         units’ capacities, the products’ specifications and what everything is worth. In the <a href={lessonHref('oil/3.5')}>next lesson</a> we’ll write the whole
-        Calder refinery as one linear program — crude choice, unit runs and blending together — and see what the refinery as a whole earns.
+        Corran refinery as one linear program — crude choice, unit runs and blending together — and see what the refinery as a whole earns.
       </P>
     </LessonPage>
   );

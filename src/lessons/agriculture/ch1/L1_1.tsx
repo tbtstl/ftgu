@@ -19,7 +19,7 @@ import {
   scale,
   useScenario,
 } from '../../../framework';
-import { CO2_TODAY, canopyDay, gramsToBushels, interception, leafAssimilation } from '../../../engines/agriculture/photosynthesis';
+import { CO2_TODAY, EXTINCTION, UMOL_PER_J, canopyDay, gramsToBushels, interception, leafAssimilation } from '../../../engines/agriculture/photosynthesis';
 import { CROP } from '../../../engines/agriculture/crop';
 import type { Crop } from '../../../model/agriculture/region';
 import { CROP_LINE, CROP_NAME, CROP_TONE } from '../shared/tones';
@@ -29,16 +29,45 @@ const LX = scale(0, LIGHT_MAX, 64, 612);
 const LY = scale(-5, 60, 226, 24);
 const SWEEP = Array.from({ length: 111 }, (_, i) => i * 20);
 
-/** The challenge: a wheat leaf ahead of a corn leaf in strong light, at today's CO₂, well watered. */
-export function wheatAheadSolved(s: { light: number; co2: number; temp: number; water: number }) {
-  if (s.light < 1500 || s.co2 !== CO2_TODAY || s.water < 50) return false;
+type LeafState = { light: number; co2: number; temp: number; water: number };
+const wheatAhead = (s: LeafState) => {
   const w = s.water / 100;
   return leafAssimilation('wheat', s.light, s.co2, s.temp, w).net > leafAssimilation('corn', s.light, s.co2, s.temp, w).net;
+};
+
+/**
+ * The challenge: in strong light, at today's CO₂ and with the soil at least half full, the warmest whole
+ * degree at which the wheat leaf fixes more carbon than the corn leaf (18 °C at any light from 1,500 up).
+ */
+export function wheatAheadSolved(s: LeafState) {
+  if (s.light < 1500 || s.co2 !== CO2_TODAY || s.water < 50) return false;
+  return wheatAhead(s) && !wheatAhead({ ...s, temp: s.temp + 1 });
+}
+
+/** The reader's estimate: how fast the corn-minus-wheat gap closes from 28 to 24 °C, and where a straight line takes it to zero. */
+export function crossingEstimate(light: number, co2: number, water: number): { rate: number; at: number } {
+  const gap = (t: number) => leafAssimilation('corn', light, co2, t, water / 100).net - leafAssimilation('wheat', light, co2, t, water / 100).net;
+  const rate = (gap(28) - gap(24)) / 4;
+  return { rate, at: 24 - gap(24) / rate };
 }
 
 const SKY = { clear: 1700, hazy: 1150, overcast: 550 } as const;
 type Sky = keyof typeof SKY;
 const DAY_LENGTH = 15;
+/** A drying soil in the prose: 30% of the plant-available water left. */
+const DRY = 0.3;
+const DRY_CORN = leafAssimilation('corn', 1500, CO2_TODAY, 28, DRY).net;
+const DRY_WHEAT = leafAssimilation('wheat', 1500, CO2_TODAY, 28, DRY).net;
+/** Light at which the corn leaf (28 °C) reaches 90% of what it fixes in full sun (2,000 µmol), to the nearest 50. */
+export const CORN_NINETY = (() => {
+  const full = leafAssimilation('corn', 2000, CO2_TODAY, 28).net;
+  let l = 0;
+  while (leafAssimilation('corn', l, CO2_TODAY, 28).net < 0.9 * full) l += 10;
+  return Math.round(l / 50) * 50;
+})();
+
+/** Share of the light reaching a layer of corn leaves that one unit of leaf area lets through. */
+const PASS_PER_UNIT = Math.exp(-EXTINCTION.corn);
 
 /** The second challenge: the smallest corn leaf area that intercepts 90% of the light. */
 export function ninetySolved(crop: Crop, lai: number) {
@@ -124,6 +153,7 @@ export default function Lesson() {
   const cornNow = leafAssimilation('corn', light, co2, temp, water / 100).net;
   const wheatNow = leafAssimilation('wheat', light, co2, temp, water / 100).net;
   const solved = wheatAheadSolved(s.state);
+  const estimate = crossingEstimate(light, co2, water);
 
   const c = useScenario('canopy', { crop: 'corn' as Crop, sky: 'clear' as Sky, lai: 5, temp: 28 });
   const day = useMemo(() => canopyDay(c.state.crop, c.state.lai, SKY[c.state.sky], DAY_LENGTH, c.state.temp), [c.state]);
@@ -132,9 +162,10 @@ export default function Lesson() {
 
   const status = (() => {
     if (light < 1500) return `The light is ${fmt(light)} µmol. Full sun needs at least 1,500.`;
-    if (co2 !== CO2_TODAY) return `The CO₂ is ${co2} ppm. Set it back to today’s 420.`;
+    if (co2 !== CO2_TODAY) return `The CO₂ is ${co2} ppm. Set it back to ${CO2_TODAY}.`;
     if (water < 50) return `The soil has ${water}% of its water left. Keep it at least half full.`;
-    return `Right now the corn leaf fixes ${fmt(cornNow, 1)} and the wheat leaf ${fmt(wheatNow, 1)} µmol of CO₂ per m² per second.`;
+    if (wheatNow > cornNow) return `The wheat leaf is ahead at ${temp} °C. Is it still ahead a degree warmer?`;
+    return `At ${temp} °C the corn leaf fixes more. Where did you estimate the two would cross?`;
   })();
 
   return (
@@ -171,7 +202,6 @@ export default function Lesson() {
           items={[
             { label: 'corn leaf, µmol CO₂/m²/s', value: fmt(cornNow, 1), tone: 'gold' },
             { label: 'wheat leaf, µmol CO₂/m²/s', value: fmt(wheatNow, 1), tone: 'orange' },
-            { label: 'ahead', value: Math.abs(cornNow - wheatNow) < 0.05 ? 'even' : cornNow > wheatNow ? 'corn' : 'wheat' },
           ]}
         />
         <Slider label="Light" tone="violet" value={light} min={0} max={LIGHT_MAX} step={50} onChange={(v) => s.set({ light: v })} display={`${fmt(light)} µmol/m²/s`} />
@@ -183,8 +213,8 @@ export default function Lesson() {
       <P>
         Start in the dark and raise the light. At first every extra photon counts: the curves rise in a straight line, and their slope — the <b>quantum yield</b> — is
         how many molecules of CO₂ the leaf fixes per photon it absorbs, about one for every 15 or 20. Then the curves bend over. The light is arriving faster than
-        the leaf’s enzymes can use it, and uptake levels off at the leaf’s <b>capacity</b>. At the starting 28 °C, the corn leaf reaches 90% of its maximum at about
-        1,350 micromoles of light, and fixes 47.3 at 1,500; the wheat leaf manages 23.5.
+        the leaf’s enzymes can use it, and uptake levels off at the leaf’s <b>capacity</b>. At the starting 28 °C, the corn leaf reaches 90% of what it fixes in full
+        sun at about {fmt(CORN_NINETY)} micromoles of light, and fixes 47.3 at 1,500; the wheat leaf manages 23.5.
       </P>
       <P>
         The difference is chemistry. The enzyme that grabs CO₂ in every plant, Rubisco, sometimes grabs an oxygen molecule by mistake, and cleaning up the mistake
@@ -196,24 +226,28 @@ export default function Lesson() {
       <P>
         Now try the other sliders. More CO₂ helps the wheat leaf a great deal — at 560 ppm it fixes 28.5 instead of 23.5 — and the corn leaf hardly at all, since its
         pump already saturates it. Temperature cuts the other way: wheat does best around 16–26 °C and falls apart in the heat, while corn wants 26 °C or more and
-        holds on past 35. And when the soil dries past half its available water, both leaves close their stomata to save what’s left. With 30% of the water left,
-        corn still fixes 30.6, because its pump can work on the little CO₂ that gets in; wheat drops to 8.7.
+        holds on past 35. And once the soil has given up a little over half its available water, both leaves start closing their stomata to save what’s left. With{' '}
+        {fmt(DRY * 100)}% of the water left, corn still fixes {fmt(DRY_CORN, 1)}, because its pump can work on the little CO₂ that gets in; wheat drops to{' '}
+        {fmt(DRY_WHEAT, 1)}.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the CO₂ at today’s 420 ppm, the soil at least half full and the light at 1,500 µmol or more. Find a leaf temperature at which the wheat leaf fixes more carbon than the corn leaf."
+        question="Keep the CO₂ at 420 ppm, close to today’s level, the soil at least half full and the light at 1,500 µmol or more. Estimate first: cool the leaf from 28 °C to 24 °C, note how much the gap between the two readouts closes per degree, and predict where it reaches zero. Then find the warmest whole degree at which the wheat leaf fixes more carbon than the corn leaf."
         solved={solved}
         status={status}
-        success={`Solved. At ${temp} °C the wheat leaf fixes ${fmt(wheatNow, 1)} and the corn leaf ${fmt(cornNow, 1)}. Below about 18 °C in strong light, photorespiration is mild, so wheat loses little to it, while corn pays for its pump and its enzymes slow in the cold. That’s why wheat is a crop of cool springs and corn a crop of hot summers — and why, as we’ll see, the two are planted and harvested at different times of year.`}
+        success={`Solved. At ${temp} °C the wheat leaf fixes ${fmt(wheatNow, 1)} and the corn leaf ${fmt(cornNow, 1)}; a degree warmer, corn is ahead. Between 28 and 24 °C the gap closed by ${fmt(estimate.rate, 1)} a degree, which put the crossing near ${fmt(estimate.at)} °C. Below about ${temp} °C in strong light, photorespiration is mild, so wheat loses little to it, while corn pays for its pump and its enzymes slow in the cold. That’s why wheat is a crop of cool springs and corn a crop of hot summers — and why, as we’ll see, the two are planted and harvested at different times of year.`}
       />
 
       <H2>From a leaf to a field</H2>
       <P>
         A crop isn’t one leaf in full sun. It’s a canopy of leaves stacked over the ground, measured by its <K tone="teal">leaf area index</K>: square meters of leaf
-        per square meter of ground. Sunlight fades as it passes down through the layers, so the top leaves get more than they can use while the lower ones live in
-        shade. In the next demonstration, the shaded curve is a canopy’s net CO₂ uptake hour by hour through a midsummer day, fifteen hours long; the dashed line is
-        the <K tone="violet">sunlight</K> above it. Change the canopy, the sky and the temperature:
+        per square meter of ground. Sunlight fades as it passes down through the layers — in a corn canopy, each unit of leaf area lets through about{' '}
+        {fmt(PASS_PER_UNIT * 100)}% of the light that reaches it — so the top leaves get more than they can use while the lower ones live in shade. In
+        the next demonstration, the shaded curve is a canopy’s net CO₂ uptake hour by hour through a midsummer day, fifteen hours long; the dashed line is the{' '}
+        <K tone="violet">sunlight</K> above it. The readouts add up the day. The carbon fixed becomes <K tone="teal">dry matter</K>: the plant’s weight with the
+        water dried out of it. And over a whole day we count light as energy rather than photons — a megajoule of it is about{' '}
+        {fmt(UMOL_PER_J, 1)} moles of photons. Change the canopy, the sky and the temperature:
       </P>
 
       <Figure name="Photosynthesis Lab · a summer day" scenario={c}>
@@ -245,7 +279,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'light intercepted', value: `${fmt(intercepted * 100)}%`, tone: 'violet' },
+            { label: 'light intercepted', value: `${fmt(intercepted * 100, 1)}%`, tone: 'violet' },
             { label: 'dry matter built today', value: `${fmt(day.dryMatter, 1)} g/m²`, tone: 'teal' },
             { label: 'as grain, if half of it', value: `${fmt(gramsToBushels(c.state.crop, day.dryMatter, 0.5), 1)} bu/ac`, tone: CROP_TONE[c.state.crop] },
             { label: 'grams per MJ of light caught', value: fmt(day.rue, 2) },
@@ -256,9 +290,10 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At the start, a full corn canopy with a leaf area index of 5 on a clear day catches 95% of the light and builds 49.2 grams of dry matter on every square meter
-        of ground. If half of it ended up as grain, that would be 4.6 bushels an acre — in one day. Drop the leaf area to 3 and the canopy still catches 83% of the
-        light and builds 44.8 grams: past a point, extra leaves mostly shade the leaves below them.
+        At the start, a full corn canopy with a leaf area index of 5 on a clear day catches {fmt(interception('corn', 5) * 100)}% of the light and builds 49.2 grams
+        of dry matter on every square meter of ground. If half of it ended up as grain, that would be 4.6 bushels an acre — in one day. Drop the leaf area to 3 and
+        the canopy still catches {fmt(interception('corn', 3) * 100, 1)}% of the light and builds 44.8 grams: past a point, extra leaves mostly shade the leaves
+        below them.
       </P>
       <P>
         Now look at the last readout, the grams of dry matter built per megajoule of light the canopy catches. For corn it stays close to 4 whatever the leaf area,
@@ -271,18 +306,21 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="A canopy that catches 90% of the sunlight is close to closed. What is the smallest corn leaf area index that intercepts at least 90%?"
+        question={`A canopy that catches 90% of the sunlight is close to closed. Predict first: if each unit of corn leaf area lets through ${fmt(PASS_PER_UNIT * 100)}% of the light that reaches it, two units let through ${fmt(PASS_PER_UNIT * 100)}% of ${fmt(PASS_PER_UNIT * 100)}%, about ${fmt(PASS_PER_UNIT ** 2 * 100)}%. How many does it take before only a tenth gets through? Then find the smallest corn leaf area index that intercepts at least 90%.`}
         solved={solved2}
         status={
           c.state.crop !== 'corn'
             ? 'Switch the crop to corn.'
-            : `At a leaf area index of ${fmt(c.state.lai, 1)}, the corn canopy intercepts ${fmt(intercepted * 100, 1)}% of the light.`
+            : intercepted >= 0.9
+              ? `At a leaf area index of ${fmt(c.state.lai, 1)} the canopy catches at least 90%. Would a little less still do it?`
+              : `At a leaf area index of ${fmt(c.state.lai, 1)} the canopy catches less than 90%. How close was your prediction?`
         }
-        success={`Solved. At ${fmt(c.state.lai, 1)}, the canopy intercepts ${fmt(intercepted * 100, 1)}%. Light fades by the same fraction through each layer of leaves, so the share that gets through falls exponentially: corn needs about 3.9 square meters of leaf over every square meter of ground to stop nine-tenths of it.`}
+        success={`Solved. At ${fmt(c.state.lai, 1)}, the canopy intercepts ${fmt(intercepted * 100, 1)}%; at ${fmt(c.state.lai - 0.1, 1)} it falls just short. Light fades by the same fraction through each layer of leaves, so the share that gets through falls exponentially: three units let through ${fmt(PASS_PER_UNIT ** 3 * 100)}%, four only ${fmt(PASS_PER_UNIT ** 4 * 100)}%, and the tenth comes a little before four. Corn needs about ${fmt(c.state.lai, 1)} square meters of leaf over every square meter of ground to stop nine-tenths of the light.`}
       />
 
       <P>
-        That is the first link in the chain from weather to price. A field’s growth on any day is, to a good approximation, the light it intercepts times its
+        That is the first link in the chain from weather to price. A field’s <b>growth</b> on any day — the dry matter it adds — is, to a good approximation, the
+        light it intercepts times its
         radiation use efficiency — the season model we’ll build in this chapter uses {fmt(CROP.corn.rue, 1)} grams per megajoule for corn and{' '}
         {fmt(CROP.wheat.rue, 1)} for wheat — slowed down whenever it is too cold, too hot or too dry. But a crop doesn’t start the season with a closed canopy. It
         has to build one, leaf by leaf, on a schedule set mostly by temperature, and then switch from building leaves to building grain. In{' '}

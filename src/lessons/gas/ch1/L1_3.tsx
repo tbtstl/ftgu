@@ -125,6 +125,8 @@ function sci(x: number): string {
 
 const PRESSURE_LIGHT = '#eef3f9';
 
+const WALL_TEXT: Record<Roughness, string> = { coated: 'coated inside', newSteel: 'new steel', oldSteel: 'old steel' };
+
 /** The pipe: drawn thickness grows with diameter, shaded by pressure, with moving dots for the gas. */
 function PipeDiagram({ s, r }: { s: typeof FLOW_DEFAULTS; r: PipeFlow }) {
   const grad = 'pipe' + useId().replace(/[^a-zA-Z0-9]/g, '');
@@ -251,9 +253,7 @@ export default function Lesson() {
         <PipeDiagram s={s} r={r} />
         <Readouts
           items={[
-            { label: 'throughput', value: flowing ? `${q0(r.qMMcfd)} MMcf/d` : '0', tone: 'orange' },
             { label: 'energy carried', value: flowing ? `${fmt((r.qMMcfd * 1000 * MMBTU_PER_MCF) / 1e6, 2)} million MMBtu/d` : '0', tone: 'gold' },
-            { label: 'friction factor', value: flowing ? fmt(r.f, 4) : '—', tone: 'violet' },
             { label: 'Reynolds number', value: flowing ? sci(r.re) : '—' },
           ]}
         />
@@ -301,7 +301,7 @@ export default function Lesson() {
 
       <P>
         At the starting settings the pipe carries {q0(BASE.qMMcfd)} million standard cubic feet a day (MMcf/d), about{' '}
-        {fmt((BASE.qMMcfd * 1000 * MMBTU_PER_MCF) / 1e6, 2)} million MMBtu of <K c="energy">energy</K> at the 1,037 Btu per cubic foot of the region’s pipeline gas.
+        {fmt((BASE.qMMcfd * 1000 * MMBTU_PER_MCF) / 1e6, 2)} million MMBtu of <K c="energy">energy</K> at the 1,037 Btu per standard cubic foot of the region’s pipeline gas.
         Engineers size gas pipelines with the <b>general flow equation</b>, which is what the demonstration solves:
       </P>
       <Eq label="Q equals 77.54 times T b over P b times the square root of (P1 squared minus P2 squared) over (G T L Z f), times D to the 2.5">
@@ -346,7 +346,7 @@ export default function Lesson() {
       </Eq>
       <P>
         Q is in standard cubic feet a day. T<Sub>b</Sub> and P<Sub>b</Sub> are the standard temperature and pressure (60 °F, which is 519.67 degrees Rankine, and 14.73
-        psia), and 77.54 is a constant that makes the units work. The pressures are absolute, so Northline’s 1,440 psig enters as {fmt(BASE.p1, 1)} psia. G is the gas’s specific gravity, {fmt(G, 3)} for the
+        psia), so T<Sub>b</Sub> ÷ P<Sub>b</Sub> = {fmt(TB_PB, 2)}, the second number in the demonstration’s equation; 77.54 is a constant that makes the units work. The pressures are absolute, so Northline’s 1,440 psig enters as {fmt(BASE.p1, 1)} psia. G is the gas’s specific gravity, {fmt(G, 3)} for the
         region’s gas; <Tt>T</Tt> its temperature in degrees Rankine, which we hold at 60 °F, close to the ground the pipe is buried in; L the length in miles; Z the
         compressibility factor at the pipe’s average pressure; and D the inside diameter in inches. The equation assumes steady flow at a constant temperature along a level
         pipe.
@@ -354,7 +354,7 @@ export default function Lesson() {
       <P>
         The last ingredient, the <K tone="violet">friction factor</K> f, measures how hard the gas must work to get past the wall. Gas in a big pipeline is turbulent: its
         Reynolds number — the ratio of the gas’s momentum to the viscosity that tries to smooth it — is around {sci(BASE.re)}, far above the roughly 2,000 below which flow is
-        smooth and orderly. In flow that turbulent, f depends almost entirely on how rough the wall is compared with the diameter. Switch the wall: the same pipe carries{' '}
+        smooth and orderly. In flow that turbulent, f depends mostly on how rough the wall is compared with the diameter. Switch the wall: the same pipe carries{' '}
         {q0(ROUGH_Q.coated)} MMcf/d if it’s coated inside, {q0(ROUGH_Q.newSteel)} as new steel and {q0(ROUGH_Q.oldSteel)} as old, pitted steel. That’s why some pipelines
         are lined with a smooth internal coating.
       </P>
@@ -378,12 +378,12 @@ export default function Lesson() {
       <P>
         The other strong term is the diameter, raised to the power 2.5. With Northline’s ends, an 18-inch pipe carries {q0(SMALL)} MMcf/d; double it to 36 inches and it
         carries {q0(DOUBLE)}, {fmt(DOUBLE / SMALL, 1)} times as much. That’s a little more than 2<Sup>2.5</Sup> ≈ 5.7, because a wider pipe’s wall is smoother relative to
-        its size, so its friction factor is lower. Length, by contrast, sits under the square root: halve the pipe to 120 miles and it carries only{' '}
+        its size and its Reynolds number is higher, and both lower its friction factor. Length, by contrast, sits under the square root: halve the pipe to 120 miles and it carries only{' '}
         {pct(HALF_LENGTH / BASE.qMMcfd - 1)} more.
       </P>
       <P>
-        A pipeline’s cost grows much more slowly than its capacity, since much of it — the right of way, the trench, the crews, the permits — barely depends on the pipe’s
-        size. That economy of scale is why gas travels long distances through a few very large pipelines rather than many small ones.
+        A pipeline’s cost grows much more slowly than its capacity: the cost of laying it grows roughly in proportion to the diameter, while the capacity grows with the
+        diameter’s 2.5 power. That economy of scale is why gas travels long distances through a few very large pipelines rather than many small ones.
       </P>
 
       <Challenge
@@ -405,7 +405,7 @@ export default function Lesson() {
       <P>
         The pressure doesn’t fall evenly between the two ends. In the next demonstration, the upper chart traces the pressure along the pipe from{' '}
         <FigRef to="Gas Flow Lab">the first demonstration</FigRef>, with a dashed line for comparison showing how it would fall if it fell evenly, and the lower chart
-        traces the gas’s speed. Drag across either chart to read any mile, and change the pressures at the ends:
+        traces the gas’s speed. Drag across either chart to read any mile, and change the pipe’s diameter and the pressures at its ends:
       </P>
 
       <Figure name="Gas Flow Lab · along the pipe" scenario={sc}>
@@ -443,7 +443,7 @@ export default function Lesson() {
           xTicks={mileTicks}
           xFormat={(v) => fmt(v)}
           yFormat={(v) => fmt(v)}
-          yLabel="Gas speed, ft/s"
+          yLabel={`Gas speed in the ${s.diameter}-inch pipe, ft/s`}
           xLabel="miles from the inlet"
           height={170}
           series={[{ xs, ys: speeds, color: GRAPHIC.orange, width: 3 }]}
@@ -454,15 +454,13 @@ export default function Lesson() {
           scrubLabel="Mile along the pipe"
           ariaLabel={`Gas speed along the pipe, from ${fps(r.vIn)} at the inlet to ${fps(r.vOut)} at the outlet. At mile ${fmt(mile)} it is ${fps(vAt)}.`}
         />
-        <Readouts
-          items={[
-            { label: `pressure at mile ${fmt(mile)}`, value: `${fmt(pAt)} psig`, tone: 'blue' },
-            { label: 'share of the drop used so far', value: pct(dropUsed), tone: 'blue' },
-            { label: 'gas speed there', value: fps(vAt), tone: 'orange' },
-          ]}
-        />
+        <Readouts items={[{ label: `share of the pressure drop used by mile ${fmt(mile)}`, value: pct(dropUsed), tone: 'blue' }]} />
+        <Slider label="Inside diameter" value={s.diameter} min={6} max={48} onChange={(v) => sc.set({ diameter: v })} display={`${s.diameter} in`} />
         <Slider label="Inlet pressure" tone="blue" value={s.inlet} min={100} max={1500} step={5} onChange={(v) => sc.set({ inlet: v })} display={`${fmt(s.inlet)} psig`} />
         <Slider label="Outlet pressure" tone="blue" value={s.outlet} min={0} max={1490} step={5} onChange={(v) => sc.set({ outlet: v })} display={`${fmt(s.outlet)} psig`} />
+        <Caption>
+          {`The first demonstration’s pipe: ${s.diameter} inches across, ${fmt(s.length)} miles, ${WALL_TEXT[s.rough]}, ${flowing ? `carrying ${q0(r.qMMcfd)} MMcf/d` : 'with no flow'}.`}
+        </Caption>
       </Figure>
 
       <P>
@@ -485,13 +483,15 @@ export default function Lesson() {
         </span>
       </Eq>
       <P>
-        As the pressure falls the gas expands, so it must speed up to keep the same amount moving: from {fps(BASE.vIn)} at Calder Hub to {fps(BASE.vOut)} at Metro, roughly{' '}
+        As the pressure falls the gas expands, so it must speed up to keep the same amount moving. In Northline’s pipe, {D.diameter} inches across inside (Reset
+        restores that if you changed it for the challenge), the gas goes from {fps(BASE.vIn)} at Calder Hub to {fps(BASE.vOut)} at Metro, roughly{' '}
         {fmt(mph(BASE.vIn))} to {fmt(mph(BASE.vOut))} miles an hour. Faster gas loses more to friction, which is why the drop steepens toward the end. A parcel of gas
         entering at Calder Hub takes about {fmt(TRANSIT)} hours to reach Metro.
       </P>
       <P>
         The pipe is never empty, either. At these pressures, its 240 miles hold about {q0(LINEPACK_MMCF)} MMcf of gas — nearly {fmt((LINEPACK_MMCF / BASE.qMMcfd) * 24)}{' '}
-        hours of its own flow. That gas in the pipe, called <b>linepack</b>, is a small store in its own right, and it will matter when demand swings faster than supply in{' '}
+        hours of its own flow, the same as a parcel’s trip. That’s no coincidence: both are the gas the pipe holds divided by the rate it moves. This gas in the
+        pipe, called <b>linepack</b>, is a small store in its own right, and it will matter when demand swings faster than supply in{' '}
         <a href={lessonHref('gas/3.3')}>Lesson 3.3</a>.
       </P>
       <P>

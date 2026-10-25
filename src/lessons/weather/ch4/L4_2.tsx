@@ -40,15 +40,15 @@ export const SEASON_DOY: Record<Season, number> = { january: 20, july: 200 };
 
 export interface DayState {
   season: Season;
-  /** Daily mean temperature at Calder Bay, °F. */
+  /** Daily mean temperature at Fenwick Bay, °F. */
   meanF: number;
   /** Daily mean wind at hub height on Hollin Ridge, m/s. */
   wind: number;
-  /** Cloud cover, 0–1. */
-  cloud: number;
 }
 
-export const DAY_DEFAULTS: DayState = { season: 'january', meanF: 33, wind: 7.5, cloud: 0.4 };
+export const DAY_DEFAULTS: DayState = { season: 'january', meanF: 33, wind: 7.5 };
+/** The day's sky, held partly cloudy: solar barely touches the evening peak, and Lesson 4.4 takes it up. */
+export const DAY_CLOUD = 0.4;
 
 /** Old Quay oil's cost to run, $/MWh: it doesn't burn gas, so it doesn't move with the gas price. */
 export const OIL_COST = STANDARD_FLEET.find((p) => p.id === 'oil')!.marginalCost;
@@ -56,10 +56,10 @@ export const OIL_COST = STANDARD_FLEET.find((p) => p.id === 'oil')!.marginalCost
 const dayCache = new Map<string, EnergyDay>();
 /** The model's day for a state (cached: every slider position is computed once). */
 export function dayOf(s: DayState, pipeline = GAS_SYSTEM.pipeline): EnergyDay {
-  const key = `${s.season}|${s.meanF}|${s.wind}|${s.cloud}|${pipeline}`;
+  const key = `${s.season}|${s.meanF}|${s.wind}|${pipeline}`;
   let d = dayCache.get(key);
   if (!d) {
-    d = energyDay({ doy: SEASON_DOY[s.season], meanF: s.meanF, windMs: s.wind, cloud: s.cloud }, { ...GAS_SYSTEM, pipeline });
+    d = energyDay({ doy: SEASON_DOY[s.season], meanF: s.meanF, windMs: s.wind, cloud: DAY_CLOUD }, { ...GAS_SYSTEM, pipeline });
     if (dayCache.size > 3000) dayCache.clear();
     dayCache.set(key, d);
   }
@@ -73,7 +73,7 @@ export function oilCheaper(s: DayState): boolean {
 
 /**
  * The first challenge: on a January day, the warmest temperature (to the degree) at which oil is
- * cheaper to run than the gas peaker. With the starting wind and cloud it's 12 °F.
+ * cheaper to run than the gas peaker. With the starting wind it's 12 °F.
  */
 export function oilSolved(s: DayState): boolean {
   return s.season === 'january' && oilCheaper(s) && !oilCheaper({ ...s, meanF: s.meanF + 1 });
@@ -91,7 +91,7 @@ export function winterDays(y: number): number[] {
 
 /** Cloud on an archive day: overcast if it rained, partly cloudy otherwise. */
 export function cloudOn(d: number): number {
-  return archive().rain.calder[d] > 0.05 ? 0.9 : 0.4;
+  return archive().rain.fenwick[d] > 0.05 ? 0.9 : 0.4;
 }
 
 export interface WinterState {
@@ -124,7 +124,7 @@ export function winterRun(s: WinterState): WinterRun {
   const gas: number[] = [];
   const power: number[] = [];
   for (const d of winterDays(s.winter)) {
-    const t = tempF('calder', d);
+    const t = tempF('fenwick', d);
     const e = energyDay({ doy: dayInfo(d).doy, meanF: t, windMs: a.wind[d] * s.windScale, cloud: cloudOn(d) }, sys);
     temps.push(t);
     gas.push(e.gas);
@@ -148,7 +148,7 @@ export function winterRun(s: WinterState): WinterRun {
 /** The archive's coldest winter: the one with the lowest daily mean temperature. */
 export const COLDEST_WINTER = (() => {
   let best = { y: 1, t: Infinity };
-  for (let y = 1; y <= 40; y++) for (const d of winterDays(y)) if (tempF('calder', d) < best.t) best = { y, t: tempF('calder', d) };
+  for (let y = 1; y <= 40; y++) for (const d of winterDays(y)) if (tempF('fenwick', d) < best.t) best = { y, t: tempF('fenwick', d) };
   return best.y;
 })();
 
@@ -202,7 +202,7 @@ const BURN = GRAPHIC.gold;
 const OTHER = '#a8a8a8';
 const BX = scale(0, 1.8e6, 24, 372);
 const UX = scale(0, 1.25, 430, 620);
-const UY = scale(0, 30, 132, 26);
+const UY = scale(0, 30, 112, 26);
 const U_CURVE = Array.from({ length: 126 }, (_, i) => i / 100);
 
 /** The day's gas balance against the pipelines, and the city-gate price curve. */
@@ -219,7 +219,7 @@ function GasBalance({ day }: { day: EnergyDay }) {
   return (
     <svg
       className="chart"
-      viewBox="0 0 640 160"
+      viewBox="0 0 640 144"
       role="img"
       aria-label={`The region’s gas demand: ${fmt(day.sendout / 1000)} thousand MMBtu for heating, ${fmt(day.powerBurn / 1000)} thousand for power plants and ${fmt(GAS_SYSTEM.other / 1000)} thousand for industry, against pipeline capacity of ${fmt(pipeline / 1e6, 1)} million: the pipelines are ${fmt(day.utilization * 100)}% full and the city-gate price is ${usd(day.gas, 2)} per MMBtu.`}
     >
@@ -246,7 +246,7 @@ function GasBalance({ day }: { day: EnergyDay }) {
           {v === 0 ? '0' : `${fmt(v / 1e6, 1)}M`}
         </text>
       ))}
-      <text className="ax" x={24} y={140} style={{ fill: TEXT.ink }}>
+      <text className="ax" x={24} y={128} style={{ fill: TEXT.ink }}>
         {fmt(day.utilization * 100)}% full
       </text>
 
@@ -255,14 +255,14 @@ function GasBalance({ day }: { day: EnergyDay }) {
       </text>
       <GridY y={UY} ticks={[0, 10, 20, 30]} x0={430} x1={620} format={(v) => `$${v}`} baseline={0} />
       <path d={linePath(U_CURVE.map(UX), U_CURVE.map((v) => UY(citygatePrice(v * pipeline))))} fill="none" stroke={GRAPHIC.green} strokeWidth={2.5} />
-      <line className="cur" x1={UX(u)} x2={UX(u)} y1={26} y2={132} />
+      <line className="cur" x1={UX(u)} x2={UX(u)} y1={26} y2={112} />
       <circle cx={UX(u)} cy={UY(day.gas)} r={6} fill={GRAPHIC.green} stroke="#fcfcfb" strokeWidth={2} />
       {[0, 0.5, 1].map((v) => (
-        <text key={v} className="ax ax-m" x={UX(v)} y={148}>
+        <text key={v} className="ax ax-m" x={UX(v)} y={128}>
           {fmt(v * 100)}%
         </text>
       ))}
-      <text className="ax ax-e" x={620} y={160}>
+      <text className="ax ax-e" x={620} y={140}>
         how full the pipelines are
       </text>
     </svg>
@@ -285,7 +285,7 @@ function WinterChart({ run, winter }: { run: WinterRun; winter: number }) {
       className="chart"
       viewBox="0 0 640 300"
       role="img"
-      aria-label={`Winter ${winter}–${winter + 1} at Calder Bay, December to February: daily mean temperatures from ${fmt(Math.min(...run.temps))} to ${fmt(Math.max(...run.temps))} °F; the city-gate gas price averaged ${usd(run.avgGas, 2)} and peaked at ${usd(run.maxGas, 2)}, above $10 on ${run.daysOver10} days; the daily average power price averaged ${usd(run.avgPower)} and peaked at ${usd(run.maxPower)} per MWh.`}
+      aria-label={`Winter ${winter}–${winter + 1} at Fenwick Bay, December to February: daily mean temperatures from ${fmt(Math.min(...run.temps))} to ${fmt(Math.max(...run.temps))} °F; the city-gate gas price averaged ${usd(run.avgGas, 2)} and peaked at ${usd(run.maxGas, 2)}, above $10 on ${run.daysOver10} days; the daily average power price averaged ${usd(run.avgPower)} and peaked at ${usd(run.maxPower)} per MWh.`}
     >
       <text className="ax" x={WX0} y={14}>
         Daily mean temperature, °F
@@ -363,6 +363,7 @@ export default function Lesson() {
       h90: jul(90),
       coldest: winterRun({ winter: COLDEST_WINTER, pipeline: 1.4, windScale: 1 }),
       calmCold: winterRun({ winter: COLDEST_WINTER, pipeline: 1.4, windScale: 0.6 }),
+      pipe145: winterRun({ winter: COLDEST_WINTER, pipeline: 1.45, windScale: 1 }),
       bigPipe: winterRun({ winter: COLDEST_WINTER, pipeline: 1.6, windScale: 1 }),
       mild: winterRun({ winter: MILD_WINTER, pipeline: 1.4, windScale: 1 }),
     };
@@ -372,20 +373,20 @@ export default function Lesson() {
 
   let caption: string;
   if (h.shortfall > 0.5) caption = `At 19:00 demand outruns every plant in the region by ${mw(h.shortfall)}: the price goes to the $1,000 cap and some customers would have to be cut off.`;
-  else caption = `At 19:00 ${setter ?? 'no plant'} sets the price at ${usd(h.price)} per MWh. The gas peaker costs ${usd(ctCost)} to run at today’s gas price; Old Quay oil, ${usd(OIL_COST)}.`;
+  else caption = `${setter ?? 'No plant'} sets the 19:00 price. At today’s gas, Eastgate costs ${usd(ctCost)} per MWh to run; Old Quay oil, ${usd(OIL_COST)}.`;
 
   return (
     <LessonPage id="weather/4.2">
       <P>
-        <a href={lessonHref('weather/4.1')}>The previous lesson</a> turned Calder Bay’s temperatures into degree days, and degree days into the gas that Calder Gas
+        <a href={lessonHref('weather/4.1')}>The previous lesson</a> turned Fenwick Bay’s temperatures into degree days, and degree days into the gas that Fenwick Gas
         & Light must deliver. But the utility isn’t the only buyer of gas in the region, and the weather doesn’t only change how much energy people want. It also
         changes how much the wind and the sun supply. This lesson follows a day’s weather into two markets at once — gas and electricity — and asks what it does
         to their prices.
       </P>
       <P>
-        For the electricity we’ll borrow the power system of this site’s electricity course and set it in the Calder region: its nine plants, its demand, and its
+        For the electricity we’ll borrow the power system of this site’s electricity course and set it in the Fenwick region: its nine plants, its demand, and its
         two weather-driven ones, Ridge wind, which becomes the 350 MW wind farm on Hollin Ridge, and the 400 MW Valley solar. Demand on the electricity course’s
-        reference day, a mild 60 °F day, peaks at {mw(n.ref.peakDemand)} at 19:00. In the Calder region most homes heat with gas, so cold adds only a little —
+        reference day, a mild 60 °F day, peaks at {mw(n.ref.peakDemand)} at 19:00. In the Fenwick region most homes heat with gas, so cold adds only a little —
         0.4% for every heating degree day beyond that day’s five — while heat adds a lot: 1.3% for every <K tone={WX.index}>cooling degree day</K>, as air
         conditioners switch on. The plants are offered cheapest first, and the last one needed sets the price for everyone, as in the electricity course’s{' '}
         <a href={lessonHref('4.3')}>Lesson 4.3</a> and <a href={lessonHref('4.4')}>Lesson 4.4</a>.
@@ -394,7 +395,7 @@ export default function Lesson() {
         Gas comes into the region by pipeline, priced off the national benchmark, Henry Hub, which we’ll hold at $4 per MMBtu. The pipelines can carry{' '}
         {fmt(GAS_SYSTEM.pipeline / 1e6, 1)} million MMBtu a day. While they have room, the <K tone={WX.money}>city-gate price</K> — what gas costs delivered to
         the region — sits about a dollar above Henry Hub. As they fill, buyers must outbid each other for what’s left, and past about 85% full the premium climbs
-        steeply, up to $30, where trucked-in liquefied gas and stored gas take over. And the two markets are tied together, because three of the power plants burn
+        steeply, until the price reaches a cap of {usd(GAS_SYSTEM.cap)}, where trucked-in liquefied gas and stored gas take over. And the two markets are tied together, because three of the power plants burn
         gas. Lakeside needs 7 MMBtu for each megawatt-hour, so at $4 gas it costs $36 to run and at $10 it costs {usd(plantCost('cc1', 10))}. All the prices in
         this lesson come from the model; none are real quotes.
       </P>
@@ -422,6 +423,7 @@ export default function Lesson() {
           xMax={X_MAX}
           yMax={yMax}
         />
+        <GasBalance day={day} />
         <Legend
           items={[
             { label: 'Nuclear', color: FUEL.nuclear },
@@ -432,32 +434,25 @@ export default function Lesson() {
             { label: 'Gas combined-cycle', color: FUEL.gasCC },
             { label: 'Gas peaker', color: FUEL.gasCT },
             { label: 'Oil', color: FUEL.oil },
-          ]}
-        />
-        <GasBalance day={day} />
-        <Legend
-          items={[
-            { label: 'Heating', color: HEAT },
-            { label: 'Power plants', color: BURN },
-            { label: 'Industry and other', color: OTHER },
+            { label: 'Gas for heating', color: HEAT },
+            { label: 'for power plants', color: BURN },
+            { label: 'for industry', color: OTHER },
           ]}
         />
         <Readouts
           items={[
             { label: 'city-gate gas, per MMBtu', value: usd(day.gas, 2), tone: WX.money },
             { label: 'evening peak demand', value: mw(day.peakDemand) },
-            { label: 'evening price, per MWh', value: h.shortfall > 0.5 ? '$1,000' : usd(h.price), tone: WX.money },
-            { label: 'day’s average price, per MWh', value: usd(day.avgPrice, 1), tone: WX.money },
+            { label: 'day’s average, per MWh', value: usd(day.avgPrice, 1), tone: WX.money },
           ]}
         />
         <Slider label="Daily mean temperature" tone={WX.temperature} value={st.meanF} min={-5} max={95} onChange={(v) => s.set({ meanF: v })} display={`${fmt(st.meanF)} °F`} />
         <Slider label="Wind on Hollin Ridge" tone={WX.wind} value={st.wind} min={2} max={14} step={0.5} onChange={(v) => s.set({ wind: v })} display={`${fmt(st.wind, 1)} m/s`} />
-        <Slider label="Cloud" tone={WX.moisture} value={st.cloud} min={0} max={1} step={0.1} onChange={(v) => s.set({ cloud: v })} display={`${fmt(st.cloud * 100)}%`} />
         <Caption>{caption}</Caption>
       </Figure>
 
       <P>
-        It starts on a normal January day at Calder Bay, averaging 33 °F. The utility needs {fmt(n.normal.sendout / 1000)} thousand MMBtu, the power plants burn{' '}
+        It starts on a normal January day at Fenwick Bay, averaging 33 °F. The utility needs {fmt(n.normal.sendout / 1000)} thousand MMBtu, the power plants burn{' '}
         {fmt(n.normal.powerBurn / 1000)} thousand, and the pipelines are {fmt(n.normal.utilization * 100)}% full, so gas costs {usd(n.normal.gas, 2)}. The evening
         peak of {mw(n.normal.peakDemand)} reaches past the combined-cycle plants to Eastgate, the gas peaker, which sets {usd(n.normal.peakPrice)}; over the whole
         day, power averages {usd(n.normal.avgPrice, 1)} per megawatt-hour.
@@ -508,14 +503,16 @@ export default function Lesson() {
         The wind works the other way. On a 25 °F January day with a calm 3 m/s on Hollin Ridge, the wind farm produces almost nothing, the gas plants burn{' '}
         {fmt(n.calm.powerBurn / 1000)} thousand MMBtu, and power averages {usd(n.calm.avgPrice, 1)}; with a brisk 12 m/s, they burn {fmt(n.windy.powerBurn / 1000)}{' '}
         thousand and power averages {usd(n.windy.avgPrice, 1)}. Every megawatt-hour of wind displaces the most expensive plant running. The sun helps on summer
-        afternoons, but by 19:00 it is low, and in January it has set: cloud barely touches the evening price.
+        afternoons, but by 19:00 it is low, and in January it has set, so this demonstration holds the sky partly cloudy and leaves Valley solar to{' '}
+        <a href={lessonHref('weather/4.4')}>Lesson 4.4</a>.
       </P>
 
       <H2>A winter of prices</H2>
       <P>
         A single day shows the mechanism; a season shows the risk. The next demonstration takes a winter from the course’s simulated archive — December through
-        February at Calder Bay, with each day’s own wind on Hollin Ridge and cloud on its rainy days — and runs every day through the same model. Days when gas
-        costs more than $10 are drawn in red. It starts on the archive’s coldest winter. Change the winter, the pipeline capacity into the region, and how windy
+        February at Fenwick Bay, with each day’s own wind on Hollin Ridge and cloud on its rainy days — and runs every day through the same model. Days when gas
+        costs more than $10 are drawn in red, and the red dashed line marks 15 °F: a January day that cold filled the pipelines to {fmt(n.d15.utilization * 100)}%
+        in <FigRef to="Weather-Energy Model">the first demonstration</FigRef>, and any colder day sends gas up fast. It starts on the archive’s coldest winter. Change the winter, the pipeline capacity into the region, and how windy
         the winter is:
       </P>
 
@@ -551,8 +548,9 @@ export default function Lesson() {
       </P>
       <P>
         Now change the physics. Make the winter calmer, at 0.6 times its own wind, and the average power price rises from {usd(n.coldest.avgPower, 1)} to{' '}
-        {usd(n.calmCold.avgPower, 1)}, while the gas spike barely changes. Add pipeline capacity instead: at 1.6 million MMBtu a day the highest gas price falls to{' '}
-        {usd(n.bigPipe.maxGas, 2)}. The cold is the same; the spike was never about the cold alone. It came from cold meeting a pipeline that was nearly full.
+        {usd(n.calmCold.avgPower, 1)}; the coldest day’s gas rises a little too, from {usd(n.coldest.maxGas, 2)} to {usd(n.calmCold.maxGas, 2)}, as the gas
+        plants burn more to cover for the missing wind. Pipeline capacity works on the spike itself, because the price depends on how full the pipelines are:
+        the same cold against more capacity leaves them less full.
       </P>
 
       <Challenge
@@ -566,6 +564,12 @@ export default function Lesson() {
         }
         success={`Solved. With ${fmt(w.state.pipeline, 2)} million MMBtu a day of pipeline the coldest day’s gas costs ${usd(winterRun(w.state).maxGas, 2)}; with 0.05 million less it would pass $10. That extra capacity would sit idle on almost every other day of the winter, which is why regions rarely build it — and why someone has to bear the price risk of the days it’s missing.`}
       />
+
+      <P>
+        The first step of capacity does the most: 1.45 million MMBtu a day takes the coldest day’s gas from {usd(n.coldest.maxGas, 2)} to{' '}
+        {usd(n.pipe145.maxGas, 2)}, pulling it back off the steep part of the price curve, and each step after that does less; at 1.6 million the highest gas price
+        is {usd(n.bigPipe.maxGas, 2)}. The cold is the same; the spike was never about the cold alone. It came from cold meeting a pipeline that was nearly full.
+      </P>
 
       <P>
         Look back at <FigRef to="Weather-Energy Model">the first demonstration</FigRef> with that in mind. A gas utility buying gas on the coldest days, a generator

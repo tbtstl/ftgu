@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import {
-  Caption,
   Challenge,
   FigRef,
   Figure,
@@ -49,7 +48,8 @@ export function dayLabel(day: number): string {
   return `${MONTH_NAMES[MONTH_INDEX[m]]} ${d - MONTH_START[m] + 1}`;
 }
 
-export const YEAR_DEFAULTS = { start: 36, inject: 0.4, withdraw: 0.6 };
+/** The field starts April 30% full and its customers inject enough to fill it by November 1, so the winter (and the first challenge) starts full. */
+export const YEAR_DEFAULTS = { start: 36, inject: 0.45, withdraw: 0.6 };
 /** The day the first demonstration opens on: January 15, mid-winter. */
 const CURSOR_DEFAULT = 289;
 type YearState = typeof YEAR_DEFAULTS;
@@ -121,7 +121,10 @@ const P_FULL = storagePressure(HC, HC.workingBcf);
 const DEF = gasYear(YEAR_DEFAULTS.start, YEAR_DEFAULTS.inject, YEAR_DEFAULTS.withdraw);
 const DEF_NOV1 = DEF[INJ_DAYS - 1].inventory;
 const DEF_MAR31 = DEF[YEAR_DAYS - 1].inventory;
-const DEF_INJ_CUT = DEF.slice(0, INJ_DAYS).filter((d) => d.limited).length;
+/** The day injection is first slowed, the day the field fills, and the day it would have filled at the nominated rate. */
+const DEF_INJ_FIRST_CUT = DEF.findIndex((d) => d.limited);
+export const DEF_FULL_DAY = DEF.findIndex((d) => d.inventory >= HC.workingBcf - 1e-6);
+const DEF_FULL_UNCUT = Math.ceil((HC.workingBcf - YEAR_DEFAULTS.start) / YEAR_DEFAULTS.inject) - 1;
 const DEF_WD_CUT = DEF.slice(INJ_DAYS).filter((d) => d.limited).length;
 const DEF_FIRST_CUT = firstWinterCut(DEF);
 const DEF_BELOW_DESIGN = DEF.findIndex((d, i) => i >= INJ_DAYS && d.inventory < DESIGN_INV);
@@ -165,9 +168,42 @@ export const CROSSOVER_DAY = (() => {
   return Infinity;
 })();
 
-/** The second challenge: both fields full, and the cold spell just long enough for Hollow Creek to pull ahead. */
-export function crossoverSolved(s: typeof SNAP_DEFAULTS): boolean {
-  return s.fill === 100 && s.days === CROSSOVER_DAY;
+/** The second challenge's cold spell, days. */
+export const EVEN_DAYS = 10;
+/** Gas each field delivers over the challenge's ten days, both starting `fill` percent full. */
+export function tenDays(fill: number): { hc: number; sf: number } {
+  return { hc: deliverableOver(HC, (fill / 100) * HC.workingBcf, EVEN_DAYS), sf: deliverableOver(SF, (fill / 100) * SF.workingBcf, EVEN_DAYS) };
+}
+/** The fill (%) at which the two fields deliver the same over ten days: about 29%. */
+export const EVEN_FILL = (() => {
+  let lo = 1;
+  let hi = 100;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    const t = tenDays(mid);
+    if (t.hc > t.sf) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+})();
+/** The fill (%) above which Salt Flat's wells are the faster: about 16%. */
+export const FASTER_FILL = (() => {
+  let lo = 1;
+  let hi = 100;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    if (withdrawCapacity(SF, (mid / 100) * SF.workingBcf) < withdrawCapacity(HC, (mid / 100) * HC.workingBcf)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+})();
+
+/** The second challenge: a ten-day cold spell, both fields starting at the fill where they deliver the same, to within a tenth of a Bcf. */
+export function evenFillSolved(s: typeof SNAP_DEFAULTS): boolean {
+  // An empty pair delivers nothing either way: that's no answer.
+  if (s.days !== EVEN_DAYS || s.fill <= 0) return false;
+  const t = tenDays(s.fill);
+  return Math.abs(t.hc - t.sf) < 0.1;
 }
 
 const SNAP_FULL10 = { hc: deliverableOver(HC, HC.workingBcf, 10), sf: deliverableOver(SF, SF.workingBcf, 10) };
@@ -254,6 +290,9 @@ function FieldDiagram({ day, inventory, flow }: { day: number; inventory: number
       <text className="ax" x={400} y={g0 + 14}>
         Bcf in the field
       </text>
+      <text x={470} y={26} style={{ fontSize: 14, fontWeight: 600, fill: '#333' }}>
+        {dayLabel(day)}
+      </text>
       {bar(470, 52, out, 1.2, 'could withdraw, Bcf/d')}
       {bar(470, 112, into, 1.2, 'could inject, Bcf/d')}
     </svg>
@@ -287,7 +326,7 @@ export default function Lesson() {
   const nextCut = firstWinterCut(gasYear(st.start, st.inject, round2(st.withdraw + 0.01)));
 
   const status = !full
-    ? `On November 1 the field holds ${fmt(nov1, 1)} of its ${HC.workingBcf} Bcf. Fill it first: it should start the winter full.`
+    ? `On November 1 the field holds ${fmt(nov1, 1)} of its ${HC.workingBcf} Bcf. It should start the winter full: inject more, or start April with more.`
     : st.withdraw <= 0
       ? 'Set a winter withdrawal rate.'
       : firstCut >= 0
@@ -303,7 +342,9 @@ export default function Lesson() {
   const snapDays = Array.from({ length: sn.days + 1 }, (_, i) => i);
   const hcGot = hcCum[sn.days];
   const sfGot = sfCum[sn.days];
-  const solvedB = crossoverSolved(sn);
+  const solvedB = evenFillSolved(sn);
+  const evenAt = Math.round(EVEN_FILL);
+  const even = tenDays(evenAt);
 
   return (
     <LessonPage id="gas/3.4">
@@ -311,8 +352,8 @@ export default function Lesson() {
         <a href={lessonHref('gas/3.3')}>Linepack</a> smooths out a day. The swings that matter most to a city, though, run over months. On a summer day Metro burns{' '}
         {fmt(SUMMER, 1)} Bcf/d of gas; on a cold winter day, {fmt(WINTER, 1)}; on its <b>design day</b>, the coldest day its utility plans for, {fmt(DESIGN, 1)}. The two
         pipelines into the city, Northline and the Valley Line, carry {fmt(PIPES_IN, 2)} Bcf/d between them. So in summer they run at half their capacity, and on the
-        design day Metro is {fmt(DESIGN_NEED, 2)} Bcf/d short — {fmt(DESIGN_NEED * 1000)} MMcf in a single day, nearly twice the {fmt(PACK_SWING)} MMcf that Northline’s
-        linepack can swing even with nothing flowing.
+        design day, as <a href={lessonHref('gas/3.1')}>Lesson 3.1</a> found, Metro needs {fmt(DESIGN_NEED, 2)} Bcf/d more than they can bring —{' '}
+        {fmt(DESIGN_NEED * 1000)} MMcf in a single day, nearly twice the {fmt(PACK_SWING)} MMcf that Northline’s linepack can swing even with nothing flowing.
       </P>
       <P>
         Building pipelines big enough for the coldest day would leave most of their steel idle most of the year. The cheaper answer is to move gas through time instead
@@ -384,32 +425,28 @@ export default function Lesson() {
           items={[
             { label: 'working gas on November 1', value: `${fmt(nov1, 1)} Bcf`, tone: 'gold' },
             { label: 'on March 31', value: `${fmt(mar31, 1)} Bcf`, tone: 'gold' },
-            { label: 'withdrawn over the winter', value: `${fmt(nov1 - mar31, 1)} Bcf`, tone: 'orange' },
             { label: 'days cut by ratchets', value: `${injCut} in · ${wdCut} out` },
           ]}
         />
         <Slider label="Working gas on April 1" tone="gold" value={st.start} min={0} max={HC.workingBcf} onChange={(v) => y.set({ start: v })} display={`${st.start} Bcf`} />
         <Slider label="Injection, April–October" tone="orange" value={st.inject} min={0} max={0.8} step={0.01} onChange={(v) => y.set({ inject: v })} display={`${fmt(st.inject, 2)} Bcf/d`} />
         <Slider label="Withdrawal, November–March" tone="orange" value={st.withdraw} min={0} max={1} step={0.01} onChange={(v) => y.set({ withdraw: v })} display={`${fmt(st.withdraw, 2)} Bcf/d`} />
-        <Caption>
-          On {dayLabel(day)} the field holds {fmt(invAt(day), 1)} Bcf of working gas at {fmt(storagePressure(HC, invAt(day)))} psia. It could withdraw up to{' '}
-          {fmt(withdrawCapacity(HC, invAt(day)), 2)} Bcf/d or inject up to {fmt(injectCapacity(HC, invAt(day)), 2)}, and it is {run[day].flow > 1e-9 ? `injecting ${fmt(run[day].flow, 2)}` : run[day].flow < -1e-9 ? `withdrawing ${fmt(-run[day].flow, 2)}` : 'idle'}.
-        </Caption>
       </Figure>
 
       <P>
-        At the starting settings the field begins April {pct(YEAR_DEFAULTS.start / HC.workingBcf)} full, at {YEAR_DEFAULTS.start} Bcf. Injecting{' '}
-        {fmt(YEAR_DEFAULTS.inject, 2)} Bcf/d for {INJ_DAYS} days would add {fmt(YEAR_DEFAULTS.inject * INJ_DAYS, 1)} Bcf if nothing got in the way, more than the field
-        has room for; in fact it reaches {fmt(DEF_NOV1, 1)} by November 1, because on the last {DEF_INJ_CUT} days of the season it couldn’t take gas as fast as it
-        was offered. In winter the customers ask for {fmt(YEAR_DEFAULTS.withdraw, 2)} Bcf/d, and from {dayLabel(DEF_FIRST_CUT)} on the field can’t keep up: the
-        last {DEF_WD_CUT} days are cut short. Over the winter it gives back {fmt(DEF_NOV1 - DEF_MAR31, 1)} Bcf and ends March with {fmt(DEF_MAR31, 1)}.
+        At the starting settings the field begins April {pct(YEAR_DEFAULTS.start / HC.workingBcf)} full, at {YEAR_DEFAULTS.start} Bcf, and its customers inject{' '}
+        {fmt(YEAR_DEFAULTS.inject, 2)} Bcf/d. At that pace its {HC.workingBcf - YEAR_DEFAULTS.start} Bcf of room would be filled by {dayLabel(DEF_FULL_UNCUT)}, but
+        from {dayLabel(DEF_INJ_FIRST_CUT)} on the field can’t take gas as fast as it’s offered, and it is full only on {dayLabel(DEF_FULL_DAY)}. In winter the
+        customers ask for {fmt(YEAR_DEFAULTS.withdraw, 2)} Bcf/d, and from {dayLabel(DEF_FIRST_CUT)} on the field can’t keep up: the last {DEF_WD_CUT} days are cut
+        short. Over the winter it gives back {fmt(DEF_NOV1 - DEF_MAR31, 1)} Bcf and ends March with {fmt(DEF_MAR31, 1)}.
       </P>
 
       <H2>Ratchets</H2>
       <P>
         Both limits come from the field’s pressure. Taking gas out of storage works like producing a well (<a href={lessonHref('gas/2.2')}>Lesson 2.2</a>): the rate
         depends on P<Sup>2</Sup> − P<Sub>wf</Sub>
-        <Sup>2</Sup>, so it falls as the field empties and its pressure drops. Hollow Creek’s wells can deliver their full {fmt(HC.maxWithdrawBcfd, 1)} Bcf/d until the
+        <Sup>2</Sup>, so it falls as the field empties and its pressure drops. That rate, the most a field can withdraw in a day, is its{' '}
+        <K tone="orange">deliverability</K>. Hollow Creek’s wells can deliver their full {fmt(HC.maxWithdrawBcfd, 1)} Bcf/d until the
         field is down to {fmt(FULL_RATE_INV)} Bcf, about two-thirds full; at half full they manage {fmt(withdrawCapacity(HC, HC.workingBcf / 2), 2)}, and at a quarter{' '}
         {fmt(withdrawCapacity(HC, HC.workingBcf / 4), 2)}. Putting gas in works against the same pressure from the other side. Compressors at the surface push it down
         at up to {fmt(HC.maxInjectBcfd, 1)} Bcf/d while the field is low, slowing to {fmt(injectCapacity(HC, HC.workingBcf / 2), 2)} at half full and{' '}
@@ -423,7 +460,7 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Metro’s utility wants a withdrawal rate it can count on every day of the winter. With Hollow Creek full on November 1, what’s the highest steady rate, to a hundredth of a Bcf/d, that the field can hold from November through March without a ratchet cutting it?"
+        question={`Metro’s utility wants a withdrawal rate it can count on every day of the winter. With Hollow Creek full on November 1, as it is at the starting settings, what’s the highest steady rate, to a hundredth of a Bcf/d, that the field can hold from November through March without a ratchet cutting it? Estimate it first from the rates at half and a quarter full: whatever the rate, the field must still manage it on March 31, the last of the winter’s ${WD_DAYS} days.`}
         solved={solved}
         status={status}
         success={`Solved: ${fmt(FIRM, 2)} Bcf/d. At ${fmt(FIRM + 0.01, 2)} the ratchet would cut it from ${dayLabel(nextCut >= 0 ? nextCut : INJ_DAYS + FIRM_NEXT_CUT)} on. The steady rate delivers ${fmt(HC.workingBcf - FIRM_LEFT, 1)} Bcf over the winter and leaves ${fmt(FIRM_LEFT, 1)} in the ground. Dividing ${HC.workingBcf} Bcf by ${WD_DAYS} days suggests ${fmt(HC.workingBcf / WD_DAYS, 2)}, but a field can’t be counted on for all its working gas at an even rate. The gas left behind isn’t wasted: it’s what keeps the field’s pressure, and its deliverability, up through March.`}
@@ -440,7 +477,7 @@ export default function Lesson() {
 
       <H2>Salt and sandstone</H2>
       <P>
-        Hollow Creek is built for a season. The region’s other field, Salt Flat beside Calder Hub, is built for a week. Salt caverns are made, not found: an operator drills
+        Hollow Creek is built for a season. The region’s other field, Salt Flat beside Calder Hub, is built for a week or two. Salt caverns are made, not found: an operator drills
         into a thick bed of underground salt and pumps in fresh water, which dissolves a cavern that is then filled with gas. In North America most of them lie along the
         Gulf Coast, where thick salt deposits are common. A cavern has no pores to squeeze gas through, so a few large wells can empty it quickly. Salt Flat holds{' '}
         {SF.workingBcf} Bcf of working gas over {SF.baseBcf} of base gas, a quarter of Hollow Creek’s working gas, but it can deliver {fmt(SF.maxWithdrawBcfd, 1)} Bcf/d —{' '}
@@ -492,8 +529,8 @@ export default function Lesson() {
             { xs: snapDays, ys: snapDays.map((d) => sfCum[d]), color: SF_COLOR, width: 2.5 },
           ]}
           markers={[
-            { x: sn.days, y: hcGot, color: HC_COLOR, r: 5, label: `${fmt(hcGot, 1)}`, labelPos: hcGot >= sfGot ? 'above' : 'below' },
-            { x: sn.days, y: sfGot, color: SF_COLOR, r: 5, label: `${fmt(sfGot, 1)}`, labelPos: hcGot >= sfGot ? 'below' : 'above' },
+            { x: sn.days, y: hcGot, color: HC_COLOR, r: 5 },
+            { x: sn.days, y: sfGot, color: SF_COLOR, r: 5 },
           ]}
           ariaLabel={`Over ${sn.days} days of cold starting ${sn.fill}% full, Hollow Creek delivers ${fmt(hcGot, 1)} Bcf and Salt Flat ${fmt(sfGot, 1)} Bcf.`}
         />
@@ -506,10 +543,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `Hollow Creek over ${sn.days} day${sn.days === 1 ? '' : 's'}`, value: `${fmt(hcGot, 1)} Bcf`, tone: 'gold' },
-            { label: `Salt Flat over ${sn.days} day${sn.days === 1 ? '' : 's'}`, value: `${fmt(sfGot, 1)} Bcf` },
-            { label: 'Hollow Creek, empty to full', value: `${FILL_DAYS_HC} days` },
-            { label: 'Salt Flat, empty to full', value: `${FILL_DAYS_SF} days` },
+            { label: `Hollow Creek over ${sn.days} day${sn.days === 1 ? '' : 's'}`, value: `${fmt(hcGot, 2)} Bcf`, tone: 'gold' },
+            { label: `Salt Flat over ${sn.days} day${sn.days === 1 ? '' : 's'}`, value: `${fmt(sfGot, 2)} Bcf` },
           ]}
         />
         <Slider label="How full both fields are" tone="gold" value={sn.fill} min={0} max={100} onChange={(v) => s2.set({ fill: v })} display={`${sn.fill}%`} />
@@ -518,29 +553,27 @@ export default function Lesson() {
 
       <P>
         With both fields full, Salt Flat wins a short spell: {fmt(SNAP_FULL10.sf, 1)} Bcf over ten days to Hollow Creek’s {fmt(SNAP_FULL10.hc, 1)}. But it has only{' '}
-        {SF.workingBcf} Bcf to give, and its deliverability falls away as it empties. Stretch the spell to {SNAP_MAX} days and Hollow Creek comes out ahead,{' '}
-        {fmt(SNAP_FULL30.hc, 1)} to {fmt(SNAP_FULL30.sf, 1)}. Start both a quarter full and even ten days favor the big field, {fmt(SNAP_QUARTER10.hc, 2)} to{' '}
-        {fmt(SNAP_QUARTER10.sf, 2)}. The two kinds of storage do different jobs: a depleted field carries a city through a winter, and a salt cavern answers a cold
-        week, a pipeline outage or a price spike, then refills in time for the next one.
+        {SF.workingBcf} Bcf to give, and its deliverability falls away as it empties. Stretch the spell and Hollow Creek pulls ahead on day {CROSSOVER_DAY}; by day{' '}
+        {SNAP_MAX} it leads, {fmt(SNAP_FULL30.hc, 1)} to {fmt(SNAP_FULL30.sf, 1)}. Start both a quarter full and even ten days favor the big field,{' '}
+        {fmt(SNAP_QUARTER10.hc, 2)} to {fmt(SNAP_QUARTER10.sf, 2)}.
       </P>
 
       <Challenge
         id="b"
         figure="Storage Reservoir · salt and sandstone"
-        question="With both fields full when the cold arrives, how many days must the cold spell last before Hollow Creek has delivered more gas than Salt Flat?"
+        question={`Somewhere between a quarter full and full, the two fields deliver the same over a ten-day cold spell. In the upper chart Salt Flat’s wells are the faster ones at any fill above about ${fmt(FASTER_FILL)}%. Predict first: do the two come out even above that fill or below it, and roughly where? Then find a fill at which their ten-day totals are within a tenth of a Bcf of each other.`}
         solved={solvedB}
         status={
-          sn.fill !== 100
-            ? `Start both fields full: right now they’re ${sn.fill}% full.`
-            : hcGot > sfGot + 1e-9
-              ? `After ${sn.days} days Hollow Creek is ahead, ${fmt(hcGot, 1)} Bcf to ${fmt(sfGot, 1)}. Did it pull ahead sooner?`
-              : `After ${sn.days} days Salt Flat is still ahead, ${fmt(sfGot, 1)} Bcf to ${fmt(hcGot, 1)}.`
+          sn.days !== EVEN_DAYS
+            ? `Set the cold spell to ten days: right now it lasts ${sn.days}.`
+            : `At ${sn.fill}% full, ${hcGot > sfGot ? 'Hollow Creek' : 'Salt Flat'} is ahead over ten days, ${fmt(Math.max(hcGot, sfGot), 2)} Bcf to ${fmt(Math.min(hcGot, sfGot), 2)}.`
         }
-        success={`Solved: day ${CROSSOVER_DAY}. Hollow Creek delivers a steady ${fmt(HC.maxWithdrawBcfd, 1)} Bcf/d for weeks, because it is still more than two-thirds full; Salt Flat’s ${fmt(SF.maxWithdrawBcfd, 1)} Bcf/d lasts only until it is about half empty, then falls away. After ${CROSSOVER_DAY} days the big field has given ${fmt(hcCum[CROSSOVER_DAY] ?? 0, 1)} Bcf and the cavern ${fmt(sfCum[CROSSOVER_DAY] ?? 0, 1)}.`}
+        success={`Solved: they come out even at about ${evenAt}% full, ${fmt(even.hc, 2)} Bcf each — well above ${fmt(FASTER_FILL)}%. Between the two fills Salt Flat’s wells start faster, yet Hollow Creek delivers more. At ${evenAt}% full, ten days at full pace take ${pct(even.sf / ((evenAt / 100) * SF.workingBcf))} of the gas Salt Flat started with, so its rate falls away as it empties, but only ${pct(even.hc / ((evenAt / 100) * HC.workingBcf))} of Hollow Creek’s, which barely slows.`}
       />
 
       <P>
-        Pipelines move gas across the region, linepack across the hours of a day, and storage across the seasons. Each has a limit, and where a limit binds, gas can be
+        The two kinds of storage do different jobs: a depleted field carries a city through a winter, and a salt cavern answers a cold week, a pipeline outage or a
+        price spike, then refills in time for the next one. Pipelines move gas across the region, linepack across the hours of a day, and storage across the seasons. Each has a limit, and where a limit binds, gas can be
         short in one place and time while it is plentiful in another: Ridgeback can be producing flat out in the same week that Metro is pulling the last of its fast gas
         out of Hollow Creek. One connection remains. At Bayport, the region’s gas meets the rest of the world — not by pipe, but by ship. That is the subject of{' '}
         <a href={lessonHref('gas/3.5')}>the next lesson</a>.

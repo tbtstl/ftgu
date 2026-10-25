@@ -35,29 +35,20 @@ import { SEGMENT_COLOR } from '../../../model/compute/workloads';
 // The first demonstration: four weeks of hourly demand against a fleet.
 
 export interface DemandState {
-  /** Inference GPUs at a weekday's busiest hour in week 1. */
-  inferencePeak: number;
-  /** Inference growth per week, percent. */
-  growth: number;
   /** Training runs starting per week, on average. */
   runsPerWeek: number;
-  /** GPUs per training run. */
-  runSize: number;
-  /** Batch work submitted per day, GPU-hours. */
-  batchPerDay: number;
   batch: 'flexible' | 'fixed';
   /** GPUs in the fleet (A-class equivalents). */
   fleet: number;
 }
 
+/** The starting fleet: a little more than the busiest hour, and well away from the first challenge's answer. */
+export const START_FLEET = 6000;
+
 export const DEMO_DEFAULTS: DemandState = {
-  inferencePeak: DEMAND_DEFAULTS.inferencePeak,
-  growth: DEMAND_DEFAULTS.growthPerWeek * 100,
   runsPerWeek: DEMAND_DEFAULTS.trainingPerWeek,
-  runSize: DEMAND_DEFAULTS.trainingSize,
-  batchPerDay: DEMAND_DEFAULTS.batchPerDay,
   batch: 'flexible',
-  fleet: DEMAND_DEFAULTS.capacity,
+  fleet: START_FLEET,
 };
 
 /** The fleet slider's step and range. */
@@ -70,11 +61,7 @@ export const SERVE_TARGET = 0.999;
 export function paramsOf(s: DemandState): DemandParams {
   return {
     ...DEMAND_DEFAULTS,
-    inferencePeak: s.inferencePeak,
-    growthPerWeek: s.growth / 100,
     trainingPerWeek: s.runsPerWeek,
-    trainingSize: s.runSize,
-    batchPerDay: s.batchPerDay,
     batchFlexible: s.batch === 'flexible',
     capacity: s.fleet,
   };
@@ -90,9 +77,9 @@ export function smallestFleet(s: DemandState, target = SERVE_TARGET): number {
   return Infinity;
 }
 
-/** The first challenge: with flexible batch, the smallest fleet that serves 99.9% of demand. */
+/** The first challenge: with flexible batch and the starting training runs, the smallest fleet that serves 99.9% of demand. */
 export function fleetSolved(s: DemandState): boolean {
-  if (s.batch !== 'flexible') return false;
+  if (s.batch !== 'flexible' || s.runsPerWeek !== DEMO_DEFAULTS.runsPerWeek) return false;
   const ok = (f: number) => 1 - runDemand({ ...s, fleet: f }).unmetShare >= SERVE_TARGET - 1e-12;
   return ok(s.fleet) && (s.fleet - FLEET_STEP < FLEET_MIN || !ok(s.fleet - FLEET_STEP));
 }
@@ -172,21 +159,22 @@ export function riskSolved(s: ForecastState): boolean {
 // Numbers for the prose, all from the engines.
 
 const BASE_SHARES = segmentHours(BASE);
-const BASE_SHORT = shortfall(BASE);
 const BASE_AVG = sumOf(BASE.total) / BASE.hours;
 const WEEK1_TROUGH = Math.min(...BASE.inference.slice(0, 120));
 const TRAINING_MAX = Math.max(...BASE.training);
 /** Hours in which three training runs overlap. */
-const THREE_RUN_HOURS = BASE.training.filter((t) => t >= 3 * DEMO_DEFAULTS.runSize).length;
-/** Every hour the starting fleet is short falls inside that overlap. */
-export const SHORT_IN_OVERLAP = BASE.unmet.every((u, h) => u <= 1e-6 || BASE.training[h] >= 3 * DEMO_DEFAULTS.runSize);
-const NO_TRAINING = runDemand({ ...DEMO_DEFAULTS, runsPerWeek: 0 });
-const FIXED = runDemand({ ...DEMO_DEFAULTS, batch: 'fixed' });
-const FIXED_SHORT = shortfall(FIXED);
+const THREE_RUN_HOURS = BASE.training.filter((t) => t >= 3 * DEMAND_DEFAULTS.trainingSize).length;
+/** The first challenge's answer: the smallest fleet that serves 99.9%, where the prose after it stands. */
 const FLEX_FLEET = smallestFleet(DEMO_DEFAULTS);
+const FLEX = runDemand({ ...DEMO_DEFAULTS, fleet: FLEX_FLEET });
+const FLEX_SHORT = shortfall(FLEX);
+/** Every hour that fleet is short falls inside the three-run overlap. */
+export const SHORT_IN_OVERLAP = FLEX.unmet.every((u, h) => u <= 1e-6 || FLEX.training[h] >= 3 * DEMAND_DEFAULTS.trainingSize);
+const NO_TRAINING = runDemand({ ...DEMO_DEFAULTS, fleet: FLEX_FLEET, runsPerWeek: 0 });
+const FIXED = runDemand({ ...DEMO_DEFAULTS, fleet: FLEX_FLEET, batch: 'fixed' });
+const FIXED_SHORT = shortfall(FIXED);
 const FIXED_FLEET = smallestFleet({ ...DEMO_DEFAULTS, batch: 'fixed' });
 const FULL_FLEET = smallestFleet(DEMO_DEFAULTS, 1);
-const FLEX_UTIL = runDemand({ ...DEMO_DEFAULTS, fleet: FLEX_FLEET }).utilization;
 const FIXED_UTIL = runDemand({ ...DEMO_DEFAULTS, batch: 'fixed', fleet: FIXED_FLEET }).utilization;
 
 const FAN0 = fanOf(FORECAST_DEFAULTS);
@@ -209,10 +197,13 @@ const HEDGE_GPUS = SAFE - FAN0[FORECAST_MONTHS].p50;
 export const LESSON_NUMBERS = {
   peak: BASE.peak,
   average: BASE_AVG,
-  utilization: BASE.utilization,
-  unmetShare: BASE.unmetShare,
-  shortHours: BASE_SHORT.hours,
-  shortWorst: BASE_SHORT.worstGpus,
+  /** The starting fleet's utilization (it serves everything). */
+  startUtil: BASE.utilization,
+  startUnmet: BASE.unmetShare,
+  /** At the first challenge's answer. */
+  flexUnmet: FLEX.unmetShare,
+  flexShortHours: FLEX_SHORT.hours,
+  flexShortWorst: FLEX_SHORT.worstGpus,
   trough: WEEK1_TROUGH,
   trainingMax: TRAINING_MAX,
   threeRunHours: THREE_RUN_HOURS,
@@ -225,7 +216,7 @@ export const LESSON_NUMBERS = {
   flexFleet: FLEX_FLEET,
   fixedFleet: FIXED_FLEET,
   fullFleet: FULL_FLEET,
-  flexUtil: FLEX_UTIL,
+  flexUtil: FLEX.utilization,
   fixedUtil: FIXED_UTIL,
   start: START,
   median12: FAN0[FORECAST_MONTHS].p50,
@@ -390,9 +381,6 @@ export default function Lesson() {
   const average = sumOf(d.total) / d.hours;
   const solved1 = useMemo(() => fleetSolved(st), [st]);
   const served = 1 - d.unmetShare;
-  const smaller = useMemo(() => (st.fleet - FLEET_STEP >= FLEET_MIN ? 1 - runDemand({ ...st, fleet: st.fleet - FLEET_STEP }).unmetShare : 0), [st]);
-  // Only needed once the challenge is solved: the fleet that would serve every GPU-hour.
-  const fullFleet = useMemo(() => (solved1 ? smallestFleet(st, 1) : Infinity), [solved1, st]);
 
   let caption: string;
   if (short.hours === 0 && d.batchUnplaced < 1) caption = `The fleet serves every GPU-hour wanted and is busy ${pct(d.utilization, 1)} of the time.`;
@@ -405,9 +393,11 @@ export default function Lesson() {
   const status1 =
     st.batch !== 'flexible'
       ? 'Let batch work run whenever there is room first.'
-      : served < SERVE_TARGET - 1e-12
-        ? `${fmt(st.fleet)} GPUs serve ${pct(served, 2)} of the GPU-hours wanted: short of 99.9%.`
-        : `${fmt(st.fleet)} GPUs serve ${pct(served, 2)}. A fleet of ${fmt(st.fleet - FLEET_STEP)} would serve ${pct(smaller, 2)}: could it be smaller?`;
+      : st.runsPerWeek !== DEMO_DEFAULTS.runsPerWeek
+        ? `Set the training runs back to ${fmt(DEMO_DEFAULTS.runsPerWeek, 2)} a week first.`
+        : served < SERVE_TARGET - 1e-12
+          ? `${fmt(st.fleet)} GPUs serve ${pct(served, 3)} of the GPU-hours wanted: short of 99.9%.`
+          : `${fmt(st.fleet)} GPUs serve ${pct(served, 3)} of the GPU-hours wanted. Could the fleet be smaller?`;
 
   const s2 = useScenario('forecast', FORECAST_DEFAULTS);
   const fs = s2.state;
@@ -415,11 +405,10 @@ export default function Lesson() {
   const end = fan[FORECAST_MONTHS];
   const firstRisky = fan.find((p) => p.shortfall > RISK_LIMIT);
   const solved2 = riskSolved(fs);
-  const lower2 = fs.fleet - FORECAST_STEP >= FORECAST_MIN ? finalRisk({ ...fs, fleet: fs.fleet - FORECAST_STEP }) : 1;
   const status2 =
     end.shortfall > RISK_LIMIT + 1e-12
-      ? `With ${fmt(fs.fleet)} GPUs the chance of running short in month 12 is ${pct(end.shortfall)}.`
-      : `${fmt(fs.fleet)} GPUs keep the risk at ${pct(end.shortfall, 1)}; ${fmt(fs.fleet - FORECAST_STEP)} would keep it at ${pct(lower2, 1)}. Could the fleet be smaller?`;
+      ? `With ${fmt(fs.fleet)} GPUs the chance of running short in month 12 is ${pct(end.shortfall, 1)}.`
+      : `${fmt(fs.fleet)} GPUs keep the risk at ${pct(end.shortfall, 1)}. Could the fleet be smaller?`;
 
   const N = LESSON_NUMBERS;
 
@@ -431,8 +420,8 @@ export default function Lesson() {
         then at the question every cloud has to answer long before those hours arrive: how much capacity to have.
       </P>
       <P>
-        Its fleet is counted in A-class equivalents, the yardstick of <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>, in which a B-class GPU counts as two to three
-        A-class GPUs depending on the work. The demand is simulated, but each of its four shapes comes from something the earlier chapters measured. Inference answers
+        Its fleet and its demand are both counted in the A-class equivalents of <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>: each customer’s work is measured by
+        the A-class GPUs it would take, so a B-class GPU in the fleet counts as two to three of them, depending on the work. The demand is simulated, but each of its four shapes comes from something the earlier chapters measured. Inference answers
         people, so it follows their days: busiest in the afternoon, quietest before dawn, lower at weekends, and it must be served at once, close to its users, with
         the headroom of <a href={lessonHref('compute/3.4')}>Lesson 3.4</a>. Developers testing their models work office hours. A training run, as{' '}
         <a href={lessonHref('compute/3.3')}>Lesson 3.3</a> found, wants a large block of GPUs all at once, every one of them for every step, for days on end. And batch
@@ -441,7 +430,7 @@ export default function Lesson() {
       <P>
         In the next demonstration, the colored bands are the GPUs each kind of customer wants in each hour of four simulated weeks, stacked, starting on a Monday; weekends
         are shaded. The dashed line is the fleet, and demand above it is red. In this model that demand goes unserved: those customers wait, or take their work
-        elsewhere. Change the customers and the size of the fleet:
+        elsewhere. Change the training runs, when batch work may run, and the size of the fleet:
       </P>
 
       <Figure name="Compute Demand Forecaster" scenario={s1}>
@@ -464,7 +453,7 @@ export default function Lesson() {
             { label: 'busiest hour', value: gpus(d.peak) },
             { label: 'average hour', value: gpus(average) },
             { label: 'fleet busy', value: pct(d.utilization, 1) },
-            { label: 'GPU-hours unserved', value: pct(d.unmetShare, 2), tone: d.unmetShare > 0.001 ? 'red' : undefined },
+            { label: 'GPU-hours unserved', value: pct(d.unmetShare, 3), tone: d.unmetShare > 0.001 ? 'red' : undefined },
           ]}
         />
         <Segmented
@@ -476,47 +465,47 @@ export default function Lesson() {
             { value: 'fixed', label: 'Batch runs as submitted, 09:00–17:00' },
           ]}
         />
-        <Slider label="Inference at its peak" tone="orange" value={st.inferencePeak} min={1000} max={4000} step={100} onChange={(v) => s1.set({ inferencePeak: v })} display={gpus(st.inferencePeak)} />
-        <Slider label="Inference growth" tone="orange" value={st.growth} min={0} max={6} step={0.5} onChange={(v) => s1.set({ growth: v })} display={`${fmt(st.growth, 1)}% a week`} />
         <Slider label="Training runs" value={st.runsPerWeek} min={0} max={2} step={0.25} onChange={(v) => s1.set({ runsPerWeek: v })} display={`${fmt(st.runsPerWeek, 2)} a week`} />
-        <Slider label="GPUs per run" value={st.runSize} min={256} max={2048} step={256} onChange={(v) => s1.set({ runSize: v })} display={fmt(st.runSize)} />
-        <Slider label="Batch work" tone="teal" value={st.batchPerDay} min={0} max={30000} step={1000} onChange={(v) => s1.set({ batchPerDay: v })} display={`${fmt(st.batchPerDay)} GPU-h a day`} />
         <Slider label="Fleet" value={st.fleet} min={FLEET_MIN} max={FLEET_MAX} step={FLEET_STEP} onChange={(v) => s1.set({ fleet: v })} display={gpus(st.fleet)} />
         <Caption>{caption}</Caption>
       </Figure>
 
       <P>
-        At the start, inference wants {gpus(DEMO_DEFAULTS.inferencePeak)} at a weekday’s busiest hour in the first week and grows {fmt(DEMO_DEFAULTS.growth)}% a week; overnight
+        Inference wants {gpus(DEMAND_DEFAULTS.inferencePeak)} at a weekday’s busiest hour in the first week and grows {fmt(DEMAND_DEFAULTS.growthPerWeek * 100)}% a week; overnight
         it falls to as little as {gpus(N.trough)}, and weekends run 20% lower. Developers add {fmt(DEMAND_DEFAULTS.devGpus)} GPUs in office hours. Training runs of{' '}
-        {fmt(DEMO_DEFAULTS.runSize)} GPUs, each lasting {fmt(DEMAND_DEFAULTS.trainingDays)} days, start about three times a month, and this month opens with three of them
-        running at once for {fmt(N.threeRunHours)} hours, holding {gpus(N.trainingMax)}. Batch work, {fmt(DEMO_DEFAULTS.batchPerDay)} GPU-hours a day, fills in wherever the others leave
+        {fmt(DEMAND_DEFAULTS.trainingSize)} GPUs, each lasting {fmt(DEMAND_DEFAULTS.trainingDays)} days, start about three times a month, and this month opens with three of them
+        running at once for {fmt(N.threeRunHours)} hours, holding {gpus(N.trainingMax)}. Batch work, {fmt(DEMAND_DEFAULTS.batchPerDay)} GPU-hours a day, fills in wherever the others leave
         room. Over the four weeks, inference takes {pct(N.shares.inference)} of the GPU-hours, training {pct(N.shares.training)}, batch {pct(N.shares.batch)} and developers{' '}
         {pct(N.shares.dev)}.
       </P>
       <P>
-        The <K tone="ink">busiest hour</K> wants {gpus(N.peak)}; the average hour, {gpus(N.average)}. The {fmt(DEMO_DEFAULTS.fleet)}-GPU fleet is busy{' '}
-        {pct(N.utilization, 1)} of the time — its <K tone="ink">utilization</K> — and
-        still turns away {pct(N.unmetShare, 2)} of the GPU-hours wanted: all of it in {fmt(N.shortHours)} hours at the start of the month, when the three training runs
-        overlap, by up to {gpus(N.shortWorst)} at the worst of them. Now set the training runs to zero. The busiest hour falls to {gpus(N.noTrainingPeak)}, and the same fleet would be busy only{' '}
-        {pct(N.noTrainingUtil, 1)} of the time. Training is the lumpiest demand a cloud sees: it arrives in blocks of a thousand GPUs or more that must all be free at
-        once, and a few blocks landing together set the peak.
+        The <K tone="ink">busiest hour</K> wants {gpus(N.peak)}; the average hour, {gpus(N.average)}. The starting fleet of {fmt(DEMO_DEFAULTS.fleet)} is a little bigger
+        than the busiest hour, so it serves every GPU-hour wanted, but it is busy only {pct(N.startUtil, 1)} of the time — its utilization, as{' '}
+        <a href={lessonHref('compute/4.5')}>Lesson 4.5</a> called it. A cloud needn’t serve every last hour, though.
       </P>
 
       <Challenge
         id="a"
-        question="With batch work allowed to run whenever there is room, find the smallest fleet, to the nearest hundred GPUs, that serves at least 99.9% of the GPU-hours demanded."
+        question={`The busiest hour wants ${gpus(N.peak)}. Predict first: is the smallest fleet that serves 99.9% of the GPU-hours wanted bigger or smaller than that? Then, with batch work running whenever there is room and the training runs at ${fmt(DEMO_DEFAULTS.runsPerWeek, 2)} a week, find that fleet, to the nearest hundred GPUs.`}
         solved={solved1}
         status={status1}
-        success={`Solved. ${fmt(st.fleet)} GPUs serve ${pct(served, 2)} of the GPU-hours wanted. ${
-          st.fleet < d.peak ? `That is fewer than the busiest hour’s ${fmt(d.peak)}: the last tenth of a percent is a few hours when demand piles up, and serving all of it would take ${Number.isFinite(fullFleet) ? `${fmt(fullFleet - st.fleet)} more GPUs` : 'more GPUs than the slider allows'}, idle the rest of the month.` : 'At these settings the fleet must cover even the busiest hour.'
-        }`}
+        success={`Solved: ${gpus(st.fleet)}, ${fmt(d.peak - st.fleet)} fewer than the busiest hour, serve ${pct(served, 3)} of the GPU-hours wanted.`}
       />
+
+      <P>
+        A fleet smaller than the busiest hour is enough. At {gpus(N.flexFleet)} it turns away {pct(N.flexUnmet, 3)} of the GPU-hours wanted, all of it in{' '}
+        {fmt(N.flexShortHours)} hours at the start of the month, when the three training runs overlap, by up to {gpus(N.flexShortWorst)} at the worst of them, and it is
+        busy {pct(N.flexUtil, 1)} of the time. Serving those few hours too would take {gpus(N.fullFleet)}, {fmt(N.fullFleet - N.flexFleet)} more, idle the rest of the
+        month. Now set the training runs to zero. The busiest hour falls to {gpus(N.noTrainingPeak)}, and the same {fmt(N.flexFleet)} GPUs would be busy only{' '}
+        {pct(N.noTrainingUtil, 1)} of the time. Training is the lumpiest demand a cloud sees: it arrives in blocks of a thousand GPUs or more that must all be free at
+        once, and a few blocks landing together set the peak.
+      </P>
 
       <H2>Flexible work fills the valleys</H2>
       <P>
-        <K tone="teal">Flexibility</K> is worth GPUs. Switch batch work to run as submitted, from 09:00 to 17:00, and it lands on top of inference’s afternoon peak instead of in its
-        valleys. The busiest hour rises to {gpus(N.fixedPeak)}, and the fleet is now short in {fmt(N.fixedShortHours)} hours, turning away {pct(N.fixedUnmet, 2)} of the
-        GPU-hours wanted. To serve 99.9% again it would need {gpus(N.fixedFleet)} instead of {gpus(N.flexFleet)}: {fmt(N.fixedFleet - N.flexFleet)} more GPUs for exactly
+        <K tone="teal">Flexibility</K> is worth GPUs. Set the training runs back, and switch batch work to run as submitted, from 09:00 to 17:00: it lands on top of
+        inference’s afternoon peak instead of in its valleys. The busiest hour rises to {gpus(N.fixedPeak)}, and the {fmt(N.flexFleet)}-GPU fleet is now short in{' '}
+        {fmt(N.fixedShortHours)} hours, turning away {pct(N.fixedUnmet, 2)} of the GPU-hours wanted. To serve 99.9% again it would need {gpus(N.fixedFleet)} instead of {gpus(N.flexFleet)}: {fmt(N.fixedFleet - N.flexFleet)} more GPUs for exactly
         the same work, busy {pct(N.fixedUtil, 1)} of the time instead of {pct(N.flexUtil, 1)}.
       </P>
       <P>
@@ -531,7 +520,8 @@ export default function Lesson() {
         Matching a fleet to hourly demand is the easy part, because the fleet can’t change by the hour anyway. GPUs ordered today arrive months from now, as{' '}
         <a href={lessonHref('compute/5.2')}>Lesson 5.2</a> showed, and a data center to put them in takes longer still. So a cloud has to decide now how much capacity it
         will need at its busiest hour a year from now, and demand for AI compute has been growing fast and unevenly. Nor can it look the answer up. An electricity grid’s
-        operator forecasts a whole region’s demand; a GPU cloud sees only its own customers, and there is no exchange that publishes how much compute everyone wants.
+        operator forecasts a whole region’s demand; a GPU cloud sees only its own customers, and with no single exchange for GPU-hours (
+        <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>), nothing publishes how much compute everyone wants.
       </P>
       <P>
         In the next demonstration, demand at the busiest hour starts at {gpus(START)} — this month’s peak, rounded — and grows by an average rate each month, with each
@@ -558,7 +548,7 @@ export default function Lesson() {
           items={[
             { label: 'median in month 12', value: gpus(end.p50) },
             { label: '1 in 20 chance above', value: gpus(end.p95) },
-            { label: 'chance of running short in month 12', value: pct(end.shortfall), tone: end.shortfall > RISK_LIMIT ? 'red' : undefined },
+            { label: 'chance of running short in month 12', value: pct(end.shortfall, 1), tone: end.shortfall > RISK_LIMIT ? 'red' : undefined },
             { label: 'risk first passes 10%', value: firstRisky ? `month ${firstRisky.month}` : 'never' },
           ]}
         />
@@ -569,14 +559,14 @@ export default function Lesson() {
 
       <P>
         At 5% a month, give or take 4%, the busiest hour’s median after a year is {gpus(N.median12)}, but the 90% range runs from {gpus(N.p5_12)} to {gpus(N.p95_12)}. A
-        fleet of {fmt(FORECAST_DEFAULTS.fleet)} GPUs, comfortably bigger than today’s peak, carries a {pct(N.risk6)} chance of running short by month 6, {pct(N.risk9)} by
-        month 9 and {pct(N.risk12)} by month 12. Ordering for the median isn’t enough either: half the time, demand comes in above it.
+        fleet of {fmt(FORECAST_DEFAULTS.fleet)} GPUs, comfortably bigger than today’s peak, carries a {pct(N.risk6)} chance of running short in month 6, {pct(N.risk9)} in
+        month 9 and {pct(N.risk12)} in month 12. Ordering for the median isn’t enough either: half the time, demand comes in above it.
       </P>
 
       <Challenge
         id="b"
         figure="Compute Demand Forecaster · forecast"
-        question="Find the smallest fleet, to the nearest hundred GPUs, that keeps the chance of running short in month 12 at 10% or less."
+        question="Estimate first, from the readouts: a 10% chance of running short means a fleet that demand outgrows one time in ten, somewhere between the month-12 median and the level it passes only one time in twenty. Then find the smallest fleet, to the nearest hundred GPUs, that keeps the chance of running short in month 12 at 10% or less."
         solved={solved2}
         status={status2}
         success={`Solved. ${fmt(fs.fleet)} GPUs keep the month-12 risk at ${pct(end.shortfall, 1)}, ${fmt(fs.fleet - end.p50)} more than the median forecast of ${fmt(end.p50)}. Those extra GPUs are what the uncertainty costs.`}

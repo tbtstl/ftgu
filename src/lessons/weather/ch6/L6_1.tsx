@@ -1,5 +1,6 @@
-import { useDeferredValue, useMemo } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import {
+  Button,
   Caption,
   Challenge,
   DataTable,
@@ -32,14 +33,16 @@ import { DAYS, YEARS, monthDays, ninoMonth, tempF } from '../../../model/weather
 import { MONTH_SHORT, MONTH_START, normalTemp } from '../../../model/weather/region';
 import {
   REGION_DEFAULTS,
-  isCalder,
+  confirmResetPart,
+  isFenwick,
   regionClimate,
   regionKnobs,
-  resetCapstone,
+  setCapstoneParts,
   updateCapstone,
   useWeatherCapstone,
   type RegionSettings,
 } from '../shared/capstone';
+import { CapstoneStrip, regionWords } from '../shared/CapstoneStrip';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -67,7 +70,7 @@ export interface RegionWinters {
   laMean: number;
   /** Average July cooling degree days. */
   julyCdd: number;
-  /** Calder Gas & Light's winter margin, if it served this region: its standard deviation and its 1-in-20 shortfall, $. */
+  /** Fenwick Gas & Light's winter margin, if it served this region: its standard deviation and its 1-in-20 shortfall, $. */
   marginSd: number;
   shortfall: number;
 }
@@ -94,7 +97,7 @@ export function regionWinters(r: RegionSettings): RegionWinters {
   let july = 0;
   for (let y = 1; y <= YEARS; y++) {
     const { start, days } = monthDays(y, 6);
-    for (let i = 0; i < days; i++) july += cdd(tempF('calder', start + i, knobs));
+    for (let i = 0; i < days; i++) july += cdd(tempF('fenwick', start + i, knobs));
   }
   const m = summarize(utilityWinters(knobs).map((w) => w.margin));
   const out: RegionWinters = {
@@ -117,29 +120,49 @@ export function regionWinters(r: RegionSettings): RegionWinters {
   return out;
 }
 
-/** Calder Bay's own winters: the reference every region is compared with. */
-export function calderWinters(): RegionWinters {
+/** Fenwick Bay's own winters: the reference every region is compared with. */
+export function fenwickWinters(): RegionWinters {
   return regionWinters(REGION_DEFAULTS);
 }
 
 // ---------------------------------------------------------------------------
 // The challenges.
 
-export const MEAN_TOLERANCE = 0.05;
-export const RISK_MULTIPLE = 1.5;
-
-/** A heating season as large as Calder Bay's on average (within 5%), with winters at least 1.5 times as variable. */
-export function riskierSolved(r: RegionSettings): boolean {
-  const w = regionWinters(r);
-  const c = calderWinters();
-  return Math.abs(w.mean / c.mean - 1) <= MEAN_TOLERANCE && w.sd >= RISK_MULTIPLE * c.sd;
+/** Whether the region is Fenwick Bay's in everything but the day-to-day variability. */
+export function othersFenwick(r: RegionSettings): boolean {
+  return (Object.keys(REGION_DEFAULTS) as Array<keyof RegionSettings>).every((k) => k === 'variability' || Math.abs(r[k] - REGION_DEFAULTS[k]) < 1e-9);
 }
+
+/** Fenwick Bay with only the variability changed, to `v`. */
+export function onlyVariability(r: RegionSettings, v: number): boolean {
+  return othersFenwick(r) && Math.abs(r.variability - v) < 1e-9;
+}
+
+/** The first challenge's setting: every day's swing doubled. */
+export const DOUBLED = 2;
+/** The second challenge's setting: every day's swing halved. */
+export const QUIETED = 0.5;
+
+/** First challenge: the reader predicts whether doubling the days' swings doubles the winters' spread, then sets it. */
+export const doubledSolved = (r: RegionSettings) => onlyVariability(r, DOUBLED);
+/** Second challenge: the reader predicts, from the variance shares, whether quieting the days to half makes ENSO explain half, then sets it. */
+export const quietedSolved = (r: RegionSettings) => onlyVariability(r, QUIETED);
 
 export const ENSO_SHARE_TARGET = 0.5;
 
 /** ENSO explains at least half of the variance of the region's winters. */
 export function ensoShareSolved(r: RegionSettings): boolean {
   return regionWinters(r).r2 >= ENSO_SHARE_TARGET;
+}
+
+/** In Fenwick Bay's geography with the variability at × 1, the weakest pull (on the slider's 0.1 grid) at which ENSO explains half. */
+export const ENSO_PULL_ANSWER = 2.1;
+/** The same with the days quieted to × 0.5. */
+export const QUIET_PULL_ANSWER = 1.2;
+
+/** The share of a region's winter-to-winter variance that its warming trend adds: what setting the trend to zero removes. */
+export function trendShareOf(w: RegionWinters, noTrend: RegionWinters): number {
+  return 1 - (noTrend.sd * noTrend.sd) / (w.sd * w.sd);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +177,7 @@ export function regionYear(r: RegionSettings): YearBands {
   if (hit) return hit;
   const knobs = regionKnobs(r);
   const series = new Float64Array(DAYS);
-  for (let d = 0; d < DAYS; d++) series[d] = tempF('calder', d, knobs);
+  for (let d = 0; d < DAYS; d++) series[d] = tempF('fenwick', d, knobs);
   const b = yearBands(series);
   if (yearCache.size > 100) yearCache.clear();
   yearCache.set(key, b);
@@ -169,7 +192,7 @@ const DAY_GRID = Array.from({ length: 74 }, (_, i) => Math.min(365, i * 5));
 function YearChart({ r }: { r: RegionSettings }) {
   const bands = regionYear(r);
   const cl = regionClimate(r);
-  const calder = regionClimate(REGION_DEFAULTS);
+  const fenwick = regionClimate(REGION_DEFAULTS);
   const line = (c: typeof cl) => linePath(DAY_GRID.map(YX), DAY_GRID.map((d) => clampY(normalTemp(c, d))));
   const band = areaPath(bands.doy.map(YX), bands.high.map(clampY), bands.low.map(clampY));
   return (
@@ -177,7 +200,7 @@ function YearChart({ r }: { r: RegionSettings }) {
       className="chart"
       viewBox="0 0 640 306"
       role="img"
-      aria-label={`The region's year: a January normal of ${fmt(monthNormal(cl, 0), 1)} °F and a July normal of ${fmt(monthNormal(cl, 6), 1)} °F, with the middle 80% of its simulated days shaded, against Calder Bay's normal of ${fmt(monthNormal(calder, 0), 1)} °F in January and ${fmt(monthNormal(calder, 6), 1)} °F in July.`}
+      aria-label={`The region's year: a January normal of ${fmt(monthNormal(cl, 0), 1)} °F and a July normal of ${fmt(monthNormal(cl, 6), 1)} °F, with the middle 80% of its simulated days shaded, against Fenwick Bay's normal of ${fmt(monthNormal(fenwick, 0), 1)} °F in January and ${fmt(monthNormal(fenwick, 6), 1)} °F in July.`}
     >
       <text className="ax" x={56} y={12}>
         Daily mean temperature, °F
@@ -188,7 +211,7 @@ function YearChart({ r }: { r: RegionSettings }) {
       <text className="ax ax-e" x={616} y={YY(65) - 5} style={{ fill: TEXT.orange }}>
         65 °F, the degree-day base
       </text>
-      <path d={line(calder)} fill="none" stroke="#777" strokeWidth={1.6} strokeDasharray="6 4" />
+      <path d={line(fenwick)} fill="none" stroke="#777" strokeWidth={1.6} strokeDasharray="6 4" />
       <path d={line(cl)} fill="none" stroke={GRAPHIC.red} strokeWidth={2.6} />
       {MONTH_SHORT.map((m, i) => (
         <text key={m} className="ax ax-m" x={YX(MONTH_START[i] + 15)} y={298}>
@@ -274,7 +297,7 @@ function GeographySliders({ r }: { r: RegionSettings }) {
     <>
       <Slider label="Latitude" value={r.latitude} min={25} max={55} step={0.5} onChange={(v) => set({ latitude: v })} display={`${fmt(r.latitude, 1)}° N`} />
       <Slider
-        label="Distance from a windward sea"
+        label="Continentality"
         value={r.continentality}
         min={0}
         max={1}
@@ -291,11 +314,61 @@ function WeatherSliders({ r, trend = true }: { r: RegionSettings; trend?: boolea
   return (
     <>
       <Slider label="The Pacific’s pull on winter" tone={WX.temperature} value={r.ensoF} min={0} max={3} step={0.1} onChange={(v) => set({ ensoF: v })} display={`${fmt(r.ensoF, 1)} °F per °C`} />
-      <Slider label="Day-to-day variability" tone={WX.temperature} value={r.variability} min={0.5} max={2} step={0.05} onChange={(v) => set({ variability: v })} display={`× ${fmt(r.variability, 2)}`} />
+      <Slider label="Day-to-day variability" tone={WX.temperature} value={r.variability} min={0.25} max={2.5} step={0.05} onChange={(v) => set({ variability: v })} display={`× ${fmt(r.variability, 2)}`} />
       {trend && (
         <Slider label="Warming trend" tone={WX.temperature} value={r.trend} min={-0.05} max={0.1} step={0.01} onChange={(v) => set({ trend: v })} display={`${signed(r.trend, 2)} °F a year`} />
       )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The end of the lesson: keep the region, or return to Fenwick Bay to follow the text.
+
+const BOX = { margin: '1.5em 0 0', padding: '10px 14px 12px', border: '1px solid var(--rule-strong)', borderRadius: 6, fontSize: 14, lineHeight: 1.55, color: 'var(--muted)' } as const;
+
+function RegionChoice({ region }: { region: RegionSettings }) {
+  const [kept, setKept] = useState(false);
+  const [undo, setUndo] = useState<RegionSettings | null>(null);
+  const fenwick = isFenwick(region);
+  return (
+    <aside aria-label="The region for the rest of the capstone" style={BOX}>
+      <div style={{ fontSize: 13 }}>The region for Lessons 6.2–6.5</div>
+      <p style={{ margin: '4px 0 8px', color: 'var(--text)' }}>
+        {fenwick
+          ? 'Fenwick Bay: the next four lessons run on it, and their text quotes it number for number.'
+          : `Your own: ${regionWords(region).replace(/^your own: /, '')}. Keep it, and the next four lessons run their figures and challenges on it, while their text quotes Fenwick Bay’s numbers and each lesson shows where yours differ. Or return to Fenwick Bay to follow the text number for number.`}
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px' }}>
+        {!fenwick && (
+          <>
+            <Button primary onClick={() => setKept(true)}>
+              Keep my region
+            </Button>
+            <Button
+              onClick={() => {
+                setUndo(region);
+                setKept(false);
+                setCapstoneParts({ region: REGION_DEFAULTS });
+              }}
+            >
+              Return to Fenwick Bay
+            </Button>
+            {kept && <span>Kept. The top of every capstone lesson shows it, with a button back to Fenwick Bay.</span>}
+          </>
+        )}
+        {fenwick && undo && (
+          <Button
+            onClick={() => {
+              setCapstoneParts({ region: undo });
+              setUndo(null);
+            }}
+          >
+            Undo: back to my region
+          </Button>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -305,12 +378,13 @@ export default function Lesson() {
   const { region } = useWeatherCapstone();
   const r = useDeferredValue(region);
   const w = regionWinters(r);
-  const c = calderWinters();
+  const c = fenwickWinters();
   const cl = regionClimate(r);
-  const calderCl = regionClimate(REGION_DEFAULTS);
-  const calder = isCalder(region);
-  const solved = riskierSolved(region);
-  const solved2 = ensoShareSolved(region);
+  const fenwickCl = regionClimate(REGION_DEFAULTS);
+  const fenwick = isFenwick(region);
+  const solved = doubledSolved(region);
+  const solved2 = quietedSolved(region);
+  const others = othersFenwick(region);
 
   // Numbers the prose quotes, from the same model the figures run.
   const n = useMemo(() => {
@@ -324,22 +398,29 @@ export default function Lesson() {
       noTrend: at({ trend: 0 }),
       fastTrend: at({ trend: 0.1 }),
       wild: at({ variability: 1.5 }),
-      pull: at({ ensoF: 2.1 }),
-      calm: at({ variability: 0.5 }),
+      quietPull: at({ variability: QUIETED, ensoF: QUIET_PULL_ANSWER }),
     };
   }, []);
+  // Of Fenwick Bay's winter-to-winter variance: ENSO's share, the trend's (what setting the trend to
+  // zero removes), and what is left for the days themselves.
+  const trendShare = trendShareOf(c, n.noTrend);
+  const daysShare = 1 - c.r2 - trendShare;
+  // What the shares predict for ENSO's share with the days' part cut to a quarter.
+  const quietPredicted = c.r2 / (c.r2 + trendShare + daysShare / 4);
   const decade = (x: RegionWinters, from: number) => x.hdd.slice(from, from + 10).reduce((a, b) => a + b, 0) / 10;
 
   const rows = [
-    { key: 'mine', name: calder ? 'Your region (Calder Bay)' : 'Your region', cl, w },
-    { key: 'calder', name: 'Calder Bay', cl: calderCl, w: c },
+    { key: 'mine', name: fenwick ? 'Your region (Fenwick Bay)' : 'Your region', cl, w },
+    { key: 'fenwick', name: 'Fenwick Bay', cl: fenwickCl, w: c },
   ];
 
   const ratio = w.sd / c.sd;
   const meanOff = w.mean / c.mean - 1;
+  const othersFirst = 'Put the other controls back to Fenwick Bay’s first (Reset does it): only the variability should change.';
 
   return (
     <LessonPage id="weather/6.1">
+      <CapstoneStrip parts={['region']} button="Return to Fenwick Bay" />
       <P>
         This course has climbed from sunlight to markets one step at a time. Chapter 1 asked why weather happens at all: a planet heated unevenly, air that grows
         lighter as it warms, water vapor that carries energy, and a spinning Earth that turns every push into a wind. Chapter 2 assembled those pieces into the
@@ -348,17 +429,17 @@ export default function Lesson() {
         Chapter 5 wrote contracts on the weather, priced them, traded them against a market and tested every idea against history.
       </P>
       <P>
-        Each of those lessons took one piece at a time, in Calder Bay. This chapter puts them together, in a region of your own. First you build the region;
+        Each of those lessons took one piece at a time, in Fenwick Bay. This chapter puts them together, in a region of your own. First you build the region;
         in <a href={lessonHref('weather/6.2')}>6.2</a> you forecast its days; in <a href={lessonHref('weather/6.3')}>6.3</a> you turn those forecasts into a
         business’s exposure; in <a href={lessonHref('weather/6.4')}>6.4</a> you price contracts on its weather and choose which to hold; and in{' '}
         <a href={lessonHref('weather/6.5')}>6.5</a> you replay the whole book over the archive’s winters, with every decision made from forecasts issued on their own
         dates. There is nothing new to learn. Every mechanic is one you have already used, and your choices carry from lesson to lesson — they are saved in your
-        browser, and nowhere else.
+        browser, and nowhere else. The text quotes Fenwick Bay and the starting settings throughout; the box at the top of each lesson shows what yours are.
       </P>
       <P>
         A region, in this course, is the climate of the station its contracts settle on. Three facts set it, by the rules of{' '}
-        <a href={lessonHref('weather/2.5')}>Lesson 2.5</a>: its <b>latitude</b>, which sets the sunlight of <a href={lessonHref('weather/1.1')}>Lesson 1.1</a>; its
-        distance from a sea the wind blows in from, which damps the seasons — less so on an east coast, where the westerlies of{' '}
+        <a href={lessonHref('weather/2.5')}>Lesson 2.5</a>: its <b>latitude</b>, which sets the sunlight of <a href={lessonHref('weather/1.1')}>Lesson 1.1</a>; its{' '}
+        <b>continentality</b>, how far it lies from a sea the wind blows in from, which damps the seasons — less so on an east coast, where the westerlies of{' '}
         <a href={lessonHref('weather/2.1')}>Lesson 2.1</a> arrive over land; and its <b>elevation</b>, which subtracts the lapse rate of <a href={lessonHref('weather/1.2')}>Lesson 1.2</a>. Three more knobs act on the weather
         itself: how hard the Pacific pulls on its winters (<a href={lessonHref('weather/2.4')}>Lesson 2.4</a>), how far its days swing from one to the next, and how
         fast it is warming. Underneath is the course’s simulated archive — the same 41 years of days, each day’s departure from normal stretched and shifted by your
@@ -366,21 +447,21 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the red line is your region’s normal year and the shaded band holds the middle 80% of its simulated days; the dashed gray line is
-        Calder Bay’s normal year, where the region starts. The table compares the two, including the <K tone={WX.index}>heating season</K> — November through March,
+        Fenwick Bay’s normal year, where the region starts. The table compares the two, including the <K tone={WX.index}>heating season</K> — November through March,
         counted in the degree days of <a href={lessonHref('weather/4.1')}>Lesson 4.1</a> — and how much it varies from one winter to the next. Build the region:
       </P>
 
-      <Figure name="Weather World Builder" onReset={() => resetCapstone('region')}>
+      <Figure name="Weather World Builder" onReset={() => confirmResetPart('region')}>
         <YearChart r={r} />
         <Legend
           items={[
             { label: 'Your region’s normal', color: GRAPHIC.red, kind: 'line' },
             { label: 'Middle 80% of its days', color: tint(GRAPHIC.red, 0.35) },
-            { label: 'Calder Bay’s normal', color: '#777', kind: 'line', dashed: true },
+            { label: 'Fenwick Bay’s normal', color: '#777', kind: 'line', dashed: true },
           ]}
         />
         <DataTable
-          caption="Your region and Calder Bay: annual mean, January and July normals, the heating season's average degree days and their winter-to-winter standard deviation, and July's cooling degree days"
+          caption="Your region and Fenwick Bay: annual mean, January and July normals, the heating season's average degree days and their winter-to-winter standard deviation, and July's cooling degree days"
           rows={rows}
           rowKey={(row) => row.key}
           rowClass={(row) => (row.key === 'mine' ? 'hl' : '')}
@@ -391,43 +472,43 @@ export default function Lesson() {
             { label: 'July', cell: (row) => `${fmt(monthNormal(row.cl, 6), 1)} °F`, align: 'right' },
             { label: <span style={{ color: TEXT.orange }}>Heating season</span>, cell: (row) => `${fmt(row.w.mean)} HDD`, align: 'right' },
             { label: 'Winter to winter', cell: (row) => `± ${fmt(row.w.sd)}`, align: 'right' },
-            { label: 'July', cell: (row) => `${fmt(row.w.julyCdd)} CDD`, align: 'right' },
+            { label: 'July cooling', cell: (row) => `${fmt(row.w.julyCdd)} CDD`, align: 'right' },
           ]}
         />
         <GeographySliders r={region} />
         <WeatherSliders r={region} />
         <Caption>
-          {calder
-            ? 'This is Calder Bay’s own climate. Move any control to make the region your own.'
-            : `Your heating season averages ${signed(meanOff * 100)}% against Calder Bay’s, and varies ${fmt(ratio, 2)} times as much from winter to winter.`}
+          {fenwick
+            ? 'This is Fenwick Bay’s own climate. Move any control to make the region your own.'
+            : `Your heating season averages ${signed(meanOff * 100)}% against Fenwick Bay’s, and varies ${fmt(ratio, 2)} times as much from winter to winter.`}
         </Caption>
       </Figure>
 
       <P>
         Each control does what its lesson said it would. Move the region to 45° north and its heating season grows from {fmt(c.mean)} to {fmt(n.north.mean)} degree
         days; at 35°, it shrinks to {fmt(n.south.mean)}. Put the sea upwind and the seasons flatten: with the wind off the sea, a winter collects only{' '}
-        {fmt(n.sea.mean)} degree days and varies by {fmt(n.sea.sd)} from one winter to the next, against Calder Bay’s {fmt(c.sd)}. Deep inland, it is{' '}
+        {fmt(n.sea.mean)} degree days and varies by {fmt(n.sea.sd)} from one winter to the next, against Fenwick Bay’s {fmt(c.sd)}. Deep inland, it is{' '}
         {fmt(n.inland.mean)} and {fmt(n.inland.sd)}. Raise it 500 m and every day is colder by the lapse rate: {fmt(n.high.mean)} degree days.
       </P>
       <P>
-        The weather knobs are subtler. Raise the warming trend to 0.10 °F a year, more than three times Calder Bay’s, and the average barely moves, but the first ten winters now
-        average {fmt(decade(n.fastTrend, 0))} degree days and the last ten {fmt(decade(n.fastTrend, 30))}: a market that prices a winter from the past has to
-        allow for the drift, as the burn analysis of <a href={lessonHref('weather/5.2')}>Lesson 5.2</a> did. Stretch the day-to-day variability to 1.5 times and
-        the winter-to-winter spread grows to {fmt(n.wild.sd)}, only {fmt(n.wild.sd / c.sd, 2)} times Calder Bay’s. Part of a winter’s spread doesn’t come from its
-        days at all. It comes from the Pacific, and from the trend, and stretching the days leaves those alone.
+        The weather knobs are subtler. Raise the warming trend to 0.10 °F a year, more than three times Fenwick Bay’s, and the average barely moves, but the first ten
+        winters now average {fmt(decade(n.fastTrend, 0))} degree days and the last ten {fmt(decade(n.fastTrend, 30))}: a market that prices a winter from the past
+        has to allow for the drift, as the burn analysis of <a href={lessonHref('weather/5.2')}>Lesson 5.2</a> did. The day-to-day variability stretches every
+        day’s departure from its normal, the cold snaps and the mild spells alike.
       </P>
 
       <Challenge
         id="a"
-        question="Build a region whose heating season averages within 5% of Calder Bay’s, but whose winters vary at least 1.5 times as much from one to the next."
+        question={`Predict first: Fenwick Bay’s winters vary by ±${fmt(c.sd)} degree days from one to the next. Make every day swing twice as far from its normal — variability × ${fmt(DOUBLED)}, everything else left as Fenwick Bay’s — and will the winters vary twice as much, by ±${fmt(2 * c.sd)}? Decide, then set it and read the table.`}
         solved={solved}
-        status={`Right now your heating season averages ${fmt(w.mean)} degree days (${signed(meanOff * 100, 1)}% against Calder Bay’s ${fmt(c.mean)}) and varies by ${fmt(w.sd)}, ${fmt(ratio, 2)} times Calder Bay’s ${fmt(c.sd)}.`}
-        success={`Solved: ${fmt(w.mean)} degree days on average, swinging by ${fmt(w.sd)} — ${fmt(ratio, 2)} times Calder Bay’s. ${
-          w.r2 >= 0.4
-            ? `Much of that extra spread comes from the Pacific: ENSO now explains ${pct(w.r2)} of it. That part of the risk is announced in the autumn, months ahead — the edge Lesson 5.3 traded.`
-            : `Most of that extra spread comes from the days themselves: ENSO explains only ${pct(w.r2)} of it. That part of the risk no forecast sees more than about two weeks ahead, as Lesson 3.4 showed. It can be hedged, as in Lesson 5.5, but not predicted from the autumn.`
-        } The same size of risk can be a very different thing to trade.`}
+        status={others ? `Make your prediction, then set the day-to-day variability to × ${fmt(DOUBLED)}.` : othersFirst}
+        success={`Solved: the winters now vary by ±${fmt(w.sd)}, ${fmt(ratio, 2)} times as much — not twice. Part of a winter’s spread doesn’t come from its days at all: it comes from the Pacific and from the trend, and stretching the days leaves those alone. The average moves a little too, to ${fmt(w.mean)}, because a mild day can’t count fewer than zero degree days while a cold one counts in full.`}
       />
+
+      <P>
+        Stretch the days by half, to × 1.5, and the spread grows only {fmt(n.wild.sd / c.sd, 2)} times, to {fmt(n.wild.sd)}. A winter’s spread has parts that
+        don’t come from its days — the Pacific’s tilt and the warming trend — and the next demonstration pulls them apart.
+      </P>
 
       <H2>The winters you’ll trade</H2>
       <P>
@@ -435,11 +516,11 @@ export default function Lesson() {
         <a href={lessonHref('weather/5.5')}>Lesson 5.5</a>, the monthly futures of <a href={lessonHref('weather/5.3')}>Lesson 5.3</a>. In the next demonstration, the
         upper chart is your region’s 40 simulated winters, each drawn as how far its heating season came in above or below the region’s average: red circles and
         bars for El Niño winters, blue squares and bars for La Niña winters, gray for the rest. The lower chart places each winter against that winter’s
-        December–February <K tone={WX.temperature}>Niño-3.4</K>, with the best straight line through them. The readouts imagine Calder Gas &amp; Light serving your
-        region instead. The last two controls are the same as in <FigRef to="Weather World Builder">the first demonstration</FigRef>:
+        December–February <K tone={WX.temperature}>Niño-3.4</K>, with the best straight line through them. The readouts imagine Fenwick Gas &amp; Light serving your
+        region instead. Its two controls are the same as in <FigRef to="Weather World Builder">the first demonstration</FigRef>:
       </P>
 
-      <Figure name="Weather World Builder · its winters" onReset={() => resetCapstone('region')}>
+      <Figure name="Weather World Builder · its winters" onReset={() => confirmResetPart('region')}>
         <WintersChart w={w} />
         <Legend
           items={[
@@ -462,10 +543,12 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At Calder Bay’s own settings, the winter’s Niño-3.4 explains {pct(c.r2)} of the variance of its heating seasons. El Niño winters average {fmt(c.elMean)}{' '}
-        degree days and La Niña winters {fmt(c.laMean)}, a gap of {fmt(c.laMean - c.elMean)}. Calder Gas &amp; Light’s winter margin varies with a standard
-        deviation of {usd(c.marginSd / 1e6, 1)} million, and one winter in 20 falls {usd(c.shortfall / 1e6, 1)} million short of its average. The other{' '}
-        {pct(1 - c.r2)} of the variance is the weather of the days themselves — the cold snaps and mild spells that the forecasts of{' '}
+        At Fenwick Bay’s own settings, the winter’s Niño-3.4 explains {pct(c.r2)} of the variance of its heating seasons. El Niño winters average {fmt(c.elMean)}{' '}
+        degree days, {signed(c.elMean - c.mean)} against the average, and La Niña winters {fmt(c.laMean)}, {signed(c.laMean - c.mean)}: a gap of{' '}
+        {fmt(c.laMean - c.elMean)}. Fenwick Gas &amp; Light’s winter margin varies with a standard deviation of {usd(c.marginSd / 1e6, 1)} million, and one
+        winter in 20 falls {usd(c.shortfall / 1e6, 1)} million short of its average. Of the other {pct(1 - c.r2)} of the variance, a little is the warming trend:
+        set it to zero and the spread falls from {fmt(c.sd)} to {fmt(n.noTrend.sd)} degree days, about {fmt(trendShare * 100)} points of the variance. The
+        remaining {pct(daysShare)} is the weather of the days themselves — the cold snaps and mild spells that the forecasts of{' '}
         <a href={lessonHref('weather/3.5')}>Lesson 3.5</a> see only a week or two ahead.
       </P>
       <P>
@@ -476,17 +559,19 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Shape your region’s weather so that the Pacific explains at least half of the variance of its winters."
+        question={`Predict first, from those shares: quiet the days to half their swings — variability × ${fmt(QUIETED, 1)}, everything else Fenwick Bay’s — and the days’ part of the variance falls to about a quarter. Will the Pacific then explain at least half of the variance of the winters? Decide, then set it and read the readouts.`}
         solved={solved2}
-        status={`ENSO explains ${pct(w.r2, 1)} of the variance of your region’s winters.`}
-        success={`Solved: ENSO explains ${pct(w.r2, 1)}. There are two ways there, and you may have used either: pull the winters harder toward the Pacific (with the day-to-day variability at × 1, it takes about ${fmt(2.1, 1)} °F per °C, where it explains ${pct(n.pull.r2)}), or quiet the days so that the Pacific’s share stands out — though quieting alone isn’t enough: at half the variability it explains only ${pct(n.calm.r2)}. In a region like this, a forecaster who reads the Pacific in October knows a great deal about the winter before it starts.`}
+        status={others ? `Make your prediction, then set the day-to-day variability to × ${fmt(QUIETED, 1)}.` : othersFirst}
+        success={`Solved: ENSO now explains ${pct(w.r2)} — far more than Fenwick Bay’s ${pct(c.r2)}, but still short of half. The shares said as much: a quarter of the days’ ${fmt(daysShare * 100)} points is about ${fmt((daysShare * 100) / 4)}, so ENSO’s ${fmt(c.r2 * 100)} points sit against the trend’s ${fmt(trendShare * 100)} and those ${fmt((daysShare * 100) / 4)} — about ${pct(quietPredicted)}, a little under half — and the simulation puts it lower still. With the days this quiet, a little more pull carries it past half: at ${fmt(QUIET_PULL_ANSWER, 1)} °F per °C ENSO explains ${pct(n.quietPull.r2)}; at Fenwick Bay’s own days it takes ${fmt(ENSO_PULL_ANSWER, 1)}. In a region like that, a forecaster who reads the Pacific in October knows a great deal about the winter before it starts.`}
       />
 
       <P>
         Your region is built: a climate, a distribution of winters, and the same simulated days of weather underneath. A distribution says what a winter can bring;
-        it doesn’t say what next week will bring. The next lesson forecasts your region’s days, one at a time, against forecasters who use only the climate, only
-        yesterday’s weather, or an overconfident model — and asks you to choose the forecaster the rest of the capstone will trust.
+        it doesn’t say what next week will bring. The next lesson forecasts your region’s days, one at a time, with five forecasters — the climate alone, today’s
+        departure from normal, an overconfident weather model, a calibrated one, and one you tune yourself — and scores them. From Lesson 6.3 on, the capstone
+        forecasts with the calibrated model; the competition shows why it deserves that trust. Before you go, choose the region the rest of the capstone runs on:
       </P>
+      <RegionChoice region={region} />
     </LessonPage>
   );
 }

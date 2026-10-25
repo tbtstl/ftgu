@@ -14,9 +14,12 @@
 // The physical assets of Lesson 6.4 — leased storage, firm transportation and a gas-fired plant —
 // are valued two ways each year: what the curve on April 1 offered (intrinsic), and what operating
 // them month by month (storage) or day by day (pipes and plants) actually earned.
+//
+// The book, the Ridgeback desk and firm transportation can also run in another world (`worlds.ts`):
+// the same eight years with one physical fact changed. Without one, they run in the history.
 
 import { conditionsOf, EXPRESS_EXPANSION, gasHistory, type YearConditions } from '../../model/gas/history';
-import { GAS_MONTH_DAYS, GAS_MONTH_START, GAS_YEAR_DAYS } from '../../model/gas/weather';
+import { GAS_MONTH_DAYS, GAS_MONTH_START, GAS_YEAR_DAYS, normalTemp } from '../../model/gas/weather';
 import { PIPELINE, STORAGE_SPECS } from '../../model/gas/world';
 import { maxDrawdown } from '../strategy/risk';
 import { FUTURES_CONTRACT_MMBTU } from './contracts';
@@ -25,6 +28,7 @@ import { curveAt, historyMonths, monthAverage, settlement } from './futures';
 import { seasonalPlan } from './market';
 import { powerDay } from './power';
 import { injectCapacity, withdrawCapacity, type StorageSpec } from './storage';
+import { announcedExpansionYear, HISTORY_MARKET, HISTORY_WORLD, worldConditions, worldMarket, type World, type WorldMarket } from './worlds';
 
 export const LOT_MMBTU = FUTURES_CONTRACT_MMBTU;
 const MMBTU_PER_BCF = 1.037e6;
@@ -134,21 +138,21 @@ export interface BookResult {
 }
 
 /** Each leg's marks at the month boundaries it lives through: [boundary, value per unit], plus its size in MMBtu. */
-function legMarks(leg: Leg, entry: number, exit?: number): { marks: Array<[number, number]>; size: number; early: boolean } {
+function legMarks(leg: Leg, entry: number, exit: number | undefined, market: WorldMarket): { marks: Array<[number, number]>; size: number; early: boolean } {
   const marks: Array<[number, number]> = [];
   if (leg.kind === 'futures') {
     const close = Math.min(exit ?? leg.delivery, leg.delivery);
-    for (let b = entry; b <= close; b++) marks.push([b, curveAt(b).calder[leg.delivery]]);
+    for (let b = entry; b <= close; b++) marks.push([b, market.curveAt(b).calder[leg.delivery]]);
     return { marks, size: leg.lots * LOT_MMBTU, early: close < leg.delivery };
   }
   if (leg.kind === 'index') {
-    marks.push([leg.delivery, settlement(leg.delivery)], [leg.delivery + 1, monthAverage(leg.delivery, 'calder')]);
+    marks.push([leg.delivery, market.settlement(leg.delivery)], [leg.delivery + 1, market.monthAverage(leg.delivery, 'calder')]);
     return { marks, size: leg.lots * LOT_MMBTU, early: false };
   }
   const key = leg.place === 'metro' ? 'metroBasis' : 'ridgebackBasis';
   const close = Math.min(exit ?? leg.delivery + 1, leg.delivery + 1);
   for (let b = entry; b <= close; b++) {
-    marks.push([b, b <= leg.delivery ? curveAt(b)[key][leg.delivery] : monthAverage(leg.delivery, leg.place, 'calder')]);
+    marks.push([b, b <= leg.delivery ? market.curveAt(b)[key][leg.delivery] : market.monthAverage(leg.delivery, leg.place, 'calder')]);
   }
   return { marks, size: leg.mmbtuPerDay * daysIn(leg.delivery), early: close <= leg.delivery };
 }
@@ -163,8 +167,8 @@ export function tradeable(t: Trade): boolean {
   });
 }
 
-/** Marks a list of trades through the history. */
-export function runBook(trades: Trade[], costs: TradingCosts = defaultCosts()): BookResult {
+/** Marks a list of trades through the history (or through another world's market; margins stay the history's). */
+export function runBook(trades: Trade[], costs: TradingCosts = defaultCosts(), market: WorldMarket = HISTORY_MARKET): BookResult {
   const N = historyMonths();
   const pnl = Array<number>(N + 1).fill(0);
   const fees = Array<number>(N + 1).fill(0);
@@ -176,7 +180,7 @@ export function runBook(trades: Trade[], costs: TradingCosts = defaultCosts()): 
     let tFees = 0;
     let closed = trade.entry;
     for (const leg of trade.legs) {
-      const { marks, size, early } = legMarks(leg, trade.entry, trade.exit);
+      const { marks, size, early } = legMarks(leg, trade.entry, trade.exit, market);
       for (let i = 1; i < marks.length; i++) {
         const v = size * (marks[i][1] - marks[i - 1][1]);
         pnl[marks[i][0] - 1] += v;
@@ -270,8 +274,17 @@ export function weatherSignals(skill: number, horizon = 14): WeatherSignal[] {
 }
 
 /**
+ * The months in which the region heats: those whose every normal day is colder than 65 °F —
+ * October to April (gas-year months 0 and 6–11). In them, a colder fortnight burns more gas.
+ */
+export const HEATING_MONTHS: number[] = GAS_MONTH_DAYS.map((_, m) => m).filter((m) =>
+  Array.from({ length: GAS_MONTH_DAYS[m] }, (_, i) => normalTemp(GAS_MONTH_START[m] + i)).every((t) => t < 65),
+);
+
+/**
  * Buy the prompt month's gas (index) on its first day when the forecast is colder than normal by
- * more than `thresholdF`, and sell it when warmer, `lots` lots at a time.
+ * more than `thresholdF`, and sell it when warmer, `lots` lots at a time (in `months`, calendar
+ * months with 0 = April; default every month).
  */
 export function weatherTrades(o: { skill: number; horizon?: number; thresholdF: number; lots: number; months?: number[] }): Trade[] {
   const allowed = new Set(o.months ?? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -381,12 +394,16 @@ export function estimatedGrowth(knownYear: number): number {
   return knownYear >= 1 ? (conditionsOf(knownYear).ridgeback - conditionsOf(0).ridgeback) / knownYear : 0;
 }
 
-/** What the hypothesis expects the region to look like in year `deliveryYear`, from what is known in `knownYear`. */
-export function hypothesizedConditions(h: RidgebackHypothesis, knownYear: number, deliveryYear: number): YearConditions {
-  const now = conditionsOf(knownYear);
+/**
+ * What the hypothesis expects the region to look like in year `deliveryYear`, from what is known in
+ * `knownYear` (of `world`: the expansion is counted on from the year it is expected to open then).
+ */
+export function hypothesizedConditions(h: RidgebackHypothesis, knownYear: number, deliveryYear: number, world: World = HISTORY_WORLD): YearConditions {
+  const now = worldConditions(world, knownYear);
   const ahead = deliveryYear - knownYear;
   const growth = h.growth === 'trend' ? estimatedGrowth(knownYear) : h.growth;
-  const opens = h.expansion && knownYear < EXPRESS_EXPANSION.year && deliveryYear >= EXPRESS_EXPANSION.year;
+  const opensIn = announcedExpansionYear(world, knownYear);
+  const opens = h.expansion && knownYear < opensIn && deliveryYear >= opensIn;
   return { ...now, ridgeback: now.ridgeback + growth * ahead, ridgebackExpress: now.ridgebackExpress + (opens ? EXPRESS_EXPANSION.addBcfd : 0) };
 }
 
@@ -406,9 +423,10 @@ export interface BasisSignal {
   side: number;
 }
 
-/** For each delivery month, the hypothesis's basis view `lead` months ahead against the forward, and the trade it implies. */
-export function ridgebackSignals(h: RidgebackHypothesis, lead: number, threshold: number): BasisSignal[] {
-  const N = historyMonths();
+/** For each delivery month, the hypothesis's basis view `lead` months ahead against the forward, and the trade it implies (in `world`). */
+export function ridgebackSignals(h: RidgebackHypothesis, lead: number, threshold: number, world: World = HISTORY_WORLD): BasisSignal[] {
+  const market = worldMarket(world);
+  const N = market.months;
   const tariff = PIPELINE['ridgeback-calder'].variableCost;
   const out: BasisSignal[] = [];
   for (let D = lead; D < N; D++) {
@@ -418,17 +436,17 @@ export function ridgebackSignals(h: RidgebackHypothesis, lead: number, threshold
     // The view moves the market's forward by what the hypothesis changes in a normal-weather year,
     // so a hypothesis that agrees with the market (nothing changes) never trades. While gas has to
     // leave the basin, Ridgeback's price can't rise above Calder's less the trip: the view stops there.
-    const shift = basisUnder(hypothesizedConditions(h, known, Math.floor(D / 12)))[cal] - basisUnder(conditionsOf(known))[cal];
-    const forward = curveAt(t).ridgebackBasis[D];
+    const shift = basisUnder(hypothesizedConditions(h, known, Math.floor(D / 12), world))[cal] - basisUnder(worldConditions(world, known))[cal];
+    const forward = market.curveAt(t).ridgebackBasis[D];
     const view = Math.min(-tariff, forward + shift);
     const side = view < forward - threshold ? -1 : view > forward + threshold ? 1 : 0;
-    out.push({ delivery: D, decided: t, view, forward, realized: monthAverage(D, 'ridgeback', 'calder'), side });
+    out.push({ delivery: D, decided: t, view, forward, realized: market.monthAverage(D, 'ridgeback', 'calder'), side });
   }
   return out;
 }
 
-export function ridgebackTrades(h: RidgebackHypothesis, o: { lead: number; threshold: number; mmbtuPerDay: number }): Trade[] {
-  return ridgebackSignals(h, o.lead, o.threshold)
+export function ridgebackTrades(h: RidgebackHypothesis, o: { lead: number; threshold: number; mmbtuPerDay: number }, world: World = HISTORY_WORLD): Trade[] {
+  return ridgebackSignals(h, o.lead, o.threshold, world)
     .filter((s) => s.side !== 0)
     .map((s) => ({ entry: s.decided, legs: [{ kind: 'basis' as const, place: 'ridgeback' as const, delivery: s.delivery, mmbtuPerDay: s.side * o.mmbtuPerDay }], tag: 'ridgeback' }));
 }
@@ -568,10 +586,13 @@ export interface StorageYear extends AssetYear {
  * earned when every planned move was locked in with futures on the curve that planned it, and the
  * hedges adjusted each month (the "rolling intrinsic" of a storage desk).
  */
-export function storageAsset(share: number): StorageYear[] {
+export function storageAsset(share: number, world: World = HISTORY_WORLD): StorageYear[] {
   const spec = leasedStorage(share);
   const start = spec.workingBcf * 0.25;
-  const h = gasHistory();
+  const market = worldMarket(world);
+  const h = market.history;
+  const curveAt = market.curveAt;
+  const monthAverage = market.monthAverage;
   const cashFor = (d: number, p: number) => (d > 0 ? -d * MMBTU_PER_BCF * (p + 0.05) : -d * MMBTU_PER_BCF * (p - 0.05));
   return h.map((_, y) => {
     const curve = (t: number) => Array.from({ length: 12 - t }, (_, k) => curveAt(y * 12 + t).calder[y * 12 + t + k]);
@@ -602,12 +623,13 @@ export function storageAsset(share: number): StorageYear[] {
 
 export type Route = 'northline' | 'express';
 
-/** Firm capacity for a year on a route, `mmbtuPerDay`: used whenever the day's spread beats the variable charge. */
-export function transportAsset(route: Route, mmbtuPerDay: number): AssetYear[] {
+/** Firm capacity for a year on a route, `mmbtuPerDay`: used whenever the day's spread beats the variable charge (in `world`). */
+export function transportAsset(route: Route, mmbtuPerDay: number, world: World = HISTORY_WORLD): AssetYear[] {
   const line = route === 'northline' ? PIPELINE['calder-metro'] : PIPELINE['ridgeback-calder'];
   const spreadOf = (p: Record<string, number>) => (route === 'northline' ? p.metro - p.calder : p.calder - p.ridgeback);
-  return gasHistory().map((yr, y) => {
-    const c = curveAt(y * 12);
+  const market = worldMarket(world);
+  return market.history.map((yr, y) => {
+    const c = market.curveAt(y * 12);
     let forward = 0;
     for (let k = 0; k < 12; k++) {
       const D = y * 12 + k;
@@ -632,10 +654,11 @@ export function lakesideMargin(gasPrice: number): number {
   return v;
 }
 
-/** A year's toll of Lakeside: its margin at the April 1 forward prices, and at each day's Metro price. */
-export function powerAsset(): AssetYear[] {
-  return gasHistory().map((yr, y) => {
-    const c = curveAt(y * 12);
+/** A year's toll of Lakeside: its margin at the April 1 forward prices, and at each day's Metro price (in `world`). */
+export function powerAsset(world: World = HISTORY_WORLD): AssetYear[] {
+  const market = worldMarket(world);
+  return market.history.map((yr, y) => {
+    const c = market.curveAt(y * 12);
     let forward = 0;
     for (let k = 0; k < 12; k++) {
       const D = y * 12 + k;

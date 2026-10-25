@@ -1,7 +1,7 @@
 import {
   Caption,
   Challenge,
-    Figure,
+  Figure,
   H2,
   K,
   Legend,
@@ -147,7 +147,7 @@ function SulfurRows({ cr }: { cr: Crude }) {
       className="chart"
       viewBox={`0 0 640 ${H}`}
       role="img"
-      aria-label={`Sulfur in each cut: ${CUTS.map((c, i) => `${c.name.toLowerCase()} ${fmtS(cr.cutSulfur[i])}`).join(', ')}. Residue nickel and vanadium ${fmt(cr.cutMetals[6])} ppm.`}
+      aria-label={`Sulfur in each cut: ${CUTS.map((c, i) => `${c.name.toLowerCase()} ${fmtS(cr.cutSulfur[i])}`).join(', ')}.`}
     >
       <text className="ax" x={X0} y={14}>
         Sulfur by weight (log scale)
@@ -219,9 +219,11 @@ export default function Lesson() {
   const light = cumulativeYield(cr, 350);
   const choose = (id: CrudeId) => s.set({ preset: id, tilt: 0, aromaticity: SPEC[id].aromaticity, sulfur: SPEC[id].sulfur, metals: SPEC[id].metals });
   const presetCrude = makeCrude(SPEC[st.preset]);
+  /** Whether the first demonstration's sliders have moved the crude away from its preset. */
+  const changed = st.tilt !== 0 || Math.abs(st.aromaticity - SPEC[st.preset].aromaticity) > 1e-9;
   const nf = makeCrude(SPEC.northfield);
   const cw = makeCrude(SPEC.coldwater);
-  const rb = makeCrude(SPEC.ridgeback);
+  const rb = makeCrude(SPEC.pinyon);
 
   const presets = (
     <Segmented label="Start from" value={st.preset} onChange={choose} options={CRUDE_SPECS.map((sp) => ({ value: sp.id, label: sp.name }))} />
@@ -231,6 +233,7 @@ export default function Lesson() {
   const solvedB = residueCapSolved(st);
   const residueS = cr.cutSulfur[6];
   const ratio = residueS / Math.max(1e-9, st.sulfur);
+  const residueMetals = cr.cutMetals[6];
 
   return (
     <LessonPage id="oil/1.2">
@@ -241,15 +244,17 @@ export default function Lesson() {
         called an <b>assay</b>, and it is the first thing a refiner looks at before buying a cargo.
       </P>
       <P>
-        This course follows four crudes, each from a different corner of the world it’s set in. <b>Ridgeback Light</b> comes from shale wells in the inland Ridgeback
+        This course follows four crudes, each from a different corner of the world it’s set in. <b>Pinyon Light</b> comes from shale wells in the inland Pinyon
         Basin. <b>Northfield Sour</b> comes from an old conventional field in the same basin. <b>Coldwater Heavy</b> comes from heavy-oil fields far to the north, and{' '}
         <b>Seaboard Blend</b> from an offshore field, arriving by tanker. They’re fictional, but their assays are realistic, and the course will produce, refine, ship and
         trade them from here to the last chapter.
       </P>
       <P>
-        In the next demonstration, each column is one cut, in boiling order from left to right, and its width is the cut’s share of the barrel. Each column is split by
-        the kinds of molecule in it: chains (<b>paraffins</b>), rings (<b>naphthenes</b>), <b>aromatics</b>, and the <b>resins and asphaltenes</b> — very large, flat
-        molecules built from many fused rings, found only at the heavy end. Pick a crude to start from, then change it:
+        In the next demonstration, each column is one cut, in boiling order from left to right, and its width is the cut’s share of the <b>barrel</b> — the oil
+        industry’s unit of volume, 42 US gallons or about 159 liters. Each column is split by the kinds of molecule in it: chains, straight or branched
+        (<b>paraffins</b>), rings (<b>naphthenes</b>), <b>aromatics</b>, and a class the builder of <a href={lessonHref('oil/1.1')}>Lesson 1.1</a> couldn’t make, the{' '}
+        <b>resins and asphaltenes</b> — very large, flat molecules built from many fused rings, found only at the heavy end. Pick a crude to start from, then change
+        it; the readouts include its API gravity, a measure of density we’ll define shortly:
       </P>
 
       <Figure name="Crude Composition Explorer" scenario={s}>
@@ -261,12 +266,11 @@ export default function Lesson() {
             { label: <K tone="teal">API gravity</K>, value: `${fmt(cr.api, 1)}°`, tone: 'teal' },
             { label: 'density', value: `${fmt(cr.sg * 999)} kg/m³` },
             { label: 'boils below 350 °C', value: pct(light) },
-            { label: <K tone="gold">sulfur</K>, value: `${fmt(cr.sulfur, 2)}%`, tone: 'gold' },
+            { label: <K tone="orange">sulfur</K>, value: `${fmt(cr.sulfur, 2)}%`, tone: 'orange' },
           ]}
         />
         <Slider
           label="Boiling range"
-          tone="orange"
           value={st.tilt}
           min={-0.4}
           max={0.4}
@@ -276,7 +280,6 @@ export default function Lesson() {
         />
         <Slider
           label="Rings and aromatics"
-          tone="violet"
           value={st.aromaticity}
           min={0}
           max={1}
@@ -284,22 +287,21 @@ export default function Lesson() {
           onChange={(v) => s.set({ aromaticity: Math.round(v * 100) / 100 })}
           display={`${pct(ringShare(cr))} of the crude`}
         />
-        <Caption>
-          {st.tilt === 0 && Math.abs(st.aromaticity - SPEC[st.preset].aromaticity) < 1e-9
-            ? `${SPEC[st.preset].name} as produced: ${pct(light)} of it boils below 350 °C, the top of the diesel range.`
-            : `Changed from ${SPEC[st.preset].name}, which has an API gravity of ${fmt(presetCrude.api, 1)}°.`}
-        </Caption>
+        {changed && (
+          <Caption>{`Changed from ${SPEC[st.preset].name}, which has an API gravity of ${fmt(presetCrude.api, 1)}° as produced.`}</Caption>
+        )}
       </Figure>
 
       <P>
         Start with Northfield Sour. A little over half of it — {pct(cumulativeYield(nf, 350))} — boils below 350 °C, in the ranges that become LPG, gasoline, jet fuel and
         diesel more or less directly. The rest is <b>vacuum gas oil</b>, which boils from 350 to 550 °C, and <b>vacuum residue</b>, which doesn’t boil at all at any
-        temperature a refinery can reach without the molecules breaking apart first. Now switch to Coldwater Heavy: only {pct(cumulativeYield(cw, 350))} of it boils below
-        350 °C, and the residue alone is {pct(cw.yields[6])} of the barrel. Ridgeback Light is the opposite case, with {pct(cumulativeYield(rb, 350))} below 350 °C.
+        temperature a refinery can reach without the molecules breaking apart first. Both are named for the column that separates them, which runs under a partial
+        vacuum; <a href={lessonHref('oil/1.4')}>Lesson 1.4</a> explains why. Now switch to Coldwater Heavy: only {pct(cumulativeYield(cw, 350))} of it boils below
+        350 °C, and the residue alone is {pct(cw.yields[6])} of the barrel. Pinyon Light is the opposite case, with {pct(cumulativeYield(rb, 350))} below 350 °C.
       </P>
       <P>
-        Look inside the columns too. In every crude, the light cuts are mostly chains and the heavy ones are rich in rings and aromatics. The heaviest molecules — the
-        resins and asphaltenes — are where crude oil keeps most of its sulfur, nitrogen and metals.
+        Look inside the columns too. In every crude, the lightest cuts are mostly chains and the heavy ones are rich in rings and aromatics. The heaviest molecules — the
+        resins and asphaltenes — are where crude oil’s sulfur and nitrogen are most concentrated, and they hold nearly all of its metals.
       </P>
 
       <H2>API gravity</H2>
@@ -337,7 +339,7 @@ export default function Lesson() {
 
       <H2>Sulfur and metals</H2>
       <P>
-        Not every atom in crude oil is carbon or hydrogen. <K tone="gold">Sulfur</K>, bound into the molecules themselves, ranges from under a tenth of a percent by weight
+        Not every atom in crude oil is carbon or hydrogen. <K tone="orange">Sulfur</K>, bound into the molecules themselves, ranges from under a tenth of a percent by weight
         in the sweetest crudes to around five percent in the most sour. Nitrogen and oxygen come in smaller amounts, and nickel and vanadium, from a few parts per
         million to several hundred or more, sit almost entirely in the asphaltenes. Crude also arrives with some water and salt, which a refinery washes out first.
       </P>
@@ -345,7 +347,7 @@ export default function Lesson() {
         These impurities matter for two reasons. Products have sulfur limits: in the United States, gasoline may average no more than 10 parts per million and road
         diesel no more than 15, jet fuel is limited to 0.3%, and since 2020 the fuel burned by ships has been capped at 0.5% outside special low-emission zones, unless the ship cleans its exhaust. And the
         catalysts a refinery uses to rebuild molecules are poisoned by metals and nitrogen. The next demonstration shows how the crude’s sulfur is spread across its cuts,
-        with each cut’s limit marked in red:
+        with each cut’s limit marked in red; its caption follows the nickel and vanadium into the residue:
       </P>
 
       <Figure name="Crude Composition Explorer · impurities" scenario={s}>
@@ -353,7 +355,7 @@ export default function Lesson() {
         <SulfurRows cr={cr} />
         <Slider
           label="Sulfur, whole crude"
-          tone="gold"
+          tone="orange"
           value={st.sulfur}
           min={0}
           max={5}
@@ -361,17 +363,20 @@ export default function Lesson() {
           onChange={(v) => s.set({ sulfur: Math.round(v * 100) / 100 })}
           display={`${fmt(st.sulfur, 2)}% by weight`}
         />
-        <Slider label="Nickel + vanadium" value={st.metals} min={0} max={500} step={5} onChange={(v) => s.set({ metals: v })} display={`${fmt(st.metals)} ppm`} />
         <Caption>
-          The residue carries {fmt(ratio, 1)} times the crude’s average sulfur concentration, and {pct(cr.yields[6] * cr.cutSG[6] * cr.cutMetals[6] / Math.max(1e-9, cr.metals * cr.sg))} of
-          its metals.
+          {changed ? `This is ${SPEC[st.preset].name} with the boiling range and molecules set in the first demonstration; the buttons restore them. ` : ''}
+          {st.sulfur > 0 ? `The residue carries ${fmt(ratio, 2)} times the crude’s average sulfur concentration` : 'This crude has no sulfur'}
+          {st.metals > 0
+            ? ` and ${fmt(residueMetals / st.metals, 1)} times its nickel and vanadium, which reach ${fmt(residueMetals)} ppm there.`
+            : ' and no nickel or vanadium.'}
         </Caption>
       </Figure>
 
       <P>
         Sulfur piles up at the heavy end. In Northfield Sour, the light naphtha holds about {fmt(round10(nf.cutSulfur[1] * 10000))} ppm while the residue holds{' '}
-        {fmt(nf.cutSulfur[6], 1)}%, about twice the crude’s average. Nearly all of the metals end up in the residue. Even the sweetest crude here fails the gasoline and
-        diesel limits: straight from the crude, Ridgeback Light’s diesel cut has about {fmt(round10(rb.cutSulfur[4] * 10000))} ppm of sulfur against a 15 ppm limit. Every
+        {fmt(nf.cutSulfur[6], 1)}%, about twice the crude’s average. Nearly all of the metals end up in the residue: Northfield Sour’s {fmt(nf.metals)} ppm of nickel and
+        vanadium becomes about {fmt(round10(nf.cutMetals[6]))} ppm there. Even the sweetest crude here fails the gasoline and
+        diesel limits: straight from the crude, Pinyon Light’s diesel cut has about {fmt(round10(rb.cutSulfur[4] * 10000))} ppm of sulfur against a 15 ppm limit. Every
         refinery has to remove sulfur; a sour crude just makes it remove much more, from heavier and harder molecules, as we’ll see in{' '}
         <a href={lessonHref('oil/3.3')}>Lesson 3.3</a>.
       </P>
@@ -380,17 +385,18 @@ export default function Lesson() {
         id="b"
         question={
           <>
-            Some residue is sold as fuel for ships. With Northfield Sour’s boiling range and molecules, find the highest whole-crude sulfur, to the nearest 0.01%, at which
-            its residue would still meet the 0.5% marine-fuel cap without any treatment.
+            Some residue is sold as fuel for ships. With Northfield Sour’s boiling range and molecules, what is the highest whole-crude sulfur, to the nearest 0.01%, at
+            which its residue would still meet the 0.5% marine-fuel cap untreated? Predict it first from the factor in the caption, which stays the same whatever the
+            sulfur, then set the slider to check; its arrow keys move it 0.01% at a time.
           </>
         }
         solved={solvedB}
         status={
           st.preset !== 'northfield' || st.tilt !== 0 || Math.abs(st.aromaticity - SPEC.northfield.aromaticity) > 1e-9
             ? 'Choose Northfield Sour with the buttons, which resets its boiling range and molecules, then lower the sulfur.'
-            : `At ${fmt(st.sulfur, 2)}% sulfur, the residue has ${fmtS(residueS)}${residueS > MARINE_CAP ? ', over the cap' : ', within the cap'}.`
+            : `At ${fmt(st.sulfur, 2)}% sulfur, the residue has ${fmtS(residueS)}.`
         }
-        success={`Solved: ${fmt(st.sulfur, 2)}%. The residue concentrates sulfur about ${fmt(ratio, 1)} times, so a crude needs well under half a percent of sulfur for its residue to burn in ships untreated. Northfield Sour’s ${fmt(SPEC.northfield.sulfur, 1)}% is far past that.`}
+        success={`Solved: ${fmt(st.sulfur, 2)}%. The cap divided by the residue’s factor, 0.5% ÷ ${fmt(ratio, 2)}, is ${fmt(MARINE_CAP / ratio, 3)}%, and ${fmt(st.sulfur, 2)}% is the last step below it. So a crude needs well under half a percent of sulfur for its residue to burn in ships untreated; Northfield Sour’s ${fmt(SPEC.northfield.sulfur, 1)}% is far past that.`}
       />
 
       <P>

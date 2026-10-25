@@ -29,6 +29,7 @@ import {
   CHIP_CAPACITANCE_F,
   CRITICAL_PATH_GATES,
   DIE_THERMAL_RESISTANCE,
+  LEAK_DOUBLING_C,
   MAX_JUNCTION_C,
   chipState,
   maxClockGHz,
@@ -96,6 +97,8 @@ export function leastPowerSolved(volts: number, clock: number, activityPct: numb
 
 export const WIDE_TARGET_GHZ = 2;
 export const UNITS = [1, 2, 3, 4, 5, 6, 7, 8];
+/** The lowest supply the engine allows a copy, V (0.45): eight copies at 0.25 GHz each sit on it. */
+export const V_FLOOR = parallelPower(UNITS[UNITS.length - 1], WIDE_TARGET_GHZ).vdd;
 
 /** The number of copies that does the work with the least power. */
 export function bestUnits(): number {
@@ -189,7 +192,7 @@ function ChipFigure({ s }: { s: ChipState }) {
         );
       })}
       <text className="ax" x={x0} y={y0 + 11 * (cell + gap) + 18}>
-        {lit} of 132 blocks switching
+        {lit} of 132 SMs switching
       </text>
       {fail && (
         <text x={x0 + (12 * (cell + gap)) / 2} y={y0 + (11 * (cell + gap)) / 2 + 4} textAnchor="middle" style={{ fontSize: 14, fontWeight: 600, fill: TEXT.red }}>
@@ -264,7 +267,7 @@ function WideChart({ units }: { units: number }) {
       className="chart"
       viewBox="0 0 640 248"
       role="img"
-      aria-label={`The same work split across 1 to 8 copies of the logic. With ${units} ${units === 1 ? 'copy' : 'copies'} at ${fmt(cur.clockGHz, 2)} GHz and ${fmt(cur.vdd, 2)} V, the chip draws ${fmt(cur.totalW)} W: ${fmt(cur.dynamicW)} W dynamic and ${fmt(cur.leakageW)} W leakage.`}
+      aria-label={`The same work split across 1 to 8 copies of the logic, with bars drawn up to the number chosen. With ${units} ${units === 1 ? 'copy' : 'copies'} at ${fmt(cur.clockGHz, 2)} GHz and ${fmt(cur.vdd, 2)} V, the chip draws ${fmt(cur.totalW)} W: ${fmt(cur.dynamicW)} W dynamic and ${fmt(cur.leakageW)} W leakage.`}
     >
       <text className="ax" x={52} y={14}>
         Power for the same work
@@ -272,16 +275,22 @@ function WideChart({ units }: { units: number }) {
       <GridY y={WY} ticks={[0, 200, 400, 600]} x0={52} x1={628} format={(v) => `${v} W`} baseline={0} />
       {rows.map((r) => {
         const on = r.units === units;
+        // Bars appear only up to the slider, so where the curve turns is found, not shown.
+        const drawn = r.units <= units;
         const x = WX(r.units) + 8;
         const dTop = WY(r.dynamicW);
         const tTop = WY(r.totalW);
         return (
           <g key={r.units} opacity={on ? 1 : 0.55}>
-            <rect x={x} y={dTop} width={40} height={WY(0) - dTop} fill={GRAPHIC.red} />
-            <rect x={x} y={tTop} width={40} height={dTop - tTop} fill={LEAK_COLOR} />
-            <text className={on ? 'lab' : 'ax'} x={x + 20} y={tTop - 6} textAnchor="middle">
-              {fmt(r.totalW)} W
-            </text>
+            {drawn && (
+              <>
+                <rect x={x} y={dTop} width={40} height={WY(0) - dTop} fill={GRAPHIC.red} />
+                <rect x={x} y={tTop} width={40} height={dTop - tTop} fill={LEAK_COLOR} />
+                <text className={on ? 'lab' : 'ax'} x={x + 20} y={tTop - 6} textAnchor="middle">
+                  {fmt(r.totalW)} W
+                </text>
+              </>
+            )}
             <text className="ax ax-m" x={x + 20} y={214} style={on ? { fill: '#111', fontWeight: 500 } : undefined}>
               {r.units}
             </text>
@@ -336,7 +345,7 @@ export default function Lesson() {
   if (s.timingFails) statusA = 'Timing fails at this voltage, so the chip does no useful arithmetic.';
   else if (s.overheated) statusA = `The die is too hot to sustain this (${s.runaway ? 'runaway' : `${fmt(s.junctionC, 1)} °C`}).`;
   else if (s.tflops < TARGET_TFLOPS - 1e-9) statusA = `Right now the chip delivers ${fmt(s.tflops)} TFLOPS, short of 900.`;
-  else statusA = `${fmt(s.tflops)} TFLOPS for ${fmt(s.totalW, 1)} W — ${fmt(s.totalW - least.totalW, 1)} W more than the least possible.`;
+  else statusA = `${fmt(s.tflops)} TFLOPS for ${fmt(s.totalW, 1)} W. Could the same arithmetic cost less?`;
 
   return (
     <LessonPage id="compute/1.5">
@@ -348,15 +357,15 @@ export default function Lesson() {
         billions of times a second, and between two ticks every stretch of logic must finish settling. Tick sooner and a register captures a half-computed answer.
       </P>
       <P>
-        So the slowest stretch sets the fastest clock. Our example chip is a fictional die about the size of the A-class 80 GB accelerator we’ll meet in Chapter 2,
-        and its slowest path between registers is {CRITICAL_PATH_GATES} gate delays long. At <K c="voltage">0.8 volts</K> each gate takes{' '}
+        So the slowest stretch sets the fastest clock. Our example chip is a fictional die about the size of the A-class 80 GB, the GPU we met in{' '}
+        <a href={lessonHref('compute/1.4')}>Lesson 1.4</a>, and its slowest path between registers is {CRITICAL_PATH_GATES} gate delays long. At <K c="voltage">0.8 volts</K> each gate takes{' '}
         {fmt(gateDelayPs(0.8), 1)} ps, so the path settles in {fmt(CRITICAL_PATH_GATES * gateDelayPs(0.8))} ps and the clock can tick at most once every{' '}
         {fmt(CRITICAL_PATH_GATES * gateDelayPs(0.8))} ps: {fmt(maxClockGHz(0.8), 2)} billion times a second, or {fmt(maxClockGHz(0.8), 2)} GHz. Lesson 1.2 found
         that gates get faster as the supply voltage rises, so voltage is one lever on speed. What it costs is the subject of this lesson.
       </P>
       <P>
-        Every gate’s output drives a small capacitor: the gates it feeds and the wire that reaches them. When the output rises from 0 to 1, the supply pushes a charge
-        of C × V onto that capacitance, and at voltage V that takes C·V² of energy — half of it stored, half lost as heat in the pull-up transistor. When the output
+        Every gate’s output drives a small capacitor: the gates it feeds and the wire that reaches them. How much charge a capacitor takes on for each volt across it
+        is its <b>capacitance</b>, C, measured in farads. When the output rises from 0 to 1, the supply pushes a charge of C × V onto that capacitance, and at voltage V that takes C·V² of energy — half of it stored, half lost as heat in the pull-up transistor. When the output
         falls back to 0, the stored half drains to ground as heat as well. So every rise and fall turns C·V² of electrical energy into heat. Multiply by the
         clock frequency <K c="frequency">f</K>, and by the <K tone="ink">activity</K> a — the share of the chip’s capacitance that actually switches in a cycle — and
         you have the chip’s <K c="power">dynamic power</K>:
@@ -377,16 +386,19 @@ export default function Lesson() {
         <K c="frequency">f</K>
       </Eq>
       <P>
-        Across our whole die, the capacitance that can switch adds up to about {fmt(CHIP_CAPACITANCE_F * 1e9)} nanofarads. At 0.8 V and 2.0 GHz, with all of it busy,
+        Across our whole die, the capacitance that can switch adds up to about {fmt(CHIP_CAPACITANCE_F * 1e9)} nanofarads (billionths of a farad). At 0.8 V and 2.0 GHz, with all of it busy,
         that’s {fmt(ref.dynamicW)} watts. On top comes <K c="power">leakage</K>: Lesson 1.2’s off current, a couple of nanoamps per micrometer, multiplied across tens
-        of billions of transistors. It adds {fmt(ref.leakageW)} W here, and it rises with voltage and, steeply, with temperature, doubling for every 25 °C. All of it
-        ends up as heat. The die sits on a liquid-cooled plate fed with 40 °C water, and every 100 W it produces holds it {fmt(100 * DIE_THERMAL_RESISTANCE)} °C
+        of billions of transistors. It adds {fmt(ref.leakageW)} W here, and it rises with voltage and, steeply, with temperature, doubling for every{' '}
+        {LEAK_DOUBLING_C} °C in our model. That is gentler than the DRAM cell of <a href={lessonHref('compute/1.4')}>Lesson 1.4</a>, whose leak doubles every 10 °C: its
+        charge drains mostly through a p–n junction, a path far more sensitive to heat than the current that slips over an off transistor’s barrier. Every watt becomes heat. The die sits on a liquid-cooled plate fed with 40 °C water, and every 100 W holds it {fmt(100 * DIE_THERMAL_RESISTANCE)} °C
         warmer than that; above a <K c="power">junction temperature</K> of {MAX_JUNCTION_C} °C it has to slow down.
       </P>
       <P>
-        In the next demonstration, set the chip’s clock, its supply voltage and its switching activity. The die is drawn as 132 blocks of arithmetic, lit when they’re
-        switching and shaded by the die’s temperature. The bar is its power, and the chart is the fastest clock the critical path allows at each voltage, with the
-        chip’s operating point marked:
+        In the next demonstration, set the chip’s clock, its supply voltage and its switching activity. The die is drawn as {ACCELERATORS.A.sms} blocks of
+        arithmetic, as many as the A-class has; GPU makers call them <b>streaming multiprocessors</b>, or SMs. They’re lit when they’re switching and shaded by the
+        die’s temperature. The bar is its power, and the chart is the fastest clock the critical path allows at each voltage, with the chip’s operating point marked. Its
+        arithmetic is the BF16 matrix work of <a href={lessonHref('compute/1.4')}>Lesson 1.4</a>, counted in TFLOPS, and at full activity and{' '}
+        {fmt(ACCELERATORS.A.clockGHz, 2)} GHz it matches the A-class’s {fmt(ACCELERATORS.A.bf16Tflops)} TFLOPS:
       </P>
 
       <Figure name="Processor Energy Simulator" scenario={s1}>
@@ -394,7 +406,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'power', value: s.runaway ? 'runaway' : `${fmt(s.totalW)} W`, tone: 'red' },
-            { label: 'junction temperature', value: s.runaway ? 'runaway' : `${fmt(s.junctionC, 1)} °C`, tone: s.overheated ? 'red' : undefined },
             { label: 'arithmetic, TFLOPS', value: fmt(s.tflops) },
             { label: 'energy per operation', value: s.timingFails ? '—' : s.runaway ? 'runaway' : `${fmt(s.pjPerFlop, 2)} pJ`, tone: 'gold' },
           ]}
@@ -438,7 +449,7 @@ export default function Lesson() {
       <P>
         Push further and the die runs out of cooling before it runs out of speed. At 2.4 GHz and 0.87 V it draws {fmt(faster.totalW)} W and reaches{' '}
         {fmt(faster.junctionC, 1)} °C, over its limit. At 1.0 V and 2.5 GHz something worse happens: the hotter die leaks more, the extra leakage heats it further, and
-        the loop never settles. That is <b>thermal runaway</b>, and a real chip’s thermal protection would throttle it or shut it down long before. The most this die
+        the loop never settles. That is <b>thermal runaway</b>; a real chip would throttle itself long before. The most this die
         can sustain with its 40 °C coolant is about {fmt(Math.round(top.tflops / 10) * 10)} TFLOPS, at 2.35 GHz and 0.86 V, drawing {fmt(top.totalW)} W. Real accelerators add a
         second limit, on power: the A-class’s board is rated for {fmt(BOARD_LIMIT_W)} W, the dashed line, and under a heavy workload it lowers its own clock and
         voltage to stay beneath it.
@@ -454,7 +465,7 @@ export default function Lesson() {
         question="Deliver at least 900 TFLOPS of arithmetic, with timing met and the die at or under 90 °C, while drawing as little power as possible."
         solved={solvedA}
         status={statusA}
-        success={`Solved. With every block busy, 900 TFLOPS needs a clock of about 1.8 GHz — and 1.8 GHz falls just short, at ${fmt(chipState(0.77, 1.8, 1).tflops)} TFLOPS, so ${fmt(least.clockGHz, 2)} GHz it is, at ${fmt(least.vdd, 2)} V, the lowest voltage that runs it: ${fmt(least.totalW)} W. Running fewer blocks on a faster clock does the same arithmetic, but the faster clock needs a higher voltage, and voltage costs power on every operation.`}
+        success={`Solved. With every block busy, 900 TFLOPS needs a clock of about 1.8 GHz — and 1.8 GHz falls just short, at ${fmt(chipState(0.77, 1.8, 1).tflops)} TFLOPS, so ${fmt(least.clockGHz, 2)} GHz it is, at ${fmt(least.vdd, 2)} V, the lowest voltage that runs it: ${fmt(least.totalW)} W. Running fewer SMs on a faster clock does the same arithmetic, but the faster clock needs a higher voltage, and voltage costs power on every operation.`}
       />
 
       <H2>Going wide</H2>
@@ -462,7 +473,7 @@ export default function Lesson() {
         The challenge’s answer points to a strategy. If a lower voltage makes every operation cheaper but every circuit slower, build more circuits and run each one
         slower. In the next demonstration, the chip’s work — 2 GHz of it, at full activity — is shared among several identical copies of its logic. Each copy runs at
         2 GHz divided by the number of copies, at the lowest voltage that clock allows. To compare like with like, the die is held at 60 °C throughout. Change the
-        number of copies:
+        number of copies; each bar appears as you reach it:
       </P>
 
       <Figure name="Processor Energy Simulator · going wide" scenario={s2}>
@@ -475,33 +486,32 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'clock of each copy', value: `${fmt(w.clockGHz, 2)} GHz`, tone: 'teal' },
             { label: 'supply voltage', value: `${fmt(w.vdd, 2)} V`, tone: 'blue' },
-            { label: 'power for the same work', value: `${fmt(w.totalW)} W`, tone: 'red' },
-            { label: 'against one copy', value: units === 1 ? '—' : `${fmt((w.totalW / one.totalW - 1) * 100)}%` },
+            { label: 'power against one copy', value: units === 1 ? '—' : `${fmt((w.totalW / one.totalW - 1) * 100)}%`, tone: 'red' },
           ]}
         />
         <Slider label="Copies of the logic" value={units} min={1} max={8} onChange={(v) => s2.set({ units: v })} display={units === 1 ? '1 copy' : `${units} copies`} />
       </Figure>
 
       <P>
-        One copy at 2.0 GHz uses {fmt(one.totalW)} W. Two copies at 1.0 GHz each need only {fmt(parallelPower(2, 2).vdd, 2)} V, and together they use{' '}
+        One copy at 2.0 GHz uses {fmt(one.totalW)} W, less than the {fmt(ref.totalW)} W of <FigRef to="Processor Energy Simulator">the first
+        demonstration</FigRef>: the die is held at 60 °C rather than {fmt(ref.junctionC)} °C, so it leaks {fmt(one.leakageW)} W instead of{' '}
+        {fmt(ref.leakageW)}, and runs at exactly the lowest voltage 2 GHz allows, {fmt(one.vdd, 3)} V. Two copies at 1.0 GHz each need only {fmt(parallelPower(2, 2).vdd, 2)} V, and together they use{' '}
         {fmt(parallelPower(2, 2).totalW)} W — {fmt((1 - parallelPower(2, 2).totalW / one.totalW) * 100)}% less for exactly the same arithmetic. Four copies at 0.5 GHz use{' '}
         {fmt(parallelPower(4, 2).totalW)} W. The saving comes entirely from the voltage. The copies’ clocks add up to the same 2 GHz, and each copy has the same
         capacitance, so the a·C·f part of the dynamic power is unchanged and only V² falls.
       </P>
       <P>
         It can’t go on forever. Every copy is another die’s worth of transistors leaking, and the voltage can’t keep falling either: close to the transistors’{' '}
-        {fmt(NFET.vth, 2)}-volt threshold, gates become slow and erratic, so we don’t let the supply drop below 0.45 V. Beyond a point the voltage sits at that floor, the dynamic
-        power stops shrinking, and each extra copy only adds leakage.
+        {fmt(NFET.vth, 2)}-volt threshold, gates become slow and erratic, so we don’t let the supply drop below {fmt(V_FLOOR, 2)} V.
       </P>
 
       <Challenge
         id="b"
-        question="Find the number of copies that does the same work with the least power."
+        question={`Predict first: once the supply sits at its ${fmt(V_FLOOR, 2)} V floor, what does one more copy save, and what does it add? Then find the number of copies that does the same work with the least power.`}
         solved={solvedB}
-        status={`Right now ${units === 1 ? 'one copy uses' : `${units} copies use`} ${fmt(w.totalW)} W.`}
-        success={`Solved. ${best} copies at ${fmt(parallelPower(best, 2).clockGHz, 2)} GHz each, at the 0.45 V floor, use ${fmt(parallelPower(best, 2).totalW)} W — ${fmt((1 - parallelPower(best, 2).totalW / one.totalW) * 100)}% less than one copy at full speed. Seven or eight copies run at the same floor voltage but leak more: eight use ${fmt(parallelPower(8, 2).totalW)} W.`}
+        status={`Right now ${units === 1 ? 'one copy uses' : `${units} copies use`} ${fmt(w.totalW)} W, at ${fmt(w.vdd, 2)} V.`}
+        success={`Solved. ${best} copies, at ${fmt(parallelPower(best, 2).clockGHz, 2)} GHz each, are the first to reach the ${fmt(V_FLOOR, 2)} V floor — ${best - 1} still need ${fmt(parallelPower(best - 1, 2).vdd, 2)} V — and use ${fmt(parallelPower(best, 2).totalW)} W, ${fmt((1 - parallelPower(best, 2).totalW / one.totalW) * 100)}% less than one copy at full speed. Past the floor another copy saves nothing: the clocks still add up to 2 GHz, so a·C·f is unchanged, and V² can’t fall further. It only adds a die’s worth of leakage: seven copies use ${fmt(parallelPower(7, 2).totalW)} W, and eight ${fmt(parallelPower(8, 2).totalW)} W.`}
       />
 
       <P>
@@ -515,14 +525,14 @@ export default function Lesson() {
         For about three decades, each new generation of transistors was smaller, and designers could lower the supply voltage in step, so a chip with twice as many
         transistors, switching faster, still drew about the same power per square millimeter. That bargain is called Dennard scaling, after the IBM engineer who
         described it in 1974, and it broke down in the mid-2000s. Leakage was the reason. At room temperature, a transistor’s off current can fall at most tenfold for
-        every 60 millivolts the gate sits below threshold (our example, at {fmt(subthresholdSwingMV())} millivolts per tenfold, is typical), so the threshold, and with it the supply,
+        every 60 millivolts the gate sits below threshold (ours manages {fmt(subthresholdSwingMV())}), so the threshold, and with it the supply,
         couldn’t keep falling without the chip leaking away its power budget. Processor clocks, which had climbed for decades, leveled off at a few gigahertz, and the
         extra transistors each generation brought went into more cores rather than faster ones.
       </P>
       <P>
-        A GPU takes that idea about as far as it goes. The A-class 80 GB has {ACCELERATORS.A.sms} processing blocks of {SM_LIMITS.fp32Lanes} arithmetic lanes each —{' '}
-        {fmt(lanes)} lanes — ticking at {fmt(ACCELERATORS.A.clockGHz, 2)} GHz, slower than a laptop processor’s top speed, plus specialized units for multiplying
-        matrices that together perform {fmt(ACCELERATORS.A.bf16Tflops)} trillion BF16 operations a second. Our die’s {fmt(ref.pjPerFlop, 2)} pJ per operation at 0.8 V
+        A GPU takes that idea about as far as it goes. The A-class has {ACCELERATORS.A.sms} SMs of {SM_LIMITS.fp32Lanes} arithmetic lanes each —{' '}
+        {fmt(lanes)} lanes — ticking at {fmt(ACCELERATORS.A.clockGHz, 2)} GHz, slower than a laptop processor’s top speed, plus matrix units that together
+        perform {fmt(ACCELERATORS.A.bf16Tflops)} BF16 TFLOPS. Our die’s {fmt(ref.pjPerFlop, 2)} pJ per operation at 0.8 V
         and 2 GHz is in the same range as a real accelerator of that size, and its {fmt(ref.totalW)} W is close to what one draws.
       </P>
       <P>

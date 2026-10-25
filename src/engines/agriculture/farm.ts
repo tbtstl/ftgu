@@ -250,15 +250,23 @@ const expectedCache = new Map<string, number[]>();
 /**
  * Expected corn yield (average over the simulated history) for each planting day on a 5-day grid
  * from April 5, interpolated between. Returns a function of the planting day.
+ *
+ * By default it averages the first 100 seasons and the grid ends on June 14, after which the yield
+ * is held flat. `opts.years` chooses the seasons averaged, and `opts.through` extends the grid (in
+ * 5-day steps) until it covers that planting day, so later days fall on the real curve.
  */
-export function expectedYieldByPlantDay(district: DistrictId): (day: number) => number {
-  let grid = expectedCache.get(district);
+export function expectedYieldByPlantDay(district: DistrictId, opts: { years?: number[]; through?: number } = {}): (day: number) => number {
+  const years = opts.years ?? YEARS.slice(0, 100);
+  const n = opts.through === undefined ? PLANT_GRID.length : Math.max(PLANT_GRID.length, Math.ceil((opts.through - PLANT_GRID[0]) / 5) + 1);
+  const days = Array.from({ length: n }, (_, i) => PLANT_GRID[0] + 5 * i);
+  const k = opts.years === undefined && opts.through === undefined ? district : `${district}|${n}|${years.join(',')}`;
+  let grid = expectedCache.get(k);
   if (!grid) {
-    grid = PLANT_GRID.map((p) => {
-      const ys = historyYields({ district, crop: 'corn', plantDay: p }, YEARS.slice(0, 100));
+    grid = days.map((p) => {
+      const ys = historyYields({ district, crop: 'corn', plantDay: p }, years);
       return ys.reduce((s, x) => s + x, 0) / ys.length;
     });
-    expectedCache.set(district, grid);
+    expectedCache.set(k, grid);
   }
   const g = grid;
   return (day: number) => {

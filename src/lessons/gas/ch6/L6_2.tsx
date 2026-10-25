@@ -14,6 +14,7 @@ import {
   Segmented,
   Slider,
   TEXT,
+  Tn,
   fmt,
   lessonHref,
   tint,
@@ -23,7 +24,7 @@ import { curveAt } from '../../../engines/gas/futures';
 import { planInventory } from '../../../engines/gas/market';
 import { defaultCosts, runBook, spreadSignals, spreadTrades, type BookResult, type SpreadOptions, type SpreadSignal } from '../../../engines/gas/strategies';
 import { gasHistory } from '../../../model/gas/history';
-import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS } from '../../../model/gas/weather';
+import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS, WINTER_START, hdd, type WeatherYear } from '../../../model/gas/weather';
 import { XYChart } from '../shared/XYChart';
 import { basis as signed, gp, money } from '../shared/format';
 
@@ -39,8 +40,9 @@ export const TRADER_SPREADS: Record<TraderSpread, { label: string; long: string;
   janOct: { label: 'January/October, bought April 1', long: 'January', short: 'October', entryCal: 0, longCal: 9, shortCal: 6 },
 };
 
-export const SPREAD_TRADER_DEFAULTS = { spread: 'marApr' as TraderSpread, year: 2, side: 'buy' as TraderSide, lots: 10 };
-export const TRADER_LOTS_MAX = 50;
+export const SPREAD_TRADER_DEFAULTS = { spread: 'marApr' as TraderSpread, year: 2 };
+/** The first demonstration always buys this many lots of the spread, as the prose does. */
+export const TRADER_LOTS = 10;
 
 /** The options the strategies engine takes for one of the figure's spreads. */
 export function traderOptions(kind: TraderSpread, lots = 1, rule: SpreadOptions['rule'] = 'always', thresholdBcf = 0): SpreadOptions {
@@ -59,11 +61,16 @@ export function traderSignal(kind: TraderSpread, year: number): SpreadSignal {
   return all.find((s) => Math.floor(s.entry / 12) === year) ?? all[all.length - 1];
 }
 
-/** Degree-days colder than normal (°F colder than normal, summed over days) from `fromDay` up to `toDay` of a year. */
+/** A day's heating degree days above (+) or below (−) normal (Lesson 4.4's measure, day by day). */
+function hddAbove(w: WeatherYear, d: number): number {
+  return hdd(w.temp[d]) - hdd(w.normal[d]);
+}
+
+/** Heating degree days above (+) or below (−) normal from `fromDay` up to `toDay` of a year. */
 export function traderCold(year: number, fromDay: number, toDay: number): number {
   const w = gasHistory()[year].weather;
   let s = 0;
-  for (let d = fromDay; d < toDay; d++) s += w.normal[d] - w.temp[d];
+  for (let d = fromDay; d < toDay; d++) s += hddAbove(w, d);
   return s;
 }
 
@@ -82,7 +89,7 @@ export interface TraderWinter {
   signal: SpreadSignal;
   /** Change in the spread from entry to exit, $/MMBtu. */
   change: number;
-  /** Degree-days colder than normal between entry and exit. */
+  /** Heating degree days above normal between entry and exit (for March/April, November 1 to March 1). */
   cold: number;
   /** Working gas against the April plan on entry and on exit, Bcf. */
   gapEntry: number;
@@ -135,7 +142,8 @@ export function traderFollowsWeather(kind: TraderSpread): boolean {
 export type TraderRule = 'always' | 'behind';
 export const SPREAD_RULE_LOTS = 10;
 export const SPREAD_RULE_MAX_THRESHOLD = 20;
-export const SPREAD_RULE_DEFAULTS = { rule: 'always' as TraderRule, threshold: 10 };
+/** At 0 Bcf the storage rule buys every November too, since storage was behind plan in every one. */
+export const SPREAD_RULE_DEFAULTS = { rule: 'always' as TraderRule, threshold: 0 };
 
 const ruleCache = new Map<string, BookResult>();
 /** The rule's book: ten lots of March/April each November 1 it trades; cached. */
@@ -170,9 +178,20 @@ export function bestRuleThresholds(): { total: number; thresholds: number[] } {
   return { total: best, thresholds: at };
 }
 
-/** The challenge: the storage rule set to the threshold that made the most. */
+/** The whole-Bcf thresholds at which the storage rule makes money over the seven winters. */
+export function profitableThresholds(): number[] {
+  const out: number[] = [];
+  for (let t = 0; t <= SPREAD_RULE_MAX_THRESHOLD; t++) if (ruleBookFor('behind', t).total > 0) out.push(t);
+  return out;
+}
+
+/**
+ * The challenge: predicted from the bars of "buy every November" and the shortfalls under them,
+ * the storage rule set to the highest threshold that makes money.
+ */
 export function spreadTraderSolved(s: { rule: TraderRule; threshold: number }): boolean {
-  return s.rule === 'behind' && bestRuleThresholds().thresholds.includes(s.threshold);
+  const ok = profitableThresholds();
+  return s.rule === 'behind' && ok.length > 0 && s.threshold === ok[ok.length - 1];
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +224,7 @@ function rangesOf(kind: TraderSpread) {
     let run = 0;
     for (let d = from; d <= to; d++) {
       gap = Math.max(gap, Math.abs(traderGap(w.year, d)));
-      if (d < to) run += gasHistory()[w.year].weather.normal[d] - gasHistory()[w.year].weather.temp[d];
+      if (d < to) run += hddAbove(gasHistory()[w.year].weather, d);
       cold = Math.max(cold, Math.abs(run));
     }
   }
@@ -216,7 +235,7 @@ function rangesOf(kind: TraderSpread) {
   };
 }
 
-function SpreadPanels({ kind, year, side, lots }: { kind: TraderSpread; year: number; side: TraderSide; lots: number }) {
+function SpreadPanels({ kind, year }: { kind: TraderSpread; year: number }) {
   const spec = TRADER_SPREADS[kind];
   const s = traderSignal(kind, year);
   const r = useMemo(() => rangesOf(kind), [kind]);
@@ -233,12 +252,12 @@ function SpreadPanels({ kind, year, side, lots }: { kind: TraderSpread; year: nu
   let run = 0;
   for (const d of days) {
     colds.push(run);
-    if (d < to) run += w.normal[d] - w.temp[d];
+    if (d < to) run += hddAbove(w, d);
   }
   const ticks = mx;
   const xFormat = (v: number) => GAS_MONTHS[GAS_MONTH_START.indexOf(v)] ?? '';
   const last = months.length - 1;
-  const book = traderBook(kind, year, side, lots);
+  const book = traderBook(kind, year, 'buy', TRADER_LOTS);
   return (
     <>
       <XYChart
@@ -278,13 +297,13 @@ function SpreadPanels({ kind, year, side, lots }: { kind: TraderSpread; year: nu
         xTicks={ticks}
         xFormat={xFormat}
         yFormat={(v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v))}`}
-        yLabel="Degree-days colder than normal since the spread was bought"
+        yLabel="Heating degree days above normal since the spread was bought"
         height={130}
         series={[
           { xs: days, ys: colds, color: tint(COLD, 0.45), kind: 'area', base: 0, opacity: 1 },
           { xs: days, ys: colds, color: COLD, width: 2 },
         ]}
-        ariaLabel={`Since ${GAS_MONTH_NAMES[s.entry % 12]} 1 the weather has been ${fmt(Math.abs(run))} degree-days ${run >= 0 ? 'colder' : 'warmer'} than normal by ${GAS_MONTH_NAMES[s.exit % 12]} 1.`}
+        ariaLabel={`From ${GAS_MONTH_NAMES[s.entry % 12]} 1 to ${GAS_MONTH_NAMES[s.exit % 12]} 1 the weather brought ${fmt(Math.abs(run))} heating degree days ${run >= 0 ? 'more' : 'fewer'} than normal.`}
       />
       <Legend
         items={[
@@ -297,11 +316,9 @@ function SpreadPanels({ kind, year, side, lots }: { kind: TraderSpread; year: nu
       />
       <Readouts
         items={[
-          { label: `spread on ${GAS_MONTH_NAMES[s.entry % 12]} 1`, value: gp(s.atEntry), tone: 'green' },
-          { label: `on ${GAS_MONTH_NAMES[s.exit % 12]} 1`, value: gp(s.atExit), tone: 'green' },
-          { label: `profit on ${lots} lot${lots === 1 ? '' : 's'}, after fees`, value: money(book.total), tone: book.total < 0 ? 'red' : 'green' },
+          { label: `profit on ${TRADER_LOTS} lots, after fees`, value: money(book.total), tone: book.total < 0 ? 'red' : 'green' },
           { label: 'storage against plan', value: `${signedBcf(gaps[0])} → ${signedBcf(gaps[gaps.length - 1])}`, tone: 'gold' },
-          { label: 'degree-days colder than normal', value: `${run < 0 ? '−' : ''}${fmt(Math.abs(run))}`, tone: 'teal' },
+          { label: `heating degree days vs normal, ${GAS_MONTHS[s.entry % 12]} 1–${GAS_MONTHS[s.exit % 12]} 1`, value: `${run < 0 ? '−' : run > 0 ? '+' : ''}${fmt(Math.abs(run))}`, tone: 'teal' },
         ]}
       />
     </>
@@ -377,7 +394,7 @@ function RuleChart({ rule, threshold }: { rule: TraderRule; threshold: number })
         Nov 1
       </text>
       <text className="ax ax-e" x={left - 6} y={242} style={{ fill: TEXT.teal }}>
-        winter
+        HDD
       </text>
     </svg>
   );
@@ -409,11 +426,10 @@ export default function Lesson() {
     const at = (t: number) => ({ total: ruleBookFor('behind', t).total, years: ruleYears('behind', t) });
     const lo = best.thresholds[0];
     const hi = best.thresholds[best.thresholds.length - 1];
-    const mildest = ma.reduce((a, b) => (b.cold < a.cold ? b : a));
     const widest = ma.reduce((a, b) => (b.change > a.change ? b : a));
     return {
-      mildest,
       widest,
+      flips: ma.filter((w) => w.cold > 0 !== traderCold(w.year, WINTER_START, GAS_YEAR_DAYS) > 0).map((w) => w.year),
       y3,
       y4,
       y3Long: [c3.calder[y3.signal.longDelivery], x3.calder[y3.signal.longDelivery]],
@@ -432,6 +448,8 @@ export default function Lesson() {
       joRange: [Math.min(...jo.map((w) => w.change)), Math.max(...jo.map((w) => w.change))],
       always: ruleBookFor('always', 0),
       best,
+      profitable: profitableThresholds(),
+      costliest: ma.reduce((a, b) => (traderBook('marApr', b.year, 'buy', 10).total < traderBook('marApr', a.year, 'buy', 10).total ? b : a)),
       below: at(lo - 1),
       above: at(hi + 1),
       bestYears: ruleYears('behind', lo),
@@ -444,7 +462,6 @@ export default function Lesson() {
   const ruleBook = ruleBookFor(gs.rule, gs.threshold);
   const traded = ruleYears(gs.rule, gs.threshold);
   const solved = spreadTraderSolved(gs);
-  const winsOf = ruleBook.trades.filter((t) => t.pnl > 0).length;
 
   return (
     <LessonPage id="gas/6.2">
@@ -456,12 +473,12 @@ export default function Lesson() {
         with no storage field at all. What moves it, and is understanding storage enough to profit from it?
       </P>
       <P>
-        First, the prices. Throughout the eight simulated years of Lesson 6.1, the market quotes a <K c="price">futures</K> price at Calder Hub on the first day of every
-        month, for each of the next twelve months. As in <a href={lessonHref('gas/4.5')}>Lesson 4.5</a>, it starts from what is known that morning — the gas in storage
+        First, the prices. Lesson 6.1’s weather desk traded one of them, the futures price of the month just starting. In fact, on the first day of every month of
+        the history the market quotes a <K c="price">futures</K> price at Calder Hub for each of the next twelve months. As in <a href={lessonHref('gas/4.5')}>Lesson 4.5</a>, it starts from what is known that morning — the gas in storage
         and the region as it stands — and assumes normal weather from then on, the same calculation the storage operators make for their monthly plans. To that it adds a
         premium for what normal weather leaves out, since a cold spell raises prices more than a mild one lowers them. A contract is 10,000 MMBtu delivered through its
         month. Ours stop trading and settle on the first day of the delivery month, a little simpler than the real contract, and until then every position is marked to
-        each month’s new curve. We set the premiums so that, across the eight years, every contract was priced right on average: bought on the first of any month and
+        each month’s new curve: its profit or loss is counted at each month’s prices, not only when it closes. We set the premiums so that, across the eight years, every contract was priced right on average: bought on the first of any month and
         held to settlement, it neither made nor lost money overall. That is a property we gave the simulated market on purpose — a market that has learned its own
         history. If there is money to be made, it lies in knowing in which years the market was wrong.
       </P>
@@ -474,9 +491,10 @@ export default function Lesson() {
       <P>
         In the next demonstration, buy the March/April spread on November 1 of one of the history’s winters and hold it until the March contract settles on March 1,
         when the April contract is sold back. The upper chart is the two contracts on the first day of each month, with the spread between them shaded; the middle one is
-        the region’s <K c="energy">working gas</K> against the plan the storage operators drew up on April 1; the lower one adds up how much colder than normal the
-        weather has been since the spread was bought, in <K tone="teal">degree-days</K> (one day 1 °F colder than normal is one degree-day). Choose the winter, the side
-        and the number of lots; the January/October spread, bought on April 1 and held through the injection season, is there for comparison:
+        the region’s <K c="energy">working gas</K> against the plan the storage operators drew up on April 1; the lower one adds up the{' '}
+        <Tn tone="teal">heating degree days</Tn> above or below normal (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>) since the spread was bought. It counts only the
+        months the spread is held, to March 1, where Lessons 6.1 and 6.5 count a winter to March 31. Choose the winter; each time, ten lots are bought. The
+        January/October spread, bought on April 1 and held through the injection season, is there for comparison:
       </P>
 
       <Figure name="Gas Spread Trader" scenario={f}>
@@ -492,37 +510,18 @@ export default function Lesson() {
           onChange={(v) => f.set({ year: Number(v) })}
           options={Array.from({ length: nYears }, (_, i) => ({ value: String(i), label: `Year ${i + 1}` }))}
         />
-        <SpreadPanels kind={kind} year={year} side={fs.side} lots={fs.lots} />
-        <Segmented
-          label="Side"
-          value={fs.side}
-          onChange={(v) => f.set({ side: v })}
-          options={[
-            { value: 'buy', label: 'Buy the spread' },
-            { value: 'sell', label: 'Sell the spread' },
-          ]}
-        />
-        <Slider
-          label="Lots (10,000 MMBtu each leg)"
-          tone="green"
-          value={fs.lots}
-          min={1}
-          max={TRADER_LOTS_MAX}
-          step={1}
-          onChange={(v) => f.set({ lots: v })}
-          display={`${fs.lots}`}
-        />
+        <SpreadPanels kind={kind} year={year} />
         <Caption>
-          {`Year ${year + 1}: ${fs.side === 'buy' ? 'bought' : 'sold'} at ${gp(sig.atEntry)} on ${GAS_MONTH_NAMES[sig.entry % 12]} 1, closed at ${gp(sig.atExit)} on ${GAS_MONTH_NAMES[sig.exit % 12]} 1 when the ${spec.long} contract settles.`}
+          {`Year ${year + 1}: ${TRADER_LOTS} lots bought at ${gp(sig.atEntry)} on ${GAS_MONTH_NAMES[sig.entry % 12]} 1, closed at ${gp(sig.atExit)} on ${GAS_MONTH_NAMES[sig.exit % 12]} 1 when the ${spec.long} contract settles.`}
         </Caption>
       </Figure>
 
       <P>
         In Year 3 the spread costs {gp(N.y3.signal.atEntry)} on November 1: March at {gp(N.y3Long[0])}, April at {gp(N.y3Short[0])}. November and December are close to
-        normal — {fmt(Math.abs(N.y3EarlyCold))} degree-days {N.y3EarlyCold >= 0 ? 'colder' : 'warmer'} by January 1 — and the spread barely moves. Then January and
+        normal — {fmt(Math.abs(N.y3EarlyCold))} heating degree days {N.y3EarlyCold >= 0 ? 'above' : 'below'} it by January 1 — and the spread barely moves. Then January and
         February turn cold, storage falls behind plan again, and on March 1 the March contract settles at {gp(N.y3Long[1])} against April’s {gp(N.y3Short[1])}. The
-        spread has widened to {gp(N.y3.signal.atExit)}, {fmt(N.y3.cold)} degree-days of cold after it was bought, and ten lots make {money(N.y3Book)} after fees. Year 4
-        runs the other way. A winter {fmt(-N.y4.cold)} degree-days warmer than normal leaves storage {fmt(N.y4.gapExit, 1)} Bcf ahead of plan by March 1, March costs only
+        spread has widened to {gp(N.y3.signal.atExit)}, with {fmt(N.y3.cold)} heating degree days above normal since it was bought, and ten lots make{' '}
+        {money(N.y3Book)} after fees. Year 4 runs the other way. A winter {fmt(-N.y4.cold)} heating degree days below normal leaves storage {fmt(N.y4.gapExit, 1)} Bcf ahead of plan by March 1, March costs only
         {' '}{gp(N.y4.signal.atExit)} more than April, and the same ten lots lose {money(-N.y4Book)}.
       </P>
       <P>
@@ -530,7 +529,11 @@ export default function Lesson() {
         {N.follows
           ? `In each of the ${WORDS[N.colder.length]} winters colder than normal between November 1 and March 1 (${yearsText(N.colder.map((w) => w.year))}), the spread widened; in each of the ${WORDS[N.milder.length]} milder ones, it narrowed.`
           : 'The spread widened in most winters colder than normal and narrowed in most milder ones.'}{' '}
-        Storage on November 1 says nothing about which way it will go. Storage was behind plan every November, by anything from {fmt(N.gapMin, 1)} Bcf in Year{' '}
+        {N.flips.length
+          ? `(Counted to March 31, as Lessons 6.1 and 6.5 count a winter, ${yearsText(N.flips)} would change sides, because of a March that came after the spread settled.) `
+          : ''}
+        Storage on November 1 says nothing about which way it will go. Storage was behind plan every November — the operators’ plans run a little ahead of what
+        their fields manage each autumn — by anything from {fmt(N.gapMin, 1)} Bcf in Year{' '}
         {N.minGapYear.year + 1} to {fmt(N.gapMax, 1)} Bcf, and the two biggest shortfalls, Years {N.big[0].year + 1} and {N.big[1].year + 1}, went opposite ways:{' '}
         {signed(N.big[0].change)} and {signed(N.big[1].change)}. The January/October spread, bought in April, moves far less — between {signed(N.joRange[0])} and{' '}
         {signed(N.joRange[1])} by October 1, against {signed(N.maRange[0])} to {signed(N.maRange[1])} for March/April — because a summer has less to surprise anyone
@@ -543,8 +546,8 @@ export default function Lesson() {
         morning, so a region {fmt(N.gapMax, 0)} Bcf short already has a dearer March in its price. What the curve can’t know is the weather to come, and the weather is what moved the
         spread in <FigRef to="Gas Spread Trader">the first demonstration</FigRef>. Still, a rule that sounds like physical insight is tempting: buy ten lots of March/April
         on November 1 only when storage is short of plan by at least some threshold, because a short region is likelier to run out in March. In the next
-        demonstration, each bar is a winter’s profit after fees from that rule; under it are that November’s storage against plan and the winter’s degree-days colder
-        than normal. Choose the rule and the threshold:
+        demonstration, each bar is a winter’s profit after fees from that rule; under it are that November’s storage against plan and the heating degree days above
+        or below normal from November 1 to March 1. Choose the rule and the threshold:
       </P>
 
       <Figure name="Gas Spread Trader · a rule" scenario={g}>
@@ -563,16 +566,13 @@ export default function Lesson() {
             { label: 'Profit', color: GRAPHIC.green },
             { label: 'Loss', color: GRAPHIC.red },
             { label: 'Storage against plan, November 1', color: STORE },
-            { label: 'Degree-days colder than normal, November to March', color: COLD },
+            { label: 'Heating degree days above normal, Nov 1–Mar 1', color: COLD },
           ]}
         />
         <Readouts
           items={[
             { label: 'winters traded', value: `${traded.length} of ${traderSignals('marApr').length}` },
             { label: 'total after fees', value: money(ruleBook.total), tone: ruleBook.total < 0 ? 'red' : 'green' },
-            { label: 'fees', value: money(ruleBook.totalFees), tone: 'green' },
-            { label: 'winning winters', value: `${winsOf}` },
-            { label: 'largest drawdown', value: money(ruleBook.maxDrawdown), tone: 'red' },
           ]}
         />
         <Slider
@@ -588,39 +588,47 @@ export default function Lesson() {
         />
         <Caption>
           {gs.rule === 'always'
-            ? `Bought every November 1: ${money(ruleBook.total)} over the seven winters.`
-            : `Short by ${gs.threshold} Bcf or more: the rule trades ${yearsText(traded)} and ${ruleBook.total >= 0 ? 'makes' : 'loses'} ${money(Math.abs(ruleBook.total))}.`}
+            ? 'Bought every November 1, whatever storage said.'
+            : `Bought only when storage was short of plan by ${gs.threshold} Bcf or more on November 1: ${yearsText(traded)}.`}
         </Caption>
       </Figure>
 
       <P>
         Bought every November, the spread {N.always.total < 0 ? 'loses' : 'makes'} {money(Math.abs(N.always.total))} over the seven winters, after{' '}
-        {money(N.always.totalFees)} in fees: the {WORDS[N.milder.length]} milder winters’ losses outweigh the {WORDS[N.colder.length]} colder winters’ gains. With the rule, everything depends on which winters a threshold happens to let in. At{' '}
+        {money(N.always.totalFees)} in fees: the {WORDS[N.milder.length]} milder winters’ losses outweigh the {WORDS[N.colder.length]} colder winters’ gains. A
+        threshold changes only which of those winters the rule lets in, and each bar already shows what its winter made:
+      </P>
+
+      <Challenge
+        id="a"
+        figure="Gas Spread Trader · a rule"
+        question="Predict first, from the bars of “Buy every November” and the November shortfalls under them: which thresholds make the storage rule money over the seven winters? Then switch to the storage rule and set the highest of them."
+        solved={solved}
+        status={
+          gs.rule === 'always'
+            ? 'Make your prediction from these bars, then switch to the storage rule.'
+            : traded.length === 0
+              ? `At ${gs.threshold} Bcf the rule never trades.`
+              : `At ${gs.threshold} Bcf the rule trades ${yearsText(traded)}.`
+        }
+        success={`Solved: ${gs.threshold} Bcf, the top of a window ${N.profitable.length === 2 ? 'two' : fmt(N.profitable.length)} Bcf wide — ${N.profitable.length === 2 ? `${N.profitable[0]} Bcf trades` : 'the others trade'} the same winters. The rule makes money only because it lets in Year ${N.widest.year + 1}, the winter whose spread widened most, and shuts out Year ${N.costliest.year + 1}, the costliest; the shortfalls that separate them, ${fmt(-N.widest.gapEntry, 1)} and ${fmt(-N.costliest.gapEntry, 1)} Bcf, said nothing about the weather that decided both. Tuned on the same history it is tested on, almost any rule finds a setting that looks good; Lesson 6.5 returns to how to tell such luck from an edge.`}
+      />
+
+      <P>
+        At{' '}
         {N.best.thresholds.length > 1 ? `${N.best.thresholds[0]} or ${N.best.thresholds[N.best.thresholds.length - 1]}` : N.best.thresholds[0]} Bcf it trades{' '}
         {yearsText(N.bestYears)} and makes {money(N.best.total)}. One Bcf lower it lets in {yearsText(N.below.years.filter((y) => !N.bestYears.includes(y)))} and{' '}
         {N.below.total < 0 ? 'loses' : 'makes'} {money(Math.abs(N.below.total))}; one Bcf higher it drops{' '}
         {yearsText(N.bestYears.filter((y) => !N.above.years.includes(y)))} and {N.above.total < 0 ? 'loses' : 'makes'} {money(Math.abs(N.above.total))}.
       </P>
 
-      <Challenge
-        id="a"
-        figure="Gas Spread Trader · a rule"
-        question="Set the storage rule to the threshold that would have made the most over the seven winters."
-        solved={solved}
-        status={
-          gs.rule === 'always'
-            ? `Bought every November, the spread ${ruleBook.total >= 0 ? 'makes' : 'loses'} ${money(Math.abs(ruleBook.total))}. Switch to the storage rule.`
-            : `At ${gs.threshold} Bcf the rule trades ${yearsText(traded)} and ${ruleBook.total >= 0 ? 'makes' : 'loses'} ${money(Math.abs(ruleBook.total))}.`
-        }
-        success={`Solved: ${gs.threshold} Bcf, ${money(ruleBook.total)} from ${yearsText(traded)}. The rule made money because it happened to include Year ${N.widest.year + 1}, the winter whose spread widened most, and to leave out Year ${N.mildest.year + 1}, the mildest. Neither had anything to do with the storage shortfall it was built on, and one Bcf either side of the best setting the rule ${N.below.total < 0 && N.above.total < 0 ? 'loses money' : 'earns far less'}. Tuned on the same history it is tested on, almost any rule finds a setting that looks good; Lesson 6.5 returns to how to tell such luck from an edge.`}
-      />
-
       <P>
         Understanding storage tells a trader what a spread means: the value of carrying gas from one month to the next, and the price of running short in March. It
         doesn’t say which way the spread will move. On the day it is bought, the spread already holds everything public about storage, and what is left is the weather
-        of the months between purchase and settlement, which Lesson 6.1 found no forecast can see. A spread held through a winter is a bet on the winter. That makes it
-        useful as insurance — a storage owner who has locked in a spread (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>) can give part of it back in exchange for
-        gaining in a cold winter, and a utility can take the other side — but it is not an edge.
+        of the months between purchase and settlement, of which, as <a href={lessonHref('gas/6.1')}>Lesson 6.1</a> found, a forecast sees only the first two weeks.
+        A spread held through a winter is a bet on the winter. That makes it useful as insurance. A utility that must buy extra gas in a cold March can buy the spread,
+        and so can a storage owner who locked one in (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>) and wants part of a cold winter’s gain back; the other side
+        suits a producer selling at the month’s price, who gains from a dear March anyway. But it is not an edge.
       </P>
       <P>
         Price differences between places might be different. A basis depends on pipes and production, which change slowly and in public: a basin’s output grows month

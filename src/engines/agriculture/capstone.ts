@@ -4,7 +4,7 @@
 // (Chapter 2), its prices and storage returns from the market (Chapters 4–5).
 
 import { CORN_ON_CORN_EXTRA_N, CORN_ON_CORN_PENALTY, PLAINS_IRRIGATION, WHEAT_ON_WHEAT_PENALTY, fieldSeason, variableCost, type FieldSpec } from './farm';
-import { CHECKPOINTS, EXPIRY, FARM_STORAGE_PER_MONTH, FINAL_REPORT, HARVEST_START, INTEREST, MONTH_DAYS, cashBid, cropYear, decFutures, futures, portSpot } from './market';
+import { CHECKPOINTS, CONTRACT_BUSHELS, EXPIRY, FARM_STORAGE_PER_MONTH, FINAL_REPORT, HARVEST_START, INTEREST, MONTH_DAYS, cashBid, cropYear, decFutures, futures, portSpot, thetaOn } from './market';
 import { harvestRush } from './elevator';
 import { hedgeGain, season as hedgeSeason } from './hedging';
 import { PREDICTORS, fitForecast, observe, type Fit } from './forecast';
@@ -259,7 +259,7 @@ export interface MerchantPlan {
   spreadCents: number;
   /** When corn left in the bins after harvest is sold, hedged; 'none' sells it at harvest. */
   storeUntil: 'none' | 'Mar' | 'May' | 'Jul';
-  /** Store only when the curve pays at least this share of full carry (Lesson 5.2). */
+  /** Store only when the curve, as it stands at harvest, pays at least this share of full carry (Lesson 5.2). */
   storeMinCarry: number;
   /** Barge freight chartered before the season at the offered rate, million bushels (Lesson 5.3). */
   charterMillions: number;
@@ -300,6 +300,11 @@ export function merchantStorage(year: number, hub: Hub, until: 'Mar' | 'May' | '
   return v1 - v0 + hedge - months * MERCHANT_STORAGE - (INTEREST / 12) * months * v0;
 }
 
+/** The share of full carry the curve pays at harvest, when the merchant decides whether to store: what the spreads say on that day. */
+export function harvestCarryShare(year: number): number {
+  return thetaOn(year, HARVEST_DAY);
+}
+
 const merchantCache = new Map<string, MerchantYear>();
 
 export function merchantYear(p: MerchantPlan, year: number, hub: Hub = 'fairview'): MerchantYear {
@@ -309,7 +314,7 @@ export function merchantYear(p: MerchantPlan, year: number, hub: Hub = 'fairview
     const c = cropYear(year);
     const rush = harvestRush({ ...MERCHANT_RUSH, harvest: MERCHANT_RUSH.harvest * (c.valley / meanValley()), spread: p.spreadCents / 100 });
     const left = rush.stocks[rush.stocks.length - 1] ?? 0;
-    const store = p.storeUntil !== 'none' && c.theta >= p.storeMinCarry - 1e-9;
+    const store = p.storeUntil !== 'none' && harvestCarryShare(year) >= p.storeMinCarry - 1e-9;
     const stored = store ? left : 0;
     const storage = store && p.storeUntil !== 'none' ? stored * merchantStorage(year, hub, p.storeUntil) : 0;
     const charter = p.charterMillions * 1e6 * (-c.hubBasis.landing - CHARTER_RATE);
@@ -321,13 +326,16 @@ export function merchantYear(p: MerchantPlan, year: number, hub: Hub = 'fairview
 }
 
 // ---------------------------------------------------------------------------------------------
-// The trading desk: the farm and the merchant together, with a hedge on the farm's crop and
-// trades on the September crop report
+// The trading desk: the farm and the merchant together, with a futures position sized against the
+// whole business's exposure, and trades on the September crop report
 
 export interface DeskPlan {
-  /** Share of the farm's expected corn sold (positive) or bought (negative) in December futures on March 1, percent. */
-  hedgePct: number;
-  /** Futures, or puts struck at the March futures price (puts only protect a crop: positive shares). */
+  /**
+   * December futures traded on March 1 and closed in mid-October, contracts of 5,000 bushels:
+   * positive sells, negative buys. With puts, the number of at-the-money December puts bought.
+   */
+  hedgeContracts: number;
+  /** Futures, or puts struck at the March futures price (puts are only bought: positive contracts). */
   hedgeWith: 'futures' | 'puts';
   /** Contracts traded each September on the forecast of Lesson 5.4. */
   forecastContracts: number;
@@ -357,14 +365,38 @@ export function expectedCorn(d: FarmDesign): number {
   return farmClimatology(d).mean * cornAcreFactor(d);
 }
 
-/** What the hedge on the farm's crop earned in a season, $. */
-export function hedgeResult(d: FarmDesign, desk: DeskPlan, year: number): number {
-  const q = (desk.hedgePct / 100) * expectedCorn(d);
+/** What the desk's futures or puts earned in a season, $. */
+export function hedgeResult(desk: Pick<DeskPlan, 'hedgeContracts' | 'hedgeWith'>, year: number): number {
+  const q = desk.hedgeContracts * CONTRACT_BUSHELS;
   if (Math.abs(q) < 1) return 0;
   const s = hedgeSeason(year);
   if (desk.hedgeWith === 'puts') return Math.max(0, q) * hedgeGain(s, 'puts');
   if (q > 0) return q * hedgeGain(s, 'futures');
   return -q * (s.f1 - s.f0 - ROUND_TRIP - longMarginInterest(year));
+}
+
+/** How far December futures moved between the desk's March 1 trade and mid-October, $ a bushel. */
+export function decemberMove(year: number): number {
+  const s = hedgeSeason(year);
+  return s.f1 - s.f0;
+}
+
+/**
+ * A business's exposure to the December price, bushels: how many dollars more it earned in a season
+ * for each dollar December futures rose between March and October — the slope of its profit on
+ * the price move. Negative is short (it loses when the price rises), positive long.
+ */
+export function priceExposure(profits: number[], years: number[]): number {
+  const moves = years.map(decemberMove);
+  const mp = profits.reduce((a, b) => a + b, 0) / profits.length;
+  const mm = moves.reduce((a, b) => a + b, 0) / moves.length;
+  let cov = 0;
+  let v = 0;
+  for (let i = 0; i < years.length; i++) {
+    cov += (profits[i] - mp) * (moves[i] - mm);
+    v += (moves[i] - mm) ** 2;
+  }
+  return v > 0 ? cov / v : 0;
 }
 
 /** One September report trade of Lesson 5.4, per bushel after costs: buy or sell on the analyst's forecast, close after the report. */
@@ -389,7 +421,7 @@ export interface DeskYear {
 export function deskYear(d: FarmDesign, m: MerchantPlan, desk: DeskPlan, year: number): DeskYear {
   const farm = farmYear(d, year).total;
   const merchant = merchantYear(m, year, ELEVATOR_OF[d.district]).total;
-  const hedge = hedgeResult(d, desk, year);
-  const forecast = desk.forecastContracts * 5000 * reportTrade(year);
+  const hedge = hedgeResult(desk, year);
+  const forecast = desk.forecastContracts * CONTRACT_BUSHELS * reportTrade(year);
   return { year, farm, merchant, hedge, forecast, total: farm + merchant + hedge + forecast };
 }

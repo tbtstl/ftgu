@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
@@ -20,7 +20,6 @@ import {
   tint,
   useScenario,
 } from '../../../framework';
-import { curveAt, monthAverage } from '../../../engines/gas/futures';
 import { switchingGasPrice } from '../../../engines/market/offerCost';
 import {
   leasedStorage,
@@ -32,10 +31,11 @@ import {
   type AssetYear,
   type StorageYear,
 } from '../../../engines/gas/strategies';
+import { HISTORY_WORLD, worldConditions, worldMarket, type World } from '../../../engines/gas/worlds';
 import { fleetById } from '../../../model/fleet';
-import { gasHistory } from '../../../model/gas/history';
-import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_YEAR_DAYS, WINTER_START } from '../../../model/gas/weather';
+import { GAS_MONTHS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS, WINTER_START, hdd } from '../../../model/gas/weather';
 import { PIPELINE, STORAGE_SPECS } from '../../../model/gas/world';
+import { traderGap } from './L6_2';
 import { XYChart } from '../shared/XYChart';
 import { bcf, bcfd, gp, money } from '../shared/format';
 
@@ -63,40 +63,52 @@ export interface ArbitrageData {
   northline: AssetYear[];
   express: AssetYear[];
   lakeside: AssetYear[];
-  /** The physical drivers: each winter's degree-days colder than normal (Nov–Mar), the year's coldest day at Metro (°F), Ridgeback's production less its takeaway (Bcf/d), Metro's average gas price ($/MMBtu). */
+  /** The physical drivers: each winter's heating degree days above normal (Nov–Mar, as Lesson 4.4 counts them), the year's coldest day at Metro (°F), Ridgeback's production less its takeaway (Bcf/d), Metro's average gas price ($/MMBtu). */
   colder: number[];
   coldest: number[];
   surplus: number[];
   metroAvg: number[];
 }
 
-let dataCache: ArbitrageData | null = null;
+const dataCache = new Map<string, ArbitrageData>();
 
-/** Everything the figures show, computed once from the history (call lazily). */
-export function arbitrageData(): ArbitrageData {
-  if (dataCache) return dataCache;
-  const h = gasHistory();
+/** Everything the figures show, computed once from the history — or from another world, the same years with Northline built bigger or smaller (call lazily). */
+export function arbitrageData(world: World = HISTORY_WORLD): ArbitrageData {
+  const key = `${world.expansionYear}|${world.northlineBcfd.toFixed(2)}`;
+  const hit = dataCache.get(key);
+  if (hit) return hit;
+  const market = worldMarket(world);
+  const h = market.history;
   const spec = leasedStorage(LEASE_BCF / STORAGE_SPECS.saltflat.workingBcf);
   const start = spec.workingBcf * 0.25;
-  const curve = h.map((_, y) => Array.from({ length: 12 }, (_, k) => curveAt(y * 12).calder[y * 12 + k]));
-  dataCache = {
-    lease: storageAsset(LEASE_BCF / STORAGE_SPECS.saltflat.workingBcf),
+  const curve = h.map((_, y) => Array.from({ length: 12 }, (_, k) => market.curveAt(y * 12).calder[y * 12 + k]));
+  const data: ArbitrageData = {
+    lease: storageAsset(LEASE_BCF / STORAGE_SPECS.saltflat.workingBcf, world),
     aprilPlan: curve.map((c) => monthlyStorageOptimum(c, spec, { startCal: 0, start, end: start }).moves),
     curve,
-    average: h.map((_, y) => Array.from({ length: 12 }, (_, k) => monthAverage(y * 12 + k, 'calder'))),
-    northline: transportAsset('northline', FIRM_MMBTU_D),
-    express: transportAsset('express', FIRM_MMBTU_D),
-    lakeside: powerAsset(),
+    average: h.map((_, y) => Array.from({ length: 12 }, (_, k) => market.monthAverage(y * 12 + k, 'calder'))),
+    northline: transportAsset('northline', FIRM_MMBTU_D, world),
+    express: transportAsset('express', FIRM_MMBTU_D, world),
+    lakeside: powerAsset(world),
     colder: h.map((y) => {
       let s = 0;
-      for (let d = WINTER_START; d < GAS_YEAR_DAYS; d++) s += y.weather.normal[d] - y.weather.temp[d];
+      for (let d = WINTER_START; d < GAS_YEAR_DAYS; d++) s += hdd(y.weather.temp[d]) - hdd(y.weather.normal[d]);
       return s;
     }),
     coldest: h.map((y) => Math.min(...y.days.map((d) => d.tempF))),
-    surplus: h.map((y) => y.conditions.ridgeback - ridgebackTakeaway(y.conditions)),
+    surplus: h.map((y) => worldConditions(world, y.index).ridgeback - ridgebackTakeaway(worldConditions(world, y.index))),
     metroAvg: h.map((y) => y.days.reduce((s, d) => s + d.price.metro, 0) / y.days.length),
   };
-  return dataCache;
+  dataCache.set(key, data);
+  return data;
+}
+
+/** Northline's capacity in the second demonstration's world, Bcf/d: as built, or bigger or smaller. */
+export const NORTHLINE_WORLD = { built: HISTORY_WORLD.northlineBcfd, min: 1.6, max: 2.2, step: 0.1 };
+
+/** The world of a Northline capacity. */
+export function northlineWorld(bcfd: number): World {
+  return { ...HISTORY_WORLD, northlineBcfd: round2(bcfd) };
 }
 
 /** Gas in the lease at the start of each month and at the end of March (13 values), given its moves. */
@@ -122,7 +134,7 @@ export function worstUnhedgedYear(): number {
   return best + 1;
 }
 
-/** The first challenge: the year chosen is the one in which running unhedged fell furthest short of April's value. */
+/** The first challenge: predicted from the winters, then found — the year in which running unhedged fell furthest short of April's value. */
 export function leaseYearSolved(s: ArbLeaseState): boolean {
   return s.year === worstUnhedgedYear();
 }
@@ -134,23 +146,27 @@ export type ArbAsset = 'hedged' | 'unhedged' | 'northline' | 'express' | 'lakesi
 export type ArbRule = 'every' | 'april';
 type FeeKey = 'lease' | 'northline' | 'express' | 'lakeside';
 
-/** Fee sliders, $ million a year. */
-export const FEE_SCALE: Record<FeeKey, { max: number; step: number }> = {
-  lease: { max: 5, step: 0.1 },
+/**
+ * Fee sliders, $ million a year. The lease's steps fall on odd tenths, so that no step sits within a
+ * few thousand dollars of the hedged lease's worst year ($2.00 million): the second challenge's answer
+ * clears its year by about $100,000, and the next step up misses by about as much.
+ */
+export const FEE_SCALE: Record<FeeKey, { min?: number; max: number; step: number }> = {
+  lease: { min: 0.1, max: 4.9, step: 0.2 },
   northline: { max: 1.5, step: 0.05 },
   express: { max: 10, step: 0.25 },
   lakeside: { max: 8, step: 0.25 },
 };
 
 /** The fees start near each asset's average April value over the eight years ($ million a year). */
-export const ARBITRAGE_DEFAULTS = { asset: 'hedged' as ArbAsset, rule: 'every' as ArbRule, lease: 2.5, northline: 0.3, express: 0.75, lakeside: 4.25 };
+export const ARBITRAGE_DEFAULTS = { asset: 'hedged' as ArbAsset, rule: 'every' as ArbRule, lease: 2.5, northline: 0.3, express: 0.75, lakeside: 4.25, northlineBcfd: 1.8 };
 export type ArbitrageState = typeof ARBITRAGE_DEFAULTS;
 
 export const feeKeyOf = (a: ArbAsset): FeeKey => (a === 'hedged' || a === 'unhedged' ? 'lease' : a);
 
-/** Each year's April value and earnings for an asset, $. */
-export function assetValues(asset: ArbAsset): Array<{ forward: number; earned: number }> {
-  const d = arbitrageData();
+/** Each year's April value and earnings for an asset, $ (in the history, or in a world with another Northline). */
+export function assetValues(asset: ArbAsset, world: World = HISTORY_WORLD): Array<{ forward: number; earned: number }> {
+  const d = arbitrageData(world);
   if (asset === 'hedged') return d.lease.map((a) => ({ forward: a.forward, earned: a.hedged }));
   if (asset === 'unhedged') return d.lease.map((a) => ({ forward: a.forward, earned: a.realized }));
   return d[asset].map((a) => ({ forward: a.forward, earned: a.realized }));
@@ -168,7 +184,7 @@ export interface ArbYear {
 /** The eight years of an asset under a fee and a holding rule. */
 export function arbitrageYears(s: ArbitrageState): ArbYear[] {
   const fee = s[feeKeyOf(s.asset)] * MILLION;
-  return assetValues(s.asset).map((v, year) => {
+  return assetValues(s.asset, northlineWorld(s.northlineBcfd ?? NORTHLINE_WORLD.built)).map((v, year) => {
     const held = s.rule === 'every' || v.forward > fee;
     return { year, forward: v.forward, earned: v.earned, held, profit: held ? v.earned - fee : 0 };
   });
@@ -182,16 +198,17 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 
 /** The highest lease fee on the slider's steps at which the hedged lease, held every year, made money in all eight. */
 export function leaseFloorFee(): number {
-  const min = Math.min(...arbitrageData().lease.map((a) => a.hedged)) / MILLION;
-  const step = FEE_SCALE.lease.step;
-  let k = Math.floor(min / step + 1e-9);
-  if (k * step >= min - 1e-12) k -= 1;
-  return round2(k * step);
+  const worst = Math.min(...arbitrageData().lease.map((a) => a.hedged)) / MILLION;
+  const { min = 0, step } = FEE_SCALE.lease;
+  let k = Math.floor((worst - min) / step + 1e-9);
+  if (min + k * step >= worst - 1e-12) k -= 1;
+  return round2(min + k * step);
 }
 
-/** The second challenge: hedged lease, held every year, at the highest fee that loses in no year. */
+/** The second challenge: predicted from the hedged lease's bars, the highest fee that loses in no year (in the history's world). */
 export function arbitrageSolved(s: ArbitrageState): boolean {
-  return s.asset === 'hedged' && s.rule === 'every' && Math.abs(round2(s.lease) - leaseFloorFee()) < 1e-9;
+  const asBuilt = Math.abs((s.northlineBcfd ?? NORTHLINE_WORLD.built) - NORTHLINE_WORLD.built) < 1e-9;
+  return asBuilt && s.asset === 'hedged' && s.rule === 'every' && Math.abs(round2(s.lease) - leaseFloorFee()) < 1e-9;
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +258,13 @@ export function arbitrageNumbers() {
     worstSellBcf: -d.lease[worst].moves[sellMonth],
     worstSellAvg: d.average[worst][sellMonth],
     worstSellQuote: d.curve[worst][sellMonth],
+    worstFebGap: traderGap(worst, GAS_MONTH_START[sellMonth]),
+    warmest: argmin(d.colder),
+    warmestRatio: ratio[argmin(d.colder)],
+    warmestSellAvg: d.average[argmin(d.colder)][argmin(d.lease[argmin(d.colder)].moves)],
+    warmestSellQuote: d.curve[argmin(d.colder)][argmin(d.lease[argmin(d.colder)].moves)],
+    warmestSellMonth: argmin(d.lease[argmin(d.colder)].moves),
+    warmestFebGap: traderGap(argmin(d.colder), GAS_MONTH_START[argmin(d.lease[argmin(d.colder)].moves)]),
     northFlat: Math.max(...northFwd) - Math.min(...northFwd) < 1,
     northFwd: northFwd[0],
     northAvg: mean(north),
@@ -266,9 +290,21 @@ export function arbitrageNumbers() {
     rule: { hedged: total('hedged', 'april'), unhedged: total('unhedged', 'april'), express: total('express', 'april'), lakeside: total('lakeside', 'april'), northline: total('northline', 'april') },
     floor,
     floorMargin: Math.min(...hedged) - floor * MILLION,
+    floorNextLoss: round2(floor + FEE_SCALE.lease.step) * MILLION - Math.min(...hedged),
     hedgedWorstAtDefault: Math.min(...hedged) - ARBITRAGE_DEFAULTS.lease * MILLION,
     unhedgedWorstAtDefault: Math.min(...unhedged) - ARBITRAGE_DEFAULTS.lease * MILLION,
+    northBuilt: northlineAt(NORTHLINE_WORLD.built),
+    northBigger: northlineAt(round2(NORTHLINE_WORLD.built + 2 * NORTHLINE_WORLD.step)),
+    northSmaller: northlineAt(NORTHLINE_WORLD.min),
   };
+}
+
+/** Firm Northline capacity in the world where Northline is `bcfd`: its capacity, the days it ran full in eight years, and its average April value and earnings, $ a year. */
+export function northlineAt(bcfd: number) {
+  const w = northlineWorld(bcfd);
+  const a = arbitrageData(w).northline;
+  const fullDays = worldMarket(w).history.reduce((s, y) => s + y.days.filter((d) => d.price.metro - d.price.calder > NORTHLINE.variableCost + 0.01).length, 0);
+  return { bcfd: w.northlineBcfd, fullDays, forward: mean(a.map((x) => x.forward)), earned: mean(a.map((x) => x.realized)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -293,8 +329,8 @@ const ASSET_NAME: Record<ArbAsset, string> = {
   lakeside: 'the Lakeside toll',
 };
 const DRIVER_NAME: Record<ArbAsset, string> = {
-  hedged: 'winter degree-days colder than normal',
-  unhedged: 'winter degree-days colder than normal',
+  hedged: 'heating degree days above normal, Nov–Mar',
+  unhedged: 'heating degree days above normal, Nov–Mar',
   northline: 'the year’s coldest day at Metro',
   express: 'Ridgeback’s production less takeaway, Bcf/d',
   lakeside: 'Metro’s average gas price',
@@ -343,8 +379,8 @@ export default function Lesson() {
   const cm = Math.max(0, Math.min(11, Math.floor(cursor)));
   const ends = (a: number[]) => [...a, a[a.length - 1]];
   const solvedA = leaseYearSolved(s.state);
-  const ratioA = lease.realized / lease.forward;
-  const statusA = `Year ${yi + 1}: run without a hedge, the lease earned ${pct(ratioA)} of the ${money(lease.forward)} April’s curve offered.`;
+  // The status never prints the share: the reader predicts from the winters, then divides the two readouts.
+  const statusA = `Year ${yi + 1}: compare what the lease earned unhedged with April’s value, both in the readouts.`;
 
   // ---- Figure 2: eight years of one asset.
   const a = useScenario('arbitrage-assets', ARBITRAGE_DEFAULTS);
@@ -352,15 +388,20 @@ export default function Lesson() {
   const key = feeKeyOf(st.asset);
   const scaleCfg = FEE_SCALE[key];
   const fee = st[key];
-  const years = arbitrageYears(st);
+  // Another world takes a moment to run: the chart follows the capacity slider a beat behind.
+  const capacity = useDeferredValue(round2(st.northlineBcfd ?? NORTHLINE_WORLD.built));
+  const d2 = arbitrageData(northlineWorld(capacity));
+  const years = arbitrageYears({ ...st, northlineBcfd: capacity });
+  const yMax = Math.max(Math.ceil(scaleCfg.max * 2) / 2, Math.ceil(Math.max(...years.map((y) => Math.max(y.forward, y.earned))) / MILLION / 0.5) * 0.5);
   const held = years.filter((y) => y.held);
   const total = held.reduce((x, y) => x + y.profit, 0);
   const worstHeld = held.length ? Math.min(...held.map((y) => y.profit)) : 0;
-  const bestHeld = held.length ? Math.max(...held.map((y) => y.profit)) : 0;
   const color = ASSET_COLOR[st.asset];
-  const solvedB = arbitrageSolved(st);
+  const solvedB = arbitrageSolved(a.state);
   const statusB =
-    st.asset !== 'hedged'
+    Math.abs(capacity - NORTHLINE_WORLD.built) > 1e-9
+      ? `Put Northline back as it was built, ${bcfd(NORTHLINE_WORLD.built, 1)}.`
+      : st.asset !== 'hedged'
       ? 'Choose the hedged lease first.'
       : st.rule !== 'every'
         ? 'Hold the lease every year.'
@@ -372,31 +413,29 @@ export default function Lesson() {
     <LessonPage id="gas/6.4">
       <P>
         <a href={lessonHref('gas/6.3')}>The previous lesson</a> ended with a different way to own a basis: not a swap but the pipe itself. Until then this chapter traded
-        paper — futures, spreads and swaps that pay for being right about prices. A physical asset pays its holder for using it. A lease of storage space buys gas in
-        one month and sells it in another (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>); firm capacity on a pipeline buys it in one place and sells it in another (
-        <a href={lessonHref('gas/4.3')}>Lesson 4.3</a>, <a href={lessonHref('gas/5.1')}>Lesson 5.1</a>); a gas-fired plant buys gas and sells electricity, keeping the{' '}
-        <K c="price">spark spread</K> of <a href={lessonHref('gas/5.3')}>Lesson 5.3</a>. Each is a spread with a choice attached, since the holder uses the asset only
-        when the spread pays, and each has a price, paid for the year whether the spread pays or not. Over the eight simulated years, which was worth its price, and
-        how should it have been run?
+        paper — futures, spreads and swaps that pay for being right about prices. A physical asset pays its holder for using it: a lease of storage buys gas in one
+        month and sells it in another (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>); firm capacity on a pipeline buys it in one place and sells it in another (
+        <a href={lessonHref('gas/4.3')}>Lesson 4.3</a>); a gas-fired plant buys gas and sells electricity, keeping the <K c="price">spark spread</K> of{' '}
+        <a href={lessonHref('gas/5.3')}>Lesson 5.3</a>. Each is a spread with a choice attached — the holder uses it only when the spread pays — and each has a
+        price, paid for the year either way. Over the eight years, which was worth its price, and how should it have been run?
       </P>
       <P>
         We’ll hold three, one gas year at a time. The first is a lease like Lesson 5.2’s: {bcf(LEASE_BCF, 0)} of Salt Flat’s <K c="energy">working gas</K>, with Salt
-        Flat’s rights to inject and withdraw scaled down to match — this time with the field’s ratchets, which slow injection as the lease fills and withdrawal as it
-        empties (<a href={lessonHref('gas/3.4')}>Lesson 3.4</a>) — and the same {gp(LEASE_COST)} per MMBtu to put gas in or take it out, starting and ending each year
-        a quarter full. The second is firm capacity for{' '}
-        {fmt(FIRM_MMBTU_D)} MMBtu a day on Northline or on Ridgeback Express, used on every day that the price at the far end beats the near end by more than the
-        pipeline’s charge for the trip. The third is a <b>toll</b> on Lakeside, the electricity course’s combined-cycle plant: the right to run it for a year, buying
-        its gas at Metro and selling its power. As in Lesson 5.3, the electricity region’s demand stays at its reference day, so only the price of gas changes. On
-        April 1 the curve says what each asset would earn if prices came out as quoted, its <K c="price">intrinsic value</K>. The year then pays something else.
+        Flat’s rights to inject and withdraw scaled down to match — this time with the field’s ratchets (<a href={lessonHref('gas/3.4')}>Lesson 3.4</a>) — and the same{' '}
+        {gp(LEASE_COST)} per MMBtu to put gas in or take it out, starting and ending each year a quarter full. The second is firm capacity for{' '}
+        {fmt(FIRM_MMBTU_D)} MMBtu a day on Northline or on Ridgeback Express, used every day the far end beats the near end by more than the pipeline’s charge. The
+        third is a <b>toll</b> on Lakeside, the electricity course’s combined-cycle plant: the right to run it for a year, buying its gas at Metro and selling its
+        power, with the electricity region’s demand held at its reference day as in Lesson 5.3. On April 1 the curve says what each asset would earn if prices came
+        out as quoted, its <K c="price">intrinsic value</K>; the year then pays something else.
       </P>
       <P>
-        Storage comes first, because its holder has the most to decide. The best schedule against April’s curve — when to buy, hold and sell — is worth the lease’s
-        intrinsic value, and the holder can lock it in by buying futures for the months the schedule injects and selling them for the months it withdraws. A month
-        later there is a new curve, and the holder can redraw the schedule from the gas actually in the lease and trade futures to match: the rolling intrinsic of
-        Lesson 5.2. Or the holder can skip the futures and simply follow the schedule, buying and selling at each month’s average price. In the next demonstration,
-        choose a year. The upper chart is Calder’s price, as April’s curve quoted each month and as each month averaged, with the months the lease put gas in shaded
-        blue and those it took gas out shaded red; the lower one is the gas in the lease under April’s schedule and as run, redrawn each month. Drag across the upper
-        chart to read a month:
+        Storage comes first, because its holder has the most to decide. The best schedule against April’s curve is worth the lease’s intrinsic value, and the holder
+        can lock most of it in by buying futures for the months the schedule injects and selling them for the months it withdraws — most, because a futures
+        contract settles at its first-of-month price while the lease trades through the month. A month later there is a new curve, and the holder can redraw the
+        schedule from the gas actually in the lease and trade futures to match: the rolling intrinsic of Lesson 5.2. Or the holder can skip the futures and simply
+        follow the schedule at each month’s average price. In the next demonstration, choose a year. The upper chart is Calder’s price, as April’s curve quoted it
+        and as each month averaged, with injection months shaded blue and withdrawals red; the lower one is the gas in the lease under April’s schedule and as run.
+        Drag across the upper chart to read a month:
       </P>
 
       <Figure name="Physical Arbitrage Optimizer" scenario={s}>
@@ -450,7 +489,7 @@ export default function Lesson() {
             { label: 'April’s value', value: money(lease.forward), tone: 'green' },
             { label: 'earned, hedged', value: money(lease.hedged), tone: 'green' },
             { label: 'earned, unhedged', value: money(lease.realized), tone: 'green' },
-            { label: 'winter vs normal', value: `${fmt(Math.abs(d.colder[yi]))} degree-days ${d.colder[yi] >= 0 ? 'colder' : 'warmer'}`, tone: 'teal' },
+            { label: 'winter, heating degree days vs normal', value: `${d.colder[yi] >= 0 ? '+' : '−'}${fmt(Math.abs(d.colder[yi]))}`, tone: 'teal' },
           ]}
         />
         <Slider label="Year" value={yi + 1} min={1} max={8} step={1} onChange={(v) => s.set({ year: Math.round(v) })} display={`Year ${yi + 1}`} />
@@ -461,41 +500,44 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Step through the years. {n.allAbove ? 'In every one of the eight' : 'In most of them'} the hedged lease earned at least what April’s curve offered: from{' '}
-        {money(n.hedgedMin)} in Year {n.hedgedMinYear} to {money(n.hedgedMax)} in Year {n.hedgedMaxYear}, {cash(n.hedgedExtra)} a year more than April’s value on
-        average. The redrawing is the reason. Each month the holder already owns a schedule locked in at earlier prices. If the new curve makes another schedule better,
-        the holder switches and trades futures for the difference — and switches only because the new schedule is worth more at today’s prices, since the old one is
-        still there to keep. What the switches add is a share of the extrinsic value of Lesson 5.2: the curve’s moves are the year’s surprises, and a lease that can
-        move gas collects some of them.
+        Step through the years. {n.allAbove ? 'In every one of the eight' : 'In most of them'} the hedged lease earned at least what April’s curve offered,{' '}
+        {cash(n.hedgedExtra)} a year more on average. The redrawing is the reason. Each month the holder already owns a schedule locked in at earlier prices; if
+        the new curve makes another schedule better, the holder switches and trades futures for the difference, and switches only because the new schedule is
+        worth more at today’s prices. What the switches add is a share of the extrinsic value of Lesson 5.2: the curve’s moves are the year’s surprises, and a lease
+        that can move gas collects some of them.
       </P>
       <P>
-        Unhedged, the same lease earned anywhere from {cash(n.unhedgedMin)} to {money(n.unhedgedMax)}. In the {WORDS[n.colderYears.length]} winters colder than normal (
-        {yearsText(n.colderYears)}) it earned {n.colderMinRatio >= 1 ? 'at least' : 'close to'} what April’s curve had offered; in the {WORDS[n.mildYears.length]} more
-        than 100 degree-days warmer ({yearsText(n.mildYears)}), between {pct(n.mildLow)} and {pct(n.mildHigh)} of it. An unhedged lease is a bet on the winter, the
-        same bet as the spread of <a href={lessonHref('gas/6.2')}>Lesson 6.2</a>, and the hedge sells that bet for a known income.
+        Skip the hedge, and the lease is a bet on the winter, the same bet as the spread of <a href={lessonHref('gas/6.2')}>Lesson 6.2</a>. The readouts give each
+        winter in heating degree days against normal, November to March, as <a href={lessonHref('gas/6.1')}>Lesson 6.1</a> counts them:
       </P>
 
       <Challenge
         id="a"
         figure="Physical Arbitrage Optimizer"
-        question="Find the year in which the lease, run without a hedge, earned the smallest share of what April’s curve offered."
+        question="Predict first, from the winters: in which year did the lease, run without a hedge, earn the smallest share of what April’s curve offered — the warmest winter? Then step through the years to find it."
         solved={solvedA}
         status={statusA}
-        success={`Solved: Year ${n.worst + 1}, ${pct(n.worstRatio)} of April’s ${money(d.lease[n.worst].forward)}. The winter came in ${fmt(n.worstWarmer)} degree-days warmer than normal, and the lease sold ${bcf(n.worstSellBcf, 2)} in ${GAS_MONTH_NAMES[n.worstSellMonth]} at an average of ${gp(n.worstSellAvg)}, against the ${gp(n.worstSellQuote)} April had quoted. Hedged, the same schedule earned ${money(d.lease[n.worst].hedged)}: the futures sold in April paid for the winter that never came.`}
+        success={`Solved: Year ${n.worst + 1}, ${pct(n.worstRatio)} of April’s ${money(d.lease[n.worst].forward)}, though ${n.warmest === n.worst ? 'it was also the warmest winter' : `Year ${n.warmest + 1}, the warmest winter, earned ${pct(n.warmestRatio)}`}. The lease sells most of its gas in ${GAS_MONTH_NAMES[n.worstSellMonth]}, so what matters is that month’s price, not the winter’s total. Year ${n.worst + 1} reached ${GAS_MONTH_NAMES[n.worstSellMonth]} ${fmt(n.worstFebGap, 1)} Bcf ahead of plan, and its ${bcf(n.worstSellBcf, 2)} sold at an average ${gp(n.worstSellAvg)} against the ${gp(n.worstSellQuote)} April had quoted${n.warmest === n.worst ? '' : `; Year ${n.warmest + 1} arrived ${fmt(n.warmestFebGap, 1)} Bcf ahead, and its ${GAS_MONTH_NAMES[n.warmestSellMonth]}, quoted at ${gp(n.warmestSellQuote)}, still averaged ${gp(n.warmestSellAvg)}`}. Hedged, the futures sold in April paid for the winter that never came.`}
       />
+
+      <P>
+        Unhedged, the lease earned anywhere from {cash(n.unhedgedMin)} to {money(n.unhedgedMax)}: {n.colderMinRatio >= 1 ? 'at least' : 'close to'} April’s value
+        in the {WORDS[n.colderYears.length]} winters colder than normal ({yearsText(n.colderYears)}), and between {pct(n.mildLow)} and {pct(n.mildHigh)} of it in
+        the {WORDS[n.mildYears.length]} with more than 100 fewer heating degree days ({yearsText(n.mildYears)}). The hedge sells that bet for a known income.
+      </P>
 
       <H2>Pipes and plants</H2>
       <P>
-        The other two assets decide far more often. The lease’s holder chooses once a month; the holder of firm capacity chooses every day, and the holder of a toll
-        every hour: ship if the spread beats the charge, run the plant if power pays more than its fuel and upkeep. Northline’s spread is Metro’s basis beyond its{' '}
+        The other two assets decide far more often: the holder of firm capacity every day, the holder of a toll every hour — ship if the spread beats the charge,
+        run the plant if power pays more than its fuel and upkeep. Northline’s spread is Metro’s basis beyond its{' '}
         {gp(NORTHLINE.variableCost)} charge, Express’s is Calder’s price less Ridgeback’s beyond {gp(EXPRESS.variableCost)}, and Lakeside’s is the spark spread in each
         hour of the reference day. On April 1 the curve values each with its monthly prices; the year pays each day’s.
       </P>
       <P>
-        In the next demonstration, choose an asset, its fee for the year, and a rule for holding it: every year, or only in the years when April’s curve values it
-        above the fee. For each year, the hollow bar is April’s value and the filled bar what the year paid; the dashed line is the fee, and faded bars are years not
-        held. Over each year is the physical fact that decided it: the winter for the lease, the coldest day at Metro for Northline, Ridgeback’s production against
-        what its pipes can take for Express, and Metro’s average gas price for Lakeside. Each fee starts near the asset’s average April value over the eight years:
+        In the next demonstration, choose an asset, its fee for the year, and a rule for holding it: every year, or only when April’s curve values it above the
+        fee. For each year the hollow bar is April’s value and the filled bar what the year paid; the dashed line is the fee, and faded bars are years not held.
+        Over each year is the physical fact that decided it, and each fee starts near the asset’s average April value. The last slider changes not the trade but
+        the world: it rebuilds Northline bigger or smaller and reruns the eight years:
       </P>
 
       <Figure name="Physical Arbitrage Optimizer · eight years" scenario={a}>
@@ -513,15 +555,15 @@ export default function Lesson() {
         />
         <XYChart
           xDomain={[0, 8]}
-          yDomain={[0, scaleCfg.max]}
+          yDomain={[0, yMax]}
           xTicks={YEAR_TICKS}
           xFormat={(v) => `Year ${Math.floor(v) + 1}`}
-          yFormat={(v) => (v === 0 ? '$0' : `$${fmt(v, scaleCfg.max < 2 ? 1 : 0)}M`)}
+          yFormat={(v) => (v === 0 ? '$0' : `$${fmt(v, yMax < 2 ? 1 : 0)}M`)}
           yLabel="Value for the year, $ million"
           xLabel={`Over each year: ${DRIVER_NAME[st.asset]}`}
           height={250}
           series={[]}
-          ariaLabel={`${ASSET_NAME[st.asset]} over eight years at a fee of ${money(fee * MILLION)}, ${st.rule === 'every' ? 'held every year' : 'held when April’s value beats the fee'}: April values ${years.map((y) => fmt(y.forward / MILLION, 2)).join(', ')} million; earned ${years.map((y) => fmt(y.earned / MILLION, 2)).join(', ')} million. Held ${held.length} years for ${money(total)} after fees.`}
+          ariaLabel={`${ASSET_NAME[st.asset]} over eight years, with Northline at ${bcfd(capacity, 1)}, at a fee of ${money(fee * MILLION)}, ${st.rule === 'every' ? 'held every year' : 'held when April’s value beats the fee'}: April values ${years.map((y) => fmt(y.forward / MILLION, 2)).join(', ')} million; earned ${years.map((y) => fmt(y.earned / MILLION, 2)).join(', ')} million. Held ${held.length} years for ${money(total)} after fees.`}
         >
           {(x, y) => (
             <g>
@@ -529,7 +571,7 @@ export default function Lesson() {
                 const x0 = x(r.year + 0.2);
                 const w = x(r.year + 0.48) - x0;
                 const x1 = x(r.year + 0.52);
-                const top = (v: number) => y(Math.min(scaleCfg.max, v / MILLION));
+                const top = (v: number) => y(Math.min(yMax, v / MILLION));
                 const op = r.held ? 1 : 0.3;
                 return (
                   <g key={r.year} opacity={op}>
@@ -539,11 +581,11 @@ export default function Lesson() {
                 );
               })}
               {years.map((r) => (
-                <text key={`t${r.year}`} className="ax ax-m" x={x(r.year + 0.5)} y={y(scaleCfg.max) + 12}>
-                  {driverText(st.asset, r.year, d)}
+                <text key={`t${r.year}`} className="ax ax-m" x={x(r.year + 0.5)} y={y(yMax) + 12}>
+                  {driverText(st.asset, r.year, d2)}
                 </text>
               ))}
-              <line x1={x(0)} x2={x(8)} y1={y(Math.min(fee, scaleCfg.max))} y2={y(Math.min(fee, scaleCfg.max))} stroke={TEXT.ink} strokeWidth={1.5} strokeDasharray="6 4" />
+              <line x1={x(0)} x2={x(8)} y1={y(Math.min(fee, yMax))} y2={y(Math.min(fee, yMax))} stroke={TEXT.ink} strokeWidth={1.5} strokeDasharray="6 4" />
             </g>
           )}
         </XYChart>
@@ -559,7 +601,6 @@ export default function Lesson() {
             { label: 'years held', value: fmt(held.length) },
             { label: 'profit after fees', value: money(total), tone: 'green' },
             { label: 'worst year held', value: held.length ? money(worstHeld) : '—', tone: 'green' },
-            { label: 'best year held', value: held.length ? money(bestHeld) : '—', tone: 'green' },
           ]}
         />
         <Segmented
@@ -576,28 +617,39 @@ export default function Lesson() {
           label="Fee for the year"
           tone="green"
           value={fee}
-          min={0}
+          min={scaleCfg.min ?? 0}
           max={scaleCfg.max}
           step={scaleCfg.step}
           onChange={(v) => a.set({ [key]: round2(v) } as Partial<ArbitrageState>)}
           display={money(fee * MILLION)}
         />
+        <Slider
+          label="Northline’s capacity (changes the world)"
+          tone="orange"
+          value={st.northlineBcfd ?? NORTHLINE_WORLD.built}
+          min={NORTHLINE_WORLD.min}
+          max={NORTHLINE_WORLD.max}
+          step={NORTHLINE_WORLD.step}
+          onChange={(v) => a.set({ northlineBcfd: round2(v) })}
+          display={`${bcfd(st.northlineBcfd ?? NORTHLINE_WORLD.built, 1)}${Math.abs((st.northlineBcfd ?? NORTHLINE_WORLD.built) - NORTHLINE_WORLD.built) < 1e-9 ? ', as built' : ''}`}
+        />
         <Caption>
           {held.length
-            ? `Held ${st.rule === 'every' ? 'every year' : `in ${WORDS[held.length]} of the eight years`}, ${ASSET_NAME[st.asset]} made ${money(total)} after fees of ${money(fee * MILLION)} a year; it lost money in ${WORDS[held.filter((y) => y.profit <= 0).length]} of them.`
+            ? `Held ${st.rule === 'every' ? 'every year' : `in ${WORDS[held.length]} of the eight years`} at ${money(fee * MILLION)} a year, ${ASSET_NAME[st.asset]} lost money in ${WORDS[held.filter((y) => y.profit <= 0).length]} of them.`
             : `April’s curve never valued ${ASSET_NAME[st.asset]} above ${money(fee * MILLION)}, so the rule never holds it.`}
         </Caption>
       </Figure>
 
       <P>
         Start with Northline. {n.northFlat ? `Its April value is the same every year, ${cash(n.northFwd)}:` : `Its April value barely changes, about ${cash(n.northFwd)}:`} the
-        curve can’t see a cold snap months ahead, so it prices the capacity at what the snaps are worth on average, and on average that is what they paid,{' '}
+        curve can’t see a cold snap months ahead, so it prices the capacity at what snaps are worth on average, and on average that is what they paid,{' '}
         {cash(n.northAvg)} a year. But it paid less than {cash(n.northCalmMax)} in {WORDS[n.northCalmCount]} of the years and {money(n.northBest)} in Year{' '}
-        {n.northBestYear + 1}, whose coldest day reached {fmt(n.northBestColdest)} °F: firm capacity into a city is the insurance of Lesson 6.3’s Metro desk in another
-        form, collected in the year the city runs short. Express is the opposite. Its April value was zero in every year but Year {n.expYear + 1}, when Ridgeback
-        produced {bcfd(n.expSurplus)} more than its pipes could carry and its field could burn — a sliver, but enough to strand gas behind a full pipe (
-        <a href={lessonHref('gas/3.2')}>Lesson 3.2</a>). The curve drawn that April already saw it and valued the year’s capacity at {money(n.expFwd)}; the year paid{' '}
-        {money(n.expEarned)}.
+        {n.northBestYear + 1}, whose coldest day reached {fmt(n.northBestColdest)} °F: the insurance of Lesson 6.3’s Metro desk in another form. What sets that
+        value is the pipe, and the last slider can change it. Built at {bcfd(n.northBigger.bcfd, 1)}, Northline runs full on {fmt(n.northBigger.fullDays)} days in
+        eight years instead of {fmt(n.northBuilt.fullDays)}, and the capacity is worth {cash(n.northBigger.forward)} a year; built at {bcfd(n.northSmaller.bcfd, 1)}, it runs full on {fmt(n.northSmaller.fullDays)} days and
+        is worth {cash(n.northSmaller.forward)}. In each world the curve prices it at what that world’s cold snaps pay on average, and in none can it say which
+        winter will bring them. Express is the opposite, and <a href={lessonHref('gas/6.3')}>Lesson 6.3</a> has already held it: worthless in every year but Year{' '}
+        {n.expYear + 1}, whose glut the April curve had already seen.
       </P>
       <P>
         Lakeside’s April value came within {pct(n.lakeDev)} of what it earned in every year, because its margin depends mostly on something the curve already knows:
@@ -605,39 +657,45 @@ export default function Lesson() {
         through the night; above it, Lakeside earns mostly in the evening, when a less efficient gas plant sets the power price (Lesson 5.3). Year{' '}
         {n.lakeMaxYear + 1}, with gas averaging{' '}
         {gp(n.metroAvg[n.lakeMaxYear])} at Metro, paid the toll the most, {money(n.lakeMax)}; Year {n.lakeMinYear + 1}, at {gp(n.metroAvg[n.lakeMinYear])}, the least,{' '}
-        {money(n.lakeMin)}. A toll on an efficient plant is, in this region, a bet on cheap gas.
+        {money(n.lakeMin)}. Here, where coal sets the price at night and the demand for power never changes, a toll on an efficient plant is a bet on cheap gas; in
+        most real markets, where the power price rises and falls with gas, a toll is a bet on a wide spark spread instead.
       </P>
 
       <H2>What the curve can see</H2>
       <P>
         Now switch the rule to holding only when April’s value beats the fee. At the starting fees it turns {money(n.every.hedged)} into {money(n.rule.hedged)} for the
-        hedged lease, {money(n.every.express)} into {money(n.rule.express)} for Express, and {cash(n.every.lakeside)} into {money(n.rule.lakeside)} for Lakeside. For
-        Northline it changes nothing, because Northline’s April value never changes. The rule works where an asset’s value depends on what the curve can see on April
+        hedged lease, {money(n.every.express)} into {money(n.rule.express)} for Express, and {cash(n.every.lakeside)} into {money(n.rule.lakeside)} for Lakeside —
+        against fees set, with hindsight, at each asset’s eight-year average April value, so the gains show how the rule works rather than what a buyer could
+        have expected. For Northline it changes nothing, because Northline’s April value never changes. The rule works where an asset’s value depends on what the curve can see on April
         1 — the price level for Lakeside, the summer-to-winter spread for the lease, a glut already in the basin for Express — and fails where it depends on what the
         curve can’t, a cold week next January. That is the chapter’s question asked of things you can own. The physics says what each asset’s value rests on, and so
         whether the price of holding it can be beaten or only paid.
       </P>
       <P>
-        The hedge matters in a different way. Held every year at the starting fee of {money(ARBITRAGE_DEFAULTS.lease * MILLION)}, the hedged lease’s worst year{' '}
-        {n.hedgedWorstAtDefault < 0 ? `lost ${cash(-n.hedgedWorstAtDefault)}` : `made ${cash(n.hedgedWorstAtDefault)}`}; the unhedged lease’s lost{' '}
-        {money(-n.unhedgedWorstAtDefault)}. A fee is paid every year, so what a holder can afford depends on the worst year as much as the average one.
+        The hedge matters in a different way. A fee is paid every year, so what a holder can afford depends on the worst year as much as the average one:
       </P>
 
       <Challenge
         id="b"
         figure="Physical Arbitrage Optimizer · eight years"
-        question="Holding the hedged lease every year, what’s the highest fee, on the slider’s steps, at which it made money in all eight years?"
+        question="Choose the hedged lease, held every year. Predict first, from its filled bars: what’s the highest fee, on the slider’s steps, at which it made money in all eight years? Then set it."
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${money(n.floor * MILLION)} a year. The hedged lease’s worst year, Year ${n.hedgedMinYear}, still earned ${money(n.hedgedMin)}, clearing the fee by ${money(Math.round(n.floorMargin / 100) * 100)}. Unhedged, the same lease earned only ${cash(n.unhedgedMin)} in its worst year, so any fee above that lost money at least once. A storage holder who hedges can promise a lender a floor; one who doesn’t is betting on the winter.`}
+        success={`Solved: ${money(n.floor * MILLION)} a year. The hedged lease’s worst year, Year ${n.hedgedMinYear}, earned ${money(n.hedgedMin)} and clears the fee by ${cash(n.floorMargin)}; one step higher, that year loses ${cash(n.floorNextLoss)}. Unhedged, the same lease earned only ${cash(n.unhedgedMin)} in its worst year, so any fee above that lost money at least once.`}
       />
+
+      <P>
+        At the starting fee of {money(ARBITRAGE_DEFAULTS.lease * MILLION)}, held every year, the hedged lease’s worst year{' '}
+        {n.hedgedWorstAtDefault < 0 ? `lost ${cash(-n.hedgedWorstAtDefault)}` : `made ${cash(n.hedgedWorstAtDefault)}`}; the unhedged lease’s lost{' '}
+        {money(-n.unhedgedWorstAtDefault)}. A storage holder who hedges can promise a lender a floor; one who doesn’t is betting on the winter.
+      </P>
 
       <P>
         Physical assets answer the chapter’s question differently from paper. Their holders don’t have to beat the market’s price for a spread; they have to hold
         something worth more than its fee, and the curve says on April 1 roughly what that is. <FigRef to="Physical Arbitrage Optimizer">Hedged storage</FigRef>{' '}
-        earned what the curve promised and more from the curve’s moves; a pipe into a city paid out like insurance, almost half of it in one cold year; a pipe out of an overflowing basin and a plant on cheap gas earned what
-        the curve could already see. All of it, though, was judged with hindsight: we chose the fees and the rules looking at the same eight years we scored them on,
-        paid no trading costs beyond the fees, and posted no margin for the hedges. <a href={lessonHref('gas/6.5')}>The next lesson</a> asks which of the chapter’s
+        earned what the curve promised and more; a pipe into a city paid out like insurance, almost half of it in one cold year; a pipe out of an overflowing basin and a plant on cheap gas earned what
+        the curve could already see. All of it was judged on the same eight years that set the fees, with no trading costs beyond them and no margin for the
+        hedges. <a href={lessonHref('gas/6.5')}>The next lesson</a> asks which of the chapter’s
         strategies survive when that hindsight is taken away.
       </P>
     </LessonPage>

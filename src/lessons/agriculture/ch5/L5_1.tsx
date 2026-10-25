@@ -3,6 +3,7 @@ import {
   Challenge,
   FigRef,
   Figure,
+  GridY,
   H2,
   K,
   Legend,
@@ -20,7 +21,9 @@ import {
 } from '../../../framework';
 import { CONTRACT_BUSHELS, EXPIRY, HARVEST_START, MARKET_YEARS, cashBid, decFutures, portSpot } from '../../../engines/agriculture/market';
 import { fieldSeason } from '../../../engines/agriculture/farm';
+import { BASE_PRICE } from '../../../engines/agriculture/world';
 import { REFERENCE_YEAR } from '../../../model/agriculture/climate';
+import { PLAN_PRICE } from '../../../model/agriculture/economics';
 import { CEDAR_BEND, dayOf } from '../../../model/agriculture/region';
 import { PriceChart, daysBetween } from '../shared/PriceChart';
 import { centsPlain } from '../shared/format';
@@ -29,15 +32,19 @@ import { MARKET_LINE } from '../shared/tones';
 /** What it costs to deliver on a contract: the load-out fee and paperwork, $ a bushel (simulated). */
 export const DELIVERY_COST = 0.03;
 
-/** Cash corn at Port Sable on December futures' last trading day in the reference season. */
+/** Cash corn at Port Sable on December futures' last trading day in the reference season, quoted to the cent as the lesson shows it. */
 export function expiryCash(): number {
-  return portSpot(REFERENCE_YEAR, EXPIRY.Dec);
+  return Math.round(portSpot(REFERENCE_YEAR, EXPIRY.Dec) * 100) / 100;
+}
+
+/** What a short (`side` 1) or a long (`side` −1) gains per bushel by delivering at a last-day futures price in whole cents; exact to the cent. */
+export function deliveryGain(cents: number, side: 1 | -1): number {
+  return (side * (cents - Math.round(expiryCash() * 100)) - Math.round(DELIVERY_COST * 100)) / 100;
 }
 
 /** Challenge 1: the highest futures price, in whole cents, at which no short gains by delivering. */
 export function deliverySolved(cents: number): boolean {
-  const top = expiryCash() + DELIVERY_COST;
-  return cents / 100 <= top + 1e-9 && (cents + 1) / 100 > top + 1e-9;
+  return deliveryGain(cents, 1) <= 0 && deliveryGain(cents + 1, 1) > 0;
 }
 
 export type HedgeDate = 'mar' | 'jul' | 'sep';
@@ -89,11 +96,22 @@ export function hedgeYear(year: number, date: HedgeDate): HedgeYear {
   return h;
 }
 
+/** Dollars to the nearest thousand, for prose. */
+const roundK = (x: number) => Math.round(x / 1000) * 1000;
+
 /** Challenge 2: the year whose March hedge needed the most margin money. */
+let worstCache = 0;
 export function worstMarginYear(): number {
+  if (worstCache) return worstCache;
   let best = 1;
   for (let y = 2; y <= MARKET_YEARS; y++) if (hedgeYear(y, 'mar').maxMargin > hedgeYear(best, 'mar').maxMargin) best = y;
+  worstCache = best;
   return best;
+}
+
+/** Challenge 2: the reader has chosen a March 1 hedge in the year that needed the most margin money. */
+export function marginSolved(st: { year: number; date: HedgeDate }): boolean {
+  return st.date === 'mar' && st.year === worstMarginYear();
 }
 
 /** The spread (standard deviation) and average of the hedged and unhedged prices over the sixty years. */
@@ -137,6 +155,7 @@ function HedgeChart({ h, date }: { h: HedgeYear; date: HedgeDate }) {
     <PriceChart
       from={dayOf(3, 1)}
       to={SELL_DAY + 6}
+      height={220}
       domain={[Math.floor(lo * 2) / 2, Math.ceil(hi * 2) / 2]}
       series={[{ days: h.path.map((p) => p.day), values: h.path.map((p) => p.futures), color: MARKET_LINE.futures }]}
       marks={[
@@ -173,18 +192,58 @@ function MarginStrip({ h }: { h: HedgeYear }) {
   );
 }
 
+/** Fixed price range for the sixty-year strip, so the hedge dates can be compared by eye. */
+export const SIXTY_DOMAIN: [number, number] = [2, 9];
+
+/** Every year at once: the harvest cash price at Fairview (gold) and the price on hedged corn (violet), joined by the futures gain or loss. */
+function SixtyYears({ date, year }: { date: HedgeDate; year: number }) {
+  const hs = useMemo(() => Array.from({ length: MARKET_YEARS }, (_, i) => hedgeYear(i + 1, date)), [date]);
+  const x = scale(0.5, MARKET_YEARS + 0.5, 60, 620);
+  const y = scale(SIXTY_DOMAIN[0], SIXTY_DOMAIN[1], 160, 24);
+  const sel = hs[year - 1];
+  return (
+    <svg
+      className="chart"
+      viewBox="0 0 640 182"
+      role="img"
+      aria-label={`All sixty years, hedged on ${HEDGE_LABEL[date]}: the harvest cash price ran from ${usd(Math.min(...hs.map((h) => h.cash)), 2)} to ${usd(Math.max(...hs.map((h) => h.cash)), 2)}, the price on hedged corn from ${usd(Math.min(...hs.map((h) => h.hedged)), 2)} to ${usd(Math.max(...hs.map((h) => h.hedged)), 2)}. Year ${year}: cash ${usd(sel.cash, 2)}, hedged ${usd(sel.hedged, 2)}.`}
+    >
+      <text className="ax" x={60} y={14}>
+        Every year, $ a bushel: cash at harvest and the price on hedged corn
+      </text>
+      <GridY y={y} ticks={[2, 4, 6, 8]} x0={60} x1={620} format={(v) => usd(v)} />
+      {hs.map((h, i) => {
+        const on = i + 1 === year;
+        return (
+          <g key={i}>
+            <line x1={x(i + 1)} x2={x(i + 1)} y1={y(h.cash)} y2={y(h.hedged)} stroke={on ? '#333' : '#c8c8c8'} strokeWidth={on ? 1.5 : 1} />
+            <circle cx={x(i + 1)} cy={y(h.cash)} r={on ? 4.5 : 2.4} fill={MARKET_LINE.cash} stroke={on ? '#333' : 'none'} />
+            <circle cx={x(i + 1)} cy={y(h.hedged)} r={on ? 4.5 : 2.6} fill={MARKET_LINE.futures} stroke={on ? '#333' : 'none'} />
+          </g>
+        );
+      })}
+      {[1, 10, 20, 30, 40, 50, 60].map((t) => (
+        <text key={t} className="ax ax-m" x={x(t)} y={178}>
+          {t === 1 ? 'year 1' : t}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
 export default function Lesson() {
   const d = useScenario('delivery', { cents: 530 });
   const s = expiryCash();
   const f = d.state.cents / 100;
-  const shortGain = f - s - DELIVERY_COST;
-  const longGain = s - f - DELIVERY_COST;
+  const shortGain = deliveryGain(d.state.cents, 1);
+  const longGain = deliveryGain(d.state.cents, -1);
   const solved1 = deliverySolved(d.state.cents);
 
   const hs = useScenario('hedge', { year: REFERENCE_YEAR, date: 'mar' as HedgeDate });
   const h = hedgeYear(hs.state.year, hs.state.date);
-  const worstYear = useMemo(() => worstMarginYear(), []);
-  const solved2 = hs.state.date === 'mar' && hs.state.year === worstYear;
+  const solved2 = useMemo(() => marginSolved(hs.state), [hs.state]);
+  const rec = useMemo(() => ({ mar: hedgeRecord('mar'), jul: hedgeRecord('jul'), sep: hedgeRecord('sep') }), []);
+  const now = rec[hs.state.date];
 
   return (
     <LessonPage id="agriculture/5.1">
@@ -197,8 +256,9 @@ export default function Lesson() {
         A <K tone="violet">futures contract</K> is a promise to deliver a fixed amount of a fixed grade of grain at a fixed place in a fixed month, at a price agreed
         today. Because every contract is the same, they can be traded on an exchange like shares. The corn contract of CME Group, the world’s main corn futures
         market, calls for 5,000 bushels of No. 2 yellow corn, delivered by shipping certificate at approved facilities along the Illinois River, in March, May,
-        July, September or December. Our valley’s contract is the same size, grade and months, but it is delivered onto ships at Port Sable — as Europe’s main
-        wheat contract is delivered at the French port of Rouen — so its price is the world’s price for corn. The buyer is <i>long</i>, the seller{' '}
+        July, September or December. Our valley’s contract is the same size and grade, though it trades only four months — December, March, May and July. It
+        is delivered onto ships at Port Sable, as Europe’s main wheat contract is delivered at the French port of Rouen, so its price is the world’s price for
+        corn. The buyer is <i>long</i>, the seller{' '}
         <i>short</i>, and they never deal with each other directly: a clearinghouse becomes the buyer to every seller and the seller to every buyer. Each side posts
         a deposit, called <K tone="red">margin</K>, and every evening each position is marked to market — whoever lost money that day pays it in cash, and whoever
         gained receives it.
@@ -223,7 +283,6 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'cash corn, Dec 14', value: usd(s, 2), tone: 'gold' },
-            { label: 'futures, Dec 14', value: usd(f, 2), tone: 'violet' },
             { label: 'who gains by delivery', value: shortGain > 0 ? 'shorts deliver' : longGain > 0 ? 'longs take delivery' : 'nobody' },
             { label: 'gain per contract', value: usd(Math.max(0, shortGain, longGain) * CONTRACT_BUSHELS), tone: 'green' },
           ]}
@@ -242,11 +301,20 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="What is the highest December futures price on the last trading day, to the cent, at which no short gains anything by delivering?"
+        question="Predict it first from the cash price and the cost of delivery, then set it to check: what is the highest December futures price on the last trading day, to the cent, at which no short gains anything by delivering?"
         solved={solved1}
         status={shortGain > 0 ? `At ${usd(f, 2)} a short earns ${usd(shortGain * CONTRACT_BUSHELS)} a contract by delivering.` : `At ${usd(f, 2)} no short gains by delivering. Could the price be higher?`}
         success={`Solved: at ${usd(f, 2)}, a short who bought cash corn at ${usd(s, 2)} and paid ${centsPlain(DELIVERY_COST)} to deliver it would just break even; a cent higher and every short would deliver. The cost of delivery sets how far apart futures and cash can be when a contract expires — which is why a futures price can stand for the price of real corn.`}
       />
+
+      <P>
+        The valley grows winter wheat as well as corn, but our market lists only the corn contract. Real wheat has futures of its own — soft red winter wheat in
+        Chicago, hard red winter wheat in Kansas City, milling wheat in Paris — each following its own harvests. To keep to one market, we price the valley’s
+        wheat off corn: at the {usd(PLAN_PRICE.wheat, 2)} a bushel of <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> when December corn futures stand at their
+        normal {usd(BASE_PRICE, 2)}, and up or down in proportion to them on July 15, when the wheat is sold. That is a simplification, though not a wild one. The
+        two grains compete for the same feed troughs — when corn is dear, livestock feeders buy more wheat — so their prices tend to rise and fall together,
+        even if wheat’s own harvests can pull them apart for a season. Every price in this chapter is for corn.
+      </P>
 
       <H2>Hedging, and paying for it as you go</H2>
       <P>
@@ -255,18 +323,26 @@ export default function Lesson() {
         the futures gain makes up for the lower cash price; if they rose, the futures loss takes away the higher one. What is left is the futures price on the day of
         the <K tone="violet">hedge</K> plus Fairview’s basis at harvest. The catch is the margin. A futures loss is paid as it happens, in cash, months before the
         corn is sold. In the next demonstration the line is December futures through one simulated season, and the strip under it is Cedar Bend’s margin account:
-        red over its line for money paid in, green under it for money received. Choose the year and when Cedar Bend hedged:
+        red over its line for money paid in, green under it for money received. The dots at the bottom are all sixty years at once — the harvest cash price at
+        Fairview and the price Cedar Bend got on its hedged corn — joined by each year’s futures gain or loss. Choose the year and when Cedar Bend hedged:
       </P>
 
       <Figure name="Commodity Market Clearing · a hedge" scenario={hs}>
         <HedgeChart h={h} date={hs.state.date} />
         <MarginStrip h={h} />
+        <SixtyYears date={hs.state.date} year={hs.state.year} />
+        <Legend
+          items={[
+            { label: 'Cash at Fairview, mid-October', color: MARKET_LINE.cash },
+            { label: 'Price on hedged corn', color: MARKET_LINE.futures },
+          ]}
+        />
         <Readouts
           items={[
-            { label: 'cash at Fairview, Oct 15', value: usd(h.cash, 2), tone: 'gold' },
-            { label: 'futures gain per bushel', value: usd(h.gain, 2), tone: h.gain >= 0 ? 'green' : 'red' },
-            { label: 'price on hedged corn', value: usd(h.hedged, 2), tone: 'violet' },
-            { label: 'most margin paid in', value: usd(h.maxMargin), tone: 'red' },
+            { label: `year ${hs.state.year}: price on hedged corn`, value: usd(h.hedged, 2), tone: 'violet' },
+            { label: `year ${hs.state.year}: most margin paid in`, value: usd(h.maxMargin), tone: 'red' },
+            { label: 'hedged, 60 years: average ± SD', value: `${usd(now.hedgedMean, 2)} ± ${usd(now.hedgedSd, 2)}`, tone: 'violet' },
+            { label: 'cash, 60 years: average ± SD', value: `${usd(now.cashMean, 2)} ± ${usd(now.cashSd, 2)}`, tone: 'gold' },
           ]}
         />
         <Segmented
@@ -275,17 +351,20 @@ export default function Lesson() {
           onChange={(v) => hs.set({ date: v })}
           options={(['mar', 'jul', 'sep'] as HedgeDate[]).map((k) => ({ value: k, label: HEDGE_LABEL[k] }))}
         />
-        <Slider label="Simulated year" value={hs.state.year} min={1} max={MARKET_YEARS} onChange={(v) => hs.set({ year: v })} display={String(hs.state.year)} />
+        <Slider label="Year" value={hs.state.year} min={1} max={MARKET_YEARS} onChange={(v) => hs.set({ year: v })} display={String(hs.state.year)} />
       </Figure>
 
       <P>
-        Step through the years with a March hedge and the price Cedar Bend receives hardly moves, while the cash price swings. Over the sixty simulated years the
-        hedged price varies by 40 cents (one standard deviation) and the harvest cash price by $1.00. The hedge doesn’t raise the average price: futures in March
-        are the market’s best estimate of December’s price, too high as often as too low. In these sixty years the hedged price averaged $4.34 and the cash price
-        $4.42, a difference well within what chance produces over sixty seasons. What the hedge does is trade <i>price</i> risk, which is large, for{' '}
+        With a March hedge the violet dots hardly move from year to year, while the gold ones swing. Over the sixty simulated years the hedged price varies by{' '}
+        {fmt(rec.mar.hedgedSd * 100)} cents (one standard deviation, the measure of spread of <a href={lessonHref('agriculture/3.5')}>Lesson 3.5</a>) and the
+        harvest cash price by {usd(rec.mar.cashSd, 2)}. The hedge doesn’t raise the average price: futures in March are the market’s best estimate of December’s
+        price, too high as often as too low. In these sixty years the hedged price averaged {usd(rec.mar.hedgedMean, 2)} and the cash price{' '}
+        {usd(rec.mar.cashMean, 2)}, a difference well within what chance produces over sixty seasons. What the hedge does is trade <i>price</i> risk, which is large, for{' '}
         <i>basis</i> risk — how far under futures Fairview bids at harvest — which is smaller, though not small: in the years when the valley’s own harvest fills
         its railroad and river, as in <a href={lessonHref('agriculture/4.4')}>Lesson 4.4</a>, Fairview’s bid falls far under the port’s price, hedge or no hedge. A later hedge locks in less, because the summer’s news is already
-        in the price: hedged on July 1 the price varies by 65 cents, and hedged on September 1 by 91, nearly as much as not hedging at all.
+        in the price: hedged on July 1 the price varies by {fmt(rec.jul.hedgedSd * 100)} cents, and hedged on September 1 by {fmt(rec.sep.hedgedSd * 100)}, nearly
+        as much as not hedging at all — the violet dots spread out to meet the gold. <a href={lessonHref('agriculture/5.4')}>Lesson 5.4</a> follows that news as it
+        arrives.
       </P>
       <P>
         Now look at the red area in a dry year. When the price rises the hedge loses, and the loss has to be paid in cash as it happens, while the corn that will
@@ -296,10 +375,21 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="With a March 1 hedge, find the simulated year in which Cedar Bend had to pay the most money into its margin account."
+        question={
+          <>
+            Predict first, from the sixty years of <a href={lessonHref('agriculture/4.5')}>Lesson 4.5</a>: in which year did a March 1 hedge need the most money
+            paid into Cedar Bend’s margin account? Then choose that year to check.
+          </>
+        }
         solved={solved2}
-        status={hs.state.date !== 'mar' ? 'Choose the March 1 hedge.' : `In year ${hs.state.year} the margin account was down as much as ${usd(h.maxMargin)}.`}
-        success={`Solved: in year ${hs.state.year} December futures climbed from ${usd(h.entry, 2)} to ${usd(h.exit, 2)} by mid-October, and Cedar Bend paid in as much as ${usd(h.maxMargin)} before its corn was sold. The hedge worked — the hedged corn fetched ${usd(h.hedged, 2)} — but the farm grew only ${fmt(h.crop / 1000)},000 bushels that year against ${fmt(HEDGED / 1000)},000 hedged: the drought that raised the price took the crop too. How much of a crop to hedge is a question for Lesson 5.5.`}
+        status={
+          hs.state.date !== 'mar'
+            ? 'Choose the March 1 hedge.'
+            : h.maxMargin < 1
+              ? `In year ${hs.state.year} December futures never rose over the March price, so the margin account only received money. Which year’s price climbed furthest after March, and why?`
+              : `Year ${hs.state.year} needed as much as ${usd(h.maxMargin)} of margin. Which year’s price climbed furthest after March, and why?`
+        }
+        success={`Solved: in year ${hs.state.year} December futures climbed from ${usd(h.entry, 2)} to ${usd(h.exit, 2)} by mid-October, and Cedar Bend paid in as much as ${usd(h.maxMargin)} before its corn was sold. On each bushel it had, the hedge did its job: those bushels fetched ${usd(h.hedged, 2)}. But the farm grew only ${fmt(h.crop / 1000)},000 bushels that year against ${fmt(HEDGED / 1000)},000 hedged — the drought that raised the price took the crop too. Its corn sold for ${usd(roundK(h.crop * h.cash))}, the futures lost ${usd(roundK(-h.gain * HEDGED))}, and the farm was left with ${usd(roundK(h.crop * h.cash + h.gain * HEDGED))}. How much of a crop to hedge is a question for Lesson 5.5.`}
       />
 
       <P>

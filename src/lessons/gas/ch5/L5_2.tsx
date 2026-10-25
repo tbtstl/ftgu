@@ -23,6 +23,7 @@ import {
   tint,
   useScenario,
 } from '../../../framework';
+import { useProgress } from '../../../course/progress';
 import { forwardCurve, normalPlan, planInventory, simulateYear, type ForwardCurve, type StorageState } from '../../../engines/gas/market';
 import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
 import { dailyFromMonthly, optimizeStorage, type StorageOptimum, type StorageSpec } from '../../../engines/gas/storage';
@@ -204,6 +205,27 @@ export function levelChallengeSolved(s: { lease: LeaseId; level: number; fee: nu
   return s.level - LEVEL_STEP < LEVEL_MIN || leaseIntrinsic('salt', s.level - LEVEL_STEP).value < LEVEL_TARGET;
 }
 
+/**
+ * The spread between the average prices received and paid that the first challenge's target takes:
+ * the Salt Flat lease buys and sells its whole 1 Bcf, so its value is MMBtu per Bcf × (spread − both
+ * fees), $/MMBtu.
+ */
+export const LEVEL_SPREAD_NEEDED = LEVEL_TARGET / MMBTU_PER_BCF + 2 * LEASE_FEE;
+
+/** The Salt Flat lease's spread at the standard fee: average price received less average price paid, $/MMBtu. */
+export function levelSpread(level: number): number {
+  const t = leaseTrades(leaseIntrinsic('salt', level).flow, curveDaily(level));
+  return t.sellAvg - t.buyAvg;
+}
+
+/**
+ * While the first challenge is unsolved, the figure keeps the Salt Flat lease's value to itself above
+ * plan at the standard fee, so the reader works it out from the prices paid and received.
+ */
+export function levelValueHidden(s: { lease: LeaseId; level: number; fee: number }, solved: boolean): boolean {
+  return !solved && s.lease === 'salt' && Math.abs(s.fee - LEASE_FEE) < 1e-9 && s.level > 100;
+}
+
 /** The second challenge: a year in which the Salt Flat lease, even with perfect foresight, earns less than its intrinsic value. */
 export function hedgeYearSolved(s: { lease: LeaseId; year: number }): boolean {
   return s.lease === 'salt' && leasePerfect('salt', s.year).value < leaseIntrinsic('salt').value;
@@ -330,14 +352,20 @@ export default function Lesson() {
   const opt = leaseIntrinsic(st.lease, st.level, st.fee);
   const trades = leaseTrades(opt.flow, daily);
   const solvedLevel = levelChallengeSolved(st);
+  const progress = useProgress();
+  const levelDone = solvedLevel || (progress['gas/5.2']?.includes('a') ?? false);
+  const hidden = levelValueHidden(st, levelDone);
+  const spreadNow = trades.sellAvg - trades.buyAvg;
   const levelStatus =
     st.lease !== 'salt'
       ? 'Choose the Salt Flat lease first.'
       : Math.abs(st.fee - LEASE_FEE) > 1e-9
         ? `Set the fee back to ${gp(LEASE_FEE)} each way.`
-        : opt.value < LEVEL_TARGET
-          ? `With the region’s storage at ${st.level}% of plan on March 1, the lease is worth ${money(opt.value)} a year.`
-          : `At ${st.level}% of plan the lease is worth ${money(opt.value)}. Does it need that much gas in storage?`;
+        : st.level <= 100
+          ? `At ${st.level}% of plan the lease is worth ${money(opt.value)}, with a spread of ${gp(spreadNow)}. It needs more gas in storage.`
+          : opt.value < LEVEL_TARGET
+            ? `At ${st.level}% of plan the lease receives ${gp(spreadNow)} more than it pays. Is that enough, after the fees?`
+            : `At ${st.level}% of plan the lease receives ${gp(spreadNow)} more than it pays. Is this the lowest level that does it?`;
   const levelTotal = storageOnMarch1(st.level);
 
   // ---- Figure 2: what actually happened.
@@ -363,6 +391,9 @@ export default function Lesson() {
   const saltDays = leaseDays('salt');
   const resDays = leaseDays('reservoir');
   const cheapest = Math.min(...base.slice(0, 7));
+  // The summer month the Salt Flat plan passes over that is closest in price to the months it buys.
+  const nextCheapest = Math.min(...base.slice(0, 7).filter((_, m) => !saltMonths.buy.includes(m)));
+  const nextCheapestMonth = GAS_MONTH_NAMES[base.indexOf(nextCheapest)];
   const dearest = Math.max(...base.slice(7));
   const low = leaseIntrinsic('salt', LEVEL_MIN).value;
   const high = leaseIntrinsic('salt', LEVEL_MAX).value;
@@ -439,10 +470,10 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'intrinsic value, a year', value: money(opt.value), tone: 'green' },
-            { label: 'per MMBtu of space', value: gp(opt.value / MMBTU_PER_BCF), tone: 'green' },
+            { label: hidden ? 'intrinsic value, a year (above plan, hidden until the challenge is solved)' : 'intrinsic value, a year', value: hidden ? '?' : money(opt.value), tone: 'green' },
             { label: 'average price paid', value: trades.bought > 0 ? gp(trades.buyAvg) : '—', tone: 'green' },
             { label: 'average price received', value: trades.sold > 0 ? gp(trades.sellAvg) : '—', tone: 'green' },
+            { label: 'received − paid', value: trades.bought > 0 && trades.sold > 0 ? gp(spreadNow) : '—', tone: 'green' },
           ]}
         />
         <Slider
@@ -466,7 +497,7 @@ export default function Lesson() {
           display={`${gp(st.fee)} per MMBtu each way`}
         />
         <Eq
-          label={`Intrinsic value equals ${fmt(MMBTU_PER_BCF / 1e6, 3)} million MMBtu per Bcf times (${fmt(trades.sold, 2)} Bcf sold at ${gp(trades.sellAvg)} minus the fee, minus ${fmt(trades.bought, 2)} Bcf bought at ${gp(trades.buyAvg)} plus the fee): ${money(opt.value)}`}
+          label={`Intrinsic value equals ${fmt(MMBTU_PER_BCF / 1e6, 3)} million MMBtu per Bcf times (${fmt(trades.sold, 2)} Bcf sold at ${gp(trades.sellAvg)} minus the fee, minus ${fmt(trades.bought, 2)} Bcf bought at ${gp(trades.buyAvg)} plus the fee)${hidden ? ', hidden above plan until the challenge is solved' : `: ${money(opt.value)}`}`}
         >
           <K c="price">value</K>
           <Op>=</Op>
@@ -476,14 +507,14 @@ export default function Lesson() {
             [{fmt(trades.sold, 2)} × ({gp(trades.sellAvg)} − {gp(st.fee)}) − {fmt(trades.bought, 2)} × ({gp(trades.buyAvg)} + {gp(st.fee)})]
           </span>
           <Op>=</Op>
-          <K c="price">{money(opt.value)}</K>
+          <K c="price">{hidden ? '?' : money(opt.value)}</K>
         </Eq>
       </Figure>
 
       <P>
         With the region’s storage as planned — {fmt(PLAN_TOTAL, 1)} Bcf on March 1 — the curve’s cheapest month is {GAS_MONTH_NAMES[base.indexOf(cheapest)]} at{' '}
         {gp(cheapest)} and its dearest is {GAS_MONTH_NAMES[base.indexOf(dearest)]} at {gp(dearest)}. The Salt Flat lease goes straight for both. Its plan buys gas in{' '}
-        {monthsText(saltMonths.buy)}, the two cheapest months, holds it, and sells it all in {monthsText(saltMonths.sell)}: {fmt(saltTrades.sold, 2)} Bcf bought at an
+        {monthsText(saltMonths.buy)}, the two cheapest months — by a fraction of a cent, since {nextCheapestMonth} also rounds to {gp(nextCheapest)} — holds it, and sells it all in {monthsText(saltMonths.sell)}: {fmt(saltTrades.sold, 2)} Bcf bought at an
         average of {gp(saltTrades.buyAvg)} and sold at {gp(saltTrades.sellAvg)}. After fees that is {money(salt.value)} a year, or {gp(salt.value / MMBTU_PER_BCF)}{' '}
         for every MMBtu of space. The Hollow Creek lease can’t be so choosy. It takes {fmt(resDays.fill)} days to fill, so it must spread its buying across{' '}
         {WORDS[resMonths.buy.length]} months, {monthsText(resMonths.buy)}, and {fmt(resDays.empty)} days to empty, so it sells across {WORDS[resMonths.sell.length]},{' '}
@@ -493,25 +524,29 @@ export default function Lesson() {
       <P>
         The curve, though, depends on the region. Lower the storage slider to {LEVEL_MIN}% of plan: with little gas left at the end of winter, the market has to refill
         storage over the summer, summer gas averages {gp(strip(lowCurve, 0, 7))} instead of {gp(strip(base, 0, 7))}, and the Salt Flat lease is worth only{' '}
-        {money(low)}. Raise it to {LEVEL_MAX}%: summer falls to {gp(strip(highCurve, 0, 7))}, winter falls less, and the lease is worth {money(high)}. A glut of gas
-        in storage makes storage space more valuable, because it cheapens the gas that goes in. Fees work the other way, cent for cent on every MMBtu that moves in or
-        out.
+        {money(low)}. Raise it to {LEVEL_MAX}%: summer falls to {gp(strip(highCurve, 0, 7))} while winter falls only to {gp(strip(highCurve, 7, 12))}, from{' '}
+        {gp(strip(base, 7, 12))}, so the gap the lease trades widens. (Above plan, the figure keeps the lease’s value to itself until you’ve tried the challenge that
+        follows.) A glut of gas in storage makes storage space more valuable, because it cheapens the gas that goes in. Fees work the other way, cent for cent on
+        every MMBtu that moves in or out.
       </P>
 
       <Challenge
         id="a"
         figure="Storage Optionality Lab"
-        question={`With the fee at ${gp(LEASE_FEE)} each way, how much gas must the region have in storage on March 1 for the Salt Flat lease to be worth at least ${money(LEVEL_TARGET)} a year? Find the lowest level on the slider that does it.`}
+        question={`With the fee at ${gp(LEASE_FEE)} each way, what’s the lowest level of storage on March 1, on the slider’s steps, at which the Salt Flat lease is worth at least ${money(LEVEL_TARGET)} a year? Work it out first: the lease buys and sells all of its 1 Bcf, ${fmt(MMBTU_PER_BCF / 1e6, 3)} million MMBtu, and pays a fee each way. What spread between the average prices received and paid does ${money(LEVEL_TARGET)} take? Then find the lowest level that earns it.`}
         solved={solvedLevel}
         status={levelStatus}
-        success={`Solved: ${st.level}% of plan, where the lease is worth ${money(leaseIntrinsic('salt', st.level).value)}${st.level - LEVEL_STEP >= LEVEL_MIN ? `; at ${st.level - LEVEL_STEP}% it would be worth ${money(leaseIntrinsic('salt', st.level - LEVEL_STEP).value)}` : ''}. More gas in the ground on March 1 means less to inject over the summer, so summer prices fall further than winter’s, and the spread the lease earns widens. A storage owner leasing out space would charge more in a year that starts with a surplus.`}
+        success={`Solved: ${st.level}% of plan. ${money(LEVEL_TARGET)} over ${fmt(MMBTU_PER_BCF / 1e6, 3)} million MMBtu is ${gp(LEVEL_TARGET / MMBTU_PER_BCF)} per MMBtu, and the two fees add ${gp(2 * LEASE_FEE)}, so the lease needs a spread of at least ${gp(LEVEL_SPREAD_NEEDED)}. Here it earns ${gp(spreadNow)} and is worth ${money(leaseIntrinsic('salt', st.level).value)}${st.level - LEVEL_STEP >= LEVEL_MIN ? `; at ${st.level - LEVEL_STEP}% the spread is ${gp(levelSpread(st.level - LEVEL_STEP))} and the lease would be worth ${money(leaseIntrinsic('salt', st.level - LEVEL_STEP).value)}` : ''}, and at ${LEVEL_MAX}% it would be worth ${money(high)}. More gas in the ground on March 1 means less to inject over the summer, so summer prices fall further than winter’s, and the spread the lease earns widens. A storage owner leasing out space would charge more in a year that starts with a surplus.`}
       />
 
       <H2>What the curve leaves out</H2>
       <P>
         The curve is an average over many possible years. The year that actually comes will have its own cold spells and mild weeks, and a lease that can move gas
-        quickly can answer them: sell into a three-day spike, buy back on a mild week, sell again. That ability is the lease’s <K c="price">extrinsic value</K>, the
-        worth of flexibility on top of what can be locked in. To see how much it could be, the next demonstration takes the {LEASE_YEARS} simulated years the curve was
+        quickly can answer them: sell into a three-day spike, buy back on a mild week, sell again. Nothing obliges it to. A lease is a right, not an obligation: its
+        holder moves gas only when the spread between buying and selling pays, and stands aside when it doesn’t. A contract that gives its holder that kind of choice
+        is an <K c="price">option</K>, and a storage lease is an option on the spread between the days it can buy and the days it can sell. Its intrinsic value is what
+        the option is worth if prices come out exactly as the curve says. Its <K c="price">extrinsic value</K> is the worth of the flexibility on top: of being able to
+        change the plan when they don’t. To see how much that could be, the next demonstration takes the {LEASE_YEARS} simulated years the curve was
         averaged from and, for each, finds the best possible plan with <b>perfect foresight</b> — knowing every day’s price in advance. No real trader does that well,
         so this is an upper limit. The upper chart is the year’s daily Calder price against the curve; the middle one, the gas in your lease under the intrinsic plan
         and under the perfect-foresight plan; the bars, what perfect foresight earns in each year. Choose a lease and a year:
@@ -578,10 +613,13 @@ export default function Lesson() {
         high-deliverability salt storage tends to lease for more per unit of space than depleted fields.
       </P>
       <P>
-        Real traders capture part of that extra, not all of it. A common way is to lock in the intrinsic plan with forwards and then, as the curve moves, re-optimize
-        and trade the difference — <b>rolling intrinsic</b>, in the industry’s phrase — or to sell options to buyers who want protection against the very spikes the
-        lease can serve. How much they capture depends on how well they read the weather and the storage report, the subject of{' '}
-        <a href={lessonHref('gas/6.1')}>Chapter 6</a>.
+        Real traders capture part of that extra, not all of it. A common way is <b>rolling intrinsic</b>: lock in the intrinsic plan with forwards on March 1, and each
+        time the curve moves, find the best plan again from the gas actually in the lease and trade forwards to switch to it. The old plan and its hedges are always
+        still there to keep, so a switch is made only when the new plan is worth more, and each one locks in a little of the extrinsic value. Another is to sell
+        options of one’s own — the right, say, to buy gas at a fixed price on whichever winter days the buyer chooses — to a utility that wants protection against the
+        very spikes the lease can serve, with the lease’s gas standing behind the promise. How much traders capture depends on how well they read the weather and the
+        storage report, the subject of <a href={lessonHref('gas/6.1')}>Chapter 6</a>; <a href={lessonHref('gas/6.4')}>Lesson 6.4</a> runs rolling intrinsic on a lease
+        like this one, a month at a time, over eight simulated years.
       </P>
 
       <H2>Why lock anything in</H2>
@@ -604,14 +642,14 @@ export default function Lesson() {
             ? 'Choose the Salt Flat lease first.'
             : `In year ${ws.year} perfect foresight earns ${money(perfect.value)}, ${perfect.value >= intr.value ? 'more' : 'less'} than the ${money(intr.value)} intrinsic value.`
         }
-        success={`Solved: in year ${ws.year} the best possible plan earns ${money(perfect.value)}, against the ${money(intr.value)} the forwards locked in. Prices that year never rewarded storing gas as much as the curve expected, so no amount of skill could have made up the difference — but a hedge did. That is the trade at the heart of storage: give up the chance of a great year in exchange for a known one, and keep the flexibility to earn more on top.`}
+        success={`Solved: in year ${ws.year} the best possible plan earns ${money(perfect.value)}, against the ${money(intr.value)} the forwards locked in. Prices that year never rewarded storing gas as much as the curve expected, so no amount of skill could have made up the difference — but a hedge did. That is the trade at the heart of storage. The hedge gives up the chance that the plan’s trades pay more than the curve expected, in exchange for knowing what they pay; it doesn’t give up the lease’s flexibility, which a hedged holder can still use to re-optimize when a cold spell comes and earn more on top.`}
       />
 
       <P>
         Storage’s value, then, has two parts with two different sources. The intrinsic part is the spread the curve already shows, set by how much gas the region has
         and how cold it expects the winter to be. The extrinsic part comes from the weather itself — from how far the year that arrives strays from the average — and
-        only a lease fast enough to respond can collect it. The biggest user that responds to gas prices day by day isn’t a storage field, though. It’s the power
-        plant, which can burn more gas or less as the spread between gas and electricity moves. That spread is the subject of{' '}
+        only a lease fast enough to respond can collect it. Storage is one way the region answers the price of gas. The buyers that answer it most readily, day by
+        day, are the region’s power plants, which can burn more gas or less as the spread between gas and electricity moves. That spread is the subject of{' '}
         <a href={lessonHref('gas/5.3')}>the next lesson</a>.
       </P>
     </LessonPage>

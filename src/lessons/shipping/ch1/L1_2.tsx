@@ -28,6 +28,7 @@ import { displacementAt, draftFor } from '../../../engines/shipping/hydrostatics
 import { G, KNOT, calmResistance, type Resistance } from '../../../engines/shipping/resistance';
 import { HULL_FILL, HULL_STROKE, SEA_FILL, SEA_LINE } from '../shared/ShipSide';
 import { XYChart } from '../shared/XYChart';
+import { useRevealed } from './reveal';
 
 const K_ = KESTREL;
 const LADEN = K_.designDraft;
@@ -57,14 +58,25 @@ export const CLEAN_14_KW = drag(14).effectivePower;
 /** Fouled-hull effective power at a speed (laden, Kestrel's own hull). */
 const fouledPower = (speedKn: number, fouling: number) => drag(speedKn, LADEN, K_.cb, fouling).effectivePower;
 
+/** The highest speed on the slider's 0.1-knot grid at which the fully fouled hull needs no more than the clean hull did at 14 knots. */
+export const FOULED_TOP_SPEED = (() => {
+  let best = 0;
+  for (let i = 60; i <= 180; i++) if (fouledPower(i / 10, 1) <= CLEAN_14_KW + 1e-9) best = i / 10;
+  return best;
+})();
+
+/** The cube-law estimate the challenge asks for: 14 knots divided by the cube root of fouling's extra power at 14 knots. */
+export const FOULED_CUBE_ESTIMATE = 14 / Math.cbrt(fouledPower(14, 1) / CLEAN_14_KW);
+
 /**
- * The challenge: with the hull fully fouled, the highest speed on the slider's 0.1-knot grid whose
- * effective power is no more than the clean hull needed at 14 knots.
+ * The challenge: with the hull fully fouled, a speed within two tenths of a knot below the highest
+ * one the clean hull's 14-knot power can hold, read where the fouled curve crosses the dashed line.
+ * The power readout is hidden until then, so the reader predicts with the cube law and checks on the chart.
  */
 export function foulingSolved(speedKn: number, fouling: number): boolean {
   if (fouling < 1 - 1e-9) return false;
   const s = Math.round(speedKn * 10) / 10;
-  return fouledPower(s, 1) <= CLEAN_14_KW + 1e-9 && fouledPower(s + 0.1, 1) > CLEAN_14_KW + 1e-9;
+  return s <= FOULED_TOP_SPEED + 1e-9 && s >= FOULED_TOP_SPEED - 0.2 - 1e-9;
 }
 
 // Numbers the prose quotes, all from the model.
@@ -85,11 +97,7 @@ const CROSSOVER = (() => {
   for (let v = 10; v <= 20; v += 0.05) if (drag(v, LADEN, 0.6).total / DISP_FINE < drag(v).total / DISP_FULL) return Math.round(v);
   return 20;
 })();
-const ANSWER = (() => {
-  let best = 0;
-  for (let i = 60; i <= 180; i++) if (fouledPower(i / 10, 1) <= CLEAN_14_KW + 1e-9) best = i / 10;
-  return best;
-})();
+const ANSWER = FOULED_TOP_SPEED;
 
 const PART_COLORS = {
   friction: GRAPHIC.violet,
@@ -183,6 +191,7 @@ export default function Lesson() {
   const pNow = fouledPower(sc.state.speed, sc.state.fouling);
   const pClean = drag(sc.state.speed).effectivePower;
   const solved = foulingSolved(sc.state.speed, sc.state.fouling);
+  const revealed = useRevealed('shipping/1.2', 'a', solved);
   const foulName = sc.state.fouling <= 1e-9 ? 'clean' : sc.state.fouling >= 1 - 1e-9 ? 'heavily fouled' : 'partly fouled';
 
   return (
@@ -203,8 +212,10 @@ export default function Lesson() {
         <b>roughness</b> allowance. Then there are the <b>waves</b> the ship makes, and a little <b>air</b> resistance on her hull and superstructure.
       </P>
       <P>
-        In the next demonstration Kestrel steams to the right through still, deep water, seen from above. The bar under the picture splits her resistance into
-        those five parts. Change her speed, her draft between the light ballast condition and full load, and the fullness of her hull:
+        Ships measure speed in <K tone="teal">knots</K>. A knot is one <K tone="blue">nautical mile</K> an hour, and a nautical mile, 1,852 meters, is close to one
+        minute of latitude along a meridian, so 14 knots is about {fmt(14 * KNOT * 3.6)} kilometers an hour. In the next demonstration Kestrel steams to the right through still, deep water, seen from
+        above. The bar under the picture splits her resistance into those five parts. Change her speed, her draft between the light ballast condition and full
+        load, and the fullness of her hull:
       </P>
 
       <Figure name="Hull Drag Lab" scenario={lab}>
@@ -284,13 +295,6 @@ export default function Lesson() {
           ))}
         </svg>
         <Legend items={segments.map((s) => ({ label: `${s.name} ${kN(s.value)}`, color: PART_COLORS[s.key] }))} />
-        <Readouts
-          items={[
-            { label: 'total resistance', value: kN(r.total), tone: 'violet' },
-            { label: 'effective power', value: kW(r.effectivePower), tone: 'red' },
-            { label: 'Froude number', value: r.froude.toFixed(3), tone: 'teal' },
-          ]}
-        />
         <Slider label="Speed" tone="teal" value={speed} min={6} max={18} step={0.5} onChange={(x) => lab.set({ speed: x })} display={kn(speed)} />
         <Slider label="Draft" tone="blue" value={load} min={0} max={1} step={0.05} onChange={(x) => lab.set({ load: x })} display={`${fmt(draft, 2)} m${loadName}`} />
         <Slider label="Hull fullness, block coefficient" tone="blue" value={cb} min={0.6} max={0.9} step={0.01} onChange={(x) => lab.set({ cb: x })} display={cb.toFixed(2)} />
@@ -328,7 +332,8 @@ export default function Lesson() {
         speed changes is the length of the waves, and how much energy they carry away.
       </P>
       <P>
-        The yardstick is the <K tone="teal">Froude number</K>: the ship’s speed divided by √(gL), the speed of a wave as long as the ship. It is named after
+        The yardstick is the <K tone="teal">Froude number</K>: the ship’s speed divided by √(gL), a speed set by her length L and gravity g. Near a Froude number
+        of 0.4, the waves she makes grow as long as she is. It is named after
         William Froude, who showed in the 1870s how to predict a full-size ship’s resistance from towing models: friction scales with one rule, waves with
         another, and two hulls of the same shape make the same wave pattern at the same Froude number. Kestrel at 14 knots is at {R14.froude.toFixed(3)}, and her
         waves are only {fmt(shipWavelength(14), 0)} meters long beside her 225-meter hull. They matter little at low speed and a great deal at high speed: waves
@@ -348,8 +353,8 @@ export default function Lesson() {
         Now bring her draft back to full and her block coefficient down to 0.60, the fineness of a container ship. At 14 knots the fine hull meets{' '}
         {kN(FINE14.total)} of resistance against Kestrel’s {kN(R14.total)}, and its wave resistance is {kN(FINE14.wave)} rather than {kN(R14.wave)}; at 18 knots
         that gap widens to {kN(FINE18.wave)} against {kN(R18.wave)}. But as <a href={lessonHref('shipping/1.1')}>the previous lesson</a> showed, the fine hull also
-        displaces less — {fmt(DISP_FINE)} tonnes instead of {fmt(DISP_FULL)} at the same draft. Per tonne of displacement, the full hull is the cheaper one to push
-        below about {CROSSOVER} knots and the fine one above it. That is why ships that carry cheap, heavy cargo slowly are built full, and ships that carry
+        displaces less — {fmt(DISP_FINE)} tonnes instead of {fmt(DISP_FULL)} at the same draft. Per tonne of displacement, in our model, the full hull is the
+        cheaper one to push below about {CROSSOVER} knots and the fine one above it. That is why ships that carry cheap, heavy cargo slowly are built full, and ships that carry
         expensive goods on fast schedules are built fine.
       </P>
 
@@ -385,9 +390,8 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `power at ${kn(sc.state.speed)}, ${foulName}`, value: kW(pNow), tone: 'red' },
-            { label: 'with a clean hull', value: kW(pClean) },
-            { label: 'extra from fouling', value: pct(pNow / pClean - 1) },
+            { label: `extra power from fouling, at ${kn(sc.state.speed)}`, value: pct(pNow / pClean - 1), tone: 'violet' },
+            ...(revealed ? [{ label: `power at ${kn(sc.state.speed)}, ${foulName}`, value: kW(pNow), tone: 'red' as const }] : []),
           ]}
         />
         <Slider label="Speed" tone="teal" value={sc.state.speed} min={6} max={18} step={0.1} onChange={(x) => sc.set({ speed: x })} display={kn(sc.state.speed)} />
@@ -414,7 +418,7 @@ export default function Lesson() {
       <H2>A dirty hull</H2>
       <P>
         A ship’s bottom is a habitat. A film of slime forms on it within days, and weed, barnacles and tubeworms follow — fastest in warm water, and when a ship
-        lies idle. Every layer roughens the surface the boundary layer slides over and raises friction. Antifouling paints slow the growth, and owners have hulls
+        lies idle. Every layer roughens the hull under the thin layer of water it drags along, and raises friction. Antifouling paints slow the growth, and owners have hulls
         cleaned by divers or robots and repainted in drydock, but fouling is still one of the main reasons a ship’s fuel consumption creeps up between dockings. In
         our model, a heavily fouled hull multiplies Kestrel’s roughness term {fmt(FOUL14.roughness / R14.roughness, 1)} times, from {kN(R14.roughness)} to{' '}
         {kN(FOUL14.roughness)} at 14 knots, and raises her effective power from {kW(R14.effectivePower)} to {kW(FOUL14.effectivePower)},{' '}
@@ -425,16 +429,14 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Hull Drag Lab · speed curve"
-        question="Kestrel has spent a long spell at anchor in the tropics and her hull is heavily fouled. Her engine can give her hull no more effective power than it needed, clean, at 14 knots. Set the fouling to 100% and find the highest speed, to a tenth of a knot, she can keep up on that power."
+        question={`Kestrel has spent a long spell at anchor in the tropics and her hull is heavily fouled. Her engine can give her hull no more effective power than it needed, clean, at 14 knots. Fouling adds about ${pct(Math.round((FOUL14.effectivePower / R14.effectivePower - 1) * 20) / 20)} to the power she needs at any speed near 14 knots (the readout shows it), and power goes roughly as the cube of speed. Predict first: how fast can she go on that power? Then set the fouling to 100% and put her at the highest speed she can hold, to within two tenths of a knot.`}
         solved={solved}
         status={
           sc.state.fouling < 1 - 1e-9
             ? `Set the hull fouling to 100% first; it is at ${fmt(sc.state.fouling * 100)}%.`
-            : pNow > CLEAN_14_KW + 1e-9
-              ? `At ${kn(sc.state.speed)} her fouled hull needs ${kW(pNow)}, more than the ${kW(CLEAN_14_KW)} available.`
-              : `At ${kn(sc.state.speed)} she needs ${kW(pNow)}, within the ${kW(CLEAN_14_KW)} available. Could she go a little faster?`
+            : `Her hull is fully fouled and she is set to ${kn(sc.state.speed)}. Compare your prediction with where the fouled curve crosses the dashed line.`
         }
-        success={`Solved. At ${kn(ANSWER)} her fouled hull needs ${kW(fouledPower(ANSWER, 1))}, just under the ${kW(CLEAN_14_KW)} her clean hull needed at 14 knots; at ${kn(ANSWER + 0.1)} it would need ${kW(fouledPower(ANSWER + 0.1, 1))}. The fouling has cost her ${fmt(14 - ANSWER, 1)} knots — a tenth of her speed — for the same power. Over a long voyage that is days lost, and Chapter 2 will put a price on them.`}
+        success={`Solved. The fouled curve crosses the dashed line at about ${kn(ANSWER)}: there her fouled hull needs ${kW(fouledPower(ANSWER, 1))}, just under the ${kW(CLEAN_14_KW)} her clean hull needed at 14 knots, and at ${kn(ANSWER + 0.1)} it would need ${kW(fouledPower(ANSWER + 0.1, 1))}. The cube law gets within a tenth of a knot of that: fouling multiplies her power need by ${fmt(FOUL14.effectivePower / R14.effectivePower, 2)}, so to stay on the same power she must slow by its cube root, ${fmt(Math.cbrt(FOUL14.effectivePower / R14.effectivePower), 2)}, and 14 ÷ ${fmt(Math.cbrt(FOUL14.effectivePower / R14.effectivePower), 2)} ≈ ${kn(FOULED_CUBE_ESTIMATE)}. The fouling has cost her ${fmt(14 - ANSWER, 1)} knots — a tenth of her speed — for the same power. Over a long voyage that is days lost, and Chapter 2 will put a price on them.`}
       />
 
       <P>

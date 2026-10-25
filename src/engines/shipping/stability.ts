@@ -37,6 +37,26 @@ export const CARGOES: Record<string, Cargo> = {
   grain: { id: 'grain', name: 'Wheat', stowage: 1.3 },
 };
 
+/**
+ * Logs: round trunks leave gaps, so they stow at about 2 m³ to the tonne and fill a bulk carrier's
+ * holds long before her marks. Log carriers stack the rest on deck (see `deckStack`).
+ */
+export const LOGS: Cargo = { id: 'logs', name: 'Logs', stowage: 2.0 };
+
+/** Fraction of the length between perpendiculars taken up by the cargo holds, and so by a deck stack. */
+const CARGO_LENGTH_FRAC = 0.77;
+
+/** Deck area a deck cargo is stacked on, m²: the length of the cargo holds times the full beam. */
+export function deckStowArea(v: VesselClass): number {
+  return CARGO_LENGTH_FRAC * v.lbp * v.beam;
+}
+
+/** A deck cargo stacked evenly from the main deck: its height, and the heights of its top and center of gravity above the keel, m. */
+export function deckStack(v: VesselClass, weight: number, stowage: number): { height: number; top: number; kg: number } {
+  const height = Math.max(0, weight) * stowage / deckStowArea(v);
+  return { height, top: v.depth + height, kg: v.depth + height / 2 };
+}
+
 /** The ballast tanks of a bulk carrier, as fractions of its normal ballast. */
 export function ballastTanks(v: VesselClass) {
   return {
@@ -55,6 +75,8 @@ export interface Loading {
   lowerBallast: number;
   /** Ballast in the topside tanks, tonnes. */
   topsideBallast: number;
+  /** Optional cargo stacked on deck above the holds (see `deckStack`). */
+  deck?: { weight: number; stowage: number };
 }
 
 export interface WeightItem {
@@ -115,6 +137,7 @@ export function stabilityOf(v: VesselClass, l: Loading, rho = RHO_SEA): Stabilit
     { name: 'Lower ballast', weight: l.lowerBallast, kg: t.lower.kg },
     { name: 'Topside ballast', weight: l.topsideBallast, kg: t.topside.kg },
   ];
+  if (l.deck && l.deck.weight > 0) items.push({ name: 'Deck cargo', weight: l.deck.weight, kg: deckStack(v, l.deck.weight, l.deck.stowage).kg });
   const displacement = items.reduce((s, i) => s + i.weight, 0);
   const kg = items.reduce((s, i) => s + i.weight * i.kg, 0) / displacement;
   const draft = draftFor(v, displacement, rho);

@@ -3,7 +3,6 @@ import {
   Caption,
   Challenge,
   Checkbox,
-  FigRef,
   Figure,
   GRAPHIC,
   GridY,
@@ -27,6 +26,7 @@ import {
 } from '../../../framework';
 import { backtest, bunkerHedge, STRATEGY_NAMES, type StrategyId, type Trade } from '../../../engines/shipping/backtest';
 import type { CycleMonth } from '../../../engines/shipping/cycle';
+import { DEFAULT_ASSUMPTIONS } from '../../../engines/shipping/forecast';
 import { dailyIndex, longRun } from '../../../engines/shipping/ffa';
 import { monthAverage } from '../../../engines/shipping/indices';
 import { equityCurve, mean, stdev, summarize, type PnlSummary } from '../../../engines/strategy/risk';
@@ -147,6 +147,26 @@ export function passingThresholds(costPct: number): number[] {
   return out;
 }
 
+/** The fundamentals rule at the starting settings with the orderbook's deliveries left out of its forecast. */
+export function fundamentalsWithoutDeliveries() {
+  const d = worldData('ours');
+  const r = backtest(
+    {
+      strategy: 'fundamental',
+      cls: 'kmax',
+      days: DEFAULT_LAB.days,
+      cost: DEFAULT_LAB.cost / 100,
+      threshold: DEFAULT_LAB.threshold / 100,
+      from: 1,
+      to: HISTORY_MONTHS - 1,
+      forecast: { ...DEFAULT_ASSUMPTIONS, deliveries: false },
+    },
+    d.index,
+    d.hist,
+  );
+  return { total: r.summary.total, traded: r.trades.filter((t) => t.side).length };
+}
+
 /** A rule's total in every world, $. */
 export function worldTotals(s: LabState): number[] {
   return WORLDS.map((w) => labRun(s, w.id).all.total);
@@ -208,6 +228,7 @@ export default function Lesson() {
       fundamentalWorlds: worldTotals({ ...DEFAULT_LAB, strategy: 'fundamental' }),
       wide45: worldTotals({ ...DEFAULT_LAB, strategy: 'reversion', threshold: 45 }),
       wide50: worldTotals({ ...DEFAULT_LAB, strategy: 'reversion', threshold: 50 }),
+      noDeliveries: fundamentalsWithoutDeliveries(),
     }),
     [],
   );
@@ -216,6 +237,7 @@ export default function Lesson() {
   const hedgeRun = N.hedge;
   const physical = hedgeRun.trades.map((t) => t.settlement * 30);
   const surprise = hedgeRun.trades.map((t) => (t.settlement - t.price) * 30);
+  const hedged = physical.map((x, i) => x + hedgeRun.pnl[i]);
 
   // Other worlds, computed from a deferred copy so the sliders stay quick.
   const deferred = useDeferredValue(s);
@@ -233,6 +255,7 @@ export default function Lesson() {
   const by = scale(bLo, bHi, 186, 30);
 
   const seasonBuys = N.seasonal.trades.filter((t) => t.side === 'buy');
+  const seasonSells = N.seasonal.trades.filter((t) => t.side === 'sell');
   const draws = (xs: number[]) => xs.slice(1, 11);
   const idxOf = (id: string) => WORLDS.findIndex((w) => w.id === id);
 
@@ -319,9 +342,11 @@ export default function Lesson() {
 
       <P>
         The harvest rule loses {$m(-N.seasonal.all.total)} over the twelve years. The season is perfectly real — Brazil’s soybeans really do fill Kamsarmaxes from
-        March to July, and <FigRef to="Freight Trading Lab">the index</FigRef> really does rise with them. But everyone knows it, and the forward curve of Lesson 4.5
-        prices it in: the March-to-June contracts this rule buys were priced at {$k(mean(seasonBuys.map((t) => t.price)))} a day on average and settled at{' '}
-        {$k(mean(seasonBuys.map((t) => t.settlement)))}. A physical fact that is already in the price earns nothing, and paying commissions to bet on it loses.
+        March to July, and the Kamsarmax index really does rise with them. But everyone knows it, and the forward curve of Lesson 4.5 prices it in — more of it, in
+        fact, than arrives. The March-to-June contracts this rule buys were priced at {$k(mean(seasonBuys.map((t) => t.price)))} a day on average and settled at{' '}
+        {$k(mean(seasonBuys.map((t) => t.settlement)))}; the September-to-November contracts it sells were priced at {$k(mean(seasonSells.map((t) => t.price)))}{' '}
+        and settled at {$k(mean(seasonSells.map((t) => t.settlement)))}. A physical fact that is already in the price earns nothing, and a rule that pays the
+        curve’s price for more season than the market delivers loses: commissions account for only {$m(N.seasonal.fees)} of its {$m(-N.seasonal.all.total)}.
       </P>
       <P>
         Momentum does worse, {$m(-N.momentum.all.total)}, and its worst <K tone="red">drawdown</K> — the deepest fall from a previous high — is{' '}
@@ -332,11 +357,18 @@ export default function Lesson() {
         years would have been badly surprised by the next six.
       </P>
       <P>
-        The fundamentals rule makes {$m(N.fundamental.all.total)}, with {pct(N.fundamental.hitRate)} of its {N.fundamental.traded} trades winning and a Sharpe
-        ratio of {fmt(N.fundamental.all.sharpe, 2)}. Be clear about why. Our model’s traders set forward prices by pulling today’s index back toward a fixed
-        long-run level; they ignore the orderbook. A forecast that counts the ships due from the shipyards, as in{' '}
-        <a href={lessonHref('shipping/2.5')}>Lesson 2.5</a> and 5.1, knows better. That is a blind spot we built into the simulation, not a law of the sea: real
-        forward freight markets are full of people running exactly this kind of analysis, and a gap this wide shouldn’t be expected in practice.
+        The fundamentals rule makes {$m(N.fundamental.all.total)}, with {pct(N.fundamental.hitRate)} of its {N.fundamental.traded} trades winning and a{' '}
+        <K>Sharpe ratio</K> of {fmt(N.fundamental.all.sharpe, 2)}, the yardstick traders use for how steady a profit is. It divides the average monthly result, here{' '}
+        {$k(N.fundamental.all.mean)}, by the <K>standard deviation</K> of the monthly results, here {$k(N.fundamental.all.stdev)} — a measure of how far a typical
+        month lands from the average — and scales the ratio to a year by multiplying it by √12. The higher it is, the less the profit rests on a few lucky months.
+      </P>
+      <P>
+        Be clear about why this rule works. It isn’t the orderbook: leave the shipyards’ deliveries out of its forecast and it makes{' '}
+        {$m(N.noDeliveries.total)} on {N.noDeliveries.traded} trades, almost the same, because one month ahead too few ships arrive to matter. As in{' '}
+        <a href={lessonHref('shipping/5.1')}>Lesson 5.1</a>, the forecaster uses the very equilibrium that generated the history and builds next month from this
+        month’s ships, cargo and season. Our model’s traders build their forward curve from nothing but today’s index and a fixed long-run level for each month of
+        the year. One month ahead, the forecast is simply the better guess. That is a blind spot we built into the simulation, not a law of the sea: real forward
+        freight markets are full of people running exactly this kind of analysis, and a gap this wide shouldn’t be expected in practice.
       </P>
 
       <Challenge
@@ -411,9 +443,19 @@ export default function Lesson() {
             { label: 'best world', value: $m(sorted[sorted.length - 1]), tone: 'green' },
           ]}
         />
+        <Slider
+          label="Threshold"
+          value={s.threshold}
+          min={0}
+          max={60}
+          disabled={!usesThreshold}
+          onChange={(v) => lab.set({ threshold: v })}
+          display={usesThreshold ? `${s.threshold}%` : 'not used'}
+        />
         <Caption>
-          {STRATEGY_NAMES[deferred.strategy]}, {deferred.days} days a month, {fmt(deferred.cost, 2)}% costs
-          {deferred.strategy === 'reversion' || deferred.strategy === 'fundamental' ? `, ${deferred.threshold}% threshold` : ''}. Every history here is simulated.
+          {STRATEGY_NAMES[deferred.strategy]}
+          {deferred.strategy === 'reversion' || deferred.strategy === 'fundamental' ? ` at a ${deferred.threshold}% threshold` : ''}, {deferred.days} days a month and{' '}
+          {fmt(deferred.cost, 2)}% costs, as set in the first demonstration. Every history here is simulated.
         </Caption>
       </Figure>
 
@@ -439,8 +481,8 @@ export default function Lesson() {
         The owner’s hedge makes {$m(N.hedge.all.total)}, small beside the swings it sits in. In our history the forward curve’s long-run level averaged{' '}
         {$k(ANCHOR_AVG)} a day while the index averaged {$k(INDEX_AVG)}, so sellers collected a little; a hedge isn’t bought for that. What it buys is certainty a
         month ahead: for a Kamsarmax earning the index, it removes surprises of about {$k(stdev(surprise))} a month (one standard deviation, on 30 days). Notice what
-        it doesn’t remove. The ship’s monthly earnings still swing by {$k(stdev(physical))} from one month to another, because next month’s forward price moves
-        with the market. Fixing earnings across a cycle takes longer contracts — a strip of FFAs or a period charter, as in{' '}
+        it doesn’t remove. Over the twelve years the ship’s monthly earnings have a standard deviation of {$k(stdev(physical))}, and with the hedge{' '}
+        {$k(stdev(hedged))} — barely less — because the price the hedge locks in, next month’s forward, moves with the market. Fixing earnings across a cycle takes longer contracts — a strip of FFAs or a period charter, as in{' '}
         <a href={lessonHref('shipping/5.3')}>Lesson 5.3</a>. The bunker hedge is the same story for costs: over the history it nets {$k(BUNKER.total)}, which is
         nothing, while taking the guesswork out of fuel bills that moved by about {$k(BUNKER.stdev)} a month.
       </P>

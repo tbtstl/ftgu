@@ -37,7 +37,8 @@ import {
 import { ACCELERATORS, GPU_IDS, type GpuId } from '../../../model/compute/hardware';
 import { SITES } from '../../../model/compute/sites';
 import { WORKLOADS, WORKLOAD_IDS, type WorkloadId } from '../../../model/compute/workloads';
-import { defaultCloud, resetPart, updateCloud, useCloud, type CloudDesign } from '../shared/cloudStore';
+import { confirmResetPart, defaultCloud, designFor, othersAtStart, updateCloud, useCloud, type Basis, type CloudDesign } from '../shared/cloudStore';
+import { BasisSwitch, SoFar } from '../shared/SoFar';
 
 // ---------------------------------------------------------------------------
 // What the lesson computes from the reader's cloud: a week of each customer's demand at the price
@@ -82,7 +83,7 @@ export interface WeekView {
   peakHour: number;
   /** Share of the week's demand served. */
   servedShare: number;
-  /** What each customer wants on average at its own value, before price. */
+  /** What each customer wants in an average hour of the week (weekends included), before price. */
   wants: number[];
   ctx: ReturnType<typeof prepare>;
 }
@@ -208,11 +209,60 @@ export function smallestFill(base: CloudDesign = START, id = 'c6'): number {
 }
 
 const withSize = (d: CloudDesign, id: string, size: number): CloudDesign => ({ ...d, customers: d.customers.map((c) => (c.id === id ? { ...c, size } : c)) });
+
+// The challenge: the frontier lab's 400B model can't run on an L-class card at all. Does its growth
+// leave the L-class idle? (No: its reserved GPUs push other customers' work down onto it.)
+
+/** The challenge's customer, the frontier lab. */
+export const SPILL_ID = 'c3';
+/** The share of the week the L-class must be busy. */
+export const SPILL_TARGET = 0.3;
+
+const json = (x: unknown) => JSON.stringify(x, (_, v) => (v === Infinity ? null : v));
+
+/** Whether the customers are the starting six, with at most one customer's size changed. */
+export function onlySizeChanged(customers: Customer[], id: string): boolean {
+  const start = defaultCloud().customers;
+  return customers.length === start.length && start.every((c, i) => customers[i]?.id === c.id && json({ ...customers[i], size: c.id === id ? c.size : customers[i].size }) === json(c));
+}
+
+/** Challenge: the starting fleet, prices and plan, the starting customers but a bigger frontier lab, and the L-class busy at least 30% of the week. */
+export function spillSolved(d: CloudDesign): boolean {
+  return othersAtStart(d, 'customers') && onlySizeChanged(d.customers, SPILL_ID) && weekView(d).ops.utilization.L >= SPILL_TARGET - 1e-9;
+}
+
+/** The smallest frontier lab (on the slider's grid) that solves the challenge from the starting design. */
+export function smallestSpill(): number {
+  for (let s = 0; s <= SIZE_MAX; s += SIZE_STEP) if (spillSolved(withSize(START, SPILL_ID, s))) return s;
+  return Infinity;
+}
+
+/** The customers whose work runs on L-class GPUs in a design's week, most first. */
+export function onTheL(d: CloudDesign): Customer[] {
+  const by = weekView(d).ops.gpuHoursBy;
+  return d.customers.filter((c) => (by[c.id]?.L ?? 0) > 1).sort((a, b) => by[b.id].L - by[a.id].L);
+}
+
+/** B-class GPUs held for the model trainer. */
+export function trainerB(d: CloudDesign): number {
+  return commitments(weekView(d).ctx)
+    .list.filter((c) => c.customer === 'c4' && c.gpu === 'B')
+    .reduce((t, c) => t + c.gpus, 0);
+}
+
+/** The frontier lab's size that answers the challenge (smallestSpill(), checked in the tests). */
+export const SPILL_ANSWER = 520;
+const SPILLED = withSize(START, SPILL_ID, SPILL_ANSWER);
 const FILLED = weekView(withSize(START, 'c6', FILL_ANSWER));
 const TRAINER_SPOT = weekView({ ...START, customers: START.customers.map((c) => (c.workload === 'train70' ? { ...c, tier: 'spot' as const } : c)) });
 
 export const LESSON_NUMBERS = {
+  /** Before price: the customers' sizes (an average weekday hour), and their average over the whole week. */
+  sizes: START.customers.reduce((s, c) => s + c.size, 0),
   wants: START_WEEK.wants.reduce((s, x) => s + x, 0),
+  /** A-class hours of work an L-class hour does: batch summaries, and fine-tuning (its best). */
+  batchL: START_WEEK.ctx.prod.batch8.L,
+  tuneL: START_WEEK.ctx.prod.tune8.L,
   average: START_WEEK.average,
   peak: START_WEEK.peak,
   peakWhen: whenOf(START_WEEK.peakHour),
@@ -231,7 +281,34 @@ export const LESSON_NUMBERS = {
   committedB: commitments(START_WEEK.ctx).list.filter((c) => c.gpu === 'B').reduce((t, c) => t + c.gpus, 0),
   q12Share: START_GROWTH.servedShare[QUARTERS - 1],
   demandGrowth: START_GROWTH.totals[QUARTERS - 1] / START_GROWTH.totals[0],
+  /** The challenge's answer: the L-class's use, who runs on it, and the trainer's B-class GPUs before and after. */
+  spillL: weekView(SPILLED).ops.utilization.L,
+  spillOnL: onTheL(SPILLED).map((c) => c.id),
+  trainerBStart: trainerB(START),
+  trainerBSpill: trainerB(SPILLED),
+  docSize: START.customers.find((c) => c.id === 'c6')!.size,
+  labSize: START.customers.find((c) => c.id === SPILL_ID)!.size,
 };
+
+// ---------------------------------------------------------------------------
+// The customer table doubles as the first demonstration's customer picker.
+
+/** Header and six rows, and a sliver of a seventh to show that more scroll into view. */
+const TABLE_MAX_PX = 266;
+const pickStyle = (on: boolean) =>
+  ({
+    appearance: 'none',
+    border: 0,
+    padding: 0,
+    background: 'none',
+    font: 'inherit',
+    color: 'inherit',
+    cursor: 'pointer',
+    textAlign: 'left',
+    textDecoration: on ? 'underline solid' : 'underline dotted',
+    textDecorationThickness: 1,
+    textUnderlineOffset: '0.25em',
+  }) as const;
 
 // ---------------------------------------------------------------------------
 // Charts.
@@ -242,7 +319,7 @@ const X1 = 628;
 function WeekChart({ view, customers, ariaLabel }: { view: WeekView; customers: Customer[]; ariaLabel: string }) {
   const [y0, y1] = niceDomain(0, Math.max(10, ...view.totals, ...view.served), 4);
   const x = scale(0, HOURS, X0, X1);
-  const y = scale(y0, y1, 214, 24);
+  const y = scale(y0, y1, 164, 24);
   const xs = Array.from({ length: HOURS + 1 }, (_, h) => x(h));
   // Each hour's value is drawn flat across the hour (repeat the last for the right edge).
   const ext = (a: number[]) => [...a, a[a.length - 1] ?? 0];
@@ -255,7 +332,7 @@ function WeekChart({ view, customers, ariaLabel }: { view: WeekView; customers: 
   });
   const gap = areaPath(xs, ext(view.totals).map(y), ext(view.served.map((s, h) => Math.min(s, view.totals[h]))).map(y));
   return (
-    <svg className="chart" viewBox="0 0 640 248" role="img" aria-label={ariaLabel}>
+    <svg className="chart" viewBox="0 0 640 188" role="img" aria-label={ariaLabel}>
       <defs>
         <pattern id="l72-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <line x1="0" y1="0" x2="0" y2="6" stroke={TEXT.red} strokeWidth="2" />
@@ -264,8 +341,11 @@ function WeekChart({ view, customers, ariaLabel }: { view: WeekView; customers: 
       <text className="ax" x={X0} y={12}>
         Demand bought at the price book’s prices, A-class equivalents
       </text>
+      <text className="ax ax-e" x={X1} y={12}>
+        average hour {fmt(view.average)}
+      </text>
       {[5, 6].map((d) => (
-        <rect key={d} x={x(d * 24)} y={24} width={x(24) - x(0)} height={190} fill="rgba(0,0,0,.035)" />
+        <rect key={d} x={x(d * 24)} y={24} width={x(24) - x(0)} height={140} fill="rgba(0,0,0,.035)" />
       ))}
       <GridY y={y} ticks={niceTicks(y0, y1, 4)} x0={X0} x1={X1} format={(v) => fmt(v)} baseline={0} />
       {areas.map((a, i) => (
@@ -274,13 +354,13 @@ function WeekChart({ view, customers, ariaLabel }: { view: WeekView; customers: 
       <path d={gap} fill="url(#l72-hatch)" opacity={0.55} />
       <path d={linePath(xs, ext(view.served).map(y))} fill="none" stroke="#222" strokeWidth={1.8} strokeDasharray="5 3" />
       {DAY.map((d, i) => (
-        <text key={d} className="ax ax-m" x={x(i * 24 + 12)} y={232}>
+        <text key={d} className="ax ax-m" x={x(i * 24 + 12)} y={182}>
           {d}
         </text>
       ))}
-      <line className="cur" x1={x(view.peakHour + 0.5)} x2={x(view.peakHour + 0.5)} y1={24} y2={214} />
-      <text className="ax" x={Math.min(x(view.peakHour + 0.5) + 4, 560)} y={36}>
-        busiest hour
+      <line className="cur" x1={x(view.peakHour + 0.5)} x2={x(view.peakHour + 0.5)} y1={24} y2={164} />
+      <text className="ax" x={Math.min(x(view.peakHour + 0.5) + 4, 500)} y={36}>
+        busiest hour, {fmt(view.peak)}
       </text>
     </svg>
   );
@@ -330,10 +410,11 @@ function GrowthChart({ view, customers, ariaLabel }: { view: GrowthView; custome
 // ---------------------------------------------------------------------------
 
 export default function Lesson() {
-  const design = useCloud();
+  const saved = useCloud();
+  const [basis, setBasis] = useState<Basis>('start');
+  const design = designFor(saved, 'customers', basis);
   const customers = design.customers;
   const [selectedId, setSelected] = useState(customers[0]?.id ?? '');
-  const [newWork, setNewWork] = useState<WorkloadId>('batch8');
   const sel = customers.find((c) => c.id === selectedId) ?? customers[0];
 
   const week = weekView(design);
@@ -342,16 +423,15 @@ export default function Lesson() {
   const growth = useMemo(() => growthView(deferred), [deferred]);
   const site = SITES[design.fleet.site];
   const busy = busyByClass(design);
-  const solved = fillSolved(design);
   const N = LESSON_NUMBERS;
 
   const edit = (patch: Partial<Customer>) => {
     if (!sel) return;
     updateCloud((d) => ({ ...d, customers: d.customers.map((c) => (c.id === sel.id ? { ...c, ...patch } : c)) }));
   };
-  const add = () => {
+  const add = (work: WorkloadId) => {
     if (customers.length >= 12) return;
-    const c = newCustomer(newWork, customers);
+    const c = newCustomer(work, customers);
     updateCloud((d) => ({ ...d, customers: [...d.customers, c] }));
     setSelected(c.id);
   };
@@ -361,6 +441,18 @@ export default function Lesson() {
     updateCloud((d) => ({ ...d, customers: d.customers.filter((c) => c.id !== sel.id) }));
     setSelected(rest[0].id);
   };
+
+  // The challenge.
+  const solved = spillSolved(design);
+  const lab = customers.find((c) => c.id === SPILL_ID);
+  const status = !othersAtStart(design, 'customers')
+    ? 'The question is about the starting fleet, prices and plan: switch the demonstration to the starting design.'
+    : !lab || !onlySizeChanged(customers, SPILL_ID)
+      ? 'Start from the starting customers — Reset puts them back — and change only the frontier lab’s size.'
+      : `The frontier lab wants ${aeq(lab.size)} A-eq in an average weekday hour, and the L-class is ${pct(week.ops.utilization.L)} busy.`;
+  const fallen = onTheL(design).map((c) => `the ${c.name.charAt(0).toLowerCase()}${c.name.slice(1)}`);
+  const fallenText = fallen.length > 1 ? `${fallen.slice(0, -1).join(', ')} and ${fallen[fallen.length - 1]}` : fallen[0] ?? 'other customers';
+  const success = `Solved: the L-class is ${pct(week.ops.utilization.L)} busy, yet none of the frontier lab’s work runs there. Its reserved GPUs, held for its busiest hour, take B-class GPUs from the model trainer, which keeps ${fmt(trainerB(design))} of the ${fmt(N.trainerBStart)} it had; the trainer’s work moves to A-class GPUs, and customers who were using those fall back to the L-class: ${fallenText}. Growth anywhere spills down to whatever capacity is idle.`;
 
   const picker = (
     <Segmented
@@ -378,9 +470,9 @@ export default function Lesson() {
       }))}
     />
   );
+  const basisSwitch = <BasisSwitch value={basis} onChange={setBasis} own="customers" />;
 
   const rttValue = sel && Number.isFinite(sel.maxRttMs) ? Math.min(100, Math.max(2, Math.round(sel.maxRttMs))) : RTT_NONE;
-  const least = busy.length ? busy.reduce((a, b) => (b.busy < a.busy ? b : a)) : null;
   const lastQ = growth.servedShare[QUARTERS - 1];
   const firstShort = growth.servedShare.findIndex((s) => s < 0.8);
 
@@ -395,18 +487,45 @@ export default function Lesson() {
     return o.reason ?? `${pct(week.ops.served[o.customer.id] ?? 0)} served`;
   };
 
+  const signUp = (
+    <>
+      <select
+        className="tsel"
+        aria-label="Sign up a new customer for a kind of work"
+        value=""
+        disabled={customers.length >= 12}
+        onChange={(e) => {
+          const w = e.target.value as WorkloadId | '';
+          if (w) add(w);
+        }}
+      >
+        <option value="">Sign up a customer…</option>
+        {WORKLOAD_IDS.map((w) => (
+          <option key={w} value={w}>
+            {WORK_LABEL[w]}
+          </option>
+        ))}
+      </select>
+      <Button onClick={remove} disabled={customers.length <= 1} label={`Remove ${sel?.name ?? 'the customer'}`}>
+        Remove customer
+      </Button>
+    </>
+  );
+
   return (
     <LessonPage id="compute/7.2">
       <P>
-        <a href={lessonHref('compute/7.1')}>Lesson 7.1</a> built the cloud’s fleet and its building — at the start, 256 L-class, 1,024 A-class and 256 B-class GPUs at
-        Tech Park, though yours may differ, and the design is kept in this browser. A fleet earns nothing until someone wants its hours. This lesson gives the cloud
-        its customers. If you skipped Lesson 7.1, the starting fleet stands in for yours.
+        <a href={lessonHref('compute/7.1')}>Lesson 7.1</a> built the cloud’s fleet and its building. A fleet earns nothing until someone wants its hours, and this
+        lesson gives the cloud its customers. The text describes the starting design — 256 L-class, 1,024 A-class and 256 B-class GPUs at Tech Park, sold at the
+        course’s list prices — and so do the demonstrations, until you switch them to your own design, which also brings in any prices or plan you have set in the
+        next two lessons. Here is your cloud so far:
       </P>
+      <SoFar parts={['fleet', 'prices', 'ops']} />
       <P>
         The cloud starts with six customers, one for each workload of <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>: a chat startup, a code tools company, a
         frontier lab, a model trainer, a fine-tuning shop and a document processor. Each is described the way the earlier chapters described demand. Its{' '}
-        <K tone="ink">size</K> is the work it wants in an average hour, counted in A-class equivalents (A-eq): the work one A-class 80 GB GPU does for that workload, the
-        unit of <a href={lessonHref('compute/6.1')}>Lesson 6.1</a>. Its daily <K tone="ink">swing</K> is the shape of{' '}
+        <K tone="ink">size</K> is the work all its buyers together want in an average weekday hour, before any price is asked, counted in A-class equivalents (A-eq): the
+        work one A-class 80 GB GPU does for that workload, the unit of Lesson 7.1’s capacity. Its daily <K tone="ink">swing</K> is the shape of{' '}
         <a href={lessonHref('compute/5.3')}>Lesson 5.3</a>: interactive work follows people’s days, peaking in the afternoon and running 20% lower at weekends, while
         training and batch work run flat. Its <K tone="teal">round-trip limit</K> is how far its users can be from the GPUs (
         <a href={lessonHref('compute/3.4')}>Lesson 3.4</a>), and it decides which sites can serve it at all. Its <K c="price">value</K> is what its buyers will pay for an
@@ -418,13 +537,13 @@ export default function Lesson() {
         What a customer actually buys depends on the price. It compares the accelerators by what a unit of its own work costs on each (
         <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>), and its buyers who value the work above that cost buy. The prices are the price book’s — the course’s
         simulated list prices until <a href={lessonHref('compute/7.3')}>Lesson 7.3</a> lets you set them. In the next demonstration, the colored bands are the work each
-        customer buys in each hour of a week, stacked, at its cheapest accelerator’s price; the dashed line is what the fleet serves of it, run under the cloud’s
-        operating plan (first come, first served, until <a href={lessonHref('compute/7.4')}>Lesson 7.4</a> changes it), and the hatched red gap is demand turned away.
-        Choose a customer and change it, or sign up new ones:
+        customer buys in each hour of a week, stacked, at its cheapest accelerator’s price, in the colors beside the customers’ names in the table; the dashed line is what the fleet
+        serves of it, run under the cloud’s operating plan (first come, first served, until <a href={lessonHref('compute/7.4')}>Lesson 7.4</a> changes it), and the
+        hatched red gap is demand turned away. Choose a customer by its name in the table and change it, or sign up new ones from the demonstration’s footer:
       </P>
 
-      <Figure name="Compute Demand Simulator" onReset={() => resetPart('customers')}>
-        {picker}
+      <Figure name="Compute Demand Simulator" onReset={() => confirmResetPart('customers')} actions={signUp}>
+        {basisSwitch}
         {sel && (
           <>
             <Segmented
@@ -454,46 +573,46 @@ export default function Lesson() {
         />
         <Legend
           items={[
-            ...customers.map((c, i) => ({ label: c.name, color: CUSTOMER_COLORS[i % CUSTOMER_COLORS.length] })),
             { label: 'Served', color: '#222', kind: 'line' as const, dashed: true },
             { label: 'Turned away', color: TEXT.red },
           ]}
         />
         <Readouts
           items={[
-            { label: 'average hour', value: `${aeq(week.average)} A-eq` },
-            { label: `busiest hour (${whenOf(week.peakHour)})`, value: `${aeq(week.peak)} A-eq` },
-            { label: 'of the week’s demand served', value: pct(week.servedShare, 1) },
-            ...busy.map((b) => ({ label: `${ACCELERATORS[b.gpu].short} GPUs busy`, value: pct(b.busy), tone: b.busy < BUSY_TARGET ? ('red' as const) : undefined })),
+            { label: 'of demand served', value: pct(week.servedShare, 1) },
+            ...busy.map((b) => ({ label: `${ACCELERATORS[b.gpu].short} GPUs busy`, value: pct(b.busy) })),
           ]}
         />
-        <DataTable
-          caption="The customers: their work, product, first-choice accelerator and price per A-class-equivalent hour, the share of their buyers who buy at it, and how much of that the fleet served"
-          rows={customers.map((c, i) => ({ c, i }))}
-          rowKey={(r) => r.c.id}
-          rowClass={(r) => (r.c.id === sel?.id ? 'hl' : week.ctx.off[r.i]?.reason ? 'dim' : '')}
-          columns={[
-            { label: 'Customer', cell: (r) => r.c.name },
-            { label: 'Work', cell: (r) => WORKLOADS[r.c.workload].name },
-            { label: 'Product', cell: (r) => TIER_LABEL[r.c.tier] },
-            { label: 'First choice', cell: (r) => choiceText(r.i), align: 'right' },
-            { label: 'Buys', cell: (r) => pct(week.ctx.off[r.i]?.choices[0]?.share ?? 0), align: 'right' },
-            { label: 'Status', cell: (r) => statusText(r.i) },
-          ]}
-        />
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 16px', marginTop: 8 }}>
-          <Segmented label="Work for a new customer" value={newWork} onChange={setNewWork} options={WORKLOAD_IDS.map((w) => ({ value: w, label: WORK_LABEL[w] }))} />
-          <Button onClick={add} disabled={customers.length >= 12}>
-            Sign up a new {WORK_LABEL[newWork].toLowerCase()} customer
-          </Button>
-          <Button onClick={remove} disabled={customers.length <= 1}>
-            Remove {sel?.name ?? 'customer'}
-          </Button>
+        {/* The table is also the customer picker; past six customers it scrolls. */}
+        <div style={{ maxHeight: customers.length > 6 ? TABLE_MAX_PX : undefined, overflowY: 'auto' }}>
+          <DataTable
+            caption="The customers, each a button that chooses it: their work, product, first-choice accelerator and price per A-class-equivalent hour, the share of their buyers who buy at it, and how much of that the fleet served"
+            rows={customers.map((c, i) => ({ c, i }))}
+            rowKey={(r) => r.c.id}
+            rowClass={(r) => (r.c.id === sel?.id ? 'hl' : week.ctx.off[r.i]?.reason ? 'dim' : '')}
+            columns={[
+              {
+                label: 'Customer',
+                cell: (r) => (
+                  <button type="button" aria-pressed={r.c.id === sel?.id} onClick={() => setSelected(r.c.id)} style={pickStyle(r.c.id === sel?.id)}>
+                    <span className="sw" style={{ background: CUSTOMER_COLORS[r.i % CUSTOMER_COLORS.length], marginRight: 6, verticalAlign: '1px' }} />
+                    {r.c.name}
+                  </button>
+                ),
+              },
+              { label: 'Work', cell: (r) => WORKLOADS[r.c.workload].name },
+              { label: 'Product', cell: (r) => TIER_LABEL[r.c.tier] },
+              { label: 'First choice', cell: (r) => choiceText(r.i), align: 'right' },
+              { label: 'Buys', cell: (r) => pct(week.ctx.off[r.i]?.choices[0]?.share ?? 0), align: 'right' },
+              { label: 'Status', cell: (r) => statusText(r.i) },
+            ]}
+          />
         </div>
       </Figure>
 
       <P>
-        At the start, the six customers want {aeq(N.wants)} A-eq in an average hour at their own values. At the list prices they buy {aeq(N.average)}, rising to{' '}
+        At the start, before price, the six customers want {aeq(N.sizes)} A-eq in an average weekday hour, the demand of Lesson 7.1’s capacity chart, or{' '}
+        {aeq(N.wants)} averaged over the whole week, quieter weekends included. At the list prices they buy {aeq(N.average)} in an average hour of the week, rising to{' '}
         {aeq(N.peak)} at the busiest hour, {N.peakWhen} on a weekday, when the chat startup, the code tools company and the frontier lab all peak together. The fleet serves{' '}
         {pct(N.servedShare, 1)} of the week’s demand. Look at the readouts, though: the B-class GPUs are {pct(N.busy.B)} busy, the A-class {pct(N.busy.A)} and the L-class{' '}
         {pct(N.busy.L)}. The cloud is short of one kind of GPU while it has another to spare.
@@ -501,12 +620,11 @@ export default function Lesson() {
       <P>
         The table says why. Every customer’s first choice is the B-class, because it does every one of these jobs most cheaply per unit of work, as{' '}
         <a href={lessonHref('compute/5.1')}>Lesson 5.1</a> found: the chat startup pays {usd(N.chatB, 2)} per A-eq hour on a B-class GPU and {usd(N.chatA, 2)} on an A-class
-        one. The reserved customers, the frontier lab and the model trainer, have B-class GPUs held for them, and at the start that takes all {fmt(N.committedB)} of
-        them. With the B-class full, only
-        the buyers who will pay the A-class’s price move there — {pct(N.chatShareA)} of its buyers rather than {pct(N.chatShareB)} — so it is served {pct(N.chatServed)} of
-        what it wants, with A-class GPUs still idle. And nobody’s work is cheapest on the L-class, the comparative disadvantage of{' '}
-        <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>: its cards sit almost unused. The turned-away demand is a mismatch between the fleet’s mix and its customers,
-        not just a shortage of GPUs.
+        one. The reserved customers, the frontier lab and the model trainer, have B-class GPUs held for them — enough to cover their busiest hour, every hour of the
+        week — and at the start that takes all {fmt(N.committedB)} of them. With the B-class full, only the buyers who will pay the A-class’s price move there —{' '}
+        {pct(N.chatShareA)} of the chat startup’s buyers rather than {pct(N.chatShareB)} — so it is served {pct(N.chatServed)} of what it wants, with A-class GPUs still
+        idle. And nobody’s work is cheapest on the L-class, the comparative disadvantage of <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>: its cards sit almost
+        unused. The turned-away demand is a mismatch between the fleet’s mix and its customers, not just a shortage of GPUs.
       </P>
 
       <H2>Who the cloud can reach</H2>
@@ -520,8 +638,8 @@ export default function Lesson() {
         ) : (
           <>So the table already marks it out of reach: no price wins it back.</>
         )}{' '}
-        {design.fleet.site !== 'northfield' && (
-          <>Had Lesson 7.1 put the fleet in Northfield, 40 ms away, the code tools company would have been out of reach from the start, as Lesson 5.5’s latency limits predicted. </>
+        {design.fleet.site !== 'fernhill' && (
+          <>Had Lesson 7.1 put the fleet in Fernhill, 40 ms away, the code tools company would have been out of reach from the start, as Lesson 5.5’s latency limits predicted. </>
         )}
         Work can also be out of reach of the hardware: the frontier lab’s 400B model can’t run on L-class cards at any count (
         <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>), so a fleet without A- or B-class GPUs can’t sell it anything.
@@ -530,35 +648,38 @@ export default function Lesson() {
         A customer’s product matters in a different way. Move the model trainer from reserved to spot and its B-class GPUs are no longer held for it: they join the pool
         the on-demand and spot customers share, and the trainer’s work becomes interruptible, taking what it can get. The chat startup is then served{' '}
         {pct(N.spotChat)} of what it wants, and the cloud {pct(N.spotShare, 1)} of all its demand — though, as Lesson 7.3 will count, spot hours sell for far less than
-        reserved ones. Which customers sign up for which product is a
-        decision about who carries the risk of idle hardware, the question <a href={lessonHref('compute/5.4')}>Lesson 5.4</a> kept returning to.
+        reserved ones. Which customers sign up for which product is a decision about who carries the risk of idle hardware, the question{' '}
+        <a href={lessonHref('compute/5.4')}>Lesson 5.4</a> kept returning to.
       </P>
 
       <H2>Filling the idle cards</H2>
       <P>
         Idle GPUs cost nearly as much as busy ones (<a href={lessonHref('compute/4.5')}>Lesson 4.5</a>), so a cloud with spare cards looks for customers to fill them. The
-        natural ones are flat, flexible and cheap: the batch work that fills the valleys of <a href={lessonHref('compute/5.3')}>Lesson 5.3</a>, which an L-class card does
-        least badly relative to the others.
+        natural ones are flat, flexible and cheap, like the batch work that fills the valleys of <a href={lessonHref('compute/5.3')}>Lesson 5.3</a>. An L-class card does
+        only {fmt(N.batchL, 2)} of an A-class hour’s batch work — its best ratio is fine-tuning’s, {fmt(N.tuneL, 2)} (Lesson 3.5) — but batch buyers pay little, don’t
+        mind waiting and want the same work around the clock, so it is work an idle card can take. Grow the document processor to {aeq(FILL_ANSWER)} A-eq and the
+        L-class is half busy. Read the table as it does, though. Under the starting plan, first come, first served, the batch work asks in a random order like everyone
+        else, so in some hours it takes the A-class GPUs the chat startup was falling back on: the chat startup is served {pct(N.fillChat)} of what it wants instead of{' '}
+        {pct(N.chatServed)}, and the code tools company {pct(N.fillCode)} instead of {pct(N.codeServed)}. More demand is not automatically more business.
+      </P>
+      <P>
+        What lands on the idle cards depends on more than whose work they can do. Put the document processor back to {aeq(N.docSize)} A-eq and look at the frontier
+        lab, whose model no L-class card can run:
       </P>
 
       <Challenge
         id="a"
-        question="Sign up enough extra work — more of an existing customer, or new ones — to keep every class of GPU in the fleet at least half busy over the week."
+        question={`Predict first: if the frontier lab grows, will the L-class cards stay as idle as they are? Then check, on the starting design: grow the frontier lab, and only it, until the L-class is busy at least ${pct(SPILL_TARGET)} of the week — if that can be done.`}
         solved={solved}
-        status={
-          least
-            ? `The least busy class is the ${ACCELERATORS[least.gpu].short}, ${pct(least.busy)} busy.`
-            : 'The fleet has no GPUs to keep busy. Add some in Lesson 7.1.'
-        }
-        success={`Solved: every class of GPU is at least half busy. From the starting design, the document processor alone does it at ${aeq(FILL_ANSWER)} A-eq of batch work — but watch the other customers as it grows. Under first come, first served, the batch work takes A-class GPUs the chat startup and the code tools company were falling back on whenever it happens to ask first. Lesson 7.4 shows how a scheduler keeps flexible work from crowding out the customers who pay most.`}
+        status={status}
+        success={success}
       />
 
       <P>
-        Grow the document processor and the L-class fills, but read the table as it does. Under the starting plan, first come, first served, the batch work asks in a
-        random order like everyone else, so in some hours it takes the A-class GPUs the chat startup was falling back on. With {aeq(FILL_ANSWER)} A-eq of batch work,
-        enough to keep the L-class half busy, the chat startup is served {pct(N.fillChat)} of what it wants instead of {pct(N.chatServed)}, and the code tools company{' '}
-        {pct(N.fillCode)} instead of {pct(N.codeServed)}. More demand is not automatically more business. Whether flexible work fills the valleys or crowds out better customers depends on the
-        scheduler and on the prices, the subjects of the next two lessons.
+        They don’t stay idle: at {aeq(SPILL_ANSWER)} A-eq, {(SPILL_ANSWER / N.labSize).toFixed(1)} times its starting size, the frontier lab has pushed the L-class to{' '}
+        {pct(N.spillL)} busy. A reserved customer’s growth takes GPUs out of everyone else’s pool in every hour, and each displaced customer moves one step down, until
+        the work that will pay the L-class’s price lands there. Whether new demand fills idle cards or crowds out better customers depends on the scheduler and on the
+        prices, the subjects of the next two lessons.
       </P>
 
       <H2>Three years of growth</H2>
@@ -570,6 +691,7 @@ export default function Lesson() {
       </P>
 
       <Figure name="Compute Demand Simulator · growth">
+        {basisSwitch}
         {picker}
         {sel && (
           <Slider

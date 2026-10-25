@@ -29,6 +29,7 @@ export function HistogramChart({
   height = 210,
   ariaLabel,
   highlight,
+  band,
 }: {
   values: number[];
   lo: number;
@@ -44,6 +45,8 @@ export function HistogramChart({
   ariaLabel: string;
   /** Bins whose range satisfies this are drawn darker (e.g. "below 150 bu"). */
   highlight?: (binLo: number, binHi: number) => boolean;
+  /** An optional shaded range drawn behind the bars (e.g. the average ± one standard deviation). */
+  band?: { from: number; to: number; color?: string };
 }) {
   const h = histogram(values, lo, hi, bins);
   // Values outside the range are added to the end bins so nothing disappears.
@@ -63,6 +66,15 @@ export function HistogramChart({
         {yLabel}
       </text>
       <GridY y={y} ticks={yTicks} x0={56} x1={626} baseline={0} />
+      {band && band.to > band.from && (
+        <rect
+          x={x(Math.max(lo, Math.min(hi, band.from)))}
+          y={top}
+          width={x(Math.max(lo, Math.min(hi, band.to))) - x(Math.max(lo, Math.min(hi, band.from)))}
+          height={bottom - top}
+          fill={band.color ?? 'rgba(0, 0, 0, .08)'}
+        />
+      )}
       {counts.map((c, i) => {
         const b0 = lo + i * h.width;
         const b1 = b0 + h.width;

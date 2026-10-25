@@ -38,6 +38,7 @@ import {
   type Weather,
 } from '../../../engines/shipping/weather';
 import { SEA_FILL, SEA_LINE, ShipSide, shipSideScale } from '../shared/ShipSide';
+import { useRevealed } from './reveal';
 
 const K_ = KESTREL;
 const LADEN = { draft: K_.designDraft };
@@ -126,12 +127,41 @@ export function routes(stormHs: number) {
   return { direct, detour };
 }
 
-/** The challenge: the smallest storm, on the slider's 0.1 m steps, at which the detour arrives sooner. */
+/** Whether this storm, on the slider's 0.1 m steps, is the smallest at which the detour arrives sooner (the challenge's success message quotes it). */
 export function detourSolved(stormHs: number) {
   const h = Math.round(stormHs / STORM_STEP) * STORM_STEP;
   const now = routes(h);
   const before = routes(h - STORM_STEP);
   return now.detour.days < now.direct.days && before.detour.days >= before.direct.days;
+}
+
+/** The storm wave height at which the two routes take exactly as long, m (found by bisection). */
+export const ROUTES_TIE_HS = (() => {
+  let lo = STORM_MIN;
+  let hi = STORM_MAX;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    const r = routes(mid);
+    if (r.detour.days < r.direct.days) hi = mid;
+    else lo = mid;
+  }
+  return (lo + hi) / 2;
+})();
+
+/** The smallest storm on the slider's grid at which the detour arrives first. */
+const DETOUR_FIRST_HS = (() => {
+  for (let i = Math.round(STORM_MIN / STORM_STEP); i <= Math.round(STORM_MAX / STORM_STEP); i++) if (detourSolved(i * STORM_STEP)) return i * STORM_STEP;
+  return STORM_MAX;
+})();
+
+/**
+ * The challenge: find the storm at which the routes tie, to within a tenth of a meter. The routes'
+ * days stay hidden until it is solved, so the reader predicts the tying storm speed from the caption
+ * (13.5 knots × 1,000 ÷ 1,300 ≈ 10.4 knots) and raises the storm until it slows her that much.
+ */
+export function tieSolved(stormHs: number): boolean {
+  const h = Math.round(stormHs / STORM_STEP) * STORM_STEP;
+  return Math.abs(h - ROUTES_TIE_HS) <= 0.1 + 1e-9;
 }
 
 /** Nautical miles covered after `tau` days on a passage made of legs. */
@@ -240,7 +270,8 @@ export default function Lesson() {
   const stormBf = beaufort(storm.windKn);
   const detourFaster = r.detour.days < r.direct.days;
   const gap = r.direct.days - r.detour.days;
-  const solved = detourSolved(stormHs);
+  const solved = tieSolved(stormHs);
+  const revealed = useRevealed('shipping/1.5', 'a', solved);
   const vMod = r.detour.legs[0].speed.stw;
   const vStorm = r.direct.legs[1].speed.stw;
   const breakEvenKn = (vMod * ROUTE.storm) / (ROUTE.storm + ROUTE.detour - ROUTE.direct);
@@ -270,9 +301,11 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, Kestrel is laden at her summer draft. Set the height of the waves, the strength of the wind and the direction both come from,
-        and a current running along her track. The side view shows her in the sea (heights stretched, as before); the plan view on the right shows where the wind
-        and waves come from. The readouts include the {fmt(PASSAGE_NM)}-nautical-mile passage from Lesson 1.3, about the haul from Western Australia’s ore ports to
-        northern China, sailed entirely in these conditions:
+        and a current running along her track. The wave height is the <b>significant wave height</b> forecasters use: the average height of the highest third of
+        the waves, close to what an experienced eye would estimate. The wind is also named on the <b>Beaufort scale</b>, the sailor’s scale of force 0, calm, to
+        force 12, hurricane. The side view shows her in the sea (heights stretched, as before); the plan view on the right shows where the wind and waves come
+        from. The readouts include the {fmt(PASSAGE_NM)}-nautical-mile passage from <a href={lessonHref('shipping/1.3')}>Lesson 1.3</a>, about the haul from
+        Western Australia’s ore ports to northern China, sailed entirely in these conditions:
       </P>
 
       <Figure name="Voyage Physics Lab" scenario={lab} play={play}>
@@ -393,15 +426,17 @@ export default function Lesson() {
       <P>
         The waves do most of the damage. Our model uses an empirical estimate known as Kreitner’s formula, the equation in the demonstration: the{' '}
         <K tone="violet">added resistance</K> grows with the <i>square</i> of the wave height. Two-meter head seas add {fmt(RAW_2)} kilonewtons; four-meter seas
-        add {fmt(RAW_4)}, four times as much, and more than half of Kestrel’s whole calm-water resistance at 14 knots. Direction matters as much as height. Waves on
-        the bow do {fmt(waveHeadingFactor(45) * 100)}% of the harm of a head sea, beam seas a quarter, and seas on the quarter or from astern almost none. In
+        add {fmt(RAW_4)}, four times as much, and more than half of Kestrel’s whole calm-water resistance at 14 knots. Direction matters as much as height. Our
+        model scales the head-sea estimate by direction: waves on the bow do {fmt(waveHeadingFactor(45) * 100)}% of the harm of a head sea, beam seas a quarter,
+        and seas on the quarter or from astern almost none. In
         four-meter waves with a 25-knot wind, Kestrel makes {kn(HS4.stw)} heading into them, {kn(HS4_BEAM.stw)} with them on the beam, and{' '}
         {kn(HS4_FOLLOW.stw)} running before them — a touch faster than in calm water, because the following wind now pushes on her superstructure instead of
-        dragging on it. In a full gale, six-meter seas and 35 knots of wind from ahead, she is down to {kn(HS6.stw)}.
+        dragging on it. In a {beaufort(35).name}, six-meter seas and 35 knots of wind from ahead, she is down to {kn(HS6.stw)}.
       </P>
       <P>
-        The wind on its own matters less. What the ship feels is the <b>apparent wind</b>, her own speed plus the true wind’s component along her track, acting on
-        the hull above water and the accommodation block at her stern. A 30-knot headwind adds {fmt(WIND30_KN)} kilonewtons at 14 knots and, on its
+        The wind on its own matters less. What the ship feels is the <b>apparent wind</b>, the true wind combined with the breeze of her own motion. Our model
+        keeps only its part along her track — her own speed plus the true wind’s component in that direction — acting on the hull above water and the
+        accommodation block at her stern. A 30-knot headwind adds {fmt(WIND30_KN)} kilonewtons at 14 knots and, on its
         own, slows her only to {kn(WIND30.stw)}. In real storms wind and waves come together, of course, because it is the wind that raises the sea.
       </P>
 
@@ -447,7 +482,7 @@ export default function Lesson() {
           className="diagram"
           viewBox="0 0 640 262"
           role="img"
-          aria-label={`Two routes across ${fmt(ROUTE.direct)} nautical miles of ocean. The direct route crosses a storm with ${fmt(stormHs, 1)}-meter waves and takes ${days(r.direct.days)} and ${t(r.direct.fuel)} of fuel; the ${fmt(ROUTE.detour)}-mile detour takes ${days(r.detour.days)} and ${t(r.detour.fuel)}. The ${detourFaster ? 'detour' : 'direct route'} is faster.`}
+          aria-label={`Two routes across ${fmt(ROUTE.direct)} nautical miles of ocean. The direct route crosses a storm with ${fmt(stormHs, 1)}-meter waves, where Kestrel makes ${kn(vStorm)}; the ${fmt(ROUTE.detour)}-mile detour stays in moderate seas at ${kn(vMod)}.${revealed ? ` The direct route takes ${days(r.direct.days)} and ${t(r.direct.fuel)} of fuel; the detour, ${days(r.detour.days)} and ${t(r.detour.fuel)}.` : ''}`}
         >
           <rect x={8} y={8} width={624} height={246} rx={6} fill={SEA_FILL} opacity={0.55} />
           {[0.35, 0.6, 0.85, 1].map((k) => (
@@ -464,8 +499,8 @@ export default function Lesson() {
           <text x={(STORM_X0 + STORM_X1) / 2} y={A.y - 70} textAnchor="middle" style={{ fontSize: 12, fontWeight: 500, fill: TEXT.red }}>
             storm: {fmt(stormHs, 1)} m seas, {fmt(storm.windKn)} kn wind
           </text>
-          <line x1={A.x} x2={B.x} y1={A.y} y2={A.y} stroke="#333" strokeWidth={detourFaster ? 1.6 : 3} />
-          <path d={DETOUR_D} fill="none" stroke="#333" strokeWidth={detourFaster ? 3 : 1.6} strokeDasharray="7 5" />
+          <line x1={A.x} x2={B.x} y1={A.y} y2={A.y} stroke="#333" strokeWidth={revealed ? (detourFaster ? 1.6 : 3) : 2} />
+          <path d={DETOUR_D} fill="none" stroke="#333" strokeWidth={revealed ? (detourFaster ? 3 : 1.6) : 2} strokeDasharray="7 5" />
           <circle cx={A.x} cy={A.y} r={6} fill="#fcfcfb" stroke="#333" strokeWidth={2} />
           <circle cx={B.x} cy={B.y} r={6} fill="#fcfcfb" stroke="#333" strokeWidth={2} />
           <text x={A.x} y={A.y - 14} textAnchor="middle" className="ax">
@@ -475,10 +510,10 @@ export default function Lesson() {
             arrive
           </text>
           <text x={A.x + 10} y={A.y + 20} className="lab">
-            Direct · {fmt(ROUTE.direct)} nm · {days(r.direct.days)}
+            Direct · {fmt(ROUTE.direct)} nm{revealed && ` · ${days(r.direct.days)}`}
           </text>
           <text x={CTRL.x} y={232} textAnchor="middle" className="lab">
-            Detour · {fmt(ROUTE.detour)} nm · {days(r.detour.days)}
+            Detour · {fmt(ROUTE.detour)} nm{revealed && ` · ${days(r.detour.days)}`}
           </text>
           <circle cx={pDirect.x} cy={pDirect.y} r={6.5} fill={GRAPHIC.orange} stroke="#fcfcfb" strokeWidth={2} />
           <circle cx={pDetour.x} cy={pDetour.y} r={6.5} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={2} />
@@ -486,13 +521,15 @@ export default function Lesson() {
             day {fmt(Math.min(tau, span - 1.5), 1)}
           </text>
         </svg>
-        <Readouts
-          items={[
-            { label: 'direct route', value: `${days(r.direct.days)}, ${t(r.direct.fuel)}`, tone: 'orange' },
-            { label: 'detour', value: `${days(r.detour.days)}, ${t(r.detour.fuel)}`, tone: 'teal' },
-            { label: detourFaster ? 'the detour saves' : 'the detour costs', value: days(Math.abs(gap)) },
-          ]}
-        />
+        {revealed && (
+          <Readouts
+            items={[
+              { label: 'direct route', value: `${days(r.direct.days)}, ${t(r.direct.fuel)}`, tone: 'orange' },
+              { label: 'detour', value: `${days(r.detour.days)}, ${t(r.detour.fuel)}`, tone: 'teal' },
+              { label: detourFaster ? 'the detour saves' : 'the detour costs', value: `${fmt(Math.abs(gap) * 24, 1)} hours` },
+            ]}
+          />
+        )}
         <Slider
           label="Storm wave height"
           tone="blue"
@@ -518,14 +555,10 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Raise the storm until going around it pays. What is the smallest storm wave height, to the nearest tenth of a meter, at which the detour arrives first?"
+        question={`The routes’ days stay hidden until you find where they tie. Predict first: both routes sail ${fmt(ROUTE.direct - ROUTE.storm)} miles of moderate sea, where the caption shows her making ${kn(vMod)}; then the direct route crosses the storm’s ${fmt(ROUTE.storm)} miles, while the detour sails ${fmt(ROUTE.storm + ROUTE.detour - ROUTE.direct)} more miles of moderate sea. How slow must the storm make her for the two to take the same time? Then raise the storm until it slows her that much, and set the wave height at which the routes tie, to within a tenth of a meter.`}
         solved={solved}
-        status={
-          detourFaster
-            ? `At ${fmt(stormHs, 1)} m the detour arrives ${days(gap)} sooner. Is this the smallest storm at which it does?`
-            : `At ${fmt(stormHs, 1)} m the direct route still arrives ${days(-gap)} sooner.`
-        }
-        success={`Solved. At ${fmt(stormHs, 1)} m the storm slows Kestrel to ${kn(vStorm)} across its ${fmt(ROUTE.storm)} miles. Where the direct route sails those ${fmt(ROUTE.storm)} miles in the storm, the detour sails ${fmt(ROUTE.storm + ROUTE.detour - ROUTE.direct)} at her moderate-sea ${kn(vMod)}; so going around wins once the storm holds her below ${fmt(ROUTE.storm)}/${fmt(ROUTE.storm + ROUTE.detour - ROUTE.direct)} of that speed, about ${kn(breakEvenKn)}. Since she burns the same tonnes a day on either route, the detour is cheaper too, though right at the crossover only by ${fmt(r.direct.fuel - r.detour.fuel, 1)} t.`}
+        status={`With ${fmt(stormHs, 1)} m seas in the storm, she makes ${kn(vStorm)} through it.`}
+        success={`Solved. The routes tie at about ${fmt(ROUTES_TIE_HS, 1)} m, where the storm holds Kestrel to ${kn(breakEvenKn)}: ${kn(vMod)} × ${fmt(ROUTE.storm)} ÷ ${fmt(ROUTE.storm + ROUTE.detour - ROUTE.direct)}, so that ${fmt(ROUTE.storm)} miles in the storm take as long as ${fmt(ROUTE.storm + ROUTE.detour - ROUTE.direct)} outside it. In a smaller storm the direct route arrives first; from ${fmt(DETOUR_FIRST_HS, 1)} m up, the detour does, by more with every tenth of a meter. She burns the same ${fmt(r.detour.legs[0].speed.tpd, 1)} tonnes a day on either route, so the quicker one is also the cheaper.`}
       />
 
       <P>

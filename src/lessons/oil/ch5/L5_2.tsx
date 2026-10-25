@@ -8,12 +8,13 @@ import { XYChart, type XYBand } from '../shared/charts';
 // ---------------------------------------------------------------------------
 // Scenarios and challenge checks.
 
-export type ExpansionYear = '1' | '2' | '3' | '4' | '5' | 'never';
+/** The years an expansion can open in: year 1 to year 4 of the five-year history, or never. */
+export type ExpansionYear = '1' | '2' | '3' | '4' | 'never';
 
 export interface ExplorerState {
-  /** Ridgeback Basin growth, kb/d per year. */
+  /** Pinyon Basin growth, kb/d per year. */
   growth: number;
-  /** Year the Kessler–Calder expansion opens, or never. */
+  /** Year the Kessler–Corran expansion opens, or never. */
   year: ExpansionYear;
   /** Capacity the expansion adds, kb/d. */
   add: number;
@@ -26,6 +27,10 @@ export const EXPANSION_YEAR = HISTORY_DEFAULTS.expansion ? HISTORY_DEFAULTS.expa
 export const SIZE_STEP = 25;
 /** Challenge a: keep the spread under this from the expansion's opening to the end of the five years, $/bbl. */
 export const SPREAD_LIMIT = 6;
+/** Challenge a's faster basin growth, kb/d a year (the reader predicts the expansion from it). */
+export const CHALLENGE_GROWTH = 100;
+/** How far Port Corran trails Northport while the Kessler–Corran line has room (Seaboard crude sets it), $/bbl. */
+export const COAST_DISCOUNT = NETWORK_DEFAULTS.northportPrice - hubPricesFast(NETWORK_DEFAULTS).corran;
 
 export const EXPLORER_DEFAULTS: ExplorerState = {
   growth: DEFAULT_GROWTH,
@@ -58,24 +63,36 @@ export function widestAfterOpening(add: number, rail: number = EXPLORER_DEFAULTS
   return spreadStats(h, EXPANSION_YEAR * 52).widest;
 }
 
-/**
- * Challenge a: with the default growth and the expansion opening in year 3, the smallest expansion on
- * the 25 kb/d grid that keeps the spread under $6 from the opening to the end of the five years.
- */
-export function smallestExpansionSolved(st: ExplorerState): boolean {
-  if (st.growth !== DEFAULT_GROWTH || st.year !== String(EXPANSION_YEAR)) return false;
-  if (widestAfterOpening(st.add, st.rail) >= SPREAD_LIMIT) return false;
-  return st.add < SIZE_STEP || widestAfterOpening(st.add - SIZE_STEP, st.rail) >= SPREAD_LIMIT;
+/** Challenge a's setting is in place: the faster growth, with the expansion opening in year 3. */
+export function challengeAReady(st: ExplorerState): boolean {
+  return st.growth === CHALLENGE_GROWTH && st.year === String(EXPANSION_YEAR);
 }
 
-/** The answer to challenge a at a rail capacity: the smallest qualifying expansion on the grid. */
-export function smallestExpansion(rail: number = EXPLORER_DEFAULTS.rail): number {
-  for (let add = 0; add <= 500; add += SIZE_STEP) if (widestAfterOpening(add, rail) < SPREAD_LIMIT) return add;
+/**
+ * Challenge a: with the basin growing 100 kb/d a year and the expansion opening in year 3, the
+ * smallest expansion on the 25 kb/d grid that keeps the spread under $6 from the opening to the end
+ * of the five years. (The answer is the same at every rail capacity.)
+ */
+export function smallestExpansionSolved(st: ExplorerState): boolean {
+  if (!challengeAReady(st)) return false;
+  if (widestAfterOpening(st.add, st.rail, st.growth) >= SPREAD_LIMIT) return false;
+  return st.add < SIZE_STEP || widestAfterOpening(st.add - SIZE_STEP, st.rail, st.growth) >= SPREAD_LIMIT;
+}
+
+/** The smallest qualifying expansion on the grid, at a rail capacity and basin growth. */
+export function smallestExpansion(rail: number = EXPLORER_DEFAULTS.rail, growth: number = DEFAULT_GROWTH): number {
+  for (let add = 0; add <= 500; add += SIZE_STEP) if (widestAfterOpening(add, rail, growth) < SPREAD_LIMIT) return add;
   return NaN;
 }
 
-/** The price of light crude at Port Calder in a week of history (the network's coastal price). */
-export function portCalderPrice(w: HistoryWeek, rail: number = HISTORY_DEFAULTS.rail): number {
+/** The basin's highest weekly output from the expansion's opening to the end of the history, kb/d. */
+export function peakBasinAfterOpening(growth: number): number {
+  const h = historyFor({ ...EXPLORER_DEFAULTS, growth, year: String(EXPANSION_YEAR) as ExpansionYear });
+  return Math.max(...h.slice(EXPANSION_YEAR * 52).map((w) => w.basinSupply));
+}
+
+/** The price of light crude at Port Corran in a week of history (the network's coastal price). */
+export function portCorranPrice(w: HistoryWeek, rail: number = HISTORY_DEFAULTS.rail): number {
   return hubPricesFast({
     ...NETWORK_DEFAULTS,
     basinSupply: w.basinSupply,
@@ -83,7 +100,7 @@ export function portCalderPrice(w: HistoryWeek, rail: number = HISTORY_DEFAULTS.
     rail,
     northportPrice: w.brent,
     floor: (w.brent * NETWORK_DEFAULTS.floor) / NETWORK_DEFAULTS.northportPrice,
-  }).calder;
+  }).corran;
 }
 
 export interface Breakdown {
@@ -92,7 +109,7 @@ export interface Breakdown {
   nfLocation: number;
   nfQuality: number;
   northfield: number;
-  /** Coldwater Heavy at Port Calder: location (Port Calder − Brent) and quality (Coldwater − Port Calder). */
+  /** Coldwater Heavy at Port Corran: location (Port Corran − Brent) and quality (Coldwater − Port Corran). */
   cwLocation: number;
   cwQuality: number;
   coldwater: number;
@@ -102,14 +119,14 @@ export interface Breakdown {
 
 /** Each physical crude as benchmark + location + quality, in one week. */
 export function breakdown(w: HistoryWeek): Breakdown {
-  const calder = portCalderPrice(w);
+  const corran = portCorranPrice(w);
   return {
     brent: w.brent,
     nfLocation: w.wti - w.brent,
     nfQuality: w.northfield - w.wti,
     northfield: w.northfield,
-    cwLocation: calder - w.brent,
-    cwQuality: w.coldwater - calder,
+    cwLocation: corran - w.brent,
+    cwQuality: w.coldwater - corran,
     coldwater: w.coldwater,
     fuelOil: w.hsfo - w.brent,
   };
@@ -162,6 +179,8 @@ function computeFacts() {
   const parts = d.map(breakdown);
   const neParts = ne.map(breakdown);
   const neDisc = neParts.map((p) => p.northfield - p.brent);
+  const qualities = parts.map((p) => p.nfQuality);
+  const qualityWeek = qualities.indexOf(Math.min(...qualities));
   return {
     all: spreadStats(d),
     firstYear: spreadStats(d.slice(0, 52)),
@@ -180,6 +199,15 @@ function computeFacts() {
       parts.map((p) => p.fuelOil),
     ),
     neverDeepest: neParts[neDisc.indexOf(Math.min(...neDisc))],
+    /** With no expansion but twice the rail, nothing is held back. */
+    neverBigRail: spreadStats(oilHistory({ expansion: null, rail: 2 * HISTORY_DEFAULTS.rail })),
+    /** The week Northfield's quality discount is deepest (with the expansion), and what it sold for then. */
+    qualityWeek,
+    qualityLow: parts[qualityWeek],
+    /** Challenge a: the basin's trend at the end of year five, its weekly peak after the opening, the answer. */
+    challengeTrend: HISTORY_DEFAULTS.basinStart + CHALLENGE_GROWTH * HISTORY_DEFAULTS.years,
+    challengePeak: peakBasinAfterOpening(CHALLENGE_GROWTH),
+    challengeAnswer: smallestExpansion(HISTORY_DEFAULTS.rail, CHALLENGE_GROWTH),
   };
 }
 function getFacts() {
@@ -204,7 +232,7 @@ function yearsText(t: number): string {
   return `${fmt(t, 1)} years`;
 }
 
-/** Contiguous runs of weeks with the Kessler–Calder line full, as x bands in years. */
+/** Contiguous runs of weeks with the Kessler–Corran line full, as x bands in years. */
 function fullBands(h: HistoryWeek[], label: boolean): XYBand[] {
   const bands: XYBand[] = [];
   let start = -1;
@@ -236,7 +264,7 @@ function Waterfall({ b, week }: { b: Breakdown; week: number }) {
     { label: '= at Kessler', from: lo, to: b.northfield, color: CRUDE_COLOR.northfield, value: d2(b.northfield), strong: true },
     { label: 'Coldwater: location', from: Math.min(b.brent, b.brent + b.cwLocation), to: Math.max(b.brent, b.brent + b.cwLocation), color: LOCATION, value: d2(b.cwLocation) },
     { label: 'quality', from: b.coldwater, to: b.brent + b.cwLocation, color: CRUDE_COLOR.coldwater, value: d2(b.cwQuality) },
-    { label: '= at Port Calder', from: lo, to: b.coldwater, color: CRUDE_COLOR.coldwater, value: d2(b.coldwater), strong: true },
+    { label: '= at Port Corran', from: lo, to: b.coldwater, color: CRUDE_COLOR.coldwater, value: d2(b.coldwater), strong: true },
   ];
   const H = top + rowH * rows.length + 24;
   return (
@@ -244,7 +272,7 @@ function Waterfall({ b, week }: { b: Breakdown; week: number }) {
       className="chart"
       viewBox={`0 0 640 ${H}`}
       role="img"
-      aria-label={`Week ${week + 1}: Brent ${d2(b.brent)}. Northfield Sour at Kessler: location ${d2(b.nfLocation)}, quality ${d2(b.nfQuality)}, price ${d2(b.northfield)}. Coldwater Heavy at Port Calder: location ${d2(b.cwLocation)}, quality ${d2(b.cwQuality)}, price ${d2(b.coldwater)}.`}
+      aria-label={`Week ${week + 1}: Brent ${d2(b.brent)}. Northfield Sour at Kessler: location ${d2(b.nfLocation)}, quality ${d2(b.nfQuality)}, price ${d2(b.northfield)}. Coldwater Heavy at Port Corran: location ${d2(b.cwLocation)}, quality ${d2(b.cwQuality)}, price ${d2(b.coldwater)}.`}
     >
       <text className="ax" x={X0} y={14}>
         Week {week + 1}: each price built from Brent, $ per barrel
@@ -297,7 +325,8 @@ export default function Lesson() {
   const pLo = Math.floor(Math.min(...h.map((w) => w.wti)) / 10) * 10;
   const pHi = Math.ceil(Math.max(...h.map((w) => w.brent)) / 10) * 10;
   const bands = fullBands(h, true);
-  const never = st.year === 'never';
+  // An expansion that opens after the history ends behaves like none (e.g. an old saved setting).
+  const never = st.year === 'never' || Number(st.year) * 52 >= h.length;
   const afterOpen = never ? null : spreadStats(h, Number(st.year) * 52);
 
   // ---- Figure 2.
@@ -328,9 +357,12 @@ export default function Lesson() {
       <P>
         Our world has the same pair. The <K c="price">Kessler price</K> behaves like WTI, and the Northport price like Brent; both, like every price in this
         course, are simulated by the model, not taken from any market. <a href={lessonHref('oil/4.4')}>Lesson 4.4</a> showed what separates them on a single day: the
-        cost of moving a barrel from Kessler to the sea, and, when the Kessler–Calder line is full, the cost of the next-best way out. In the next demonstration the
-        model runs for five years of weeks. The Ridgeback Basin grows, the line fills, and the line may be expanded. Set how fast the basin grows, when the expansion
-        opens and how big it is, and how much crude the railroad can take:
+        cost of moving a barrel from Kessler to the sea, and, when the Kessler–Corran line is full, the cost of the next-best way out. In the next demonstration the
+        model runs for five years of weeks. The Pinyon Basin starts at {fmt(HISTORY_DEFAULTS.basinStart)} kb/d and grows {fmt(DEFAULT_GROWTH)} kb/d a year.
+        Coldwater’s {fmt(NETWORK_DEFAULTS.coldwaterSupply)} kb/d into Kessler matches the {fmt(NETWORK_DEFAULTS.inlandDemand)} kb/d the inland refineries take, so
+        what has to leave for the coast is the basin’s own output: up to {fmt(HISTORY_DEFAULTS.pipeline)} kb/d down the line, and up to{' '}
+        {fmt(HISTORY_DEFAULTS.rail)} kb/d more by rail. Set how fast the basin grows, when the line is expanded and by how much, and how much crude the railroad can
+        take:
       </P>
 
       <Figure name="WTI-Brent Price Explorer" scenario={s1}>
@@ -338,11 +370,11 @@ export default function Lesson() {
           items={[
             { label: 'Brent (Northport, simulated)', color: BRENT, kind: 'line' },
             { label: 'WTI (Kessler, simulated)', color: WTI, kind: 'line' },
-            { label: 'Kessler–Calder line full', color: 'rgba(231, 91, 85, .25)' },
+            { label: 'Kessler–Corran line full', color: 'rgba(231, 91, 85, .25)' },
           ]}
         />
         <XYChart
-          ariaLabel={`Five years of weekly simulated prices: Brent between ${d2(Math.min(...h.map((w) => w.brent)))} and ${d2(Math.max(...h.map((w) => w.brent)))}, WTI between ${d2(Math.min(...h.map((w) => w.wti)))} and ${d2(Math.max(...h.map((w) => w.wti)))}. The Kessler–Calder line is full in ${stats.fullWeeks} of ${h.length} weeks.`}
+          ariaLabel={`Five years of weekly simulated prices: Brent between ${d2(Math.min(...h.map((w) => w.brent)))} and ${d2(Math.max(...h.map((w) => w.brent)))}, WTI between ${d2(Math.min(...h.map((w) => w.wti)))} and ${d2(Math.max(...h.map((w) => w.wti)))}. The Kessler–Corran line is full in ${stats.fullWeeks} of ${h.length} weeks.`}
           height={210}
           x={[0, 5]}
           y={[pLo, pHi]}
@@ -396,7 +428,6 @@ export default function Lesson() {
             { value: '2', label: 'Year 2' },
             { value: '3', label: 'Year 3' },
             { value: '4', label: 'Year 4' },
-            { value: '5', label: 'Year 5' },
             { value: 'never', label: 'Never' },
           ]}
         />
@@ -415,54 +446,59 @@ export default function Lesson() {
         <Caption>
           {stats.fullWeeks === 0
             ? 'The line never fills, so WTI stays a transport cost below Brent throughout.'
-            : `The line is full for ${stats.fullWeeks} weeks, and in those weeks WTI is set by Kessler’s next-best outlet, not by Brent less the pipeline tariff.`}
+            : 'In the weeks the line is full, WTI is set by Kessler’s next-best outlet, not by Brent less the pipeline tariff.'}
           {afterOpen ? ` From the expansion’s opening on, the spread averages ${d2(afterOpen.average)} and peaks at ${d2(afterOpen.widest)}.` : ''}
         </Caption>
       </Figure>
 
       <P>
-        With the default settings, the first year is quiet: the line has room, and the spread averages {d2(f.firstYear.average)}, the cost of getting a Kessler
-        barrel to the coast where it displaces Seaboard crude (Lesson 4.4’s first regime). About {yearsText(f.firstFullYears)} in, the basin outgrows the line.
-        From then on the next barrel leaves Kessler by rail, and WTI falls to the coastal price less the rail freight: in the weeks the line is full, the spread
+        With the default settings, the first year is quiet: the line has room, and the spread averages {d2(f.firstYear.average)}. That is the “pipeline has
+        room” regime of <a href={lessonHref('oil/4.4')}>Lesson 4.4</a>. A Kessler barrel reaches Port Corran for the {d2(NETWORK_DEFAULTS.pipelineTariff)} tariff
+        and displaces Seaboard crude there, and Port Corran trails Northport by {d2(COAST_DISCOUNT)}, so WTI sits{' '}
+        {d2(NETWORK_DEFAULTS.pipelineTariff + COAST_DISCOUNT)} under Brent, give or take a little weekly noise. About {yearsText(f.firstFullYears)} in, the basin
+        outgrows the line. From then on the next barrel leaves Kessler by rail, and WTI falls to the coastal price less the rail freight: in the weeks the line is full, the spread
         averages {d2(f.fullAverage)}. The expansion opens in year {EXPANSION_YEAR}, and from then the spread averages {d2(f.afterOpening.average)} and never
         exceeds {d2(f.afterOpening.widest)} — now the coast exports, so WTI sits at export parity, a little further below Brent than in the first year.
       </P>
       <P>
         Choose <b>Never</b> and the story darkens. About {yearsText(f.railFullYears)} in, the railroad is full too, Coldwater crude is held back at its source,
         and WTI collapses to what a stranded barrel is worth: the spread reaches {d2(f.never.widest)}, and averages {d2(f.never.average)} over the five years.
-        Notice what doesn’t move. Brent follows exactly the same path in every setting — from {d2(f.brentMin)} to {d2(f.brentMax)} — because the world balance
-        doesn’t care where inside it a pipeline is full. The spread is entirely WTI’s doing. That is the model’s version of what happened to WTI when production
+        Raise the rail capacity to {fmt(2 * HISTORY_DEFAULTS.rail)} kb/d, though, and the collapse never comes: the railroad carries whatever the line can’t, and
+        the spread is never wider than {d2(f.neverBigRail.widest)}, the cost of the rail route to the sea. Notice what doesn’t move. Brent follows exactly the same path in every setting — from {d2(f.brentMin)} to {d2(f.brentMax)} — because our world balance
+        leaves out what happens inside the network. (In reality, crude held back at its source is supply the world goes without, and would lift Brent a little.)
+        The spread is entirely WTI’s doing. That is the model’s version of what happened to WTI when production
         inland outran the pipelines out of Cushing (<a href={lessonHref('oil/4.4')}>Lesson 4.4</a>).
       </P>
 
       <Challenge
         id="a"
-        question={`With the basin growing ${fmt(DEFAULT_GROWTH)} kb/d a year and the expansion opening in year ${EXPANSION_YEAR}, find the smallest expansion, to the nearest ${SIZE_STEP} kb/d, that keeps the spread under $${SPREAD_LIMIT} from the day it opens to the end of the five years.`}
+        question={`Suppose the basin grows faster, ${fmt(CHALLENGE_GROWTH)} kb/d a year, and the expansion still opens in year ${EXPANSION_YEAR}. Predict first: how much will the basin produce by the end of the five years, and how much of that won’t fit in the ${fmt(HISTORY_DEFAULTS.pipeline)} kb/d line? Then find the smallest expansion, to the nearest ${SIZE_STEP} kb/d, that keeps the spread under $${SPREAD_LIMIT} from the day it opens to the end.`}
         solved={solvedA}
         status={
-          st.growth !== DEFAULT_GROWTH || st.year !== String(EXPANSION_YEAR)
-            ? `Set basin growth to ${fmt(DEFAULT_GROWTH)} kb/d a year and the expansion to open in year ${EXPANSION_YEAR}.`
-            : `With ${fmt(st.add)} kb/d added, the widest spread after the opening is ${d2(widestAfterOpening(st.add, st.rail))}.`
+          !challengeAReady(st)
+            ? `Set basin growth to ${fmt(CHALLENGE_GROWTH)} kb/d a year and the expansion to open in year ${EXPANSION_YEAR}.`
+            : `With ${fmt(st.add)} kb/d added, the widest spread after the opening is ${d2(widestAfterOpening(st.add, st.rail, st.growth))}.`
         }
-        success={`Solved: ${fmt(st.add)} kb/d. ${fmt(st.add - SIZE_STEP)} kb/d leaves the basin’s last months of growth with nowhere to go but rail, and the spread jumps back to the rail freight. Pipelines are sized for where production is going, not where it is — which is why expansions are fought over years before they open.`}
+        success={`Solved: ${fmt(f.challengeAnswer)} kb/d. By the end of year five the basin’s trend reaches ${fmt(f.challengeTrend)} kb/d, ${fmt(f.challengeTrend - HISTORY_DEFAULTS.pipeline)} more than the line carries — but week-to-week swings take it as high as ${fmt(f.challengePeak)}, so an expansion of ${fmt(f.challengeAnswer - SIZE_STEP)} kb/d leaves a few weeks with the line full again, and the spread jumps. Pipelines are sized for where production is going, with room to spare, which is why expansions are fought over years before they open.`}
       />
 
       <H2>Differentials</H2>
       <P>
         Benchmarks price a handful of grades. Everything else is priced as a benchmark plus or minus a <K c="price">differential</K>, and the differential has two
-        parts we’ve already met. The <b>location</b> part is the cost of getting from where the crude is to where the benchmark is priced, or back (Lesson 4.4). The{' '}
-        <b>quality</b> part is what a refinery can make of the crude compared with the benchmark grade (Lesson 4.5). In practice, physical cargoes are commonly priced
+        parts we’ve already met. The <b>location</b> part is the cost of getting from where the crude is to where the benchmark is priced, or back (
+        <a href={lessonHref('oil/4.4')}>Lesson 4.4</a>). The <b>quality</b> part is what a refinery can make of the crude compared with the benchmark grade (
+        <a href={lessonHref('oil/4.5')}>Lesson 4.5</a>). In practice, physical cargoes are commonly priced
         at a benchmark’s average over an agreed window plus a differential, and some national oil companies publish monthly differentials for their grades.
       </P>
       <P>
         In the next demonstration, two of our crudes are taken apart week by week over the same simulated history. Northfield Sour is sold at Kessler, so its location
-        part is WTI’s own discount to Brent. Coldwater Heavy is delivered to Port Calder, so its location part is the coast’s small discount to Northport. Drag across
+        part is WTI’s own discount to Brent. Coldwater Heavy is delivered to Port Corran, so its location part is the coast’s small discount to Northport. Drag across
         the chart to choose a week, and switch the expansion off to compare:
       </P>
 
       <Figure name="WTI-Brent Price Explorer · differentials" scenario={s2}>
         <Segmented
-          label="Kessler–Calder expansion"
+          label="Kessler–Corran expansion"
           value={s2.state.mode}
           onChange={(v) => s2.set({ mode: v })}
           options={[
@@ -474,7 +510,7 @@ export default function Lesson() {
           items={[
             { label: 'Location at Kessler (WTI − Brent)', color: LOCATION, kind: 'line' },
             { label: 'Northfield quality (vs WTI)', color: CRUDE_COLOR.northfield, kind: 'line' },
-            { label: 'Coldwater quality (vs light crude at Port Calder)', color: CRUDE_COLOR.coldwater, kind: 'line' },
+            { label: 'Coldwater quality (vs light crude at Port Corran)', color: CRUDE_COLOR.coldwater, kind: 'line' },
             { label: 'Fuel oil − Brent', color: FUEL, kind: 'line', dashed: true },
           ]}
         />
@@ -512,7 +548,7 @@ export default function Lesson() {
 
       <P>
         The two parts move for different reasons. Quality differentials follow fuel oil. Northfield Sour’s runs between {d2(f.nfQuality.min)} and{' '}
-        {d2(f.nfQuality.max)} against WTI, and Coldwater Heavy’s between {d2(f.cwQuality.min)} and {d2(f.cwQuality.max)} against light crude at Port Calder, and
+        {d2(f.nfQuality.max)} against WTI, and Coldwater Heavy’s between {d2(f.cwQuality.min)} and {d2(f.cwQuality.max)} against light crude at Port Corran, and
         Coldwater’s rises and falls almost in step with fuel oil’s own discount to Brent (their correlation over the five years is {fmt(f.fuelCorrelation, 2)}).
         When fuel oil is cheap, the residue that sour and heavy crudes are full of is worth less, and so are they — the mechanism of{' '}
         <a href={lessonHref('oil/4.5')}>Lesson 4.5</a>. Location differentials follow the plumbing. Coldwater’s, at the coast, barely moves, between{' '}
@@ -521,14 +557,14 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`With the expansion opening in year ${EXPANSION_YEAR}, find a week in which Northfield Sour sold at its deepest discount to Brent (within ${fmt(CHEAPEST_TOLERANCE * 100)} cents).`}
+        question={`Predict first: is Northfield Sour cheapest against Brent in a stretch when the Kessler–Corran line is full, or when fuel oil is cheapest? Then, with the expansion opening in year ${EXPANSION_YEAR}, find a week in which it sold at its deepest discount to Brent (within ${fmt(CHEAPEST_TOLERANCE * 100)} cents).`}
         solved={solvedB}
         status={
           s2.state.mode !== 'built'
             ? `Choose the history in which the expansion opens in year ${EXPANSION_YEAR}.`
             : `In week ${week + 1}, Northfield Sour sold ${d2(-nfDiscNow)} below Brent.`
         }
-        success={`Solved: week ${week + 1}, ${d2(-nfDiscNow)} below Brent. Of that, ${d2(-b.nfLocation)} is location — the line was full — and only ${d2(-b.nfQuality)} is quality. A trader who saw only “sour crude is cheap” would have missed that it was the pipeline, not the sulfur, doing most of the work.`}
+        success={`Solved: week ${week + 1}, ${d2(-nfDiscNow)} below Brent. Of that, ${d2(-b.nfLocation)} is location — the line was full — and only ${d2(-b.nfQuality)} is quality. Northfield’s quality discount is deepest in week ${f.qualityWeek + 1}, at ${d2(-f.qualityLow.nfQuality)}, but with room on the line that week it sold only ${d2(-(f.qualityLow.northfield - f.qualityLow.brent))} under Brent. A trader who saw only “sour crude is cheap” would have missed that it was the pipeline, not the sulfur, doing most of the work.`}
       />
 
       <P>

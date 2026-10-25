@@ -7,7 +7,6 @@ import {
   GRAPHIC,
   GridY,
   H2,
-  K,
   Legend,
   LessonPage,
   P,
@@ -19,11 +18,13 @@ import {
   linePath,
   mix,
   scale,
+  TEXT,
   useScenario,
 } from '../../../framework';
 import { observe, type Predictor } from '../../../engines/agriculture/forecast';
 import { MARKET_YEARS, checkpointForecast, normCdf, valleyCorn, valleySd } from '../../../engines/agriculture/market';
 import { meanValley } from '../../../engines/agriculture/world';
+import { NEW_SEASONS } from '../../../engines/agriculture/capstone';
 import { dayOf } from '../../../model/agriculture/region';
 import { MARKET_LINE } from '../shared/tones';
 
@@ -59,20 +60,54 @@ export function entryScore(year: number, e: Entry): number {
   return crps(e.mean, e.half / Z80, valleyCorn(year));
 }
 
-/** Challenge 1: every season forecast and revealed, with an average score better than the long-run average's. */
+/**
+ * How much better than the long-run average a forecaster must score to show it used the evidence:
+ * a quarter lower. The best forecast that ignores the evidence — the same center and band every
+ * season — scores only about 3% lower on these five seasons.
+ */
+export const BEAT_BY = 0.25;
+
+/** Challenge 1: every season forecast and revealed, with an average score at least a quarter lower than the long-run average's. */
 export function beatClimatology(entries: Record<string, Entry>): boolean {
   const done = CHALLENGE_SEASONS.every((y) => entries[y]?.locked);
   if (!done) return false;
   const mine = CHALLENGE_SEASONS.reduce((a, y) => a + entryScore(y, entries[y]), 0);
   const clim = CHALLENGE_SEASONS.reduce((a, y) => a + climatologyScore(y), 0);
-  return mine < clim;
+  return mine <= (1 - BEAT_BY) * clim;
 }
 
-/** Challenge 2: for a forecast that misses by `miss`, the band half-width (in steps of 5) that scores best. */
+/** The regression and the long-run average over all forty new seasons: the average miss of the regression's center, how often its 80% band held the harvest, and both scores. */
+export function fortySeasons(): { miss: number; inside: number; model: number; clim: number } {
+  const n = NEW_SEASONS.length;
+  return {
+    miss: NEW_SEASONS.reduce((a, y) => a + Math.abs(checkpointForecast(y, AUG1, 'full').mean - valleyCorn(y)), 0) / n,
+    inside: NEW_SEASONS.filter((y) => {
+      const f = checkpointForecast(y, AUG1, 'full');
+      return Math.abs(valleyCorn(y) - f.mean) <= Z80 * f.sd;
+    }).length,
+    model: NEW_SEASONS.reduce((a, y) => a + modelScore(y), 0) / n,
+    clim: NEW_SEASONS.reduce((a, y) => a + climatologyScore(y), 0) / n,
+  };
+}
+
+/** For a forecast that misses by `miss`, the band half-width (in steps of 5) that scores best. */
 export function bestHalfWidth(miss: number): number {
   let best = 5;
   for (let h = 5; h <= 150; h += 5) if (crps(0, h / Z80, miss) < crps(0, best / Z80, miss) - 1e-12) best = h;
   return best;
+}
+
+/** Challenge 2's miss: twice the 40 million bushels the reader checks first, so the answer has to be scaled, not read. */
+export const CHALLENGE_MISS = 80;
+
+/**
+ * Challenge 2: a band committed for a miss solves when it reaches between 1.25 and 1.75 times the miss — the
+ * flat bottom of the curve, where every band scores within about 2% of the best (the best is about 1.54 times).
+ */
+export function bandGuessSolved(miss: number, half: number | undefined): boolean {
+  if (half === undefined || miss <= 0) return false;
+  const k = half / miss;
+  return k >= 1.25 - 1e-9 && k <= 1.75 + 1e-9;
 }
 
 const PRED_LABEL: Record<Predictor, string> = {
@@ -113,25 +148,50 @@ function HistoryScatter({ pred, value, mean, half }: { pred: Predictor; value: n
   );
 }
 
-function ScoreCurve({ miss, half }: { miss: number; half: number }) {
+function ScoreCurve({ miss, half, guess }: { miss: number; half: number; guess?: number }) {
   const hs = Array.from({ length: 59 }, (_, i) => 5 + i * 2.5);
   const scores = hs.map((h) => crps(0, h / Z80, miss));
   const top = Math.max(...scores, Math.abs(miss)) * 1.05;
   const x = scale(0, 150, 70, 620);
   const y = scale(0, top, 200, 24);
   const best = hs[scores.indexOf(Math.min(...scores))];
+  const shown = guess !== undefined;
   return (
-    <svg className="chart" viewBox="0 0 640 232" role="img" aria-label={`The score of a forecast that misses by ${fmt(miss)} million bushels, for bands of every width: best at about ${fmt(best)} either side.`}>
+    <svg
+      className="chart"
+      viewBox="0 0 640 232"
+      role="img"
+      aria-label={
+        shown
+          ? `The score of a forecast that misses by ${fmt(miss)} million bushels, for bands of every width: best at about ${fmt(best)} either side. You checked ±${fmt(guess)}.`
+          : `A forecast that misses by ${fmt(miss)} million bushels: with no band it scores ${fmt(miss)}. Check a band to see the score for every width.`
+      }
+    >
       <text className="ax" x={70} y={14}>
         Score (lower is better), million bushels
       </text>
       <GridY y={y} ticks={[0, Math.round(top / 3), Math.round((2 * top) / 3)]} x0={70} x1={620} format={(v) => fmt(v)} />
-      <path d={linePath(hs.map(x), scores.map(y))} fill="none" stroke={GRAPHIC.teal} strokeWidth={2.5} />
+      {shown && <path d={linePath(hs.map(x), scores.map(y))} fill="none" stroke={GRAPHIC.teal} strokeWidth={2.5} />}
       <line x1={70} x2={620} y1={y(Math.abs(miss))} y2={y(Math.abs(miss))} stroke="#999" strokeDasharray="4 4" />
       <text className="ax ax-e" x={618} y={y(Math.abs(miss)) - 4}>
         a single number, no band
       </text>
-      <circle cx={x(half)} cy={y(crps(0, half / Z80, miss))} r={5.5} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={1.5} />
+      {shown ? (
+        <>
+          <circle cx={x(guess)} cy={y(crps(0, guess / Z80, miss))} r={8} fill="none" stroke="#333" strokeWidth={1.5} />
+          <text className="ax ax-m" x={x(guess)} y={y(crps(0, guess / Z80, miss)) + 22}>
+            checked
+          </text>
+          <circle cx={x(half)} cy={y(crps(0, half / Z80, miss))} r={5.5} fill={GRAPHIC.teal} stroke="#fcfcfb" strokeWidth={1.5} />
+        </>
+      ) : (
+        <>
+          <line x1={x(half)} x2={x(half)} y1={24} y2={200} stroke={GRAPHIC.teal} strokeWidth={2} strokeDasharray="5 3" />
+          <text className="ax" x={x(half) + 6} y={60} style={{ fill: TEXT.teal }}>
+            your band, ±{fmt(half)}: check it to see the scores
+          </text>
+        </>
+      )}
       {[0, 25, 50, 75, 100, 125, 150].map((v) => (
         <text key={v} className="ax ax-m" x={x(v)} y={216}>
           ±{v}
@@ -156,10 +216,14 @@ export default function Lesson() {
   const modelAvg = done.length ? done.reduce((a, y) => a + modelScore(y), 0) / done.length : NaN;
   const solved1 = beatClimatology(s.state.entries);
   const model = checkpointForecast(year, AUG1, 'full');
+  const forty = useMemo(() => fortySeasons(), []);
+  const fiveMiss = Math.max(...CHALLENGE_SEASONS.map((y) => Math.abs(checkpointForecast(y, AUG1, 'full').mean - valleyCorn(y))));
 
-  const k = useScenario('score', { miss: 40, half: 25 });
-  const target = bestHalfWidth(k.state.miss);
-  const solved2 = k.state.miss === 40 && k.state.half === bestHalfWidth(40);
+  const k = useScenario('score', { miss: 40, half: 25, checked: {} as Record<string, number> });
+  const guess = k.state.checked[k.state.miss];
+  const challengeGuess = k.state.checked[CHALLENGE_MISS];
+  const solved2 = bandGuessSolved(CHALLENGE_MISS, challengeGuess);
+  const bestFor = (m: number) => bestHalfWidth(m);
 
   return (
     <LessonPage id="agriculture/6.3">
@@ -169,12 +233,10 @@ export default function Lesson() {
         May, the satellites’ NDVI and the crop’s condition — and you forecast the valley’s corn harvest: a most likely number, and an 80% band around it.
       </P>
       <P>
-        A forecast like that needs a fair score, one that can’t be gamed. Grading only the center would reward a forecaster who never states a band; grading only
-        whether the truth fell inside the band would reward bands as wide as the valley. The score here is the <K tone="teal">continuous ranked probability
-        score</K>, which weather and crop forecasters use for exactly this: it measures, in million bushels, how far the whole forecast distribution sat from what
-        happened. Lower is better. For a forecast with no band it is simply the size of the miss; a band earns credit when it honestly covers the miss, and costs
-        when it is wider than needed. Your benchmarks are the long-run average — 506 million bushels, give or take 64, the forecast of someone who looks at
-        nothing — and the regression of <a href={lessonHref('agriculture/3.4')}>Lesson 3.4</a>.
+        The forecasts are scored as in <a href={lessonHref('agriculture/3.4')}>Lesson 3.4</a>, with the continuous ranked probability score, here in million
+        bushels: for a bare number it is the miss itself, and a band earns credit when it covers the miss and pays when it is wider than needed. Lower is better.
+        Your benchmarks are the long-run average — {fmt(meanValley())} million bushels, give or take {fmt(valleySd())}, the forecast of someone who looks at
+        nothing — and the regression of Lesson 3.4.
       </P>
       <P>
         In the next demonstration the dots are the sixty past seasons of Chapter 5, plotted by one of the August 1 observations against the harvest that followed;
@@ -211,7 +273,9 @@ export default function Lesson() {
         poor crop condition rating is a warning. NDVI, on August 1, says the least: by then nearly every canopy in the valley is green, and the satellites’ signal
         comes later, as the leaves start to fail. The regression
         does what a careful forecaster does with this evidence, weighting each observation by how much it has mattered before; on these five seasons it beats the
-        long-run average by a wide margin. Can you?
+        long-run average by a wide margin, missing none by more than {fmt(Math.ceil(fiveMiss))} million bushels. That is luckier than usual: over all forty new
+        seasons it misses by {fmt(forty.miss)} million bushels on average and scores {fmt(forty.model, 1)}, against the long-run average’s{' '}
+        {fmt(forty.clim, 1)}. Can you beat the average by a quarter on these five?
       </P>
       <P>
         Reason the way the regression does. Season 65 reached August 1 hotter than any of the sixty past seasons, 2.7 °C over normal since June, and 7 inches
@@ -223,12 +287,12 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Forecast all five seasons and lock each one in. Is your average score better than the long-run average’s?"
+        question="Forecast all five seasons and lock each one in. Is your average score at least a quarter lower than the long-run average’s?"
         solved={solved1}
         status={
           done.length < CHALLENGE_SEASONS.length
             ? `${done.length} of ${CHALLENGE_SEASONS.length} seasons locked in.${done.length ? ` Your average so far: ${fmt(myAvg, 1)}, against ${fmt(climAvg, 1)} for the long-run average.` : ''}`
-            : `Your average score is ${fmt(myAvg, 1)}, against ${fmt(climAvg, 1)} for the long-run average. Reset and try again.`
+            : `Your average score is ${fmt(myAvg, 1)}, against ${fmt(climAvg, 1)} for the long-run average; a quarter lower would be ${fmt((1 - BEAT_BY) * climAvg, 1)}. Reset and try again.`
         }
         success={`Solved: your forecasts scored ${fmt(myAvg, 1)} on average, against ${fmt(climAvg, 1)} for the long-run average and ${fmt(modelAvg, 1)} for the regression. You have turned August weather into information about the harvest — which is what a market pays for, as long as it is early or better than everyone else’s.`}
       />
@@ -236,12 +300,13 @@ export default function Lesson() {
       <H2>What the score rewards</H2>
       <P>
         Why not just state a very wide band and be safe? Because the score charges for width. In the next demonstration one forecast is taken apart: it misses the
-        harvest by a set amount, and the curve shows its score for every width of band. With no band at all the score is the full miss. A band that roughly
-        matches the size of the miss scores best; a band much wider scores worse again. Set the miss and the band:
+        harvest by a set amount, and with no band at all it scores the full miss, the dashed line. A band that covers the miss scores better; a band much wider
+        than the miss scores worse again. Start with a miss of 40 million bushels: set the band you expect to score best, check it, and the curve appears with
+        the score for every width. Then move the band along it:
       </P>
 
       <Figure name="Yield Prediction Challenge · the score" scenario={k}>
-        <ScoreCurve miss={k.state.miss} half={k.state.half} />
+        <ScoreCurve miss={k.state.miss} half={k.state.half} guess={guess} />
         <Legend
           items={[
             { label: 'Score for each band width', color: GRAPHIC.teal, kind: 'line' },
@@ -250,33 +315,36 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'miss', value: `${fmt(k.state.miss)} million bu` },
-            { label: 'band', value: `± ${fmt(k.state.half)}`, tone: 'teal' },
-            { label: 'score', value: fmt(crps(0, k.state.half / Z80, k.state.miss), 1), tone: 'teal' },
+            { label: 'score of this band', value: guess === undefined ? 'check to see' : fmt(crps(0, k.state.half / Z80, k.state.miss), 1), tone: 'teal' },
+            { label: 'the band you checked', value: guess === undefined ? 'none yet' : `± ${fmt(guess)}, scoring ${fmt(crps(0, guess / Z80, k.state.miss), 1)}`, tone: 'ink' },
           ]}
         />
         <Slider label="How far the forecast missed" value={k.state.miss} min={0} max={120} step={5} onChange={(v) => k.set({ miss: v })} display={`${fmt(k.state.miss)} million bu`} />
         <Slider label="80% band, either side" tone="teal" value={k.state.half} min={5} max={150} step={5} onChange={(v) => k.set({ half: v })} display={`± ${fmt(k.state.half)}`} />
+        <Button onClick={() => k.set({ checked: { ...k.state.checked, [k.state.miss]: k.state.half } })} disabled={guess !== undefined || k.state.miss === 0} primary>
+          {guess !== undefined ? `Checked for a miss of ${fmt(k.state.miss)}` : 'Check this band'}
+        </Button>
       </Figure>
 
       <P>
-        The score is <i>proper</i>: over many seasons, the way to score best is to state the band you actually believe. A forecaster who makes the band narrower to
-        look confident loses when the misses come, and one who widens it to stay safe loses every season. That is what makes the score fit for judging the regression
-        of Lesson 3.4, whose August 1 band of ±{fmt(Z80 * model.sd)} million bushels came from its errors on a hundred seasons it never saw.
-      </P>
-      <P>
-        Forecasters call the two halves of the job <i>calibration</i> — bands that hold the truth as often as they claim, as in{' '}
-        <a href={lessonHref('agriculture/6.2')}>the last lesson</a> — and <i>sharpness</i>, bands as narrow as the evidence allows. A proper score rewards
-        sharpness only as far as calibration permits. Weather centers judge their ensemble forecasts with this same score, season after season, and the
-        forecasters who trade on crops are judged, in the end, by their profit and loss, which is a proper score too.
+        Over many seasons, as <a href={lessonHref('agriculture/3.4')}>Lesson 3.4</a> found, the way to score best is to state the band you actually believe. A
+        forecaster who makes the band narrower to look confident loses when the misses come, and one who widens it to stay safe loses every season. That is what
+        makes the score fit for judging the regression of Lesson 3.4, whose August 1 band of ±{fmt(Z80 * model.sd)} million bushels came from its errors on a
+        hundred seasons it never saw. On the forty new seasons that band held the harvest {forty.inside} times, about as often as it claims — calibrated, as{' '}
+        <a href={lessonHref('agriculture/6.2')}>the last lesson</a> found the farm’s own bands to be. Weather centers judge their ensemble forecasts with this
+        same score, season after season.
       </P>
 
       <Challenge
         id="b"
-        question="Set the miss to 40 million bushels. What band width, to the nearest 5 million bushels either side, gives the best score?"
+        question={`A forecast misses by ${CHALLENGE_MISS} million bushels. Predict, from what the 40-million-bushel miss showed, the band that scores best, to the nearest 10 million bushels either side; then set the miss to ${CHALLENGE_MISS}, set your band and check it.`}
         solved={solved2}
-        status={k.state.miss !== 40 ? 'Set the miss to 40 million bushels.' : `A band of ± ${fmt(k.state.half)} scores ${fmt(crps(0, k.state.half / Z80, 40), 1)}.`}
-        success={`Solved: for a 40-million-bushel miss the best band is about ± ${fmt(target)} million bushels, scoring ${fmt(crps(0, target / Z80, 40), 1)} — better than the bare miss of 40, and better than any wider or narrower band. A forecaster whose bands are about as wide as their real misses is doing it right.`}
+        status={
+          challengeGuess === undefined
+            ? `Set the miss to ${CHALLENGE_MISS} million bushels and your band, then press “Check this band”.`
+            : `Your band of ± ${fmt(challengeGuess)} scores ${fmt(crps(0, challengeGuess / Z80, CHALLENGE_MISS), 1)}; the best, about ± ${fmt(bestFor(CHALLENGE_MISS))}, scores ${fmt(crps(0, bestFor(CHALLENGE_MISS) / Z80, CHALLENGE_MISS), 1)}. Reset the demonstration to predict again.`
+        }
+        success={`Solved: for an ${CHALLENGE_MISS}-million-bushel miss your band of ± ${fmt(challengeGuess ?? 0)} scores ${fmt(crps(0, (challengeGuess ?? 0) / Z80, CHALLENGE_MISS), 1)}, within a whisker of the best, about ± ${fmt(bestFor(CHALLENGE_MISS))} — and far better than the bare miss of ${CHALLENGE_MISS}. The score has no favorite size: double the miss and the best band doubles too, so whatever the miss, the best 80% band reaches about one and a half times as far on either side. A forecaster whose bands are honest has the same proportion, an 80% band about one and a half times its average miss.`}
       />
 
       <P>

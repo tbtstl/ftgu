@@ -1,9 +1,9 @@
 // Where the course's GPUs live: three fictional data-center sites. Tech Park is the empty site in
-// the electricity course's region, beside Metro, and buys power at that region's hub price; Bayport
-// sits in a warm coastal city close to most users; Northfield is a remote, cold valley with cheap
+// the electricity course's region, beside Metro, and buys power at that region's hub price; Marston
+// sits in a warm coastal city close to most users; Fernhill is a remote, cold valley with cheap
 // hydro power and plenty of room. Prices, costs and climates are simulated for teaching.
 
-export type SiteId = 'bayport' | 'techpark' | 'northfield';
+export type SiteId = 'marston' | 'techpark' | 'fernhill';
 
 export interface Site {
   id: SiteId;
@@ -28,9 +28,9 @@ export interface Site {
 }
 
 export const SITES: Record<SiteId, Site> = {
-  bayport: {
-    id: 'bayport',
-    name: 'Bayport',
+  marston: {
+    id: 'marston',
+    name: 'Marston',
     blurb: 'a warm coastal city, beside most of the users',
     powerPrice: 95,
     meanTempC: 20,
@@ -54,9 +54,9 @@ export const SITES: Record<SiteId, Site> = {
     gridMW: 60,
     buildCostIndex: 1.0,
   },
-  northfield: {
-    id: 'northfield',
-    name: 'Northfield',
+  fernhill: {
+    id: 'fernhill',
+    name: 'Fernhill',
     blurb: 'a cold, remote valley with cheap hydro power',
     powerPrice: 35,
     meanTempC: 4,
@@ -69,7 +69,7 @@ export const SITES: Record<SiteId, Site> = {
   },
 };
 
-export const SITE_IDS: SiteId[] = ['bayport', 'techpark', 'northfield'];
+export const SITE_IDS: SiteId[] = ['marston', 'techpark', 'fernhill'];
 
 /**
  * Outdoor temperature at a site in a given hour of the year (0–8,759): a seasonal cycle peaking in

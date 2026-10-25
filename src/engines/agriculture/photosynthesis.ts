@@ -69,12 +69,15 @@ export function quantumYield(crop: Crop, co2: number, t: number): number {
   return (p.alpha * eff(co2, g)) / eff(CO2_TODAY, g25);
 }
 
+/** Share of the plant-available water left when the stomata begin to close (crop.ts's stressAt is 0.55 used). */
+export const STOMATA_CLOSE_BELOW = 0.45;
+
 /**
  * How much the stomata stay open, from soil water (fraction of the plant-available water left):
- * fully open until half is used, then closing in proportion — the same rule as the water balance.
+ * fully open until 55% of it is used, then closing in proportion — the same rule as the water balance.
  */
 export function stomatalFactor(soilWater: number): number {
-  return Math.max(0, Math.min(1, soilWater / 0.5));
+  return Math.max(0, Math.min(1, soilWater / STOMATA_CLOSE_BELOW));
 }
 
 export interface LeafResult {

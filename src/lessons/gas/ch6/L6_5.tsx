@@ -14,6 +14,7 @@ import {
   Segmented,
   Slider,
   TEXT,
+  Tn,
   fmt,
   lessonHref,
   pct,
@@ -24,8 +25,10 @@ import {
 } from '../../../framework';
 import { curveAt, monthAverage } from '../../../engines/gas/futures';
 import {
+  daysIn,
   defaultCosts,
   estimatedGrowth,
+  HEATING_MONTHS,
   LOT_MMBTU,
   metroBasisTrades,
   pastMetroBasis,
@@ -35,12 +38,14 @@ import {
   runBook,
   spreadSignals,
   spreadTrades,
+  weatherSignals,
   weatherTrades,
   type BookResult,
   type SpreadSignal,
   type Trade,
   type TradingCosts,
 } from '../../../engines/gas/strategies';
+import { LATE_EXPANSION_WORLD, worldMarket } from '../../../engines/gas/worlds';
 import { conditionsOf, gasHistory, HISTORY_YEARS } from '../../../model/gas/history';
 import { GAS_MONTH_NAMES, GAS_YEAR_DAYS, hdd, WINTER_START } from '../../../model/gas/weather';
 import { XYChart } from '../shared/XYChart';
@@ -48,6 +53,7 @@ import { money } from '../shared/format';
 
 // ---------------------------------------------------------------------------
 // The four strategies of Lessons 6.1–6.3, as those lessons left them.
+// (Lesson 6.1's weather desk trades the heating months, October to April.)
 
 /** Futures and index trades are this many lots, basis swaps this many MMBtu a day, at size ×1. */
 export const LAB_LOTS = 10;
@@ -156,7 +162,7 @@ export function labTrades(pick: StrategyLabPick, size: number): Trade[] {
   const volume = LAB_VOLUME * size;
   switch (pick) {
     case 'weather':
-      return weatherTrades({ skill: LAB_WEATHER.skill, thresholdF: LAB_WEATHER.thresholdF, lots });
+      return weatherTrades({ skill: LAB_WEATHER.skill, thresholdF: LAB_WEATHER.thresholdF, lots, months: HEATING_MONTHS });
     case 'spread':
       return spreadTrades({ ...LAB_SPREAD, lots, rule: 'behind', thresholdBcf: labSpreadHindsight() });
     case 'ridgeback':
@@ -236,7 +242,47 @@ export function strategyLabSolved(s: StrategyLabState): boolean {
 // ---------------------------------------------------------------------------
 // Hindsight against walking forward.
 
-export type WalkPick = 'spread' | 'metro' | 'ridgeback';
+export type WalkPick = 'spread' | 'metro' | 'skip' | 'ridgeback';
+
+// ---------------------------------------------------------------------------
+// The lab's Metro desk with its one setting chosen from the winters already seen.
+
+/** The skip thresholds the Metro desk may choose from, °F colder than normal (null: never skip, sell every month). */
+export const LAB_SKIP_OPTIONS: Array<number | null> = [null, 0, 1, 2, 3, 4];
+
+function skipTrades(th: number | null, years?: (y: number) => boolean): Trade[] {
+  return metroBasisTrades({
+    lead: 0,
+    months: LAB_METRO.months,
+    mmbtuPerDay: -LAB_VOLUME,
+    forecast: th === null ? undefined : { skill: LAB_METRO.skill, skipColderF: th },
+  }).filter((t) => !years || years(Math.floor(t.entry / 12)));
+}
+
+let skipWinterMemo: number[][] | null = null;
+
+/** What each skip threshold (rows, as `LAB_SKIP_OPTIONS`) made in each winter (columns), after fees, $. */
+export function labSkipWinters(): number[][] {
+  if (!skipWinterMemo) skipWinterMemo = LAB_SKIP_OPTIONS.map((th) => Array.from({ length: HISTORY_YEARS }, (_, y) => runBook(skipTrades(th, (x) => x === y)).total));
+  return skipWinterMemo;
+}
+
+/** The threshold that made the most over the first `winters` winters (the first listed if several tie); with no winters to learn from, sell every month. */
+export function labSkipBest(winters: number): number | null {
+  const tab = labSkipWinters();
+  let best = 0;
+  let bv = -Infinity;
+  tab.forEach((row, i) => {
+    const v = row.slice(0, winters).reduce((a, b) => a + b, 0);
+    if (v > bv + 1e-6) {
+      bv = v;
+      best = i;
+    }
+  });
+  return winters < 1 ? null : LAB_SKIP_OPTIONS[best];
+}
+
+const skipText = (th: number | null) => (th === null ? 'sell all' : `${th} °F`);
 export const WALK_DEFAULTS = { pick: 'spread' as WalkPick };
 
 export interface LabWalk {
@@ -287,6 +333,17 @@ export function labWalk(pick: WalkPick): LabWalk {
       used: years.map((y) => (y < winters.length ? (walked[y] === null ? 'no past' : `${walked[y]} Bcf`) : '—')),
       happened: years.map((y) => (y < winters.length ? `${fmt(winters[y].signal.vsPlan, 1)} Bcf` : '—')),
       hindsightSetting: `${hind} Bcf`,
+    };
+  } else if (pick === 'skip') {
+    const sig = weatherSignals(LAB_METRO.skill);
+    const hind = labSkipBest(HISTORY_YEARS);
+    const walked = years.map((y) => labSkipBest(y));
+    w = {
+      hindsight: runBook(skipTrades(hind)),
+      walk: runBook(years.flatMap((y) => skipTrades(walked[y], (x) => x === y))),
+      used: walked.map(skipText),
+      happened: years.map((y) => `${signedF(Math.max(...LAB_METRO.months.map((c) => sig[y * 12 + c].forecastColder)))} °F`),
+      hindsightSetting: `a ${skipText(hind)} threshold`,
     };
   } else if (pick === 'metro') {
     w = {
@@ -362,7 +419,59 @@ export function strategyLabNumbers() {
     ridgeWalk: labWalk('ridgeback'),
     growth: estimatedGrowth(1),
     takeaway: ridgebackTakeaway(conditionsOf(0)),
+    ...ridgebackSides(),
+    metroEdge: metroGrossEdge(),
+    spreadWorstYear: worstYear(at('spread')),
+    skipWalk: labWalk('skip'),
+    skipHindsight: labSkipBest(HISTORY_YEARS),
+    skipWalked: Array.from({ length: HISTORY_YEARS }, (_, y) => labSkipBest(y)),
+    skipColdest: skipColdest(),
   };
+}
+
+/** The coldest two-week forecast (°F colder than normal) on the first of a winter month, each winter, at the Metro desk's skill. */
+function skipColdest(): number[] {
+  const sig = weatherSignals(LAB_METRO.skill);
+  return Array.from({ length: HISTORY_YEARS }, (_, y) => Math.max(...LAB_METRO.months.map((c) => sig[y * 12 + c].forecastColder)));
+}
+
+/** The year (0-based) a book lost the most in. */
+function worstYear(b: BookResult): number {
+  const ys = pnlByYear(b);
+  return ys.indexOf(Math.min(...ys));
+}
+
+/** The Ridgeback desk's sold and bought basis, and its purchases of the expansion year in the world where the pipe opens a year late. */
+function ridgebackSides() {
+  const b = labBook('ridgeback', 1, 1);
+  const sum = (xs: BookResult['trades']) => xs.reduce((a, o) => a + o.pnl, 0);
+  const sold = b.trades.filter((o) => o.trade.legs.some((l) => l.kind === 'basis' && l.mmbtuPerDay < 0));
+  const bought = b.trades.filter((o) => o.trade.legs.some((l) => l.kind === 'basis' && l.mmbtuPerDay > 0));
+  const late = runBook(
+    ridgebackTrades({ growth: 'trend', expansion: true }, { lead: LAB_RIDGEBACK.lead, threshold: LAB_RIDGEBACK.threshold, mmbtuPerDay: LAB_VOLUME }, LATE_EXPANSION_WORLD),
+    defaultCosts(),
+    worldMarket(LATE_EXPANSION_WORLD),
+  );
+  const boughtDeliveries = new Set(bought.map((o) => o.trade.legs[0].delivery));
+  const lateSame = late.trades.filter((o) => boughtDeliveries.has(o.trade.legs[0].delivery) && o.trade.legs.some((l) => l.kind === 'basis' && l.mmbtuPerDay > 0));
+  return {
+    ridgeSold: sum(sold),
+    ridgeSoldCount: sold.length,
+    ridgeSoldYear: sold.length ? Math.floor(sold[0].trade.legs[0].delivery / 12) : 0,
+    ridgeBought: sum(bought),
+    ridgeBoughtCount: bought.length,
+    ridgeBoughtYear: bought.length ? Math.floor(bought[0].trade.legs[0].delivery / 12) : 0,
+    lateSame: sum(lateSame),
+    lateSameLosers: lateSame.filter((o) => o.pnl <= 0).length,
+    lateSameCount: lateSame.length,
+  };
+}
+
+/** The Metro desk's profit before fees per MMBtu it sold, $. */
+function metroGrossEdge(): number {
+  const b = labBook('metro', 1, 1);
+  const volume = b.trades.reduce((a, o) => a + o.trade.legs.reduce((v, l) => v + (l.kind === 'basis' ? Math.abs(l.mmbtuPerDay) * daysIn(l.delivery) : 0), 0), 0);
+  return volume > 0 ? (b.total + b.totalFees) / volume : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +491,11 @@ function axisMoney(v: number): string {
   const s = v < 0 ? '−' : '';
   const a = Math.abs(v);
   return a >= 1e6 ? `${s}$${fmt(a / 1e6, a >= 1e7 ? 0 : 1)}M` : `${s}$${fmt(a / 1e3)}k`;
+}
+
+/** "+4.6", "−0.3". */
+function signedF(x: number): string {
+  return `${x >= 0 ? '+' : '−'}${fmt(Math.abs(x), 1)}`;
 }
 
 /** "+$0.74", "−$0.12". */
@@ -499,18 +613,23 @@ export default function Lesson() {
   const wEq = equityPoints(wk.walk);
   const y2 = moneyDomain([...hEq.ys, ...wEq.ys]);
   const walkYears = pnlByYear(wk.walk);
-  const walkName = w.state.pick === 'spread' ? 'March/April rule' : w.state.pick === 'metro' ? 'Metro fair-value rule' : 'Ridgeback desk';
-  const usedLabel = w.state.pick === 'spread' ? 'threshold' : w.state.pick === 'metro' ? 'fair value' : 'growth';
-  const happenedLabel = w.state.pick === 'spread' ? 'Nov 1 gap' : w.state.pick === 'metro' ? 'realized' : 'Bcf/d';
+  const WALK_TEXT: Record<WalkPick, { name: string; used: string; happened: string; color: string }> = {
+    spread: { name: 'March/April rule', used: 'threshold', happened: 'Nov 1 gap', color: TEXT.gold },
+    metro: { name: 'Metro fair-value rule', used: 'fair value', happened: 'realized', color: TEXT.green },
+    skip: { name: 'Metro desk', used: 'skip if colder', happened: 'coldest fcst', color: TEXT.teal },
+    ridgeback: { name: 'Ridgeback desk', used: 'growth', happened: 'Bcf/d', color: TEXT.orange },
+  };
+  const walkName = WALK_TEXT[w.state.pick].name;
+  const usedLabel = WALK_TEXT[w.state.pick].used;
+  const happenedLabel = WALK_TEXT[w.state.pick].happened;
 
   return (
     <LessonPage id="gas/6.5">
       <P>
-        <a href={lessonHref('gas/6.4')}>The previous lesson</a> weighed the region’s physical assets — storage space, firm pipeline capacity, a power plant —
-        against what they cost. Before it, the chapter built four trading strategies on what the course had taught: a weather forecast (
-        <a href={lessonHref('gas/6.1')}>Lesson 6.1</a>), the storage behind a calendar spread (<a href={lessonHref('gas/6.2')}>Lesson 6.2</a>), and the
-        production and pipes behind two kinds of basis (<a href={lessonHref('gas/6.3')}>Lesson 6.3</a>). Each looked good somewhere. But Lesson 6.2 ended with a
-        warning: a rule tuned on the same history it is tested on almost always finds a setting that looks good.
+        <a href={lessonHref('gas/6.4')}>The previous lesson</a> weighed the region’s physical assets against what they cost. Before it, the chapter built four
+        trading strategies on what the course had taught: a weather forecast (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>), the storage behind a calendar spread
+        (<a href={lessonHref('gas/6.2')}>Lesson 6.2</a>), and the production and pipes behind two kinds of basis (<a href={lessonHref('gas/6.3')}>Lesson 6.3</a>).
+        Each looked good somewhere, but Lesson 6.2 warned that a rule tuned on the same history it is tested on almost always finds a setting that looks good.
       </P>
       <P>
         A <K c="price">backtest</K> — running a strategy through the past as if it had been traded — is worth only as much as its honesty about three things:
@@ -518,15 +637,14 @@ export default function Lesson() {
         strategies to all three, and then answers the chapter’s question: can an understanding of these physical systems produce a profitable market strategy?
       </P>
       <P>
-        The four run as the earlier lessons left them, at {word(LAB_LOTS)} lots or {fmt(LAB_VOLUME)} MMBtu a day. The weather trades use a forecast with skill{' '}
-        {fmt(LAB_WEATHER.skill, 1)} on the first day of every month: when the next two weeks look more than {LAB_WEATHER.thresholdF} °F colder than normal, the
-        desk buys {word(LAB_LOTS)} lots of that month’s gas at its futures price and sells it back day by day at the daily prices, and when they look warmer it
-        does the reverse. The spread buys March/April on November 1 when storage is at least {n.spreadHindsight} Bcf behind plan, the threshold that did best in
-        Lesson 6.2. The Ridgeback desk extrapolates the production trend seen so far, counts on the announced expansion, and trades{' '}
-        {word(LAB_RIDGEBACK.lead)} months ahead. The Metro desk sells each winter month’s basis on its first day unless the forecast is colder than normal.
+        The four run as the earlier lessons left them, at {word(LAB_LOTS)} lots or {fmt(LAB_VOLUME)} MMBtu a day: the weather desk of Lesson 6.1, with skill{' '}
+        {fmt(LAB_WEATHER.skill, 1)} and a {LAB_WEATHER.thresholdF} °F threshold; the spread, bought on November 1 when storage is at least {n.spreadHindsight} Bcf
+        behind plan, the threshold that did best in Lesson 6.2; the Ridgeback desk, extrapolating the production trend seen so far, counting on the announced
+        expansion and trading {word(LAB_RIDGEBACK.lead)} months ahead; and the Metro desk, selling each winter month’s basis unless the forecast is colder than
+        normal.
       </P>
       <P>
-        Every position is marked to each month’s curve, so its profit or loss shows up as prices move, not only when it closes. Trading costs{' '}
+        As in Lesson 6.2, every position is marked to each month’s curve. Trading costs{' '}
         {usd(n.futuresFee, 3)} per MMBtu each way for futures and index gas — {usd(n.futuresFee * LOT_MMBTU)} a lot — and {usd(n.basisFee, 2)} for basis swaps.
         And every open position ties up <K c="price">margin</K>, cash posted with the exchange so that a loser can always pay. Exchanges set it from how far
         prices can move; ours covers three standard deviations of a month’s move in the history: {usd(n.futuresMargin)} per futures lot and{' '}
@@ -537,7 +655,7 @@ export default function Lesson() {
       <P>
         In the next demonstration, choose a strategy, its size, the trading costs and the capital set aside. The chart is the running profit after fees, month by
         month, with each fall from a high point shaded and the capital the strategy needs as a dashed step. Under it are two physical drivers for each year — its
-        winter, in <K tone="teal">heating degree days</K> colder or warmer than normal, and Ridgeback’s <K tone="orange">production</K> against what its pipes
+        winter, in <Tn tone="teal">heating degree days</Tn> above or below normal from November through March, and Ridgeback’s <K tone="orange">production</K> against what its pipes
         can take — and the strategy’s profit that year:
       </P>
 
@@ -635,14 +753,15 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        The weather trades make {cash(n.weather.total)} from {fmt(n.weather.trades.length)} months, {pct(n.weather.winRate)} of them winners. A forecast that loses{' '}
-        {fmt(n.weather.trades.filter((o) => o.pnl <= 0).length)} times in {fmt(n.weather.trades.length)} is still worth trading when its misses are small, and
-        these never need more than {cash(n.weather.peakCapital)} of capital. The March/April
-        rule makes {cash(n.spread.total)} but needs {cash(n.spread.peakCapital)} to do it and falls {cash(n.spread.maxDrawdown)} from its high on the way, because
-        our bookkeeping charges each leg of the spread a full lot’s margin; real exchanges charge less for a spread than for two separate positions, since its legs
-        mostly move together. The Ridgeback desk makes {cash(n.ridgeback.total)} from {word(n.ridgeback.trades.length)} trades, every one a winner, and{' '}
-        {pct(n.ridgeback.total / n.all.total)} of what the four make together. The Metro desk makes {cash(n.metro.total)}, but its fees are{' '}
-        {cash(n.metro.totalFees)}; at ten times the costs it keeps {cash(n.metroCostly)}. An edge of a few cents a month is the first thing costs take.
+        The weather trades make {cash(n.weather.total)} from {fmt(n.weather.trades.length)} months, {pct(n.weather.winRate)} of them winners. Its misses are small, and it never
+        needs more than {cash(n.weather.peakCapital)} of capital. The March/April rule makes {cash(n.spread.total)} but needs{' '}
+        {cash(n.spread.peakCapital)} of capital, {cash(Math.max(...n.spread.margin))} of it margin, because our bookkeeping charges each leg of the spread a full
+        lot’s margin (real exchanges charge a spread less); on the way it falls{' '}
+        {cash(n.spread.maxDrawdown)} from its high, when Year {n.spreadWorstYear + 1}’s winter goes against it. The Ridgeback desk makes {cash(n.ridgeback.total)}{' '}
+        from {word(n.ridgeback.trades.length)} trades, every one a winner, and {pct(n.ridgeback.total / n.all.total)} of what the four make together:{' '}
+        {cash(n.ridgeSold)} selling Year {n.ridgeSoldYear + 1}’s basis before the glut and {cash(n.ridgeBought)} buying Year {n.ridgeBoughtYear + 1}’s before the
+        expansion. The Metro desk makes {cash(n.metro.total)}, but its fees are {cash(n.metro.totalFees)}; at ten times the costs it keeps {cash(n.metroCostly)}.
+        Its edge before fees is about {usd(n.metroEdge, 2)} per MMBtu sold, and a thin edge is the first thing costs take.
       </P>
       <P>
         Together the four make {cash(n.all.total)} and need at most {cash(n.all.peakCapital)}, less than the Ridgeback desk alone, because by the time its swaps
@@ -664,9 +783,10 @@ export default function Lesson() {
         Every setting in <FigRef to="Gas Strategy Lab">the first demonstration</FigRef> was chosen by someone who had seen all eight years — the spread’s
         threshold most obviously. A fairer test is a <K c="price">walk-forward</K> test. Each year, the trader may use only the years before it: it tunes its rule
         on the past, trades the next year with it, and moves on, so whatever it makes is what the rule could have made in real time. In the next demonstration,
-        three rules run twice, tuned with hindsight on all eight years (dashed) and walked forward (solid). The March/April rule re-chooses its threshold each
-        November; a Metro rule sells (or buys) winter basis whenever the forward is more than {usd(LAB_FAIR_THRESHOLD, 2)} above (or below) the average of the
-        same month in the winters seen so far; the Ridgeback desk estimates growth from the production seen so far. Under the chart is what the walk-forward
+        four rules run twice, tuned with hindsight on all eight years (dashed) and walked forward (solid). The March/April rule re-chooses its threshold each
+        November. The Metro desk re-chooses how cold a forecast must be before it stands aside, starting from selling every month. A second, different Metro rule
+        ignores the forecast and sells (or buys) winter basis whenever the forward is more than {usd(LAB_FAIR_THRESHOLD, 2)} above (or below) the average of the
+        same month in the winters seen so far. The Ridgeback desk estimates growth from the production seen so far. Under the chart is what the walk-forward
         trader used each year, what happened, and what it made:
       </P>
 
@@ -677,6 +797,7 @@ export default function Lesson() {
           onChange={(v) => w.set({ pick: v })}
           options={[
             { value: 'spread', label: 'March/April threshold' },
+            { value: 'skip', label: 'Metro skip' },
             { value: 'metro', label: 'Metro fair value' },
             { value: 'ridgeback', label: 'Ridgeback trend' },
           ]}
@@ -702,7 +823,7 @@ export default function Lesson() {
           ariaLabel={`What the walk-forward ${walkName} used each year: ${wk.used.join(', ')}; what happened: ${wk.happened.join(', ')}.`}
           rows={[
             { label: usedLabel, cells: wk.used.map((t) => ({ text: t, color: TEXT.ink })) },
-            { label: happenedLabel, cells: wk.happened.map((t) => ({ text: t, color: w.state.pick === 'ridgeback' ? TEXT.orange : w.state.pick === 'metro' ? TEXT.green : TEXT.gold })) },
+            { label: happenedLabel, cells: wk.happened.map((t) => ({ text: t, color: WALK_TEXT[w.state.pick].color })) },
             { label: 'profit', cells: walkYears.map((v) => ({ text: Math.abs(v) < 1 ? '—' : axisMoney(v), color: v < 0 ? TEXT.red : TEXT.green })) },
           ]}
         />
@@ -723,7 +844,7 @@ export default function Lesson() {
         The March/April rule falls apart. Tuned on all seven winters it chose {n.spreadHindsight} Bcf and made {cash(n.spreadWalk.hindsight.total)}; walked
         forward it loses {cash(-n.spreadWalk.walk.total)}. After Year 1 every threshold that had traded had won, so in Year 2 it used the lowest, bought, and lost.
         After Year 2 it raised the bar to {n.walked[2]} Bcf and so stood aside in Year 3, the winter that paid most; after Year 3 it went back to buying everything
-        and walked into Year 4, a winter {fmt(-winterHdd[3])} heating degree days warmer than normal, which cost {cash(-n.winters[3].pnl)}. Each winter’s best
+        and walked into Year 4, a winter {fmt(-winterHdd[3])} heating degree days below normal, which cost {cash(-n.winters[3].pnl)}. Each winter’s best
         threshold was a fact about the winters already past, not about the one to come.
       </P>
       <P>
@@ -734,19 +855,30 @@ export default function Lesson() {
         be priced from two or three of them.
       </P>
       <P>
-        The Ridgeback desk makes the same {cash(n.ridgeWalk.walk.total)} either way. Its hypothesis needed nothing hindsight supplies: from Year 2 on, the
-        production seen so far already showed growth of {fmt(n.growth, 2)} Bcf/d a year, the expansion had been announced, and the physics — production against
-        the {fmt(n.takeaway, 2)} Bcf/d the basin’s pipes and its own use could take — was public.
+        The Metro desk’s skip rule does no better once its setting has to be learned. Standing aside had never helped before Year 3, so the walk-forward desk sold
+        all of that winter, January included, whose forecast ran {signedF(n.skipColdest[2])} °F colder than normal; afterwards it stood aside only on forecasts more
+        than {n.skipWalked[3] ?? 0} °F colder,{' '}
+        {n.skipColdest.slice(3).every((c) => c <= (n.skipWalked[3] ?? 0)) ? 'which no later forecast reached' : 'and traded the later winters with that'}. Walked
+        forward it {n.skipWalk.walk.total < 0 ? 'loses' : 'makes'} {cash(Math.abs(n.skipWalk.walk.total))}, against {cash(n.skipWalk.hindsight.total)} for the best
+        threshold in hindsight. The lab’s setting, standing aside on any cold forecast, makes {cash(n.metro.total)}; the case for it is the physics — don’t sell
+        insurance against a cold week you can see coming — not the backtest.
+      </P>
+      <P>
+        Walked forward, the Ridgeback desk makes the same {cash(n.ridgeWalk.walk.total)}. Its sell side needed nothing hindsight supplies: from Year 2 on, the
+        production seen so far showed growth of {fmt(n.growth, 2)} Bcf/d a year, and the {fmt(n.takeaway, 2)} Bcf/d of takeaway it would outrun was public. Its buy side is another matter. The {cash(n.ridgeBought)} it made buying Year {n.ridgeBoughtYear + 1}’s basis
+        rested on the expansion opening on time, and walking forward can’t test that: the history holds one expansion, and it opened on time. In the world of{' '}
+        <a href={lessonHref('gas/6.3')}>Lesson 6.3</a> where it opens a year late, the same {word(n.lateSameCount)} purchases{' '}
+        {n.lateSame < 0 ? 'lose' : 'make'} {cash(Math.abs(n.lateSame))} between them, {word(n.lateSameLosers)} of them at a loss.
       </P>
 
       <H2>The chapter’s answer</H2>
       <P>
         Can an understanding of these physical systems produce a profitable market strategy? In our history, yes, in a particular way. Understanding paid where it
-        held information the price didn’t: a production trend carried forward, an expansion announced before it opened, a weather forecast better than the market’s.
-        It didn’t pay where the market already knew what we knew. Storage on November 1 was already in the spread, and Metro’s breakaways were already in its
-        premium. And understanding did something less obvious: it set the shape of each bet. Ridgeback’s basis couldn’t rise above the cost of the trip, so selling
-        it risked little; Metro’s could climb to the value of the last customer cut off, so selling it risked a great deal; a spread held through a winter was a bet
-        on that winter’s weather and nothing else.
+        held information the price didn’t: a production trend carried forward, a weather forecast better than the market’s and — so long as the pipe opened on time
+        — an expansion announced before it opened.
+        It didn’t pay where the market already knew what we knew: storage on November 1 was already in the spread, and Metro’s breakaways in its premium. And, as
+        Lesson 6.3 found, understanding set the shape of each bet: a ceiling on Ridgeback’s basis, none on Metro’s, and nothing but the weather in a spread held
+        through a winter.
       </P>
       <P>
         Two cautions keep the answer honest. Most of the money came from one event — Year 5’s glut and the pipe that ended it — and eight years hold only one. A
@@ -757,8 +889,8 @@ export default function Lesson() {
       </P>
       <P>
         This chapter took the region as given: its pipes, its storage fields, its weather. The capstone hands it over. In{' '}
-        <a href={lessonHref('gas/7.1')}>Chapter 7</a> you’ll build a gas network of your own, run its market through a year, forecast where it will bind, run a
-        portfolio of storage, transport and futures on it, and test the result on winters no one has seen — the whole course, from the pipe to the trade, in one
+        <a href={lessonHref('gas/7.1')}>Chapter 7</a> you’ll build a gas network of your own, run its market, forecast where it binds, trade a portfolio on it, and
+        test the result on winters no one has seen — the whole course, from the pipe to the trade, in one
         system.
       </P>
     </LessonPage>

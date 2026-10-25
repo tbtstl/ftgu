@@ -20,8 +20,9 @@ import {
   lessonHref,
   useScenario,
 } from '../../../framework';
+import { breakevenHub, type LngVoyage } from '../../../engines/gas/lng';
 import { clearRegion, normalPlan, planAt, planInventory, simulateYear, STORAGE_HALF_SPREAD, type MarketDayInput, type YearDay } from '../../../engines/gas/market';
-import { BASINS, PRODUCTION_COST } from '../../../model/gas/world';
+import { BASINS, BAYPORT_LNG, PIPELINE, PRODUCTION_COST } from '../../../model/gas/world';
 import { COAL_SWITCH_BLOCKS, LNG_VALUE, OIL_SWITCH_VALUE, PROTECTED_VALUE, sectorOf } from '../../../model/gas/demand';
 import { GAS_MONTHS, GAS_MONTH_START, gasDayLabel, normalTemp, weatherYear } from '../../../model/gas/weather';
 import { XYChart } from '../shared/XYChart';
@@ -126,16 +127,29 @@ export function balanceDay(s: BalanceState): BalanceDay {
   };
 }
 
-/** The warmest whole-degree temperature on January 15 at which the region has to cut its LNG exports. */
-export function lngCutTemperature(): number {
-  for (let t = 60; t >= -40; t--) if (balanceDay({ ...BALANCE_DEFAULTS, temp: t }).lngCut > 1e-6) return t;
+/** The warmest whole-degree temperature on January 15 at which the region has to cut its LNG exports, for Ridgeback's production. */
+export function lngCutTemperature(ridgeback = RIDGEBACK_BASE): number {
+  for (let t = 60; t >= -40; t--) if (balanceDay({ ...BALANCE_DEFAULTS, temp: t, ridgeback }).lngCut > 1e-6) return t;
   return NaN;
 }
 export const LNG_CUT_TEMP = lngCutTemperature();
+/** Ridgeback's production in the challenge, Bcf/d: 0.3 more than it starts at. */
+export const RIDGEBACK_MORE = 2.9;
+/** The challenge's answer: where LNG is first cut with Ridgeback at RIDGEBACK_MORE. */
+export const LNG_CUT_TEMP_MORE = lngCutTemperature(RIDGEBACK_MORE);
 
-/** The challenge: January 15 with the default production and LNG value, at the warmest temperature that cuts LNG. */
+/**
+ * The challenge: January 15 at the starting LNG value, Ridgeback raised to 2.9 Bcf/d, at the warmest
+ * whole degree at which the region cuts LNG.
+ */
 export function lngCutSolved(s: BalanceState): boolean {
-  return s.day === BAL_JAN15 && s.lng === LNG_VALUE && Math.abs(s.ridgeback - RIDGEBACK_BASE) < 1e-9 && balanceDay(s).lngCut > 1e-6 && balanceDay({ ...s, temp: s.temp + 1 }).lngCut <= 1e-6;
+  return (
+    s.day === BAL_JAN15 &&
+    s.lng === LNG_VALUE &&
+    Math.abs(s.ridgeback - RIDGEBACK_MORE) < 1e-6 &&
+    balanceDay(s).lngCut > 1e-6 &&
+    balanceDay({ ...s, temp: s.temp + 1 }).lngCut <= 1e-6
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -249,9 +263,13 @@ const MARGINAL_TEXT = (b: BalanceDay): string => {
 // ---------------------------------------------------------------------------
 // A year, week by week.
 
+/**
+ * The simulated years. The mild and typical winters are the ones Lessons 4.2 and 4.4 come back to
+ * (weather seeds 2 and 3); the cold December appears only here.
+ */
 export const BALANCE_YEARS = [
   { id: 'mild', label: 'A mild winter', seed: 2 },
-  { id: 'ordinary', label: 'An ordinary winter', seed: 8 },
+  { id: 'typical', label: 'A typical winter', seed: 3 },
   { id: 'cold', label: 'A cold December', seed: 5 },
 ] as const;
 type YearId = (typeof BALANCE_YEARS)[number]['id'];
@@ -363,6 +381,15 @@ const AT_LIMIT = balanceDay({ ...BALANCE_DEFAULTS, temp: STORAGE_LIMIT_TEMP });
 const PER_DEGREE = Math.abs(balanceDay({ ...BALANCE_DEFAULTS, temp: BALANCE_DEFAULTS.temp - 1 }).storage - JAN.storage);
 const STEPS = [STORAGE_LIMIT_TEMP - 1, STORAGE_LIMIT_TEMP - 2, STORAGE_LIMIT_TEMP - 3].map((t) => ({ t, b: balanceDay({ ...BALANCE_DEFAULTS, temp: t }) }));
 const AT_CUT = balanceDay({ ...BALANCE_DEFAULTS, temp: LNG_CUT_TEMP });
+/** Where, between whole degrees, the LNG cut really begins at the starting production, °F. */
+export const CUT_ONSET = LNG_CUT_TEMP + AT_CUT.lngCut / PER_DEGREE;
+/** Degrees of extra cold that Ridgeback's extra 0.3 Bcf/d covers. */
+export const CUT_SHIFT = (RIDGEBACK_MORE - RIDGEBACK_BASE) / PER_DEGREE;
+/** The warmest whole degree on January 15 at which interruptible industry sets the price, °F. */
+export const INTERRUPTIBLE_TEMP = (() => {
+  for (let t = LNG_CUT_TEMP; t >= -60; t--) if (balanceDay({ ...BALANCE_DEFAULTS, temp: t }).price >= 8 - 1e-9) return t;
+  return NaN;
+})();
 const COLD = balanceWeeks(BALANCE_YEARS[2].seed);
 const MILD = balanceWeeks(BALANCE_YEARS[0].seed);
 const COLD_SURPRISE = COLD.reduce((a, w) => (w.change - w.planChange < a.change - a.planChange ? w : a));
@@ -372,6 +399,27 @@ const MILD_PEAK = MILD.reduce((a, w) => (w.price > a.price ? w : a));
 const MILD_END = MILD[51];
 const MILD_DRAW = winterDraw(BALANCE_YEARS[0].seed);
 
+/** LNG feed gas's value at Bayport, less the trip down Gulfward: the same value at Calder Hub, $/MMBtu. */
+export const LNG_VALUE_AT_CALDER = LNG_VALUE - PIPELINE['calder-bayport'].variableCost;
+/**
+ * The simulated European price at which a cargo just breaks even with gas at Calder Hub at
+ * LNG_VALUE_AT_CALDER: Lesson 3.5's break-even hub price, worked backward (it is linear in the price).
+ */
+export const LNG_EUROPE_PRICE = (() => {
+  const d = BAYPORT_LNG.destinations.europe;
+  const v: LngVoyage = {
+    hubPrice: LNG_VALUE_AT_CALDER,
+    feedMultiplier: BAYPORT_LNG.feedMultiplier,
+    liquefactionFee: BAYPORT_LNG.liquefactionFee,
+    ladenDays: d.ladenDays,
+    charterPerDay: BAYPORT_LNG.charterPerDay,
+    voyageFees: d.voyageFees,
+    regasFee: BAYPORT_LNG.regasFee,
+  };
+  const b0 = breakevenHub(v, 0);
+  return (LNG_VALUE_AT_CALDER - b0) / (breakevenHub(v, 1) - b0);
+})();
+
 export default function Lesson() {
   const s = useScenario('balance', BALANCE_DEFAULTS);
   const st = s.state;
@@ -379,10 +427,12 @@ export default function Lesson() {
   const w = storageValue(st.day);
   const normal = Math.round(normalTemp(st.day));
   const solved = lngCutSolved(st);
-  const atChallenge = st.day === BAL_JAN15 && st.lng === LNG_VALUE && Math.abs(st.ridgeback - RIDGEBACK_BASE) < 1e-9;
+  const onJan15 = st.day === BAL_JAN15 && st.lng === LNG_VALUE;
+  const atMore = Math.abs(st.ridgeback - RIDGEBACK_MORE) < 1e-6;
 
   const y = useScenario('year', { year: 'cold' as YearId });
-  const seed = BALANCE_YEARS.find((x) => x.id === y.state.year)!.seed;
+  const year = BALANCE_YEARS.find((x) => x.id === y.state.year) ?? BALANCE_YEARS[2];
+  const seed = year.seed;
   const weeks = useMemo(() => balanceWeeks(seed), [seed]);
   const [cursor, setCursor] = useState(38);
   const wk = weeks[clamp(Math.round(cursor), 0, 51)];
@@ -394,20 +444,20 @@ export default function Lesson() {
     lower = highs;
     return { xs, ys: highs, lows, kind: 'band' as const, color: USE_COLOR[layer.kind], opacity: 0.85 };
   });
-  const yearLabel = BALANCE_YEARS.find((x) => x.id === y.state.year)!.label.toLowerCase();
+  const yearLabel = year.label.toLowerCase();
 
-  const status = !atChallenge
-    ? `Set the date back to January 15, Bayport’s LNG value to ${gp(LNG_VALUE)} and Ridgeback’s production to ${bcfd(RIDGEBACK_BASE, 1)} — Reset does all three — then change only the temperature.`
-    : b.lngCut > 1e-6
-      ? `At ${st.temp} °F the region cuts ${bcfd(b.lngCut)} of LNG exports. Would it still have to at a warmer temperature?`
-      : `At ${st.temp} °F every LNG cargo still gets its gas; the price is ${gp(b.price)}.`;
+  const status = !onJan15
+    ? `Press Reset to go back to January 15 with LNG feed gas worth ${gp(LNG_VALUE)}, then set Ridgeback’s production to ${bcfd(RIDGEBACK_MORE, 1)}.`
+    : !atMore
+      ? `Set Ridgeback’s production to ${bcfd(RIDGEBACK_MORE, 1)}, then the temperature to your prediction.`
+      : `At ${fmt(st.temp)} °F with Ridgeback at ${bcfd(RIDGEBACK_MORE, 1)}, ${b.lngCut > 1e-6 ? 'the region is cutting LNG exports' : 'every LNG cargo still gets its gas'}.`;
 
   return (
     <LessonPage id="gas/4.1">
       <P>
         Chapter 3 moved gas with engineering: pipelines across the region, linepack through the hours, storage through the seasons, ships across the sea. None of it
         says how much gas anyone will produce, burn or store on a given day. Those decisions are made by thousands of people — producers, utilities, power plant
-        owners, factory managers, storage operators — who never coordinate with one another and never see a pipeline. They respond to a <K c="price">price</K>.
+        owners, factory managers, storage operators — who never coordinate with one another. They respond to a <K c="price">price</K>.
         This chapter is about how that price forms, and how the physical limits of Chapter 3 end up inside it.
       </P>
       <P>
@@ -431,17 +481,18 @@ export default function Lesson() {
         power plants burn gas until it costs more than{' '}
         {gp(OIL_SWITCH_VALUE, 0)}, when burning oil is cheaper, and some of them compete with coal plants: they burn extra gas only while it’s cheaper than coal,
         in blocks valued from {gp(COAL_SWITCH_BLOCKS[0].value)} down to {gp(COAL_SWITCH_BLOCKS[COAL_SWITCH_BLOCKS.length - 1].value)}. Bayport’s LNG terminal
-        takes its feed gas while overseas prices cover the voyage — up to a simulated {gp(LNG_VALUE)}, the kind of netback <a href={lessonHref('gas/3.5')}>Lesson 3.5</a>{' '}
-        worked out.
+        takes its feed gas while overseas prices cover the voyage: in our simulation, as long as gas costs no more than {gp(LNG_VALUE)} at Bayport, or{' '}
+        {gp(LNG_VALUE_AT_CALDER)} at Calder Hub, a trip down Gulfward away. That is the break-even hub price of{' '}
+        <a href={lessonHref('gas/3.5')}>Lesson 3.5</a> for a cargo selling at about {gp(Math.round(LNG_EUROPE_PRICE * 10) / 10)} in Europe.
       </P>
       <P>
         On the other side, the region’s wells produce whatever they produce — {bcfd(RIDGEBACK_BASE, 1)} from Ridgeback and {bcfd(SANDHILL, 1)} from Sandhill —
         and once the wells are drilled, getting the gas out costs only {gp(PRODUCTION_COST.ridgeback ?? 0)} and {gp(PRODUCTION_COST.sandhill ?? 0)} per MMBtu.
-        Storage is both a buyer and a seller. Its owners know what gas is likely to be worth later in the season (how they know is{' '}
-        <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>), so they offer their gas for that much plus {gp(STORAGE_HALF_SPREAD)} and bid for more at that much
-        minus {gp(STORAGE_HALF_SPREAD)}. In the next demonstration, the dashed steps are the supply curve, cheapest first; the solid steps are the demand curve,
-        most valuable first, colored by who wants the gas. Storage’s fields are as full as the season’s plan has them on the chosen date. Pick a date, then make
-        the day warmer or colder:
+        Storage is both a buyer and a seller. Its owners work from the season’s plan: how full their fields should be, and what gas should be worth, on each
+        day of a year with normal weather (how they draw it up is <a href={lessonHref('gas/4.4')}>Lesson 4.4</a>). Gas they don’t sell today they can sell
+        later, so they offer it for the plan’s price for the day plus {gp(STORAGE_HALF_SPREAD)} and bid for more at that price minus {gp(STORAGE_HALF_SPREAD)}. In
+        the next demonstration, the dashed steps are the supply curve, cheapest first; the solid steps are the demand curve, most valuable first, colored by who
+        wants the gas. Storage’s fields are as full as the plan has them on the chosen date. Pick a date, then make the day warmer or colder:
       </P>
 
       <Figure name="Gas Balance Model" scenario={s}>
@@ -456,15 +507,7 @@ export default function Lesson() {
             ...(['homes', 'power', 'industry', 'lng'] as UseKind[]).map((k) => ({ label: USE_LABEL[k], color: USE_COLOR[k] })),
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'price', value: gp(b.price), tone: 'green' },
-            { label: 'production', value: bcfd(b.production), tone: 'orange' },
-            { label: 'burned in the region', value: bcfd(b.consumption) },
-            { label: 'LNG exports', value: bcfd(b.exports) },
-            { label: b.storage >= 0 ? 'into storage' : 'out of storage', value: bcfd(Math.abs(b.storage)), tone: 'gold' },
-          ]}
-        />
+        <Readouts items={[{ label: 'price', value: gp(b.price), tone: 'green' }]} />
         <Eq
           label={`${fmt(b.production, 2)} produced minus ${fmt(b.consumption, 2)} burned minus ${fmt(b.exports, 2)} exported equals ${fmt(b.storage, 2)} Bcf per day into storage`}
         >
@@ -518,28 +561,31 @@ export default function Lesson() {
 
       <H2>Who gives way</H2>
       <P>
-        Storage can’t balance everything. Set the date to January 15 and lower the temperature. Each degree colder adds about{' '}
+        Storage can’t balance everything. Press Reset to go back to January 15, then lower the temperature. Each degree colder adds about{' '}
         {fmt(PER_DEGREE * 1000)} MMcf/d of demand, and storage covers it at an unchanged price down to {STORAGE_LIMIT_TEMP} °F, when Salt Flat and Hollow Creek
         are withdrawing {bcfd(-AT_LIMIT.storage)} of the {bcfd(AT_LIMIT.withdrawLimit)} they can manage. A degree colder they reach their limit, there’s no more
         gas to be had at any price, and the market has to find buyers willing to do without. The price climbs the demand curve: {gp(STEPS[0].b.price)} at{' '}
         {STEPS[0].t} °F, as the power plants that only just beat coal switch back to it; {gp(STEPS[1].b.price)} at {STEPS[1].t} °F, as more of them do;{' '}
-        {gp(STEPS[2].b.price)} at {STEPS[2].t} °F, when Bayport’s flexible industry starts cutting back too.
+        {gp(STEPS[2].b.price)} at {STEPS[2].t} °F, when Bayport’s flexible industry starts cutting back too. At {LNG_CUT_TEMP} °F it reaches {gp(AT_CUT.price)},
+        the value of LNG feed gas, and the terminal starts losing cargoes: {fmt(AT_CUT.lngCut * 1000)} MMcf/d of exports is cut so that the region’s own users keep
+        their gas. Each colder degree cuts LNG further; only from {fmt(INTERRUPTIBLE_TEMP)} °F would the price reach the $8 of interruptible industry, then the $15 at
+        which power plants burn oil, and finally rationing.
       </P>
 
       <Challenge
         id="a"
-        question={`On January 15, with Bayport’s LNG feed gas worth ${gp(LNG_VALUE)} and Ridgeback producing ${bcfd(RIDGEBACK_BASE, 1)}, how cold does the day have to get before the region starts cutting its LNG exports? Find the warmest whole degree at which it does.`}
+        question={`Suppose Ridgeback’s wells produced ${bcfd(RIDGEBACK_MORE, 1)} instead of ${bcfd(RIDGEBACK_BASE, 1)}. Predict first: with each degree colder adding about ${fmt(PER_DEGREE * 1000)} MMcf/d of demand, how much colder than ${LNG_CUT_TEMP} °F could January 15 get before the terminal loses cargoes? Then set Ridgeback to ${bcfd(RIDGEBACK_MORE, 1)} and find the warmest whole degree at which LNG exports are cut.`}
         solved={solved}
         status={status}
-        success={`Solved: ${LNG_CUT_TEMP} °F. The price rises to ${gp(AT_CUT.price)}, the value of LNG feed gas, and ${bcfd(AT_CUT.lngCut)} of exports is cut so that the region’s own users keep their gas. Every user with a cheaper way out has already taken it: power plants back on coal, flexible industry idle. Below this, each colder degree cuts LNG further; only far colder still would the price reach the $8 of interruptible industry, the $15 at which power plants burn oil, and finally rationing.`}
+        success={`Solved: ${fmt(LNG_CUT_TEMP_MORE)} °F, ${LNG_CUT_TEMP - LNG_CUT_TEMP_MORE} degrees colder. The extra ${fmt((RIDGEBACK_MORE - RIDGEBACK_BASE) * 1000)} MMcf/d meets ${fmt(CUT_SHIFT, 1)} degrees’ worth of extra demand (${fmt((RIDGEBACK_MORE - RIDGEBACK_BASE) * 1000)} ÷ ${fmt(PER_DEGREE * 1000, 1)}), and the cut at ${LNG_CUT_TEMP} °F had really begun at about ${fmt(CUT_ONSET, 1)} °F, so the first whole degree with a cut lands ${LNG_CUT_TEMP - LNG_CUT_TEMP_MORE} colder. Every other step of the climb moves by the same amount: more gas from the wells delays each user’s turn to give way, but doesn’t change the price at which it does.`}
       />
 
       <P>
         The order isn’t arbitrary. A rising price asks every user, in effect, what it would cost them to do without, and those with the cheapest alternatives —
         coal for a power plant, a paused process for a factory, a cargo that can be cancelled — give way first. Homes give way last, because their alternative is a
         cold house. Notice, too, what the price is doing when it jumps. It isn’t that gas suddenly costs more to produce: the wells’ costs haven’t changed. The
-        price is set by the value of the last use being cut off, so a little scarcity can move it a long way. Try raising Ridgeback’s production, or lowering
-        what LNG is worth, and watch the same cold day clear at a different price.
+        price is set by the value of the last use being cut off, so a little scarcity can move it a long way. Lower what LNG is worth and the terminal moves up the
+        queue: below $5 it gives way before Bayport’s flexible industry, and the cold day clears at a lower price.
       </P>
 
       <H2>The year, week by week</H2>
@@ -550,9 +596,11 @@ export default function Lesson() {
         means less gas left for the rest of the winter.
       </P>
       <P>
-        In the next demonstration, the region runs through a simulated gas year, day by day, with the weather of the year you choose. The upper chart shows what
-        each kind of user burned on average each week; the middle one, the week’s change in storage — the bars — against what the season’s plan expected for a
-        normal week; the lower one, the average price at Calder Hub against the plan’s. Drag across any chart to read a week:
+        In the next demonstration, the region runs through a simulated gas year, day by day, with the weather of the year you choose. This time the market
+        clears across the whole pipeline network of Chapter 3, so we quote its price at Calder Hub, the junction where most of the region’s gas is traded
+        (<a href={lessonHref('gas/4.2')}>Lesson 4.2</a> explains why). The upper chart shows what each kind of user burned on average each week; the middle one, the week’s
+        change in storage — the bars — against what the season’s plan expected for a normal week; the lower one, the average price at Calder Hub against the
+        plan’s. Drag across any chart to read a week:
       </P>
 
       <Figure name="Gas Balance Model · the year" scenario={y}>
@@ -639,7 +687,6 @@ export default function Lesson() {
           items={[
             { label: `week of ${gasDayLabel(wk.start)}`, value: signedBcf(wk.change), tone: 'gold' },
             { label: 'the plan expected', value: signedBcf(wk.planChange) },
-            { label: 'storage against plan', value: signedBcf(wk.inventory - wk.planInventory), tone: wk.inventory < wk.planInventory - 0.5 ? 'red' : 'ink' },
             { label: 'Calder Hub', value: gp(wk.price), tone: 'green' },
           ]}
         />
@@ -666,10 +713,10 @@ export default function Lesson() {
         consumption changes storage, and storage changes the price. That chain is why gas traders read weather forecasts as closely as any meteorologist.
       </P>
       <P>
-        Everything in this lesson treated the region as a single place. It isn’t: Metro is 240 miles of Northline away from Calder Hub, and Ridgeback’s gas has
-        only two pipelines out. In <FigRef to="Gas Balance Model">the first demonstration</FigRef> a cubic foot from Ridgeback could warm a house in Metro at no
-        cost. In <a href={lessonHref('gas/4.2')}>the next lesson</a> we put the pipelines back, and find that the region has not one price but several — and a
-        hub where most of the trading happens.
+        <FigRef to="Gas Balance Model">The first demonstration</FigRef> treated the region as a single place, where a cubic foot from Ridgeback could warm a
+        house in Metro at no cost. It isn’t one: Metro is 240 miles of Northline away from Calder Hub, and Ridgeback’s gas has only two pipelines out. In{' '}
+        <a href={lessonHref('gas/4.2')}>the next lesson</a> we put the pipelines back, and find that the region has not one price but several — and a hub where
+        most of the trading happens.
       </P>
     </LessonPage>
   );

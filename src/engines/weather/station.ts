@@ -1,4 +1,4 @@
-// A weather station's day, hour by hour, built around the archive's daily record for Calder Bay.
+// A weather station's day, hour by hour, built around the archive's daily record for Fenwick Bay.
 // The archive's daily temperature is the station's official daily mean, (max + min) / 2, as US
 // weather contracts define it; the hourly curve is shaped and shifted so it reproduces that
 // value exactly. Instrument problems — an unshielded sensor, a hot surface nearby, drift — are
@@ -63,7 +63,7 @@ function dailyPressure(d: number): number {
     let x = 0;
     for (let i = 0; i < n; i++) {
       x = 0.7 * x + Math.sqrt(1 - 0.49) * gaussian(r);
-      pressureCache[i] = 1016 + 6 * x - (a.rain.calder[i] > 0.05 ? 7 : 0);
+      pressureCache[i] = 1016 + 6 * x - (a.rain.fenwick[i] > 0.05 ? 7 : 0);
     }
   }
   const i = Math.max(0, Math.min(pressureCache.length - 1, d));
@@ -77,7 +77,7 @@ export function diurnalShape(h: number): number {
   return x <= 9 ? -Math.cos((Math.PI * x) / 9) : Math.cos((Math.PI * (x - 9)) / 15);
 }
 
-/** Sun height at Calder Bay's latitude on a day of the year, as a share of noon's on the summer solstice, 0–1. */
+/** Sun height at Fenwick Bay's latitude on a day of the year, as a share of noon's on the summer solstice, 0–1. */
 export function sunAt(doy: number, h: number): number {
   const decl = 23.44 * Math.sin((2 * Math.PI * (doy - 80)) / 365);
   const lat = 41;
@@ -88,7 +88,7 @@ export function sunAt(doy: number, h: number): number {
   return Math.max(0, sinElev / noonMax);
 }
 
-/** Sunrise and sunset at Calder Bay's 41° north, hours of local solar time. */
+/** Sunrise and sunset at Fenwick Bay's 41° north, hours of local solar time. */
 export function sunTimes(doy: number, lat = 41): { sunrise: number; sunset: number } {
   const r = Math.PI / 180;
   const decl = 23.44 * Math.sin((2 * Math.PI * (doy - 80)) / 365);
@@ -114,10 +114,10 @@ export function heatIslandWeight(h: number, doy: number): number {
 export function stationDay(d: number, faults: SensorFaults = {}): StationDay {
   const a = archive();
   const { doy } = dayInfo(d);
-  const official = tempF('calder', d);
-  const prev = tempF('calder', Math.max(0, d - 1));
-  const next = tempF('calder', Math.min(a.z.length - 1, d + 1));
-  const rain = a.rain.calder[d];
+  const official = tempF('fenwick', d);
+  const prev = tempF('fenwick', Math.max(0, d - 1));
+  const next = tempF('fenwick', Math.min(a.z.length - 1, d + 1));
+  const rain = a.rain.fenwick[d];
   const cloud = Math.min(1, rain > 0.05 ? 0.9 : 0.3 + 0.2 * Math.abs(a.z[d]) * 0.5);
   // A clear day swings ±9 °F around its mean, a cloudy one much less.
   const amp = 9 * (1 - 0.65 * cloud);

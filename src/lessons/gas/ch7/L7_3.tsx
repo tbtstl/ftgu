@@ -3,7 +3,6 @@ import {
   Button,
   Caption,
   Challenge,
-  Checkbox,
   DataTable,
   FigRef,
   Figure,
@@ -38,6 +37,7 @@ import { END_OF_WINTER } from '../../../model/gas/history';
 import { GAS_MONTHS, GAS_MONTH_DAYS, GAS_MONTH_NAMES, GAS_MONTH_START, GAS_YEAR_DAYS, gasDayLabel } from '../../../model/gas/weather';
 import { CORRIDORS, GAS_NODES } from '../../../model/gas/world';
 import { XYChart } from '../shared/XYChart';
+import { CapstoneSoFar } from '../shared/CapstoneUi';
 import { useGasCapstone } from '../shared/capstone';
 import { basis, bcf, gp, money } from '../shared/format';
 
@@ -131,6 +131,17 @@ export function forecastRound(s: GasSystem, winter: number, month: number, skill
     normalTemp: avg(fcDays.map((d) => y.weather.normal[d])),
     actTemp: avg(fcDays.map((d) => temps[d])),
   };
+}
+
+/**
+ * A round's breakaway days — Metro above Calder by more than Northline's trip, as `fullPipeDays`
+ * counts them — split into those inside the weather forecast's two weeks and those after.
+ */
+export function roundBreakaways(s: GasSystem, r: ForecastRound): { inside: number; after: number } {
+  const days = systemYear(s, r.seed).days.slice(r.day, r.day + GAS_MONTH_DAYS[r.month]);
+  const basisDays = days.map((d) => d.price.metro - d.price.calder);
+  const inside = fullPipeDays(basisDays.slice(0, ROUND_HORIZON));
+  return { inside, after: fullPipeDays(basisDays) - inside };
 }
 
 const tempCache = new Map<string, number[]>();
@@ -230,7 +241,7 @@ export function roundTally(s: GasSystem, skill: number): Tally {
 
 /** The first demonstration opens on January 1 of the first hidden winter, with Lesson 6.1's skill. */
 /** Your forecasts start at the market's (null) until you move them. */
-export const FORECAST_CHALLENGE_DEFAULTS = { winter: 0, month: 9, skill: 0.8, members: true, basis: null as number | null, calder: null as number | null, storage: null as number | null };
+export const FORECAST_CHALLENGE_DEFAULTS = { winter: 0, month: 9, skill: 0.8, basis: null as number | null, calder: null as number | null, storage: null as number | null };
 export type ChallengeState = typeof FORECAST_CHALLENGE_DEFAULTS;
 /** The second demonstration's defaults. */
 export const TALLY_DEFAULTS = { question: 'basis' as Question, skill: 0.8 };
@@ -253,26 +264,28 @@ const CHART_FROM = GAS_MONTH_START[6];
 const DAY_TICKS = GAS_MONTH_START.slice(6);
 const dayTick = (v: number) => GAS_MONTHS[GAS_MONTH_START.indexOf(v)] ?? '';
 const ACTUAL = '#333333';
-const NORMAL = '#8a8a8a';
-const WEATHER = GRAPHIC.teal;
 const MARKET = GRAPHIC.green;
 const ENSEMBLE = GRAPHIC.gold;
 const MEMBER = tint(GRAPHIC.gold, 0.45);
 const YOU = GRAPHIC.violet;
 const RESERVE = totalStorage(END_OF_WINTER);
-const WINTER_OPTIONS = CHALLENGE_SEEDS.map((_, i) => ({ value: String(i), label: `Winter ${i + 1}` }));
+const WINTER_OPTIONS = CHALLENGE_SEEDS.map((_, i) => ({ value: String(i), label: i === 0 ? 'Winter 1' : String(i + 1) }));
 const MONTH_OPTIONS = ROUND_MONTHS.map((m) => ({ value: String(m), label: `${GAS_MONTHS[m]} 1` }));
 const SHORT_LABEL: Record<Question, string> = { basis: 'Metro’s basis', calder: 'Calder', storage: 'Storage, Mar 31' };
 const QUESTION_LABEL: Record<Question, string> = { basis: 'Metro’s basis, the month ahead', calder: 'Calder, the month ahead', storage: 'Working gas, March 31' };
+/** The same, as it reads in a sentence. */
+const QUESTION_PHRASE: Record<Question, string> = { basis: 'Metro’s basis for the month ahead', calder: 'Calder for the month ahead', storage: 'working gas on March 31' };
 const fmtQ = (q: Question, v: number) => (q === 'storage' ? bcf(v) : q === 'basis' ? basis(v) : gp(v));
 /** A miss, unsigned. */
 const fmtMiss = (q: Question, v: number) => (q === 'storage' ? bcf(v) : gp(v));
 const WORDS = ['none', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen'];
 const word = (n: number) => WORDS[n] ?? fmt(n);
+const cap1 = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const keyOf = (w: number, m: number) => `${w}|${m}`;
 
 export default function Lesson() {
-  const { system } = useGasCapstone();
+  const capstone = useGasCapstone();
+  const system = capstone.system;
   const net = networkWords(system);
   const s = useScenario('forecast-challenge', FORECAST_CHALLENGE_DEFAULTS);
   const st = s.state;
@@ -309,15 +322,12 @@ export default function Lesson() {
   const n = GAS_MONTH_DAYS[st.month];
   const xs = Array.from({ length: GAS_YEAR_DAYS - CHART_FROM }, (_, i) => CHART_FROM + i + 0.5);
   const known = day - CHART_FROM;
-  const temps = y.weather.temp.slice(CHART_FROM);
-  const normals = xs.map((x) => y.weather.normal[Math.floor(x)]);
   const basisDays = y.days.slice(CHART_FROM).map((d) => d.price.metro - d.price.calder);
   const calderDays = y.days.slice(CHART_FROM).map((d) => d.price.calder);
   const monthXs = [day, day + n];
   const ensBasisDaily = Array.from({ length: n }, (_, i) => avg(f.members.map((m) => m.metroBasis[i])));
   const ensCalderDaily = Array.from({ length: n }, (_, i) => avg(f.members.map((m) => m.calder[i])));
   const aheadXs = Array.from({ length: n }, (_, i) => day + i + 0.5);
-  const fcXs = fcTemps.map((_, i) => day + i + 0.5);
   // The market's curve for the rest of the year, as steps.
   const curveXs: number[] = [];
   const curveYs: number[] = [];
@@ -357,6 +367,7 @@ export default function Lesson() {
   const coldest = winters.indexOf(Math.max(...winters));
   // The biggest miss of Metro's basis by the market, at the default skill.
   const bigBasis = tallyDefault.rounds.reduce((b, r) => (Math.abs(r.market.basis - r.actual.basis) > Math.abs(b.market.basis - b.actual.basis) ? r : b), tallyDefault.rounds[0]);
+  const bigSplit = roundBreakaways(system, bigBasis);
   const decembers = tallyDefault.rounds.filter((r) => r.month === 8);
   const decWins = decembers.filter((r) => Math.abs(r.ensemble.basis - r.actual.basis) < Math.abs(r.market.basis - r.actual.basis)).length;
   const sweeps = useMemo(() => ensembleSweeps(system, TALLY_DEFAULTS.skill), [system]);
@@ -369,12 +380,13 @@ export default function Lesson() {
 
   return (
     <LessonPage id="gas/7.3">
+      <CapstoneSoFar capstone={capstone} />
       <P>
         <a href={lessonHref('gas/7.2')}>The previous lesson</a> ran your network through eight practice winters, every day of them in view. A trader never
         sees a winter that way. It arrives a day at a time, and every decision is made on a morning when the rest of it is still hidden. This lesson hides the
         winter. On the first of December, January or February of one of six winters you haven’t seen, with only what is known that morning, you forecast where the
-        system will bind — whether the pipes into Metro will run full in the month ahead, what gas will cost at Calder, and how much will be left in storage at the
-        end of March — and then compare your forecasts with the market’s.
+        system will bind — whether the pipes into Metro will run full in the month ahead, which shows as Metro’s price rising more than Northline’s trip above
+        Calder’s; what gas will cost at Calder; and how much will be left in storage at the end of March — and then compare your forecasts with the market’s.
       </P>
       <P>
         The network running is {netLink}
@@ -389,42 +401,19 @@ export default function Lesson() {
         weather forecast whose skill you choose, and {ROUND_MEMBERS} imagined winters run through this network from the gas actually in storage that morning.
       </P>
       <P>
-        In the next demonstration, choose a winter and a forecast day. The upper chart is Metro’s <K tone="teal">temperature</K>, with the two-week forecast in teal;
-        the middle ones are Metro’s basis and Calder’s price, with the market’s forecasts for the rest of the year in green and the imagined winters’ average in
-        gold; the lower one is the gas in <K c="energy">storage</K>, with the operators’ plan and the imagined winters fanning out. Everything after the forecast day
-        stays hidden. Set your three forecasts — they start at the market’s — and press Reveal; a revealed round is locked:
+        In the next demonstration, choose a winter and a forecast day. The first two charts are Metro’s basis and Calder’s price, with the market’s forecasts in
+        green — for the month ahead on the basis, for the rest of the year at Calder — and the imagined winters, faint, with their average in gold; the third is the
+        gas in <K c="energy">storage</K>, with the operators’ plan and the imagined winters fanning out. A readout gives the two-week{' '}
+        <K tone="teal">weather forecast</K> against normal. Everything after the forecast day stays hidden. Set your three forecasts — they start at the market’s —
+        and press Reveal; a revealed round stays locked:
       </P>
 
-      <Figure
-        name="Gas Forecast Challenge"
-        scenario={s}
-        actions={
-          <Button onClick={() => setCommitted({})} disabled={!Object.keys(committed).length}>
-            Forget rounds
-          </Button>
-        }
-      >
-        <Segmented label="Winter" value={String(st.winter)} onChange={(v) => goTo(Number(v), st.month)} options={WINTER_OPTIONS} />
-        <Segmented label="Forecast day" value={String(st.month)} onChange={(v) => goTo(st.winter, Number(v))} options={MONTH_OPTIONS} />
-        <XYChart
-          xDomain={[CHART_FROM, GAS_YEAR_DAYS]}
-          yDomain={[-20, 80]}
-          xTicks={DAY_TICKS}
-          xFormat={dayTick}
-          yTicks={[-20, 0, 20, 40, 60, 80]}
-          yFormat={(v) => `${v}°`}
-          yLabel="Metro’s daily mean temperature, °F"
-          height={140}
-          bands={[{ from: day, to: day + fcTemps.length, color: 'rgba(42, 157, 144, 0.10)', label: 'forecast' }]}
-          series={[
-            { xs, ys: normals, color: NORMAL, width: 1.25, dash: '5 4' },
-            { xs: xs.slice(0, known), ys: temps.slice(0, known), color: ACTUAL, width: 1.5 },
-            ...(locked ? [{ xs: xs.slice(known), ys: temps.slice(known), color: ACTUAL, width: 1, dash: '3 3', opacity: 0.75 }] : []),
-            { xs: fcXs, ys: fcTemps, color: WEATHER, width: 3 },
-          ]}
-          vLines={[{ at: day, color: TEXT.teal, dash: '2 3', width: 1 }]}
-          ariaLabel={`Metro’s temperature in winter ${st.winter + 1} up to ${gasDayLabel(day)}. The next ${fcTemps.length} days are forecast at ${fmt(round.fcTemp, 1)} °F against a normal ${fmt(round.normalTemp, 1)} °F${locked ? `; they came in at ${fmt(round.actTemp, 1)} °F` : ''}.`}
-        />
+      <Figure name="Gas Forecast Challenge" scenario={s}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 40 }}>
+          <Segmented label="Winter" value={String(st.winter)} onChange={(v) => goTo(Number(v), st.month)} options={WINTER_OPTIONS} />
+          <Segmented label="Forecast day" value={String(st.month)} onChange={(v) => goTo(st.winter, Number(v))} options={MONTH_OPTIONS} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0 16px' }}>
         <XYChart
           xDomain={[CHART_FROM, GAS_YEAR_DAYS]}
           yDomain={[0, BASIS_TOP]}
@@ -433,11 +422,13 @@ export default function Lesson() {
           yTicks={[0, 1, 2, 3, 4]}
           yFormat={(v) => `$${v}`}
           yLabel="Metro’s basis to Calder, $/MMBtu"
-          height={150}
+          width={320}
+          left={40}
+          height={180}
           bands={[{ from: day, to: day + n, color: 'rgba(171, 112, 182, 0.08)', label: 'month ahead' }]}
           series={[
             { xs: xs.slice(0, known), ys: basisDays.slice(0, known), color: ACTUAL, width: 1.5 },
-            ...(st.members ? f.members.map((m) => ({ xs: aheadXs, ys: m.metroBasis.slice(0, n), color: MEMBER, width: 0.75 })) : []),
+            ...f.members.map((m) => ({ xs: aheadXs, ys: m.metroBasis.slice(0, n), color: MEMBER, width: 0.75 })),
             { xs: aheadXs, ys: ensBasisDaily, color: ENSEMBLE, width: 2 },
             { xs: monthXs, ys: [round.market.basis, round.market.basis], color: MARKET, width: 2.5, dash: '6 4' },
             { xs: monthXs, ys: [entry.basis, entry.basis], color: YOU, width: 3 },
@@ -459,9 +450,12 @@ export default function Lesson() {
           yTicks={[0, 2, 4, 6, 8, 10]}
           yFormat={(v) => `$${v}`}
           yLabel="Calder Hub, $/MMBtu"
-          height={140}
+          width={320}
+          left={40}
+          height={180}
           series={[
             { xs: xs.slice(0, known), ys: calderDays.slice(0, known), color: ACTUAL, width: 1.5 },
+            ...f.members.map((m) => ({ xs: aheadXs, ys: m.calder.slice(0, n), color: MEMBER, width: 0.75 })),
             { xs: curveXs, ys: curveYs, color: MARKET, width: 2, dash: '6 4' },
             { xs: aheadXs, ys: ensCalderDaily, color: ENSEMBLE, width: 2 },
             { xs: monthXs, ys: [entry.calder, entry.calder], color: YOU, width: 3 },
@@ -475,6 +469,7 @@ export default function Lesson() {
           vLines={[{ at: day, color: TEXT.teal, dash: '2 3', width: 1 }]}
           ariaLabel={`Calder’s price up to ${gasDayLabel(day)}. For the month ahead the futures price is ${gp(round.market.calder)}, the imagined winters average ${gp(round.ensemble.calder)}, and your forecast is ${gp(entry.calder)}${locked ? `; it averaged ${gp(round.actual.calder)}` : ''}.`}
         />
+        </div>
         <XYChart
           xDomain={[CHART_FROM, GAS_YEAR_DAYS]}
           yDomain={[0, 160]}
@@ -483,10 +478,10 @@ export default function Lesson() {
           yTicks={[0, 40, 80, 120, 160]}
           yFormat={(v) => fmt(v)}
           yLabel="Working gas in storage, Bcf"
-          height={170}
+          height={160}
           series={[
-            ...(st.members ? f.members.map((m) => ({ xs: sFutXs, ys: [round.storageNow, ...m.storage], color: MEMBER, width: 0.75 })) : []),
-            { xs: sPastXs, ys: sPast, color: ENSEMBLE, width: 2.5 },
+            ...f.members.map((m) => ({ xs: sFutXs, ys: [round.storageNow, ...m.storage], color: MEMBER, width: 0.75 })),
+            { xs: sPastXs, ys: sPast, color: ACTUAL, width: 1.5 },
             { xs: planXs, ys: planYs, color: MARKET, width: 2, dash: '6 4' },
             ...(locked ? [{ xs: sFutXs, ys: [round.storageNow, ...f.actual.storage], color: ACTUAL, width: 1.5, dash: '5 3' }] : []),
           ]}
@@ -504,7 +499,6 @@ export default function Lesson() {
         </XYChart>
         <Legend
           items={[
-            { label: 'weather forecast', color: WEATHER, kind: 'line' },
             { label: 'the market', color: MARKET, kind: 'line', dashed: true },
             { label: 'imagined winters’ average', color: ENSEMBLE, kind: 'line' },
             { label: 'your forecast', color: YOU, kind: 'line' },
@@ -513,7 +507,11 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: `next ${fcTemps.length} days, forecast (normal ${fmt(round.normalTemp, 1)} °F)`, value: `${fmt(round.fcTemp, 1)} °F`, tone: 'teal' },
+            {
+              label: `Metro, next ${fcTemps.length} days: forecast · normal${locked ? ' · came in' : ''}`,
+              value: `${fmt(round.fcTemp, 1)} · ${fmt(round.normalTemp, 1)}${locked ? ` · ${fmt(round.actTemp, 1)}` : ''} °F`,
+              tone: 'teal',
+            },
             { label: `in storage on ${gasDayLabel(day)}`, value: bcf(round.storageNow), tone: 'gold' },
             {
               label: `days Metro’s pipes run full in ${GAS_MONTH_NAMES[st.month]}: imagined${locked ? ' · happened' : ''}`,
@@ -521,39 +519,6 @@ export default function Lesson() {
               tone: 'orange',
             },
           ]}
-        />
-        <Slider
-          label={`Your forecast: ${QUESTION_LABEL.basis}`}
-          tone="green"
-          value={entry.basis}
-          min={0}
-          max={4}
-          step={ENTRY_STEPS.basis}
-          disabled={!!locked}
-          onChange={(v) => s.set({ basis: round2(snap(v, ENTRY_STEPS.basis)) })}
-          display={`${basis(entry.basis)} (market ${basis(mkt.basis)})`}
-        />
-        <Slider
-          label={`Your forecast: ${QUESTION_LABEL.calder}`}
-          tone="green"
-          value={entry.calder}
-          min={2}
-          max={10}
-          step={ENTRY_STEPS.calder}
-          disabled={!!locked}
-          onChange={(v) => s.set({ calder: round2(snap(v, ENTRY_STEPS.calder)) })}
-          display={`${gp(entry.calder)} (market ${gp(mkt.calder)})`}
-        />
-        <Slider
-          label={`Your forecast: ${QUESTION_LABEL.storage}`}
-          tone="gold"
-          value={entry.storage}
-          min={0}
-          max={90}
-          step={ENTRY_STEPS.storage}
-          disabled={!!locked}
-          onChange={(v) => s.set({ storage: snap(v, ENTRY_STEPS.storage) })}
-          display={`${bcf(entry.storage)} (plan ${bcf(mkt.storage)})`}
         />
         <Slider
           label="Weather forecast skill"
@@ -565,17 +530,9 @@ export default function Lesson() {
           onChange={(v) => s.set({ skill: round2(snap(v, SKILL_STEP)) })}
           display={st.skill === 0 ? 'none: normal weather' : `${fmt(st.skill, 1)} · ${fmt(forecastSkill(st.skill, 7), 2)} a week out`}
         />
-        <Checkbox label="Show the imagined winters" checked={st.members} onChange={(v) => s.set({ members: v })} />
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0' }}>
-          <Button primary onClick={() => setCommitted((c) => ({ ...c, [key]: { ...entry } }))} disabled={!!locked}>
-            {locked ? 'Revealed' : 'Reveal'}
-          </Button>
-          <span style={{ fontSize: 13, color: TEXT.gray }}>
-            {locked ? `Locked: Winter ${st.winter + 1}, ${GAS_MONTH_NAMES[st.month]} 1. Choose another round to play on.` : 'Your forecasts are committed when you press Reveal.'}
-          </span>
-        </div>
-        {locked && score && (
+        {locked && score ? (
           <DataTable
+            caption={`Winter ${st.winter + 1}, ${GAS_MONTH_NAMES[st.month]} 1: you came closer than the market on ${score.beaten === 0 ? 'none' : word(score.beaten)} of the three forecasts${score.beaten ? ' (highlighted)' : ''}.${clipped ? ` Metro’s basis went off the chart’s top at ${basis(Math.max(...basisDays.slice(known, known + n)))}.` : ''} The winter turned out ${fmt(Math.abs(winterColder(y.weather)))} heating degree days ${winterColder(y.weather) >= 0 ? 'colder' : 'warmer'} than normal.`}
             columns={[
               { label: 'Forecast', cell: (r: Question) => SHORT_LABEL[r] },
               { label: 'You', cell: (r: Question) => fmtQ(r, locked[r]), align: 'right' },
@@ -587,12 +544,54 @@ export default function Lesson() {
             rowKey={(r) => r}
             rowClass={(r) => (score.beat[r] ? 'hl' : '')}
           />
+        ) : (
+          <>
+            <Slider
+              label={`Your forecast: ${QUESTION_LABEL.basis}`}
+              tone="green"
+              value={entry.basis}
+              min={0}
+              max={4}
+              step={ENTRY_STEPS.basis}
+              onChange={(v) => s.set({ basis: round2(snap(v, ENTRY_STEPS.basis)) })}
+              display={`${basis(entry.basis)} (market ${basis(mkt.basis)})`}
+            />
+            <Slider
+              label={`Your forecast: ${QUESTION_LABEL.calder}`}
+              tone="green"
+              value={entry.calder}
+              min={2}
+              max={10}
+              step={ENTRY_STEPS.calder}
+              onChange={(v) => s.set({ calder: round2(snap(v, ENTRY_STEPS.calder)) })}
+              display={`${gp(entry.calder)} (market ${gp(mkt.calder)})`}
+            />
+            <Slider
+              label={`Your forecast: ${QUESTION_LABEL.storage}`}
+              tone="gold"
+              value={entry.storage}
+              min={0}
+              max={90}
+              step={ENTRY_STEPS.storage}
+              onChange={(v) => s.set({ storage: snap(v, ENTRY_STEPS.storage) })}
+              display={`${bcf(entry.storage)} (plan ${bcf(mkt.storage)})`}
+            />
+          </>
         )}
-        <Caption>
-          {locked
-            ? `Winter ${st.winter + 1}, ${GAS_MONTH_NAMES[st.month]} 1: you came closer than the market on ${score!.beaten === 0 ? 'none' : word(score!.beaten)} of the three forecasts${score!.beaten ? ' (highlighted)' : ''}.${clipped ? ` Metro’s basis went off the chart’s top at ${basis(Math.max(...basisDays.slice(known, known + n)))}.` : ''} The winter turned out ${fmt(Math.abs(winterColder(y.weather)))} degree days ${winterColder(y.weather) >= 0 ? 'colder' : 'warmer'} than normal.`
-            : `Winter ${st.winter + 1}, ${GAS_MONTH_NAMES[st.month]} 1, with ${fmt(round.storageNow, 1)} Bcf in storage. The market quotes ${basis(round.market.basis)} for Metro’s basis and ${gp(round.market.calder)} at Calder for ${GAS_MONTH_NAMES[st.month]}, and its operators plan to end March with ${fmt(round.market.storage, 1)} Bcf; the imagined winters average ${basis(round.ensemble.basis)}, ${gp(round.ensemble.calder)} and ${fmt(round.ensemble.storage, 1)} Bcf.`}
-        </Caption>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0' }}>
+          <Button primary onClick={() => setCommitted((c) => ({ ...c, [key]: { ...entry } }))} disabled={!!locked}>
+            {locked ? 'Revealed' : 'Reveal'}
+          </Button>
+          <span style={{ fontSize: 13, color: TEXT.gray }}>
+            {locked ? `Locked: Winter ${st.winter + 1}, ${GAS_MONTH_NAMES[st.month]} 1. Choose another round to play on.` : 'Your forecasts are committed when you press Reveal; a revealed round can’t be played again.'}
+          </span>
+        </div>
+        {!locked && (
+          <Caption>
+            The imagined winters average {basis(round.ensemble.basis)} for Metro’s basis and {gp(round.ensemble.calder)} at Calder in {GAS_MONTH_NAMES[st.month]}, and{' '}
+            {fmt(round.ensemble.storage, 1)} Bcf on March 31.
+          </Caption>
+        )}
       </Figure>
 
       <P>
@@ -608,8 +607,8 @@ export default function Lesson() {
         Read each forecast for what it is. Metro’s basis sits at the cost of the trip on most days and leaves it only when the pipes into the city are full, so its
         average for a month is the trip plus a few days of breakaway, if any (<a href={lessonHref('gas/4.2')}>Lesson 4.2</a>). A forecast of the basis is a forecast of
         those days. Calder’s month moves with the weather the two-week forecast can partly see and the weather after it, which no one can. And the end of March is
-        five months of weather away from December, a long way from February (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>): the imagined winters’ range
-        is your honest answer there, and their average is only its middle.
+        four months of weather away from December 1 and two from February 1, most of it beyond any forecast (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>):
+        the imagined winters’ range is your honest answer there, and their average is only its middle.
       </P>
 
       <Challenge
@@ -627,7 +626,7 @@ export default function Lesson() {
         applied the same way to every round, scored on all of them. In the next demonstration the rule is to forecast the imagined winters’ average every time, on
         all {word(CHALLENGE_SEEDS.length * ROUND_MONTHS.length)} rounds of the six hidden winters; it gives the game away, so play a few rounds first. Each pair of
         dots is one round: how far the market’s forecast missed, in green, and how far the imagined winters missed, in gold. The rounds are grouped by winter,
-        December to February, with each winter’s degree days colder (+) or warmer (−) than normal over it. Choose the forecast and the weather forecast’s skill:
+        December to February, with each winter’s heating degree days colder (+) or warmer (−) than normal over it. Choose the forecast and the weather forecast’s skill:
       </P>
 
       <Figure name="Gas Forecast Challenge · every round" scenario={tz}>
@@ -649,7 +648,7 @@ export default function Lesson() {
             { xs: tXs, ys: mMiss, color: MARKET, kind: 'points', r: 4.5 },
             { xs: tXs, ys: eMiss, color: ENSEMBLE, kind: 'points', r: 4.5 },
           ]}
-          ariaLabel={`How far each forecast missed, for ${QUESTION_LABEL[q].toLowerCase()}, in the ${tally.rounds.length} rounds of the six hidden winters. The imagined winters came closer than the market in ${tally.wins[q]} of them; on average the market missed by ${fmtMiss(q, tally.marketMiss[q])} and the imagined winters by ${fmtMiss(q, tally.ensembleMiss[q])}.`}
+          ariaLabel={`How far each forecast missed, for ${QUESTION_PHRASE[q]}, in the ${tally.rounds.length} rounds of the six hidden winters. The imagined winters came closer than the market in ${tally.wins[q]} of them; on average the market missed by ${fmtMiss(q, tally.marketMiss[q])} and the imagined winters by ${fmtMiss(q, tally.ensembleMiss[q])}.`}
         >
           {(x, yy) => (
             <g>
@@ -688,8 +687,7 @@ export default function Lesson() {
           display={ts.skill === 0 ? 'none: normal weather' : fmt(ts.skill, 1)}
         />
         <Caption>
-          With skill {fmt(ts.skill, 1)}, the imagined winters came closer than the market on {QUESTION_LABEL[q].toLowerCase()} in {tally.wins[q]} of the{' '}
-          {tally.rounds.length} rounds; without a weather forecast, in {tally0.wins[q]}.
+          Without a weather forecast, the imagined winters came closer than the market on {QUESTION_PHRASE[q]} in {tally0.wins[q]} of the {tally.rounds.length} rounds.
         </Caption>
       </Figure>
 
@@ -712,9 +710,29 @@ export default function Lesson() {
         {bigBasis.actual.basis > bigBasis.market.basis ? (
           <>
             But the month that mattered most, neither saw coming. In {GAS_MONTH_NAMES[bigBasis.month]} of Winter {bigBasis.winter + 1}, Metro’s basis averaged{' '}
-            {basis(bigBasis.actual.basis)}, against {basis(bigBasis.market.basis)} from the market and {basis(bigBasis.ensemble.basis)} from the imagined winters:
-            the cold that filled the pipes arrived after the weather forecast ran out. The constraint a trader most wants to forecast is the one that binds beyond
-            the forecast’s reach.
+            {basis(bigBasis.actual.basis)}, against {basis(bigBasis.market.basis)} from the market and {basis(bigBasis.ensemble.basis)} from the imagined
+            winters.{' '}
+            {bigSplit.inside > 0 ? (
+              <>
+                {cap1(word(bigSplit.inside))} of its {word(bigSplit.inside + bigSplit.after)} breakaway days fell inside the two-week weather forecast, which
+                expected {fmt(bigBasis.fcTemp, 1)} °F against a normal {fmt(bigBasis.normalTemp, 1)} °F; the two weeks came in at {fmt(bigBasis.actTemp, 1)} °F.{' '}
+                {bigBasis.actTemp < bigBasis.fcTemp - 0.5 ? (
+                  <>
+                    {bigBasis.fcTemp < bigBasis.normalTemp - 0.5
+                      ? `The forecast leaned cold, but ${bigBasis.normalTemp - bigBasis.fcTemp < 0.5 * (bigBasis.normalTemp - bigBasis.actTemp) ? 'not nearly ' : 'not '}cold enough.`
+                      : 'The forecast didn’t lean cold at all.'}{' '}
+                    A forecast’s skill fades inside its window — at skill {fmt(TALLY_DEFAULTS.skill, 1)}, to {fmt(forecastSkill(TALLY_DEFAULTS.skill, 7), 2)} a
+                    week out — so it can see a cold spell coming without seeing how deep it will go.
+                  </>
+                ) : (
+                  'The forecast had those two weeks about right, and the pipes filled anyway.'
+                )}{' '}
+                {bigSplit.after > 0 ? `The other ${word(bigSplit.after)} came after it ran out. ` : ''}
+              </>
+            ) : (
+              `All ${word(bigSplit.after)} of its breakaway days came after the two-week weather forecast ran out. `
+            )}
+            The constraint a trader most wants to forecast is the one that binds where the forecast is weakest.
           </>
         ) : (
           <>
@@ -730,8 +748,8 @@ export default function Lesson() {
         {sweeps.every((r) => r.winter !== coldest) ? `, none of them in Winter ${coldest + 1}, the coldest` : ''}. That is what forecasting constraints amounts to:
         an edge on average, made of many small wins in calm months and a few large misses in the months when the system binds hardest. A forecast like that can’t be
         traded as if it were certain. It has to be traded so that the misses can be survived — with storage hedged, with firm capacity held as insurance against
-        the breakaways, and with the forecast standing guard over any basis sold, a guard that{' '}
-        <FigRef to="Gas Forecast Challenge">the first demonstration</FigRef> showed can see two weeks and no further. Putting those positions together on your
+        the breakaways, and with the forecast standing guard over any basis sold, a guard whose sight, as{' '}
+        <FigRef to="Gas Forecast Challenge">the first demonstration</FigRef> showed, fades within its two weeks. Putting those positions together on your
         network is the work of <a href={lessonHref('gas/7.4')}>the next lesson</a>.
       </P>
     </LessonPage>

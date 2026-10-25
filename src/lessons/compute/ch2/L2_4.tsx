@@ -96,7 +96,7 @@ export function runMem(s: MemState): CachedResult & { codeIntensity: number; flo
 }
 
 let smallestCache: number | null = null;
-/** The smallest batch at which matrix × vectors, read once at the A-class's own bandwidth, stops waiting on memory. */
+/** The smallest batch at which matrix × vectors, read once at the A-class's own bandwidth, stops waiting on memory (Lesson 2.3's 319). */
 export function smallestComputeBatch(): number {
   if (smallestCache !== null) return smallestCache;
   for (let b = 1; b <= 1024; b++) {
@@ -107,17 +107,58 @@ export function smallestComputeBatch(): number {
 
 const atOwnBandwidth = (bw: number) => Math.abs(bw - A.bandwidthTBs) < 1e-9;
 
-/** Challenge a: that smallest batch, in one pass, at 3.35 TB/s. */
-export function batchSolved(s: MemState): boolean {
-  return s.kernel === 'gemv' && s.passes === 1 && atOwnBandwidth(s.bw) && s.batch === smallestComputeBatch();
+/** The HBM bandwidth slider, TB/s. */
+export const BW = { min: 0.5, max: 10, step: 0.05 };
+/** Challenge a's batch of vectors. */
+export const BW_BATCH = 128;
+
+/** The lowest bandwidth on the slider at which matrix × `batch` vectors, read once, is compute-bound (Infinity if none). */
+export function lowestComputeBandwidth(batch = BW_BATCH): number {
+  const steps = Math.round((BW.max - BW.min) / BW.step);
+  for (let k = 0; k <= steps; k++) {
+    const bw = Math.round((BW.min + k * BW.step) * 100) / 100;
+    if (runMem({ ...MEM_DEFAULTS, kernel: 'gemv', batch, passes: 1, bw }).bound === 'compute') return bw;
+  }
+  return Infinity;
 }
 
-/** Challenge b's target, TFLOPS: about twice what normalization's 1 FLOP per byte allows from HBM. */
-export const NORM_TARGET = 6;
+/** Challenge a: matrix × 128 vectors, read once, at the lowest HBM bandwidth that keeps the arithmetic busy. */
+export function bandwidthSolved(s: MemState): boolean {
+  return s.kernel === 'gemv' && s.passes === 1 && s.batch === BW_BATCH && Math.abs(s.bw - lowestComputeBandwidth()) < 1e-6;
+}
 
-/** Challenge b: the normalization kernel at 6 TFLOPS or more, without changing the bandwidth. */
+/** Challenge b's target, TFLOPS: nearly twice what normalization's 1 FLOP per byte allows from HBM. */
+export const NORM_TARGET = 6;
+/** Challenge b reads its data twice. */
+export const CACHE_PASSES = 2;
+/** The working-set slider: log10 of the working set in MB. */
+export const WS = { min: 0, max: WS_MAX_LOG, step: 0.01 };
+
+/**
+ * The largest working set, MB, at which normalization in `passes` passes reaches `target` TFLOPS at the A-class's own
+ * bandwidth, by cachedKernel's L2 logic: past the cache's size the repeat passes still find the cache's worth of data
+ * there, so HBM carries W + (P − 1)(W − C) bytes for P × W FLOPs, and P·W·bw ≥ target × that while W ≤ target(P − 1)C / (P(target − bw)).
+ */
+export function cacheLimitMB(passes = CACHE_PASSES, target = NORM_TARGET): number {
+  return (target * (passes - 1) * A.l2MB) / (passes * (target - A.bandwidthTBs));
+}
+
+let largestWsCache: number | null = null;
+/** The largest working set on the slider (log10 MB) at which normalization read twice reaches 6 TFLOPS at the A-class's own bandwidth. */
+export function largestCachedWorkingSet(): number {
+  if (largestWsCache !== null) return largestWsCache;
+  const steps = Math.floor((WS.max - WS.min) / WS.step + 1e-9);
+  let best = -Infinity;
+  for (let k = 0; k <= steps; k++) {
+    const wsLog = Math.round((WS.min + k * WS.step) * 100) / 100;
+    if (runMem({ ...MEM_DEFAULTS, kernel: 'norm', passes: CACHE_PASSES, wsLog }).tflops >= NORM_TARGET - 1e-9) best = wsLog;
+  }
+  return (largestWsCache = best);
+}
+
+/** Challenge b: normalization read twice at the A-class's own bandwidth, with the largest working set on the slider that still reaches 6 TFLOPS. */
 export function cacheSolved(s: MemState): boolean {
-  return s.kernel === 'norm' && atOwnBandwidth(s.bw) && runMem(s).tflops >= NORM_TARGET - 1e-9;
+  return s.kernel === 'norm' && atOwnBandwidth(s.bw) && s.passes === CACHE_PASSES && Math.abs(s.wsLog - largestCachedWorkingSet()) < 1e-6;
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +425,8 @@ export default function Lesson() {
   const st = s1.state;
   const r = runMem(st);
   const smallest = useMemo(() => smallestComputeBatch(), []);
-  const solvedA = batchSolved(st);
+  const lowestBw = useMemo(() => lowestComputeBandwidth(), []);
+  const solvedA = bandwidthSolved(st);
   const solvedB = cacheSolved(st);
   const ridge = A.bf16Tflops / st.bw;
 
@@ -419,48 +461,57 @@ export default function Lesson() {
   let caption: string;
   if (r.bound === 'compute') caption = `${KERNEL_NAME[st.kernel]} does enough arithmetic per byte to keep all ${fmt(A.bf16Tflops)} TFLOPS busy: memory waits on the arithmetic.`;
   else if (r.bound === 'memory')
-    caption = `${KERNEL_NAME[st.kernel]} gets ${fmt(r.intensity, r.intensity < 10 ? 2 : 1)} FLOPs from each byte of HBM traffic, below the ridge at ${fmt(ridge)}: the arithmetic waits on HBM and reaches ${pct(r.tflops / A.bf16Tflops, r.tflops / A.bf16Tflops < 0.01 ? 2 : 0)} of its peak.`;
+    caption = `${KERNEL_NAME[st.kernel]} sits left of the ridge at ${fmt(ridge)} FLOPs per byte: the arithmetic waits on HBM.`;
   else caption = `The L2 cache serves ${pct(r.hitRate)} of the repeat reads, so HBM is no longer the bottleneck — but the cache has a speed limit of its own, ${A.l2TBs} TB/s.`;
+
+  const i128 = batchIntensity(BW_BATCH);
 
   let statusA: string;
   if (st.kernel !== 'gemv') statusA = 'Choose matrix × vectors.';
   else if (st.passes !== 1) statusA = 'Read the matrix once: set passes to 1.';
-  else if (!atOwnBandwidth(st.bw)) statusA = `Put the bandwidth back to the A-class’s own ${A.bandwidthTBs} TB/s.`;
-  else if (r.bound !== 'compute') statusA = `At a batch of ${st.batch}, the kernel does ${fmt(r.intensity, 1)} FLOPs per byte, below the ridge at ${fmt(ridge)}: still waiting on memory.`;
-  else statusA = `A batch of ${st.batch} keeps the arithmetic busy. Is it the smallest that does?`;
+  else if (st.batch !== BW_BATCH) statusA = `Set the batch to ${BW_BATCH} (it’s ${fmt(st.batch)}); the arrow keys move the slider one vector at a time.`;
+  else if (r.bound !== 'compute')
+    statusA = `At ${fmt(st.bw, 2)} TB/s the layer’s ${fmt(r.intensity, 1)} FLOPs per byte fall short of the ridge at ${fmt(ridge)}: it still waits on memory, at ${tf(r.tflops)} TFLOPS.`;
+  else statusA = `At ${fmt(st.bw, 2)} TB/s the arithmetic sets the pace. Is that the lowest bandwidth that does it?`;
 
   let statusB: string;
   if (st.kernel !== 'norm') statusB = 'Choose the normalization kernel.';
-  else if (!atOwnBandwidth(st.bw)) statusB = `Leave the bandwidth at the A-class’s own ${A.bandwidthTBs} TB/s.`;
-  else statusB = `Right now normalization reaches ${tf(r.tflops)} TFLOPS${st.passes === 1 ? ', reading its data once' : ` over ${st.passes} passes, with ${pct(r.hitRate)} of repeat reads hitting the L2`}.`;
+  else if (!atOwnBandwidth(st.bw)) statusB = `Set the bandwidth back to the A-class’s own ${A.bandwidthTBs} TB/s.`;
+  else if (st.passes !== CACHE_PASSES) statusB = `Read the data in two passes (now it’s ${st.passes === 1 ? 'read once' : `read in ${st.passes}`}).`;
+  else if (r.tflops >= NORM_TARGET - 1e-9)
+    statusB = `Two passes over ${bytesLabel(r.ws)} reach ${tf(r.tflops)} TFLOPS, with ${pct(r.hitRate)} of the repeat reads hitting the L2. Can the working set be larger? The arrow keys move it about 2% at a time.`;
+  else statusB = `Two passes over ${bytesLabel(r.ws)} reach only ${tf(r.tflops)} TFLOPS, with ${pct(r.hitRate)} of the repeat reads hitting the L2.`;
 
   const compareRows = (['add', 'norm', 'gemv', 'gemm'] as CompareKernel[]).map((k) => ({ k, i: kernelIntensity(k, k === 'gemv' ? s2.state.batch : 1) }));
+  const limitMB = cacheLimitMB();
 
   return (
     <LessonPage id="compute/2.4">
       <P>
-        At the end of <a href={lessonHref('compute/2.3')}>the previous lesson</a>, one 8,192 × 8,192 layer of the 70B model took {fmt(layer1.totalS * 1e6, 1)} µs
-        to apply to a single vector and {fmt(layer256.totalS * 1e6, 1)} µs to apply to 256 of them. The extra arithmetic was almost free, because the arithmetic was
-        never what took the time. Every one of the matrix’s {fmt(LAYER_BYTES / 1e6)} MB of weights had to come in from memory, and at {A.bandwidthTBs} TB/s that
-        takes {fmt(layer1.totalS * 1e6, 1)} µs, however little is done with them.
+        <a href={lessonHref('compute/2.3')}>Lesson 2.3</a> timed each of its multiplications against two limits: how long the arithmetic takes at the chip’s
+        peak rate, and how long the bytes take to arrive from memory. The longer of the two sets the pace, and the multiplication’s arithmetic intensity, FLOPs per
+        byte moved, decides which one that is. One 8,192 × 8,192 layer of the 70B model took {fmt(layer1.totalS * 1e6, 1)} µs to apply to a single vector and{' '}
+        {fmt(layer256.totalS * 1e6, 1)} µs to apply to 256: every one of its {fmt(LAYER_BYTES / 1e6)} MB of weights had to come in from memory at{' '}
+        {A.bandwidthTBs} TB/s, and the extra arithmetic hid inside that time.
       </P>
       <P>
-        So a GPU’s speed depends on two rates, not one: how fast it can do arithmetic, and how fast it can be fed. This lesson is about the second. We’ll look at the
-        layers of memory a GPU keeps its data in, and at a simple model — the roofline — that says, for any piece of work, which of the two rates sets its pace.
+        So a GPU’s speed depends on two rates, not one: how fast it can do arithmetic, and how fast it can be fed. This lesson is about the second. We’ll draw
+        Lesson 2.3’s two limits on one chart, then look at where a GPU keeps its data, what more bandwidth buys, and how a cache can stand in for it.
       </P>
       <P>
-        Lesson 1.4 found the basic trade: SRAM is fast but takes six transistors a bit, while DRAM packs a bit into one transistor and a capacitor but is slower to
-        reach. A GPU uses both, in a hierarchy. Closest to the arithmetic are each SM’s <K tone="violet">registers</K>, {fmt(REG_KB)} KB of them, and its{' '}
-        <K tone="violet">shared memory</K>, {SM_LIMITS.sharedKB} KB, where Lesson 2.3’s tiles lived. All 132 SMs share the <K tone="violet">L2 cache</K>:{' '}
+        <a href={lessonHref('compute/1.4')}>Lesson 1.4</a> found the basic trade: SRAM is fast but takes six transistors a bit, while DRAM packs a bit into one
+        transistor and a capacitor but is slower to reach. A GPU uses both, in a hierarchy. Closest to the arithmetic are each SM’s{' '}
+        <K tone="violet">registers</K>, {fmt(REG_KB)} KB of them, and its <K tone="violet">shared memory</K>, {SM_LIMITS.sharedKB} KB, where{' '}
+        <a href={lessonHref('compute/2.3')}>Lesson 2.3</a>’s tiles lived. All 132 SMs share the <K tone="violet">L2 cache</K>:{' '}
         {A.l2MB} MB of SRAM that delivers roughly {A.l2TBs} TB/s. Then comes the <K tone="violet">HBM</K>, the {A.memoryGB} GB of stacked DRAM beside the chip,
         at {A.bandwidthTBs} TB/s. Beyond that is the host computer’s own memory, reached over the PCIe link at about {GPU.copyGBs} GB/s. Each level is larger
         than the one before and slower to reach.
       </P>
       <P>
-        Whatever is computed, the data must eventually come up from HBM. If a piece of work — a <b>kernel</b>, in the language of Lesson 2.2 — needs F floating-point
-        operations and moves B bytes to and from HBM, then it can finish no sooner than F divided by the peak arithmetic rate, and no sooner than B divided by the
-        bandwidth. Which of these is longer depends on the ratio F/B, the kernel’s <K tone="orange">arithmetic intensity</K>: how many FLOPs it gets from each byte
-        it moves. The best a kernel can do is whichever limit is lower:
+        Whatever is computed, the data must eventually come up from HBM. Take a piece of work — a kernel, in the language of{' '}
+        <a href={lessonHref('compute/2.2')}>Lesson 2.2</a> — that needs F floating-point operations and moves B bytes to and from HBM. Lesson 2.3’s two limits say
+        it can finish no sooner than F divided by the peak arithmetic rate, and no sooner than B divided by the bandwidth. Divide its F operations by the longer of
+        those two times, and the rate it attains is the lesser of two rates, the second set by its intensity F/B:
       </P>
       <Eq label="Attainable throughput is the lesser of peak arithmetic and bandwidth times intensity">
         <K tone="orange">attainable</K>
@@ -475,9 +526,10 @@ export default function Lesson() {
         <span>intensity)</span>
       </Eq>
       <P>
-        Plotted on logarithmic axes, the two limits form a roofline: a slope where memory limits the work, and a flat roof where the arithmetic does. They meet at
-        the <b>ridge point</b>, peak divided by bandwidth: {fmt(A.bf16Tflops)} TFLOPS ÷ {A.bandwidthTBs} TB/s ≈ {fmt(ridgePoint(A))} FLOPs per byte for the
-        A-class. Below it, a kernel waits on memory; above it, memory waits on the arithmetic.
+        Draw that on logarithmic axes, intensity across and TFLOPS up, and it takes the shape that gives this picture its name, the <b>roofline</b>: a slope
+        where bandwidth limits the work, rising one decade for every decade of intensity, and a flat roof where the arithmetic does. The corner sits at Lesson
+        2.3’s ridge point, peak divided by bandwidth: {fmt(ridgePoint(A))} FLOPs per byte for the A-class. A kernel left of it sits on the slope, and its height
+        there shows at a glance how much of the chip’s arithmetic it can use.
       </P>
       <P>
         In the next demonstration, choose a kernel and watch where it lands on the A-class’s roofline. The strip shows the memory hierarchy, with HBM’s bandwidth
@@ -499,15 +551,13 @@ export default function Lesson() {
             { label: 'HBM roof', color: GRAPHIC.violet, kind: 'line' },
             { label: 'L2 roof', color: GRAPHIC.violet, kind: 'line', dashed: true },
             { label: 'arithmetic roof', color: GRAPHIC.orange, kind: 'line' },
-            { label: 'kernel, by its HBM traffic (ring: by its L2 traffic)', color: r.bound === 'compute' ? GRAPHIC.orange : GRAPHIC.violet },
+            { label: 'kernel: dot by HBM, ring by L2 traffic', color: r.bound === 'compute' ? GRAPHIC.orange : GRAPHIC.violet },
           ]}
         />
         <Readouts
           items={[
-            { label: 'achieved', value: `${tf(r.tflops)} TFLOPS`, tone: 'orange' },
-            { label: 'share of peak', value: pct(r.tflops / A.bf16Tflops, r.tflops / A.bf16Tflops < 0.01 ? 2 : 0) },
-            { label: 'limited by', value: BOUND_LABEL[r.bound], tone: r.bound === 'compute' ? 'orange' : 'violet' },
             { label: 'FLOPs per byte from HBM', value: fmt(r.intensity, r.intensity < 10 ? 2 : 0), tone: 'violet' },
+            { label: 'share of peak', value: pct(r.tflops / A.bf16Tflops, r.tflops / A.bf16Tflops < 0.01 ? 2 : 0), tone: 'orange' },
           ]}
         />
         <Slider
@@ -524,44 +574,54 @@ export default function Lesson() {
           label="Working set"
           tone="violet"
           value={st.wsLog}
-          min={0}
-          max={WS_MAX_LOG}
-          step={0.01}
-          onChange={(v) => s1.set({ wsLog: v })}
+          min={WS.min}
+          max={WS.max}
+          step={WS.step}
+          onChange={(v) => s1.set({ wsLog: Math.round(v * 100) / 100 })}
           display={bytesLabel(r.ws)}
         />
         <Slider label="Passes over it" value={st.passes} min={1} max={32} onChange={(v) => s1.set({ passes: v })} display={st.passes === 1 ? 'read once' : `${st.passes} passes`} />
-        <Slider label="HBM bandwidth" tone="violet" value={st.bw} min={0.5} max={10} step={0.05} onChange={(v) => s1.set({ bw: v })} display={`${fmt(st.bw, 2)} TB/s`} />
+        <Slider
+          label="HBM bandwidth"
+          tone="violet"
+          value={st.bw}
+          min={BW.min}
+          max={BW.max}
+          step={BW.step}
+          onChange={(v) => s1.set({ bw: Math.round(v * 100) / 100 })}
+          display={`${fmt(st.bw, 2)} TB/s`}
+        />
         <Caption>{caption}</Caption>
       </Figure>
 
       <P>
         The simplest kernels sit far down the slope. An <b>elementwise add</b> reads two numbers and writes one — six bytes in BF16 — for a single addition, so it
         gets {fmt(1 / 6, 2)} FLOPs per byte and reaches {tf(addRun.tflops)} TFLOPS: {pct(addRun.tflops / A.bf16Tflops, 2)} of what the arithmetic could do.{' '}
-        <b>Normalization</b>, which rescales each vector of activations, does about one FLOP per byte and reaches {tf(normRun.tflops)} TFLOPS. Applying a layer to a
-        single vector is no better: each 2-byte weight is used for one multiply and one add, so it too reaches {tf(gemv1.tflops)} TFLOPS. That is the position of a
-        language model producing text for one user, as Chapter 3 will show, and it uses about a third of one percent of the chip.
+        <b>Normalization</b> rescales each vector of activations — the numbers one layer of a model hands to the next, like the vectors in Lesson 2.3’s batch —
+        and does about one FLOP per byte, reaching {tf(normRun.tflops)} TFLOPS. Applying a layer to a single vector is no better: each 2-byte weight is used for
+        one multiply and one add, so it too reaches {tf(gemv1.tflops)} TFLOPS. That is the position of a language model producing text for one user, as Chapter 3
+        will show, and it uses about a third of one percent of the chip.
       </P>
       <P>
-        Raise the batch and the dot climbs the slope. At 64 vectors the layer gets {fmt(gemv64.intensity)} FLOPs per byte and reaches {tf(gemv64.tflops)} TFLOPS. A
-        large matrix multiply, with each matrix read once, gets {fmt(D / 3)} FLOPs per byte, far past the ridge, and runs at the full {tf(gemmRun.tflops)} TFLOPS.
-        Now move the bandwidth. Every kernel on the slope speeds up in proportion — at twice the A-class’s bandwidth, the single-vector layer reaches{' '}
+        Raise the batch and the dot climbs the slope: at 64 vectors the layer gets {fmt(gemv64.intensity)} FLOPs per byte and {tf(gemv64.tflops)} TFLOPS, and
+        at the {smallest} vectors Lesson 2.3 found, it meets the roof. A large matrix multiply, with each matrix read once, gets {fmt(D / 3)} FLOPs per byte, far
+        past the ridge, and runs at the full {tf(gemmRun.tflops)} TFLOPS. Now move the bandwidth. Every kernel on the slope speeds up in proportion — at twice the A-class’s bandwidth, the single-vector layer reaches{' '}
         {tf(doubled.tflops)} TFLOPS — while the large multiply, already on the flat roof, doesn’t move. The ridge slides left as bandwidth rises: with more bytes per
         second, less arithmetic per byte is needed to keep the chip busy.
       </P>
 
       <Challenge
         id="a"
-        question="Find the smallest batch at which the matrix kernel, reading its weights once at the A-class’s own 3.35 TB/s, stops waiting on memory."
+        question={`With the matrix kernel reading its weights once for a batch of ${BW_BATCH} vectors, find the lowest HBM bandwidth on the slider at which the layer stops waiting on memory.`}
         solved={solvedA}
         status={statusA}
-        success={`Solved: ${smallest} vectors. That is a little past the ridge point of ${fmt(ridgePoint(A))}, because the vectors themselves must be read in and written out too, which costs some bytes per vector. Below ${smallest}, the GPU is partly idle whatever the batch; from ${smallest} up, every extra vector costs real arithmetic time.`}
+        success={`Solved: ${fmt(lowestBw, 2)} TB/s. A batch of ${BW_BATCH} gets ${fmt(i128)} FLOPs per byte, so keeping ${fmt(A.bf16Tflops)} TFLOPS busy takes ${fmt(A.bf16Tflops)} ÷ ${fmt(i128)} ≈ ${fmt(A.bf16Tflops / i128, 2)} TB/s, and ${fmt(lowestBw - BW.step, 2)} falls just short. That is the B-class’s bandwidth — but the B-class also has more than twice the arithmetic, so its ridge sits at ${fmt(ridgePoint(ACCELERATORS.B))} and the same batch still waits on memory there. More bandwidth moves the ridge left; more arithmetic moves it right.`}
       />
 
       <H2>Reading data twice</H2>
       <P>
         So far every kernel has read its data once, so every byte came from HBM. Many kernels read the same data again: a straightforward normalization passes over its vectors once to
-        measure them and again to rescale them, and the tiles of Lesson 2.3 shared their reads through the L2. When data is read a second time it may still be in the
+        measure them and again to rescale them, and the tiles of <a href={lessonHref('compute/2.3')}>Lesson 2.3</a> shared their reads through the L2. When data is read a second time it may still be in the
         cache. If the whole working set fits in the L2’s {A.l2MB} MB, every repeat read hits there, and only the first pass costs HBM bandwidth. If it doesn’t fit,
         we’ll assume only the share the cache can hold is found there — a simplification, since real access patterns can do better or much worse.
       </P>
@@ -576,14 +636,14 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="GPU Memory Simulator"
-        question={`Without changing the HBM bandwidth, get the normalization kernel to at least ${NORM_TARGET} TFLOPS — nearly twice what its one FLOP per byte allows from HBM alone.`}
+        question={`Predict first: two passes over a working set that fits in the L2 reach ${tf(norm2.tflops)} TFLOPS. Past ${A.l2MB} MB, the second pass finds only the ${A.l2MB} MB the cache can hold and fetches the rest from HBM again. Is the largest working set at which two passes still reach ${NORM_TARGET} TFLOPS the L2’s ${A.l2MB} MB, or more? Then, at the A-class’s own bandwidth, choose normalization, set two passes and find it.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: ${tf(r.tflops)} TFLOPS. Reading the same data again is only cheap if it is still close by; with a working set that fits in the ${A.l2MB} MB L2, the repeat passes never touch HBM.`}
+        success={`Solved: ${bytesLabel(r.ws)}, at ${tf(r.tflops)} TFLOPS — more than the L2 holds. The second pass still finds ${A.l2MB} MB of it in the cache, ${pct(r.hitRate)} of its reads, so HBM carries ${bytesLabel(r.memoryBytes)} of the ${bytesLabel(r.ws * st.passes)} the kernel reads. Two passes over W megabytes do 2W million FLOPs and fetch 2W − ${A.l2MB} MB from HBM, so at ${A.bandwidthTBs} TB/s they stay at ${NORM_TARGET} TFLOPS or more until W ≈ ${fmt(limitMB, 1)} MB. A cache doesn’t stop helping at its own size; its help fades.`}
       />
 
       <P>
-        Much of the craft of GPU programming is arranging work this way, so that data is reused while it is close to the arithmetic: tiling, as in Lesson 2.3, and
+        Much of the craft of GPU programming is arranging work this way, so that data is reused while it is close to the arithmetic: tiling, as in <a href={lessonHref('compute/2.3')}>Lesson 2.3</a>, and
         <b> fusing</b> several small steps — a normalization, an addition, the matrix multiply that follows — into one kernel that reads its data from HBM once instead
         of once per step. A GPU’s peak TFLOPS is a ceiling that only arithmetic-heavy, well-arranged work reaches. For everything else, what the work is really
         buying is bytes per second.
@@ -614,14 +674,12 @@ export default function Lesson() {
           display={ck === 'gemv' ? fmt(s2.state.batch) : '—'}
         />
         <DataTable
-          caption="TFLOPS each accelerator can attain on each kernel, BF16"
+          caption="The B-class’s attainable rate on each kernel, as a multiple of the A-class’s"
           rows={compareRows}
           rowKey={(row) => row.k}
           rowClass={(row) => (row.k === ck ? 'hl' : '')}
           columns={[
             { label: 'Kernel', cell: (row) => (row.k === 'gemv' ? `Matrix × ${fmt(s2.state.batch)} ${s2.state.batch === 1 ? 'vector' : 'vectors'}` : KERNEL_NAME[row.k]) },
-            { label: 'FLOPs/byte', cell: (row) => fmt(row.i, row.i < 10 ? 2 : 0), align: 'right' },
-            ...GPU_LIST.map((g) => ({ label: g.short, cell: (row: { k: CompareKernel; i: number }) => tf(compareTflops(g.id, row.i)), align: 'right' as const })),
             { label: 'B ÷ A', cell: (row) => `${fmt(compareTflops('B', row.i) / compareTflops('A', row.i), 2)}×`, align: 'right' },
           ]}
         />

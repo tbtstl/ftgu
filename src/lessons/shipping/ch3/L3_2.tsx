@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import {
   Caption,
   Challenge,
-  FigRef,
   Figure,
   GRAPHIC,
   H2,
@@ -24,7 +23,7 @@ import {
 } from '../../../framework';
 import { expectedWait, simulateQueue, utilization } from '../../../engines/shipping/queue';
 import { fleetRequirement } from '../../../engines/shipping/market';
-import { MARKET_CLASSES, type ClassId } from '../../../model/shipping/trades';
+import { MARKET_CLASSES, OFF_HIRE_DAYS, type ClassId } from '../../../model/shipping/trades';
 import { XYChart } from '../shared/XYChart';
 
 /** A Capesize cargo, tonnes. */
@@ -44,6 +43,8 @@ export function serviceDays(ratePerDay: number): number {
 }
 
 export const CHALLENGE = { arrivals: 2.6, rate: 100_000, maxWait: 0.5 };
+/** The Berths slider's top, well past the challenge's answer. */
+export const MAX_BERTHS = 12;
 
 /**
  * The challenge: with 2.6 arrivals a day and berths discharging 100,000 t a day, the fewest berths
@@ -58,14 +59,18 @@ export function fewestBerthsSolved(berths: number, rate: number, arrivals: numbe
 // ---------------------------------------------------------------------------
 // Numbers the prose quotes.
 
-const DEF = { berths: 4, rate: 100_000, arrivals: 1.5, variability: 'variable' as Variability };
-const S100 = serviceDays(100_000);
+/** Every berth discharges at the challenge's rate, 100,000 t a day. */
+const RATE = CHALLENGE.rate;
+export const DEF = { berths: 4, arrivals: 1.5, variability: 'variable' as Variability };
+const S100 = serviceDays(RATE);
 const DEF_UTIL = utilization(DEF.berths, DEF.arrivals, S100);
 const DEF_WAIT = expectedWait(DEF.berths, DEF.arrivals, S100, CV.variable);
 const DEF_SIM = simulateQueue({ berths: DEF.berths, arrivalsPerDay: DEF.arrivals, serviceDays: S100, serviceCv: CV.variable, days: DAYS, seed: SEED });
 const HOT = 1.7;
 const HOT_UTIL = utilization(4, HOT, S100);
 const HOT_WAIT = expectedWait(4, HOT, S100, CV.variable);
+/** The lost-capacity figure starts at the busier port's long-run wait, to the slider's tenth of a day. */
+export const LOST_START_WAIT = Math.round(HOT_WAIT * 10) / 10;
 /** Long-run wait with four berths at a given utilization. */
 const waitAtUtil = (u: number, cv: number) => expectedWait(4, (u * 4) / S100, S100, cv);
 const POOL_SHARED = waitAtUtil(0.8, CV.variable);
@@ -73,7 +78,7 @@ const POOL_SEPARATE = expectedWait(1, (0.8 * 4) / S100 / 4, S100, CV.variable);
 
 // Demonstration 2: ships tied up by waiting at Qingdao.
 const WAITS = Array.from({ length: 21 }, (_, i) => i / 2);
-const LOST = (Object.keys(MARKET_CLASSES) as ClassId[]).reduce(
+export const LOST = (Object.keys(MARKET_CLASSES) as ClassId[]).reduce(
   (acc, id) => {
     const base = fleetRequirement(id);
     const curve = WAITS.map((w) => fleetRequirement(id, { congestion: { QIN: w } }).ships);
@@ -84,7 +89,13 @@ const LOST = (Object.keys(MARKET_CLASSES) as ClassId[]).reduce(
   },
   {} as Record<ClassId, { base: number; curve: number[]; calls: number; perDay: number; crossover: number }>,
 );
-const CAPE4 = LOST.cape.curve[8] - LOST.cape.base;
+/** Ships a class needs to carry its trades with this many extra days of waiting on every call at Qingdao. */
+export function shipsNeeded(cls: ClassId, wait: number): number {
+  return fleetRequirement(cls, { congestion: { QIN: wait } }).ships;
+}
+const CAPE_HOT = shipsNeeded('cape', LOST_START_WAIT) - LOST.cape.base;
+const KMAX_HOT = shipsNeeded('kmax', LOST_START_WAIT);
+const EARNING_DAYS = 365 - OFF_HIRE_DAYS;
 
 const days = (x: number, d = 1) => (Number.isFinite(x) ? `${fmt(x, d)} days` : 'no limit');
 const ships = (x: number) => `${fmt(x)} ships`;
@@ -156,13 +167,14 @@ function Terminal({ t, run, berths, service }: { t: number; run: ReturnType<type
 
 export default function Lesson() {
   const lab = useScenario('port', DEF);
-  const { berths, rate, arrivals, variability } = lab.state;
+  const { berths, arrivals, variability } = lab.state;
   const cv = CV[variability];
-  const service = serviceDays(rate);
+  const service = S100;
   const util = utilization(berths, arrivals, service);
   const longRun = expectedWait(berths, arrivals, service, cv);
   const run = useMemo(() => simulateQueue({ berths, arrivalsPerDay: arrivals, serviceDays: service, serviceCv: cv, days: DAYS, seed: SEED }), [berths, arrivals, service, cv]);
-  const solved = fewestBerthsSolved(berths, rate, arrivals, cv);
+  const solved = fewestBerthsSolved(berths, RATE, arrivals, cv);
+  const atChallenge = Math.abs(arrivals - CHALLENGE.arrivals) < 1e-6;
 
   const play = usePlay(true);
   const [t, setT] = useState(0);
@@ -174,13 +186,13 @@ export default function Lesson() {
     return { us, ws: us.map((u) => Math.min(12, expectedWait(berths, (u * berths) / service, service, cv))) };
   }, [berths, service, cv]);
 
-  const lost = useScenario('lost-capacity', { cls: 'cape' as ClassId, wait: 4 });
+  const lost = useScenario('lost-capacity', { cls: 'cape' as ClassId, wait: LOST_START_WAIT });
   const L = LOST[lost.state.cls];
-  const wi = Math.round(lost.state.wait * 2);
-  const need = L.curve[wi];
+  const need = useMemo(() => shipsNeeded(lost.state.cls, lost.state.wait), [lost.state.cls, lost.state.wait]);
   const fleet = MARKET_CLASSES[lost.state.cls].fleet;
   const extra = need - L.base;
   const clsName = MARKET_CLASSES[lost.state.cls].name;
+  const clsPlural = clsName.endsWith('x') ? `${clsName}es` : `${clsName}s`;
 
   return (
     <LessonPage id="shipping/3.2">
@@ -196,10 +208,10 @@ export default function Lesson() {
       </P>
       <P>
         Take an iron-ore discharge terminal serving Capesizes, each carrying {fmt(CARGO)} tonnes; the terminal and its numbers are illustrative. A berth
-        discharges at a steady rate, and berthing, starting up and sailing take another half a day, so a ship ties up a berth for the cargo divided by the rate,
-        plus half a day. How busy the berths are on average is their <b>utilization</b>: arrivals per day times the days each ship needs, divided by the number of
+        discharges {fmt(RATE)} tonnes a day, and berthing, starting up and sailing take another half a day, so a ship ties up a berth for{' '}
+        {fmt(CARGO / RATE, 1)} + {fmt(BERTHING_DAYS, 1)} = {fmt(S100, 1)} days. How busy the berths are on average is their <b>utilization</b>: arrivals per day times the days each ship needs, divided by the number of
         berths. In the next demonstration, ships arrive at random and wait at anchor, first come, first served, until a berth is free. The replay runs through {DAYS}{' '}
-        days of one random draw. Set the berths, the discharge rate, the arrivals and how much handling times vary:
+        days of one random draw. Set the berths, the arrivals and how much handling times vary:
       </P>
 
       <Figure name="Port Congestion Lab" scenario={lab} play={play}>
@@ -259,8 +271,7 @@ export default function Lesson() {
             { label: 'most ships at anchor', value: fmt(run.maxQueue), tone: 'orange' },
           ]}
         />
-        <Slider label="Berths" value={berths} min={1} max={8} onChange={(v) => lab.set({ berths: v })} display={fmt(berths)} />
-        <Slider label="Discharge rate per berth" tone="orange" value={rate} min={60_000} max={200_000} step={10_000} onChange={(v) => lab.set({ rate: v })} display={`${fmt(rate)} t/day`} />
+        <Slider label="Berths" value={berths} min={1} max={MAX_BERTHS} onChange={(v) => lab.set({ berths: v })} display={fmt(berths)} />
         <Slider label="Arrivals" tone="teal" value={arrivals} min={0.5} max={5} step={0.1} onChange={(v) => lab.set({ arrivals: v })} display={`${fmt(arrivals, 1)} ships a day`} />
         <Caption>
           {util >= 1
@@ -270,7 +281,7 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        At the starting settings, four berths discharging {fmt(100_000)} tonnes a day hold each ship for {fmt(S100, 1)} days, and {fmt(DEF.arrivals, 1)} arrivals
+        At the starting settings, each ship holds a berth for {fmt(S100, 1)} days, and {fmt(DEF.arrivals, 1)} arrivals
         a day keep them {pct(DEF_UTIL, 1)} busy. On average there is spare capacity: {fmt(DEF.berths * (1 - DEF_UTIL), 1)} of the four berths stand empty. Yet
         ships wait — {days(DEF_SIM.avgWait)} on average in this run, with as many as {DEF_SIM.maxQueue} at anchor at once, and {days(DEF_WAIT)} in the long run. The trouble is that spare capacity can’t be saved up. A berth idle on a
         quiet Tuesday is no help when four ships turn up on Wednesday, and each bunch of arrivals leaves a queue that takes days to work off.
@@ -282,8 +293,9 @@ export default function Lesson() {
 
       <H2>Why queues explode</H2>
       <P>
-        The right-hand chart is the long-run average wait at each level of utilization, from a formula worked out a century ago by Agner Krarup Erlang, a Danish
-        engineer who studied queues of calls at telephone exchanges. With four berths and variable handling, ships wait {days(waitAtUtil(0.5, CV.variable), 2)} at 50%
+        The chart of average wait against berth utilization plots the long-run average wait at each level of utilization. It comes from a formula worked out a
+        century ago by Agner Krarup Erlang, a Danish engineer who studied queues of calls at telephone exchanges: Erlang’s formula is exact for variable
+        handling, and for steadier handling we use it with a standard adjustment for service times that vary less. With four berths and variable handling, ships wait {days(waitAtUtil(0.5, CV.variable), 2)} at 50%
         utilization, {days(waitAtUtil(0.8, CV.variable))} at 80%, {days(waitAtUtil(0.9, CV.variable))} at 90% and {days(waitAtUtil(0.95, CV.variable))} at 95%.
         The last few percent of a port’s capacity are the most expensive to use, which is why ports run with what looks like slack. The replay wanders around the
         formula — {DAYS} days is one draw of luck — but its long runs agree with it.
@@ -299,14 +311,16 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Port Congestion Lab"
-        question={`Traffic grows to ${fmt(CHALLENGE.arrivals, 1)} ships a day, and each berth discharges ${fmt(CHALLENGE.rate)} tonnes a day. What is the fewest berths that keeps the long-run average wait under half a day?`}
+        question={`Traffic grows to ${fmt(CHALLENGE.arrivals, 1)} ships a day. Predict first: how many berths’ worth of work is that, and how many berths will it take to keep the long-run average wait under half a day? Then set the arrivals and find the fewest berths that do.`}
         solved={solved}
         status={
-          Math.abs(arrivals - CHALLENGE.arrivals) > 1e-6 || Math.abs(rate - CHALLENGE.rate) > 1e-6
-            ? `Set the arrivals to ${fmt(CHALLENGE.arrivals, 1)} a day and the discharge rate to ${fmt(CHALLENGE.rate)} t/day first.`
-            : `With ${berths} berth${berths === 1 ? '' : 's'}, the long-run average wait is ${days(longRun, 2)}.`
+          !atChallenge
+            ? `Set the arrivals to ${fmt(CHALLENGE.arrivals, 1)} ships a day first.`
+            : util >= 1
+              ? `${berths} berth${berths === 1 ? '' : 's'} can’t keep up: the line at anchor never clears.`
+              : `${berths} berths are ${pct(util)} busy. Is the long-run wait under half a day, and would one fewer berth do?`
         }
-        success={`Solved. ${fmt(CHALLENGE.arrivals, 1)} ships a day at ${fmt(serviceDays(CHALLENGE.rate), 1)} days each is ${fmt(CHALLENGE.arrivals * serviceDays(CHALLENGE.rate), 2)} berths’ worth of work, so six berths would be ${pct(utilization(6, CHALLENGE.arrivals, serviceDays(CHALLENGE.rate)))} busy and ships would wait ${days(expectedWait(6, CHALLENGE.arrivals, serviceDays(CHALLENGE.rate), cv), 1)}. ${variability === 'variable' ? `With variable handling it takes eight; with steady handling, seven would do (${days(expectedWait(7, CHALLENGE.arrivals, serviceDays(CHALLENGE.rate), CV.steady), 2)}). Smoother handling is worth a whole berth.` : `With steady handling seven berths do it; with variable handling it would take eight, because seven leave ships waiting ${days(expectedWait(7, CHALLENGE.arrivals, serviceDays(CHALLENGE.rate), CV.variable), 2)}. Smoother handling is worth a whole berth.`}`}
+        success={`Solved: ${berths} berths. ${fmt(CHALLENGE.arrivals, 1)} ships a day at ${fmt(S100, 1)} days each is ${fmt(CHALLENGE.arrivals * S100, 2)} berths’ worth of work, so six berths would be ${pct(utilization(6, CHALLENGE.arrivals, S100))} busy and ships would wait ${days(expectedWait(6, CHALLENGE.arrivals, S100, cv), 1)}; ${berths} are ${pct(util)} busy, and the spare berths soak up the bunches. ${variability === 'variable' ? `With steady handling, seven would do (${days(expectedWait(7, CHALLENGE.arrivals, S100, CV.steady), 2)}).` : `With variable handling it would take eight, because seven leave ships waiting ${days(expectedWait(7, CHALLENGE.arrivals, S100, CV.variable), 2)}.`} Smoother handling is worth a whole berth.`}
       />
 
       <H2>Waiting ships carry nothing</H2>
@@ -316,9 +330,11 @@ export default function Lesson() {
         time lay at anchor off Los Angeles and Long Beach waiting for berths.
       </P>
       <P>
-        In the next demonstration, ships discharging at Qingdao, the main importing port in our world, wait extra days at anchor on every call. The chart counts
-        the ships needed to carry all of the course’s trades for the class, at fixed speeds of 12 knots laden and 13 in ballast, against the days of waiting; the
-        dashed line is the class’s whole fleet. Set the waiting time:
+        In the next demonstration, ships discharging at Qingdao, the main importing port in our world, wait extra days at anchor on every call. The wait starts
+        at {days(LOST_START_WAIT)}, the long-run wait we found at four berths with {fmt(HOT, 1)} arrivals a day, as if Qingdao’s berths were as busy as that
+        terminal’s. The chart
+        counts the ships needed to carry all of the course’s trades for the class, at fixed speeds of 12 knots laden and 13 in ballast, against the days of
+        waiting; the dashed line is the class’s whole fleet. Set the waiting time:
       </P>
 
       <Figure name="Port Congestion Lab · lost capacity" scenario={lost}>
@@ -338,7 +354,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`${clsName}s needed to carry the trades against waiting days at Qingdao: ${ships(L.base)} with no waiting, ${ships(need)} with ${fmt(lost.state.wait, 1)} days. The fleet has ${fmt(fleet)}.`}
+          ariaLabel={`${clsPlural} needed to carry the trades against waiting days at Qingdao: ${ships(L.base)} with no waiting, ${ships(need)} with ${fmt(lost.state.wait, 1)} days. The fleet has ${fmt(fleet)}.`}
           series={[{ xs: WAITS, ys: L.curve, color: GRAPHIC.orange, width: 2.5 }]}
           xMin={0}
           xMax={10}
@@ -355,31 +371,30 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'calls at Qingdao a year', value: fmt(L.calls) },
             { label: 'ships tied up waiting', value: ships(extra), tone: 'orange' },
             { label: 'share of the whole fleet', value: pct(extra / fleet, 1), tone: 'orange' },
           ]}
         />
-        <Slider label="Extra waiting at Qingdao" tone="teal" value={lost.state.wait} min={0} max={10} step={0.5} onChange={(v) => lost.set({ wait: v })} display={days(lost.state.wait)} />
+        <Slider label="Extra waiting at Qingdao" tone="teal" value={lost.state.wait} min={0} max={10} step={0.1} onChange={(v) => lost.set({ wait: v })} display={days(lost.state.wait)} />
         <Caption>
-          {need > fleet
-            ? `At these speeds the trades now need more ${clsName}s than exist: the fleet would have to sail faster to carry everything.`
-            : `${fmt(lost.state.wait, 1)} days of waiting on each of ${fmt(L.calls)} calls is ${fmt(lost.state.wait * L.calls)} ship-days a year: ${ships(extra)} doing nothing but wait.`}
+          {`${fmt(lost.state.wait, 1)} days of waiting on each of ${fmt(L.calls)} calls a year is ${fmt(lost.state.wait * L.calls)} ship-days, and a ship works ${EARNING_DAYS} days a year.`}
+          {need > fleet ? ` At these speeds the trades now need more ${clsPlural} than exist: the fleet would have to sail faster to carry everything.` : ''}
         </Caption>
       </Figure>
 
       <P>
         The arithmetic is simple and unforgiving. Capesizes call at Qingdao {fmt(LOST.cape.calls)} times a year in our world, so every extra day of waiting there
-        ties up {fmt(LOST.cape.perDay, 1)} Capesizes for the whole year. Four days of congestion takes {ships(CAPE4)} out of service, {pct(CAPE4 / MARKET_CLASSES.cape.fleet, 1)}{' '}
-        of the fleet — as if a small shipping company had vanished. Past about {fmt(LOST.cape.crossover, 1)} days, the trades need more Capesizes than the{' '}
-        {fmt(MARKET_CLASSES.cape.fleet)} that exist, at these speeds. The Kamsarmaxes are hit less hard, because fewer of their cargoes go to Qingdao:{' '}
-        {fmt(LOST.kmax.perDay, 1)} ships for every day of waiting.
+        ties up {fmt(LOST.cape.perDay, 1)} Capesizes for the whole year. Waits of {days(LOST_START_WAIT)}, like the busy terminal’s, take {ships(CAPE_HOT)} out of service,{' '}
+        {pct(CAPE_HOT / MARKET_CLASSES.cape.fleet, 1)} of the fleet — as if a large shipping company had vanished — and leave only{' '}
+        {fmt(MARKET_CLASSES.cape.fleet - LOST.cape.base - CAPE_HOT)} to spare. Past about {fmt(LOST.cape.crossover, 1)} days, the trades need more Capesizes than
+        the {fmt(MARKET_CLASSES.cape.fleet)} that exist, at these speeds. Switch to the Kamsarmaxes: they are hit less hard, {fmt(LOST.kmax.perDay, 1)} ships for every day
+        of waiting, because fewer of their cargoes go to Qingdao. But they have less to spare, and at {days(LOST_START_WAIT)} their trades need{' '}
+        {fmt(KMAX_HOT)}, more than the {fmt(MARKET_CLASSES.kmax.fleet)} in the fleet.
       </P>
       <P>
         Nothing about the ships changed, and no cargo was added. A queue at one port, half a world away from most of the fleet, has made ships scarce everywhere,
-        because every ship is a candidate for every cargo. What that scarcity does to the price of transport — and why congestion is one of the first things a
-        freight trader checks — is the subject of <a href={lessonHref('shipping/4.1')}>Chapter 4</a>. Try the Kamsarmax setting in{' '}
-        <FigRef to="Port Congestion Lab · lost capacity">this demonstration</FigRef> to see how the same delay weighs on a class with a different pattern of trades.
+        because over a few months every ship is a candidate for every cargo. What that scarcity does to the price of transport — and why congestion is one of the first things a
+        freight trader checks — is the subject of <a href={lessonHref('shipping/4.1')}>Chapter 4</a>.
       </P>
       <P>
         A port can at least add berths over the years. Some bottlenecks can’t be widened at all: the canals and straits that whole trades are funneled through.{' '}

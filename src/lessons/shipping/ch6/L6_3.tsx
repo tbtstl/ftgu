@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Button,
   Caption,
@@ -36,7 +36,8 @@ import {
 } from '../../../engines/shipping/company';
 import { PLACE } from '../../../model/shipping/geo';
 import { eventAt, monthLabel, standardHistory } from '../../../model/shipping/history';
-import { defaultDesign, resetCompany, updateCompany, useCompany, type CompanyDesign } from '../shared/company';
+import { STARTING, confirmReset, money, partChanged, resetCompany, updateCompany, useCompany, when, type CompanyDesign } from '../shared/company';
+import { CompanySoFar, ViewSwitch, fleetText, policyText, worldText, type CompanyView } from '../shared/CompanyUi';
 import { CARGO_COLOR } from '../shared/tones';
 
 const HIST = standardHistory();
@@ -50,7 +51,9 @@ const RULES: Array<{ value: DispatchRule; label: string }> = [
 ];
 
 const perDay = (x: number) => `${usd(x)}/day`;
-const signedUsd = (x: number) => (x >= 0 ? `+${usd(x)}` : usd(x));
+/** The period in words: “half-year” for the starting 26 weeks. */
+const periodText = (weeks: number) => (weeks === 26 ? 'half-year' : weeks === 52 ? 'year' : `${weeks} weeks`);
+const signedMoney = (x: number) => (x >= 0 ? `+${money(x)}` : money(x));
 const place = (id: string) => PLACE[id]?.name ?? id;
 const routeName = (c: CargoOffer) => `${place(c.route.from)}–${place(c.route.to)}`;
 
@@ -111,7 +114,7 @@ export function runDesk(d: CompanyDesign): OpsResult {
 // ---------------------------------------------------------------------------
 // The starting company, for the prose and the challenge.
 
-const START = defaultDesign();
+const START = STARTING;
 const START_OFFERS = cargoOffers(START.world);
 const runStart = (p: Partial<OpsPolicy>) => operate(START.ships, START_OFFERS, { ...START.policy, ...p }, START.finance, START.world);
 const BASE = runStart({});
@@ -140,42 +143,58 @@ const MARKET = HIST.cls.kmax.slice(START.world.start, START.world.start + Math.c
 const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'];
 const word = (n: number) => WORDS[n] ?? fmt(n);
 /** Kestrel's two Samarinda–Qingdao offers at her first decision, dearer first. */
-const SAMQ = FIRST_SAMQ();
-function FIRST_SAMQ() {
-  return LOG[0].options.filter((o) => o.cargo.route.id === 'P-SAM-QIN').sort((a, b) => b.cargo.freight - a.cargo.freight);
-}
+const SAMQ = LOG[0].options.filter((o) => o.cargo.route.id === 'P-SAM-QIN').sort((a, b) => b.cargo.freight - a.cargo.freight);
 const SANTOS = LOG[0].options.filter((o) => o.cargo.route.id === 'P-SAN-QIN').sort((a, b) => b.cargo.freight - a.cargo.freight);
 const PANAMA_MONTHS = Array.from({ length: 7 }, (_, k) => START.world.start + k).filter((t) => eventAt(t)?.closed?.includes('panama')).length;
 
-/** The fuel shock: bunkers at $900 a tonne for the half-year, freights as they were. */
-export const SHOCK_BUNKER = 900;
-export const SHOCK_GAIN = 1_000_000;
-const SHOCK_BASE = runStart({ bunker: SHOCK_BUNKER });
-const SHOCK_SLOW = runStart({ bunker: SHOCK_BUNKER, speed: 9 });
+// ---------------------------------------------------------------------------
+// The challenge: when does the TCE rule stop sending Kestrel to Brazil?
 
-/** True when the design's ships and cargo world are the starting ones (prices within a dollar). */
-export function isStartingCompany(d: CompanyDesign): boolean {
-  if (d.ships.length !== START.ships.length) return false;
-  const shipsSame = d.ships.every((s, i) => {
-    const o = START.ships[i];
-    return s.id === o.id && s.cls === o.cls && s.age === o.age && s.mode === o.mode && s.at === o.at && s.openDay === o.openDay && Math.abs(s.price - o.price) < 1 && s.hire === o.hire;
-  });
-  return shipsSame && JSON.stringify(d.world) === JSON.stringify(START.world);
-}
-
-/** The profit the starting policy makes with this design's finance at the shock's bunker price. */
-export function shockBaseline(d: CompanyDesign): number {
-  return operate(d.ships, cargoOffers(d.world), { ...START.policy, bunker: SHOCK_BUNKER }, d.finance, d.world).profit;
-}
-
+/** The bunker price in the starting company's first month, $/t. */
+export const START_BUNKER = HIST.bunker[START.world.start];
+/** Fuel per day of the ship's time on a fixture, t/day. */
+export const fuelPerVoyageDay = (f: Fixture) => f.fuel / (f.end - f.depart);
 /**
- * The challenge: with the starting fleet and cargo world, bunkers fixed at $900 and no extra wait at
- * Qingdao, a policy that makes at least $1 million more than the starting policy does at that price.
+ * Kestrel's first decision, on day 0 in Qingdao, with bunkers fixed at a price under the starting
+ * policy: every cargo she could reach, and the one with the best TCE (whether or not it clears zero).
  */
-export function fuelShockSolved(d: CompanyDesign): boolean {
-  if (!isStartingCompany(d)) return false;
-  if (d.policy.bunker !== SHOCK_BUNKER || (d.policy.congestion ?? 0) !== 0) return false;
-  return runDesk(d).profit >= shockBaseline(d) + SHOCK_GAIN - 1e-6;
+export function kestrelFirstAt(bunker: number): Decision {
+  const kestrel = START.ships.find((x) => x.id === 'kestrel')!;
+  const p = { ...START.policy, bunker };
+  const options = START_OFFERS.filter((c) => c.cls === kestrel.cls && c.to >= kestrel.openDay && c.from <= kestrel.openDay + 45)
+    .map((c) => planFixture(kestrel, kestrel.at, kestrel.openDay, c, p, HIST, START.world.start))
+    .filter((x): x is Fixture => !!x);
+  return { ship: kestrel.id, day: kestrel.openDay, at: kestrel.at, options, chosen: pickByRule(options, 'bestTce') };
+}
+/** Whether, at that price, the TCE rule still sends Kestrel to Brazil on her first voyage. */
+export const goesToBrazilAt = (bunker: number) => kestrelFirstAt(bunker).chosen.cargo.route.id === 'P-SAN-QIN';
+let crossoverCache: number | null = null;
+/** The bunker price, to the dollar, above which Kestrel's first voyage is no longer Brazil's soybeans. */
+export function brazilCrossover(): number {
+  if (crossoverCache !== null) return crossoverCache;
+  let lo = START_BUNKER;
+  let hi = 2_000;
+  while (hi - lo > 0.5) {
+    const mid = (lo + hi) / 2;
+    if (goesToBrazilAt(mid)) lo = mid;
+    else hi = mid;
+  }
+  return (crossoverCache = Math.round((lo + hi) / 2));
+}
+/** How close an estimate must be, $/t. */
+export const ESTIMATE_TOLERANCE = 50;
+export const ESTIMATE_DEFAULT = 600;
+/** The challenge: a checked estimate within $50 a tonne of the crossover. */
+export function estimateSolved(checked: number | null): boolean {
+  return checked !== null && Math.abs(checked - brazilCrossover()) <= ESTIMATE_TOLERANCE;
+}
+/** Kestrel's Brazil voyage and the best coal cargo she could take instead, at the start. */
+export const KESTREL_SANTOS = FIRST_BEST;
+export const KESTREL_COAL = FIRST.options.filter((o) => o.cargo.route.commodity === 'coal').reduce((a, b) => (b.tce > a.tce ? b : a));
+
+/** The company a figure runs: the starting one (with the reader's desk policy) or the reader's. */
+export function companyFor(d: CompanyDesign, view: CompanyView): CompanyDesign {
+  return view === 'start' ? { ...STARTING, policy: d.policy } : d;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,9 +208,10 @@ function commodityColor(c: CargoOffer): string {
 
 const GX0 = 104;
 const GX1 = 624;
-const ROW = 36;
 
 function Gantt({ result, ships, days, start }: { result: OpsResult; ships: CompanyShip[]; days: number; start: number }) {
+  // Rows tighten for a big fleet, so eight ships still fit.
+  const ROW = ships.length > 4 ? 30 : 36;
   const end = Math.max(days, ...result.runs.map((r) => r.freeDay));
   const xMax = Math.ceil(end / 30) * 30;
   const x = (d: number) => GX0 + (Math.max(0, d) / xMax) * (GX1 - GX0);
@@ -309,27 +329,51 @@ function OptionBars({ d, minTce }: { d: Decision; minTce: number }) {
 
 export default function Lesson() {
   const design = useCompany();
-  const offers = useMemo(() => cargoOffers(design.world), [design.world]);
-  const result = useMemo(() => operate(design.ships, offers, design.policy, design.finance, design.world), [design.ships, offers, design.policy, design.finance, design.world]);
-  const log = useMemo(() => decisionLog(design.ships, offers, design.policy, design.world), [design.ships, offers, design.policy, design.world]);
-  const days = design.world.weeks * WEEK;
+  // Which company the desk runs: the starting one, which the text describes, or the reader's.
+  const changed = partChanged(design, 'ships') || partChanged(design, 'world');
+  const [view, setView] = useState<CompanyView>('start');
+  const co = changed ? companyFor(design, view) : design;
+  const offers = useMemo(() => cargoOffers(co.world), [co.world]);
+  const result = useMemo(() => operate(co.ships, offers, co.policy, co.finance, co.world), [co.ships, offers, co.policy, co.finance, co.world]);
+  const log = useMemo(() => decisionLog(co.ships, offers, co.policy, co.world), [co.ships, offers, co.policy, co.world]);
+  const days = co.world.weeks * WEEK;
   const p = design.policy;
   const setPolicy = (patch: Partial<OpsPolicy>) => updateCompany((d) => ({ ...d, policy: { ...d.policy, ...patch } }));
   const taken = countFixtures(result);
   const idle = result.runs.reduce((a, r) => a + r.idle, 0);
-  const starting = isStartingCompany(design);
-  const solved = fuelShockSolved(design);
-  const baselineNow = useMemo(() => (starting ? shockBaseline(design) : NaN), [starting, design]);
-  const windowEvents = [...new Set(Array.from({ length: Math.ceil(days / MONTH) }, (_, k) => eventAt(design.world.start + k)?.label).filter((x): x is string => !!x))];
+  const windowEvents = [...new Set(Array.from({ length: Math.ceil(days / MONTH) }, (_, k) => eventAt(co.world.start + k)?.label).filter((x): x is string => !!x))];
+  const resetDesk = () => {
+    if (!confirmReset('your desk’s policy', partChanged(design, 'policy'))) return;
+    resetCompany('policy');
+    setView('start');
+  };
+  const switcher = changed && (
+    <ViewSwitch
+      value={view}
+      onChange={setView}
+      labels={['Starting company', 'Your company']}
+      note={<>The text describes the starting company. Yours: {fleetText(design)}; {worldText(design)}. Both use your desk’s policy.</>}
+    />
+  );
 
-  // Demonstration 2: one ship's decisions.
-  const pick = useScenario('one-ship', { ship: 'kestrel', fixture: 0 });
-  const shipId = design.ships.some((s) => s.id === pick.state.ship) ? pick.state.ship : design.ships[0]?.id;
+  // Demonstration 2: one ship's decisions, and the challenge's estimate.
+  const pick = useScenario('one-ship', { ship: 'kestrel', fixture: 0, estimate: ESTIMATE_DEFAULT, checked: null as number | null });
+  const shipId = co.ships.some((s) => s.id === pick.state.ship) ? pick.state.ship : co.ships[0]?.id;
   const shipDecisions = log.filter((d) => d.ship === shipId);
   const fixtureIndex = Math.min(pick.state.fixture, Math.max(0, shipDecisions.length - 1));
   const decision = shipDecisions[fixtureIndex];
-  const ship = design.ships.find((s) => s.id === shipId);
-  const bunkerThen = decision ? (p.bunker ?? HIST.bunker[Math.min(HIST.months - 1, design.world.start + Math.floor(decision.day / MONTH))]) : 0;
+  const ship = co.ships.find((s) => s.id === shipId);
+  const bunkerThen = decision ? (co.policy.bunker ?? HIST.bunker[Math.min(HIST.months - 1, co.world.start + Math.floor(decision.day / MONTH))]) : 0;
+  const checked = pick.state.checked;
+  const solved = estimateSolved(checked);
+  const atCheck = useMemo(() => {
+    if (checked === null) return null;
+    const d = kestrelFirstAt(checked);
+    const tceOf = (id: string) => d.options.find((o) => o.cargo.id === id)!.tce;
+    return { santos: tceOf(KESTREL_SANTOS.cargo.id), coal: tceOf(KESTREL_COAL.cargo.id), brazil: d.chosen.cargo.route.id === 'P-SAN-QIN' };
+  }, [checked]);
+  const santosPerDay = fuelPerVoyageDay(KESTREL_SANTOS);
+  const coalPerDay = fuelPerVoyageDay(KESTREL_COAL);
 
   return (
     <LessonPage id="shipping/6.3">
@@ -340,6 +384,7 @@ export default function Lesson() {
         someone has to decide what she does next: take a cargo she can reach before its window closes, wait for a better one, or sail empty toward one far away.
         How should Northwind’s ships be scheduled?
       </P>
+      <CompanySoFar d={design} lesson={3} />
       <P>
         Nothing on the desk is new. Each cargo a ship could take is a voyage estimate from <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a>: the freight less
         commissions, fuel at the month’s bunker price and port costs, divided by the days from the moment she leaves to the moment she discharges — the ballast
@@ -349,13 +394,16 @@ export default function Lesson() {
         waits a few days and looks again.
       </P>
       <P>
-        In the next demonstration each row is one of Northwind’s ships over the half-year from {monthLabel(design.world.start)}. Dashed outlines are ballast
-        legs, gray blocks are waits for a loading window, and solid bars are cargo voyages, colored by cargo and labeled with their TCE. The <b>benchmark</b> is
-        what the same ships would have made earning the market rate (<a href={lessonHref('shipping/4.3')}>Lesson 4.3</a>) on every earning day, less the same
-        costs. Change the rule, the speed, the minimum and the conditions the ships sail in — the desk is kept with the rest of your company:
+        In the next demonstration each row is one of Northwind’s ships over the {periodText(co.world.weeks)} from {when(co.world.start)}. Dashed outlines are
+        ballast legs, gray blocks are waits for a loading window, and solid bars are cargo voyages, colored by cargo and labeled with their TCE. The{' '}
+        <b>benchmark</b> is what the same ships would have made earning the market rate (<a href={lessonHref('shipping/4.3')}>Lesson 4.3</a>) on every earning
+        day, less the same costs; with the bunker price fixed, the market rate pays the same freights with fuel at that price. Change the rule, the speed, the
+        minimum and the conditions the ships sail in — the desk’s policy is kept with the rest of your company.
+        {changed && ' Since your fleet or cargo window has changed, the switch at the top runs either the starting company, which the text describes, or yours.'}
       </P>
 
-      <Figure name="Fleet Operations Desk" onReset={() => resetCompany('policy')}>
+      <Figure name="Fleet Operations Desk" onReset={resetDesk}>
+        {switcher}
         <Segmented label="Dispatch rule" value={p.rule} onChange={(v) => setPolicy({ rule: v })} options={RULES} />
         <Legend
           items={[
@@ -366,21 +414,20 @@ export default function Lesson() {
             { label: 'Grain and soybeans', color: CARGO_COLOR.grain },
           ]}
         />
-        <Gantt result={result} ships={design.ships} days={days} start={design.world.start} />
+        <Gantt result={result} ships={co.ships} days={days} start={co.world.start} />
         <Readouts
           items={[
-            { label: 'voyage results: freight less fuel, ports, commissions', value: usd(result.voyageNet), tone: 'green' },
-            { label: 'daily costs of the ships', value: usd(result.dailyCosts), tone: 'green' },
-            { label: 'profit', value: usd(result.profit), tone: result.profit < 0 ? 'red' : 'green' },
-            { label: 'benchmark: the same ships at the market rate', value: usd(result.benchmark) },
-            { label: 'desk against the benchmark', value: signedUsd(result.profit - result.benchmark), tone: result.profit >= result.benchmark ? 'green' : 'red' },
+            { label: 'voyage results: freight less fuel, ports, commissions', value: money(result.voyageNet), tone: 'green' },
+            { label: 'daily costs of the ships', value: money(result.dailyCosts), tone: 'green' },
+            { label: 'profit', value: money(result.profit), tone: result.profit < 0 ? 'red' : 'green' },
+            { label: 'benchmark: the same ships at the market rate', value: money(result.benchmark) },
+            { label: 'desk against the benchmark', value: signedMoney(result.profit - result.benchmark), tone: result.profit >= result.benchmark ? 'green' : 'red' },
             { label: 'cargoes taken, of those offered', value: `${taken} of ${offers.length}` },
             { label: 'days idle, all ships', value: fmt(idle), tone: 'teal' },
           ]}
         />
         <Slider label="Speed, laden and in ballast" tone="teal" value={p.speed} min={9} max={15} step={0.5} onChange={(v) => setPolicy({ speed: v })} display={`${fmt(p.speed, 1)} kn`} />
         <Slider label="Minimum acceptable TCE" tone="green" value={p.minTce} min={0} max={25_000} step={1_000} onChange={(v) => setPolicy({ minTce: v })} display={perDay(p.minTce)} />
-        <Slider label="Days to wait before looking again" tone="teal" value={p.waitDays} min={1} max={10} onChange={(v) => setPolicy({ waitDays: v })} display={`${p.waitDays} days`} />
         <Slider label="Extra waiting at Qingdao" tone="teal" value={p.congestion ?? 0} min={0} max={6} step={0.5} onChange={(v) => setPolicy({ congestion: v })} display={`${fmt(p.congestion ?? 0, 1)} days a call`} />
         <Segmented
           label="Bunker price"
@@ -396,11 +443,11 @@ export default function Lesson() {
           tone="green"
           value={p.bunker ?? 600}
           min={300}
-          max={1_000}
+          max={1_200}
           step={10}
           disabled={p.bunker === undefined}
           onChange={(v) => setPolicy({ bunker: v })}
-          display={p.bunker === undefined ? `history: $${fmt(HIST.bunker[design.world.start])}/t` : `$${fmt(p.bunker)}/t`}
+          display={p.bunker === undefined ? `history: $${fmt(HIST.bunker[co.world.start])}/t` : `$${fmt(p.bunker)}/t`}
         />
         <Caption>
           {windowEvents.length
@@ -416,90 +463,66 @@ export default function Lesson() {
         With Northwind’s starting company and cargo world, the desk’s first decision is Kestrel’s, on day 0 in Qingdao. She can reach {FIRST.options.length}{' '}
         cargoes in time. The best by TCE is soybeans from Santos at ${fmt(FIRST_BEST.cargo.freight, 2)} a tonne, worth {perDay(FIRST_BEST.tce)} even after{' '}
         {fmt(FIRST_BEST.ballastNm)} miles in ballast; the nearest is coal from Samarinda, {fmt(FIRST_NEAR.ballastNm)} miles away, worth {perDay(FIRST_NEAR.tce)}.
-        Kestrel goes to Brazil, and Albatross follows {word(Math.round(ALB_DECISIONS[0].day))} days later for ore from Tubarão at {perDay(ALB_FIRST.tce)}. Over the half-year the ships’ voyages
-        net {usd(BASE.voyageNet)} and their daily costs come to {usd(BASE.dailyCosts)}, so the company loses {usd(-BASE.profit)} — in a market that paid Kamsarmaxes
-        between {perDay(Math.min(...MARKET))} and {perDay(Math.max(...MARKET))}. The same ships at the market rate would have lost {usd(-BASE.benchmark)}, so the desk
-        beat its benchmark by {usd(edge(BASE))}. The long ballast legs to the Atlantic that <a href={lessonHref('shipping/5.4')}>Lesson 5.4</a> weighed paid off here.
+        Kestrel goes to Brazil, and Albatross follows {word(Math.round(ALB_DECISIONS[0].day))} days later for ore from Tubarão at {perDay(ALB_FIRST.tce)}. Over the
+        half-year the ships’ voyages net {money(BASE.voyageNet)} and their daily costs come to {money(BASE.dailyCosts)}, so the company loses{' '}
+        {money(-BASE.profit)} — in a market that paid Kamsarmaxes between {perDay(Math.min(...MARKET))} and {perDay(Math.max(...MARKET))}. The same ships at the
+        market rate would have lost {money(-BASE.benchmark)}, so the desk beat its benchmark by {money(edge(BASE))}. The long ballast legs to the Atlantic that{' '}
+        <a href={lessonHref('shipping/5.4')}>Lesson 5.4</a> weighed paid off here.
       </P>
 
       <H2>Rules and patience</H2>
       <P>
         Switch the rule to the nearest cargo. Kestrel never leaves Asian waters: she shuttles Indonesian coal to China and India on{' '}
         {word(fixturesOf(NEAREST, 'kestrel').length)} short voyages, Albatross runs Port Hedland ore, and between them the ships spend{' '}
-        {fmt(idleOf(NEAREST, 'kestrel') + idleOf(NEAREST, 'albatross'))} days idle. The company takes {countFixtures(NEAREST)} cargoes instead of {countFixtures(BASE)} and ends {usd(Math.abs(edge(NEAREST)))}{' '}
-        {edge(NEAREST) < 0 ? 'behind' : 'ahead of'} the benchmark. Choosing by freight per tonne is better, {signedUsd(edge(FREIGHT))}, but still not as good as
-        choosing by TCE, because a rate per tonne says nothing about how far a ship must sail empty to earn it or how many days the voyage takes (
-        <a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>). For Albatross’s second voyage it picks coal from Richards Bay at ${fmt(ALB_FREIGHT_2.cargo.freight, 2)}{' '}
-        a tonne over Port Hedland ore at ${fmt(ALB_TCE_2.cargo.freight, 2)}; the {fmt(ALB_FREIGHT_2.ballastNm)} miles of ballast to Richards Bay leave her earning{' '}
-        {perDay(ALB_FREIGHT_2.tce)} instead of {perDay(ALB_TCE_2.tce)}.
+        {fmt(idleOf(NEAREST, 'kestrel') + idleOf(NEAREST, 'albatross'))} days idle. The company takes {countFixtures(NEAREST)} cargoes instead of{' '}
+        {countFixtures(BASE)} and ends {money(Math.abs(edge(NEAREST)))} {edge(NEAREST) < 0 ? 'behind' : 'ahead of'} the benchmark. Choosing by freight per tonne
+        is better, {signedMoney(edge(FREIGHT))}, but still not as good as choosing by TCE, because a rate per tonne says nothing about how far a ship must sail
+        empty to earn it or how many days the voyage takes (<a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>). For Albatross’s second voyage it picks coal from
+        Richards Bay at ${fmt(ALB_FREIGHT_2.cargo.freight, 2)} a tonne over Port Hedland ore at ${fmt(ALB_TCE_2.cargo.freight, 2)}; the{' '}
+        {fmt(ALB_FREIGHT_2.ballastNm)} miles of ballast to Richards Bay leave her earning {perDay(ALB_FREIGHT_2.tce)} instead of {perDay(ALB_TCE_2.tce)}.
       </P>
       <P>
         A minimum TCE is patience: turn down whatever is on offer and hope for better. Set it to {perDay(8_000)} and Kestrel skips her last coal voyage, which paid{' '}
         {perDay(fixturesOf(BASE, 'kestrel').at(-1)!.tce)}. At {perDay(10_000)} she sits idle for {fmt(idleOf(PATIENT10, 'kestrel'))} days after her first cargo, and
-        at {perDay(12_000)} she never sails at all, because nothing she could reach paid that much; the company’s loss grows from {usd(-PATIENT8.profit)} to{' '}
-        {usd(-PATIENT12.profit)}. Patience pays only when better cargoes are coming, and in a slack market like this one they mostly weren’t. The conditions matter
-        too. Every voyage the starting desk fixes ends in Qingdao, so four extra days of queue there cut the desk’s lead over the benchmark to {usd(edge(QIN4))}.
+        at {perDay(12_000)} she never sails at all, because nothing she could reach paid that much; the company’s loss grows from {money(-PATIENT8.profit)} to{' '}
+        {money(-PATIENT12.profit)}. Patience pays only when better cargoes are coming, and in a slack market like this one they mostly weren’t. The conditions
+        matter too. Every voyage the starting desk fixes ends in Qingdao, so four extra days of queue there cut the desk’s lead over the benchmark to{' '}
+        {money(edge(QIN4))}.
         {PANAMA_MONTHS > 0 && (
           <>
             {' '}
-            And the first {word(PANAMA_MONTHS)} months fall in the drought that restricts the Panama Canal (<a href={lessonHref('shipping/3.3')}>Lesson 3.3</a>), so any
-            US grain cargo for China has to go the long way round.
+            And the first {word(PANAMA_MONTHS)} months fall in the drought that closes the Panama Canal to bulk carriers (
+            <a href={lessonHref('shipping/3.3')}>Lesson 3.3</a>), so any US grain cargo for China has to go the long way round, through Suez.
           </>
         )}
       </P>
-
-      <Challenge
-        id="a"
-        figure="Fleet Operations Desk"
-        question={`Suppose bunkers cost $${fmt(SHOCK_BUNKER)} a tonne for the whole half-year while freight rates stay as they were. With the starting fleet and cargo world and no extra queue at Qingdao, find a policy that makes Northwind at least ${usd(SHOCK_GAIN)} more than the starting policy does at that price.`}
-        solved={solved}
-        status={
-          !starting ? (
-            <>
-              This challenge is set on Northwind’s starting fleet and cargo world, and yours have changed in Lessons 6.1 or 6.2.{' '}
-              <Button
-                onClick={() => {
-                  resetCompany('ships');
-                  resetCompany('world');
-                }}
-              >
-                Use the starting company
-              </Button>
-            </>
-          ) : p.bunker !== SHOCK_BUNKER ? (
-            `Fix the bunker price at $${fmt(SHOCK_BUNKER)} a tonne first.`
-          ) : (p.congestion ?? 0) !== 0 ? (
-            'Take the extra queue at Qingdao back to zero.'
-          ) : (
-            `At $${fmt(SHOCK_BUNKER)}, the starting policy makes ${usd(baselineNow)}; yours makes ${usd(result.profit)}, ${signedUsd(result.profit - baselineNow)} against it.`
-          )
-        }
-        success={`Solved. At $${fmt(SHOCK_BUNKER)} a tonne the starting policy’s long hauls at 12 knots lose ${usd(-SHOCK_BASE.profit)}. Slowing to 9 knots alone cuts the loss to ${usd(-SHOCK_SLOW.profit)}, ${usd(SHOCK_SLOW.profit - SHOCK_BASE.profit)} better: fuel per voyage falls roughly with the square of speed (Lesson 1.3), and when fuel is dear, days are cheaper than knots (Lesson 2.3). Notice that the slower desk also picks different cargoes: short voyages from Indonesia and Australia, with no long ballast leg to pay for, now beat the hauls from Brazil.`}
-      />
 
       <H2>One ship’s choices</H2>
       <P>
         The desk is greedy: each time a ship comes free it takes the best fixture available then, and never looks further ahead. In the next demonstration, pick a
         ship and one of her fixtures to see what was on offer at that moment — every cargo she could still reach in time, ranked by the TCE it would have earned
-        her — and how the one she took breaks down:
+        her — and how the one she took breaks down. It runs the same company and policy as{' '}
+        <FigRef to="Fleet Operations Desk">the first demonstration</FigRef>:
       </P>
 
       <Figure name="Fleet Operations Desk · one ship’s choices" scenario={pick}>
-        <Segmented label="Ship" value={shipId ?? ''} onChange={(v) => pick.set({ ship: v, fixture: 0 })} options={design.ships.map((s) => ({ value: s.id, label: s.name }))} />
+        {switcher}
+        <Segmented label="Ship" value={shipId ?? ''} onChange={(v) => pick.set({ ship: v, fixture: 0 })} options={co.ships.map((s) => ({ value: s.id, label: s.name }))} />
         {decision ? (
           <>
-            <OptionBars d={decision} minTce={p.minTce} />
+            <OptionBars d={decision} minTce={co.policy.minTce} />
             <DataTable
               caption="The fixture she took, broken down"
               rows={[
                 { k: 'Free at', v: `${place(decision.at)}, day ${fmt(decision.day)}` },
-                { k: 'Ballast to the loading port', v: `${fmt(decision.chosen.ballastNm)} nm, ${fmt(decision.chosen.ballastDays, 1)} days` },
-                { k: 'Waiting for the loading window', v: `${fmt(decision.chosen.load - decision.chosen.arrive, 1)} days` },
-                { k: 'Loading, laden passage and discharge', v: `${fmt(decision.chosen.end - decision.chosen.load, 1)} days` },
-                { k: 'Fuel', v: `${fmt(decision.chosen.fuel)} t at $${fmt(bunkerThen)}/t = ${usd(decision.chosen.fuel * bunkerThen)}` },
-                { k: 'Freight', v: `$${fmt(decision.chosen.cargo.freight, 2)}/t × ${fmt(decision.chosen.cargo.tonnes)} t = ${usd(decision.chosen.cargo.freight * decision.chosen.cargo.tonnes)}` },
-                { k: 'Net after commissions, fuel and ports', v: usd(decision.chosen.net) },
-                { k: 'TCE over the voyage’s days', v: perDay(decision.chosen.tce) },
+                {
+                  k: 'Days',
+                  v: `${fmt(decision.chosen.ballastDays, 1)} ballast (${fmt(decision.chosen.ballastNm)} nm) + ${fmt(decision.chosen.load - decision.chosen.arrive, 1)} waiting + ${fmt(decision.chosen.end - decision.chosen.load, 1)} loaded = ${fmt(decision.chosen.end - decision.chosen.depart, 1)}`,
+                },
+                { k: 'Freight', v: `$${fmt(decision.chosen.cargo.freight, 2)}/t × ${fmt(decision.chosen.cargo.tonnes)} t = ${money(decision.chosen.cargo.freight * decision.chosen.cargo.tonnes)}` },
+                { k: 'Fuel', v: `${fmt(decision.chosen.fuel)} t at $${fmt(bunkerThen)}/t = ${money(decision.chosen.fuel * bunkerThen)}` },
+                { k: 'Net of commissions, fuel and ports', v: money(decision.chosen.net) },
+                { k: 'TCE: net per day of her time', v: perDay(decision.chosen.tce) },
               ]}
               rowKey={(r) => r.k}
               columns={[
@@ -521,6 +544,29 @@ export default function Lesson() {
           onChange={(v) => pick.set({ fixture: v })}
           display={decision ? `${fixtureIndex + 1} of ${shipDecisions.length}: day ${fmt(decision.day)}` : 'none'}
         />
+        <Slider
+          label="Your estimate of the switch"
+          tone="green"
+          value={pick.state.estimate}
+          min={400}
+          max={1_400}
+          step={10}
+          onChange={(v) => pick.set({ estimate: v })}
+          display={`$${fmt(pick.state.estimate)}/t`}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <Button onClick={() => pick.set((st) => ({ checked: st.estimate }))} primary>
+            Check my estimate
+          </Button>
+          <span style={{ fontSize: 14, color: '#5f5f5f' }}>
+            {atCheck && checked !== null
+              ? `At $${fmt(checked)}/t, Santos soybeans earn ${perDay(atCheck.santos)} and Samarinda coal ${perDay(atCheck.coal)}: she ${atCheck.brazil ? 'still goes to Brazil' : 'takes the coal'}.`
+              : 'Starting company and policy, with bunkers fixed at your estimate.'}
+          </span>
+        </div>
+        <Caption>
+          Running {view === 'start' || !changed ? 'the starting company' : 'your company'} under your desk’s policy: {policyText(design)}.
+        </Caption>
       </Figure>
 
       <P>
@@ -535,11 +581,36 @@ export default function Lesson() {
         Step through Albatross’s fixtures. On her first, the dearest cargo per tonne, ore from Tubarão, is also the best by TCE. On her second, the dearest is{' '}
         {routeName(ALB_DEAR_2.cargo)} at ${fmt(ALB_DEAR_2.cargo.freight, 2)} a tonne — the cargo the best-freight rule took in{' '}
         <FigRef to="Fleet Operations Desk">the first demonstration</FigRef> — and it ranks below {routeName(ALB_DECISIONS[1].chosen.cargo)} by{' '}
-        {perDay(ALB_DECISIONS[1].chosen.tce - ALB_DEAR_2.tce)}. What the desk can’t see is the future. Kestrel’s first soybean voyage ties her up
-        for {fmt(fixturesOf(BASE, 'kestrel')[0].end)} days, and whatever turns up in the Pacific meanwhile goes to other owners. A better desk would weigh each
-        fixture against where it leaves the ship and what the market will pay when she gets there — the positional value of Lesson 3.4 and the forecasts of
-        Lesson 5.1. The next lesson takes up the second half: in <a href={lessonHref('shipping/6.4')}>Lesson 6.4</a>, you forecast what the market will pay as
-        trade flows, weather and the fleet change around Northwind.
+        {perDay(ALB_DECISIONS[1].chosen.tce - ALB_DEAR_2.tce)}.
+      </P>
+      <P>
+        Fuel moves the ranking too. At the history’s price for {when(START.world.start)}, ${fmt(START_BUNKER)} a tonne, Kestrel’s Brazil voyage takes {fmt(KESTREL_SANTOS.end - KESTREL_SANTOS.depart)} days and burns {fmt(KESTREL_SANTOS.fuel)} tonnes, {fmt(santosPerDay, 1)}{' '}
+        a day, most of it at sea; the best coal cargo, from Samarinda, takes {fmt(KESTREL_COAL.end - KESTREL_COAL.depart)} days and burns{' '}
+        {fmt(KESTREL_COAL.fuel)} tonnes, {fmt(coalPerDay, 1)} a day. Every dollar on the bunker price takes more off the long voyage’s TCE than off the short
+        one’s, so somewhere the TCE rule stops sending her to Brazil.
+      </P>
+
+      <Challenge
+        id="a"
+        figure="Fleet Operations Desk · one ship’s choices"
+        question={`Estimate first, from the two voyages’ TCEs and the fuel each burns a day: with bunkers fixed at what price would the best-TCE desk send the starting company’s Kestrel for the Samarinda coal instead of Brazil’s soybeans? Set your estimate and check it; it scores within $${ESTIMATE_TOLERANCE} a tonne.`}
+        solved={solved}
+        status={
+          checked === null || !atCheck
+            ? 'No estimate checked yet.'
+            : atCheck.brazil
+              ? `Not yet: at $${fmt(checked)} a tonne the soybeans still earn ${perDay(atCheck.santos - atCheck.coal)} more than the coal. How fast is that gap closing per dollar?`
+              : `Too far: at $${fmt(checked)} a tonne the coal already earns ${perDay(atCheck.coal - atCheck.santos)} more. Where did the gap close?`
+        }
+        success={`Solved: $${fmt(checked ?? 0)} a tonne, against the $${fmt(brazilCrossover())} at which she switches. The gap of ${perDay(KESTREL_SANTOS.tce - KESTREL_COAL.tce)} at $${fmt(START_BUNKER)} closes by $${fmt(santosPerDay - coalPerDay, 1)} a day for every dollar on the bunker price, the difference between the two voyages’ fuel per day. Nobody told the TCE rule to prefer short voyages when fuel is dear; ranking cargoes by what they net per day of the ship’s time does it.`}
+      />
+
+      <P>
+        What the desk can’t see is the future. Kestrel’s first soybean voyage ties her up for {fmt(fixturesOf(BASE, 'kestrel')[0].end)} days, and whatever turns
+        up in the Pacific meanwhile goes to other owners. A better desk would weigh each fixture against where it leaves the ship and what the market will pay when
+        she gets there — the positional value of <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a> and the forecasts of{' '}
+        <a href={lessonHref('shipping/5.1')}>Lesson 5.1</a>. The next lesson takes up the second half: in <a href={lessonHref('shipping/6.4')}>Lesson 6.4</a>, you
+        forecast what the market will pay as trade flows, weather and the fleet change around Northwind.
       </P>
     </LessonPage>
   );

@@ -18,6 +18,7 @@ import {
   Slider,
   Sup,
   TEXT,
+  Tn,
   fmt,
   lessonHref,
   linePath,
@@ -30,9 +31,10 @@ import {
   usePlay,
   useScenario,
 } from '../../../framework';
-import { maxBatch, prefillS, servingPoint, type ServeConfig } from '../../../engines/compute/inference';
+import { maxBatch, prefillS, servingPoint, tensorParallelS, type ServeConfig } from '../../../engines/compute/inference';
 import { simulateServing, type SchedResult } from '../../../engines/compute/scheduling';
 import { ACCELERATORS } from '../../../model/compute/hardware';
+import { WORKLOADS, type ServingWorkload } from '../../../model/compute/workloads';
 
 // ---------------------------------------------------------------------------
 // The server: one copy of the 70B model split over four A-class GPUs, as in Lesson 3.2, serving
@@ -48,9 +50,13 @@ export const CAP_MAX = maxBatch(SERVE, INPUT + Math.ceil(OUTPUT * 1.5));
 /** Requests that fit if every reply were the average length, as in Lesson 3.2. */
 export const CAP_AVERAGE = maxBatch(SERVE, INPUT + OUTPUT);
 
-/** The service's promise: 95% of requests see a first token within 2 s, and tokens come at least every 50 ms. */
-export const TTFT_LIMIT = 2;
-export const TPOT_LIMIT = 0.05;
+/**
+ * The service's promise is the chat assistant's, kept from Lesson 3.2's challenge to Lesson 3.5: 95% of requests see a
+ * first token within 1.5 s, and tokens come at least every 40 ms.
+ */
+const CHAT = WORKLOADS.chat70 as ServingWorkload;
+export const TTFT_LIMIT = CHAT.ttftMax;
+export const TPOT_LIMIT = CHAT.tpotMax;
 
 export const RATE_MIN = 0.5;
 export const RATE_MAX = 20;
@@ -78,14 +84,29 @@ export function meetsLimits(r: SchedResult): boolean {
   return !r.overloaded && r.ttftP95 <= TTFT_LIMIT && r.tpot <= TPOT_LIMIT;
 }
 
-/** The highest arrival rate on the slider's grid that some max batch can serve within the limits (checked in the tests). */
-export const BEST_RATE = 9;
-/** At that rate, the only max batches that work. */
-export const BEST_CAPS: [number, number] = [150, 156];
+/**
+ * The highest arrival rate on the slider's grid that some max batch can serve within the limits, in this one seeded
+ * two-minute sample of arrivals (checked in the tests; other samples put it a little higher).
+ */
+export const BEST_RATE = 7.5;
+/** At that rate, the max batches that work: every one from the first to the slider's end. */
+export const BEST_CAPS: [number, number] = [91, 309];
+/** The max batch whose run the prose quotes at the best rate. */
+export const BEST_SHOWN_CAP = 256;
 
-/** The challenge: within the limits, at the best rate on the grid or one step below it. */
+/** The challenge: within the limits at the best rate on the grid (no higher rate on the slider keeps them). */
 export function rateSolved(rate: number, cap: number): boolean {
-  return rate >= BEST_RATE - RATE_STEP - 1e-9 && meetsLimits(runLab(rate, cap));
+  return rate >= BEST_RATE - 1e-9 && meetsLimits(runLab(rate, cap));
+}
+
+/** The server flat out: arrivals at the slider's top, the most its memory holds decoding, the queue unlimited. */
+export function flatOut(): SchedResult {
+  return runLab(RATE_MAX, CAP_MAX);
+}
+
+/** Requests a second the server finishes flat out (each writes OUTPUT tokens on average). */
+export function flatOutRequests(): number {
+  return flatOut().throughput / OUTPUT;
 }
 
 /** Max batches shown as curves in the second demonstration. */
@@ -95,6 +116,8 @@ export const CURVE_RATES = [0.5, ...Array.from({ length: 20 }, (_, i) => i + 1)]
 
 /** Time the four GPUs spend reading one 1,000-token prompt, s. */
 export const PREFILL_S = prefillS(SERVE, INPUT);
+/** Of that, the time spent exchanging partial results between the GPUs, s; the rest is arithmetic. */
+export const PREFILL_EXCHANGE_S = tensorParallelS(SERVE, INPUT);
 
 // ---------------------------------------------------------------------------
 // Formatting.
@@ -113,6 +136,10 @@ function rateText(r: number): string {
   return Number.isInteger(r) ? fmt(r) : fmt(r, 1);
 }
 
+/** "40 ms", "1.5 s": the promise's limits. */
+const TPOT_TEXT = `${fmt(TPOT_LIMIT * 1e3)} ms`;
+const TTFT_TEXT = `${rateText(TTFT_LIMIT)} s`;
+
 const QUEUE = GRAPHIC.teal;
 const BATCH = '#333333';
 
@@ -123,7 +150,7 @@ export function labCaption(r: SchedResult, rate: number, cap: number): string {
   const tpotOver = r.tpot > TPOT_LIMIT;
   const ttftOver = r.ttftP95 > TTFT_LIMIT;
   if (tpotOver && ttftOver) return `The queue keeps up, but both promises are broken: tokens come every ${ms(r.tpot)} and 5% of requests wait over ${secs(r.ttftP95)} to start.`;
-  if (tpotOver) return `The queue keeps up, but the batch averages ${fmt(r.meanBatch)} and prompts keep interrupting it, so tokens come every ${ms(r.tpot)}: slower than the 50 ms promised.`;
+  if (tpotOver) return `The queue keeps up, but the batch averages ${fmt(r.meanBatch)} and prompts keep interrupting it, so tokens come every ${ms(r.tpot)}: slower than the ${TPOT_TEXT} promised.`;
   if (ttftOver) return `Tokens come every ${ms(r.tpot)}, but the queue backs up at busy moments: 5% of requests wait over ${secs(r.ttftP95)} for their first token.`;
   return `At ${rateText(rate)} requests a second the batch averages ${fmt(r.meanBatch)}. Both promises are kept: 95% of requests start within ${secs(r.ttftP95)}, and tokens come every ${ms(r.tpot)}.`;
 }
@@ -291,7 +318,7 @@ function TradeoffCharts({ curves, rate }: { curves: Array<{ cap: number; points:
       <line className="base" x1={64} x2={612} y1={150} y2={150} />
       <line x1={64} x2={612} y1={Y1(TTFT_LIMIT)} y2={Y1(TTFT_LIMIT)} stroke={GRAPHIC.red} strokeDasharray="5 4" />
       <text className="ax" x={68} y={Y1(TTFT_LIMIT) - 5} style={{ fill: TEXT.red }}>
-        2 s promise
+        {TTFT_TEXT} promise
       </text>
       <text className="ax" x={64} y={200}>
         Time per output token
@@ -306,7 +333,7 @@ function TradeoffCharts({ curves, rate }: { curves: Array<{ cap: number; points:
       ))}
       <line x1={64} x2={612} y1={Y2(TPOT_LIMIT * 1000)} y2={Y2(TPOT_LIMIT * 1000)} stroke={GRAPHIC.red} strokeDasharray="5 4" />
       <text className="ax" x={68} y={Y2(TPOT_LIMIT * 1000) - 5} style={{ fill: TEXT.red }}>
-        50 ms promise
+        {TPOT_TEXT} promise
       </text>
       {[...curves].reverse().map((c) => {
         const xs = c.points.map((p) => X(p.r.throughput));
@@ -359,13 +386,14 @@ export default function Lesson() {
   const jam = runLab(8, 64);
   const open = runLab(8, 256);
   const steadyAtOpen = servingPoint(SERVE, Math.round(open.meanBatch), INPUT, OUTPUT);
-  const best = runLab(BEST_RATE, 152);
-  const loose = runLab(BEST_RATE, 256);
-  const flatOut = runLab(RATE_MAX, CAP_MAX);
+  const best = runLab(BEST_RATE, BEST_SHOWN_CAP);
+  const flat = flatOut();
+  const flatRequests = flatOutRequests();
   const littleWait = OUTPUT * open.tpot;
   const busyShare = 8 * PREFILL_S;
   const capacity = curves.map((c) => Math.max(...c.points.map((p) => p.r.throughput)));
   const gpuHoursAt = (tokensPerS: number) => (SERVE.tp * 1e6) / (tokensPerS * 3600);
+  const ghText = (tokensPerS: number) => fmt(gpuHoursAt(tokensPerS), 3);
 
   const status = r.overloaded
     ? `At ${rateText(rate)} requests a second with a max batch of ${fmt(cap)}, the queue grows without end.`
@@ -387,15 +415,18 @@ export default function Lesson() {
         A real server can only batch the requests that have arrived, and when they arrive faster than it finishes them, they wait.
       </P>
       <P>
-        So a person sees two delays. The <K tone="teal">time to first token</K> is how long they wait before the reply begins: time in the queue, plus the time to
-        read their prompt. The <K tone="teal">time per output token</K> is how quickly the reply then streams out. Suppose the service promises that 95% of
-        requests see their first token within {TTFT_LIMIT} seconds, and that tokens arrive at least 20 a second — no more than 50 ms apart.
+        So a person still sees the two delays of Lesson 3.2, but the <Tn tone="teal">time to first token</Tn> now includes time in the queue as well as the time to
+        read their prompt. Suppose the service makes the chat assistant’s promise, which this chapter keeps from Lesson 3.2’s challenge to{' '}
+        <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>: a <Tn tone="teal">time per output token</Tn> of no more than {TPOT_TEXT}, and a first token within{' '}
+        {TTFT_TEXT} for 95% of requests. That second limit is on the 95th percentile, the wait that only one request in twenty exceeds; an average would hide the
+        people who wait longest.
       </P>
       <P>
         In the next demonstration, requests arrive at random, at an average rate you set, each with a 1,000-token prompt and a reply between 150 and 450 tokens long.
         The server works in steps. At each step it admits waiting requests into the batch, up to a maximum you choose, reads the new arrivals’ prompts, and then
         gives every request in the batch one more token; finished requests leave. The top drawing replays the run, and the chart shows it whole: the batch, and the
-        queue of requests waiting to join it, second by second over {SECONDS} seconds. Change the arrival rate and the maximum batch:
+        queue of requests waiting to join it, second by second over {SECONDS} seconds. The maximum batch stops at {fmt(CAP_MAX)}, not {fmt(CAP_AVERAGE)}, because
+        memory must hold every request’s cache with its reply at its longest, {fmt(Math.ceil(OUTPUT * 1.5))} tokens. Change the arrival rate and the maximum batch:
       </P>
 
       <Figure name="Inference Scheduling Lab" scenario={lab} play={play}>
@@ -428,24 +459,29 @@ export default function Lesson() {
       </P>
       <P>
         Raise the maximum to {fmt(256)} and the queue drains: the batch averages {fmt(open.meanBatch)}, and 95% start within {secs(open.ttftP95)}. But the tokens now
-        come every {ms(open.tpot)}, about twice as slowly as Lesson 3.2’s steady batch of that size, {ms(steadyAtOpen.tpot)}. The difference is the prompts.
-        Reading a 1,000-token prompt takes these four GPUs {ms(PREFILL_S)} of hard arithmetic, and while they do it, no one in the batch gets a token. At 8 arrivals a
-        second, that is {ms(busyShare)} of every second spent on prompts. Little’s law closes the loop: each request now stays about {fmt(OUTPUT)} ×{' '}
+        come every {ms(open.tpot)} — just over the {TPOT_TEXT} promised — about twice as slowly as Lesson 3.2’s steady batch of that size, {ms(steadyAtOpen.tpot)}.
+        The difference is the prompts. Reading a 1,000-token prompt takes these four GPUs {ms(PREFILL_S)} — {ms(PREFILL_S - PREFILL_EXCHANGE_S)} of arithmetic and{' '}
+        {ms(PREFILL_EXCHANGE_S)} of exchanges between them — and while they do it, no one in the batch gets a token. At 8 arrivals a second, that is{' '}
+        {ms(busyShare)} of every second spent on prompts. Little’s law closes the loop: each request now stays about {fmt(OUTPUT)} ×{' '}
         {ms(open.tpot)} ≈ {secs(littleWait)}, and 8 a second for {secs(littleWait)} is about {fmt(8 * littleWait)} requests in the batch at once.
+      </P>
+      <P>
+        How much can this server do at all? Push the arrivals to {fmt(RATE_MAX)} a second and the maximum batch to {fmt(CAP_MAX)}. The queue runs away, but the batch
+        stays full, and the server writes {fmt(flat.throughput)} tokens a second: flat out, it finishes about {fmt(flatRequests, 1)} requests a second.
       </P>
 
       <Challenge
         id="a"
-        question="Serve as many requests a second as you can while keeping both promises: 95% of first tokens within 2 seconds, and no more than 50 ms between tokens."
+        question={`Predict first: flat out, the server finishes about ${fmt(flatRequests, 1)} requests a second. How many a second can it take while keeping both promises — 95% of first tokens within ${TTFT_TEXT}, and no more than ${TPOT_TEXT} between tokens? Estimate, then find the highest arrival rate at which some max batch keeps both.`}
         solved={solved}
         status={status}
-        success={`Solved. The most this server can take within both promises is ${BEST_RATE} requests a second, and only with a max batch between ${BEST_CAPS[0]} and ${BEST_CAPS[1]}: at ${BEST_RATE} a second, a max batch of 128 lets the queue run away, and one of 256 lets the batch grow until tokens come every ${ms(loose.tpot)}. At ${BEST_RATE} a second with a max batch of 152 the server writes ${fmt(best.throughput)} tokens a second, using ${pct(best.utilization)} of its arithmetic.`}
+        success={`Solved: ${rateText(BEST_RATE)} requests a second, with any max batch from ${fmt(BEST_CAPS[0])} up — only ${fmt((BEST_RATE / flatRequests) * 100)}% of what the server finishes flat out. Any smaller max batch and requests queue too long to start. At ${rateText(BEST_RATE + RATE_STEP)} a second nothing works: a max batch small enough to keep tokens within ${TPOT_TEXT} leaves too many requests waiting over ${TTFT_TEXT}, and one big enough to keep the queue short lets tokens slow past ${TPOT_TEXT}. These edges come from one two-minute sample of random arrivals; another would move them a little.`}
       />
 
       <H2>The knee</H2>
       <P>
-        The challenge has a sharp edge. A little below the best rate, a wide range of maximum batches keeps both promises; at the best rate only a narrow band does;
-        a little above it, none at all. To see why, the next demonstration runs the server at every arrival rate from 0.5 to 20 a second, for three maximum batches, and plots what each run
+        Why is the edge so sharp — half a request a second more, and no maximum batch keeps both promises — and so far below what the server can do? To see, the
+        next demonstration runs the server at every arrival rate from 0.5 to 20 a second, for three maximum batches, and plots what each run
         delivered — its <K tone="orange">throughput</K>, in output tokens per second — against the two delays its users saw. The dots mark the arrival rate you
         choose: solid where the queue keeps up, hollow where it grows without end. Move the arrival rate:
       </P>
@@ -474,31 +510,30 @@ export default function Lesson() {
         admitted almost at once. As traffic approaches what the server can finish, the wait turns sharply upward, and past that point it is limited only by how long
         the run lasts. The turn is the <b>knee</b>, and it sits at very different places for the three settings: a server that decodes at most 16 requests at once
         tops out at about {fmt(capacity[0])} tokens a second, one allowed 64 at about {fmt(capacity[1])}, and one allowed 256 at about {fmt(capacity[2])}. The lower
-        chart shows the price of the bigger batch: below its knee every setting streams quickly, but near its knee the big batch fills and its tokens slow, past the
-        50 ms promise.
+        chart shows the price of the bigger batch: below its knee every setting streams quickly, but near its knee the big batch fills and its tokens slow, past the{' '}
+        {TPOT_TEXT} promise.
       </P>
       <P>
         The shape isn’t special to language models. Any server fed by random arrivals waits longer the busier it is, and the wait grows roughly as 1 ÷ (1 − the share
         of the time it is busy) — slowly at first, then explosively as that share approaches one. A server run at 95% of its capacity waits about twice as long as
-        one at 90%. That is why the best the challenge allows, {fmt(best.throughput)} tokens a second, sits well below the{' '}
-        {fmt(flatOut.throughput)} tokens a second the same server manages flat out, with an unlimited queue and {fmt(CAP_MAX)} requests in its batch, which is the
-        most its memory can hold when every reply runs long.
+        one at 90%. That is why the best the challenge allows, {fmt(best.throughput)} tokens a second, is only {fmt((best.throughput / flat.throughput) * 100)}% of
+        the {fmt(flat.throughput)} the same server manages flat out.
       </P>
 
       <H2>Headroom is idle capacity</H2>
       <P>
         Look at the arithmetic in use in <FigRef to="Inference Scheduling Lab">the first demonstration</FigRef>. Even run flat out, the four GPUs use{' '}
-        {pct(flatOut.utilization)} of their {fmt(g.bf16Tflops)} TFLOPS: decoding is limited by memory, as Chapter 2 predicted, and the prompts that do use the
+        {pct(flat.utilization)} of their {fmt(g.bf16Tflops)} TFLOPS: decoding is limited by memory, as Chapter 2 predicted, and the prompts that do use the
         arithmetic stall everything else. At the challenge’s answer, {pct(best.utilization)}. Serving systems fight both losses. They cut long prompts into pieces and
         fold them into the decoding steps, so no single prompt stalls the batch for long, and some run prompts and replies on separate groups of GPUs altogether, each
         sized for its own kind of work. But no arrangement removes the knee. To keep a promise about waiting, a server must run below its capacity, and the gap is
         hardware that is paid for and idle.
       </P>
       <P>
-        That gap has a cost per token. Kept within both promises, this server writes {fmt(best.throughput)} tokens a second, or{' '}
-        {fmt(gpuHoursAt(best.throughput), 2)} GPU-hours per million tokens. Run flat out, with nobody waiting on the result — an overnight batch of documents, say —
-        the same four GPUs need {fmt(gpuHoursAt(flatOut.throughput), 2)} GPU-hours per million tokens. And with every request the same length and the batch always
-        full, Lesson 3.2’s steady figure, {fmt(gpuHoursAt(full.tokensPerS), 2)}. The same hardware, running the same model, costs different amounts per token depending
+        That gap has a cost per token. Kept within both promises, this server writes {fmt(best.throughput)} tokens a second, or {ghText(best.throughput)}{' '}
+        GPU-hours per million tokens. Run flat out, with nobody waiting on the result — an overnight batch of documents, say — the same four GPUs need{' '}
+        {ghText(flat.throughput)} GPU-hours per million tokens. And with every request the same length and the batch always full, Lesson 3.2’s steady figure,{' '}
+        {ghText(full.tokensPerS)}. The same hardware, running the same model, costs different amounts per token depending
         on how quickly its users need the answer. Demand also rises and falls through the day, so a server sized for the afternoon peak sits partly idle at night —
         idle capacity that someone pays for, as Chapter 5 will show when it prices on-demand and interruptible capacity.
       </P>
@@ -509,7 +544,7 @@ export default function Lesson() {
           {SERVE.tp} GPUs × 10<Sup>6</Sup> ÷ ({fmt(best.throughput)} tokens/s × 3,600 s)
         </span>
         <Op>=</Op>
-        <K tone="orange">{fmt(gpuHoursAt(best.throughput), 2)}</K>
+        <K tone="orange">{ghText(best.throughput)}</K>
       </Eq>
       <P>
         Every workload so far has been one model on one kind of GPU. A real cloud runs many workloads at once — chat, code completion, batch jobs, training runs —

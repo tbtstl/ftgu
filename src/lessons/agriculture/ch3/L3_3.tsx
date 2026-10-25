@@ -26,13 +26,23 @@ import { dayOf } from '../../../model/agriculture/region';
 import { DayChart } from '../shared/DayChart';
 import { buAc } from '../shared/format';
 
-const GREEN = '#4f8f2f';
+/** The canopy and its NDVI take the course's growth tone, as leaf area does in Lesson 1.1. */
+const CANOPY = GRAPHIC.teal;
 const SOIL_COLOR = '#9a7b52';
 
-/** The challenge: the smallest leaf area index (0.1 steps) at which a healthy canopy reads NDVI 0.75. */
-export function ndviSolved(lai: number, chlorophyll: number, stress: number): boolean {
-  if (chlorophyll !== 1 || stress !== 0) return false;
-  return ndvi(canopyReflectance(lai)) >= 0.75 && ndvi(canopyReflectance(Math.round((lai - 0.1) * 10) / 10)) < 0.75;
+/** NDVI as the readout shows it, to three decimals. */
+export function shown(lai: number, chlorophyll = 1, stress = 0): number {
+  return Math.round(ndvi(canopyReflectance(lai, chlorophyll, stress)) * 1000) / 1000;
+}
+
+/** The challenge's two canopies: a thin, healthy one, and a full one whose leaves are losing their green. */
+export const THIN_LAI = 2;
+export const FULL_LAI = 5;
+
+/** The challenge: a full, unstressed canopy whose lost chlorophyll makes it read, within 0.01, the NDVI of the thin, healthy one. */
+export function lookalikeSolved(lai: number, chlorophyll: number, stress: number): boolean {
+  if (lai !== FULL_LAI || stress !== 0 || chlorophyll >= 1) return false;
+  return Math.abs(shown(lai, chlorophyll) - shown(THIN_LAI)) <= 0.01;
 }
 
 function Spectrum({ lai, chl, stress }: { lai: number; chl: number; stress: number }) {
@@ -56,10 +66,10 @@ function Spectrum({ lai, chl, stress }: { lai: number; chl: number; stress: numb
       <rect x={x(780)} y={24} width={x(900) - x(780)} height={186} fill="rgba(171, 112, 182, .12)" />
       <GridY y={y} ticks={[0, 0.2, 0.4, 0.6]} x0={70} x1={610} format={(t) => `${fmt(t * 100)}%`} baseline={0} />
       <path d={linePath(xs, SOIL.map(y))} fill="none" stroke={SOIL_COLOR} strokeWidth={2} strokeDasharray="6 4" />
-      <path d={linePath(xs, lf.map(y))} fill="none" stroke={GREEN} strokeWidth={1.2} opacity={0.6} />
-      <path d={linePath(xs, canopy.map(y))} fill="none" stroke={GREEN} strokeWidth={2.8} />
+      <path d={linePath(xs, lf.map(y))} fill="none" stroke={CANOPY} strokeWidth={1.2} opacity={0.6} />
+      <path d={linePath(xs, canopy.map(y))} fill="none" stroke={CANOPY} strokeWidth={2.8} />
       {canopy.map((c, i) => (
-        <circle key={i} cx={xs[i]} cy={y(c)} r={4.5} fill={GREEN} stroke="#fcfcfb" strokeWidth={1.5} />
+        <circle key={i} cx={xs[i]} cy={y(c)} r={4.5} fill={CANOPY} stroke="#fcfcfb" strokeWidth={1.5} />
       ))}
       {BANDS.map((b) => (
         <text key={b.id} className="ax ax-m" x={x(b.nm)} y={228}>
@@ -87,22 +97,57 @@ const SEASONS = {
 } as const;
 type SeasonKey = keyof typeof SEASONS;
 
+const ORBIT_FROM = dayOf(4, 15);
+const ORBIT_TO = dayOf(10, 15);
+const MID_FROM = dayOf(7, 15);
+const MID_TO = dayOf(8, 15);
+
+let blightCache: { passes: number; all: number; mid: number; daily: number; dailyClearSky: number; days: number; wet: number } | null = null;
+/**
+ * What the satellite sees of the wet, blighted summer: clear passes at the figure's defaults (every five days, 30% cloud on dry
+ * days), over the season and from mid-July to mid-August; and in that month with a pass every day, at 30% and at no cloud on dry days.
+ */
+export function blightLooks() {
+  if (!blightCache) {
+    const year = SEASONS.blight.year;
+    const truth = seasonNdvi(fieldSeason(year, blightField('none')));
+    const w = simulatedYear(year, 'prairie');
+    const look = (revisit: number, cloud: number) => satellitePasses(truth, w, revisit, cloud, 7000 + year, ORBIT_FROM, ORBIT_TO);
+    const clear = (obs: ReturnType<typeof look>, a = 0, b = 999) => obs.filter((x) => x.day >= a && x.day < b && x.value !== null).length;
+    const five = look(5, 0.3);
+    let wet = 0;
+    for (let d = MID_FROM; d < MID_TO; d++) if ((w[d]?.rain ?? 0) >= 0.05) wet++;
+    blightCache = {
+      passes: five.length,
+      all: clear(five),
+      mid: clear(five, MID_FROM, MID_TO),
+      daily: clear(look(1, 0.3), MID_FROM, MID_TO),
+      dailyClearSky: clear(look(1, 0), MID_FROM, MID_TO),
+      days: MID_TO - MID_FROM,
+      wet,
+    };
+  }
+  return blightCache;
+}
+
 export default function Lesson() {
   const s = useScenario('spectrum', { lai: 2, chl: 1, stress: 0 });
   const canopy = canopyReflectance(s.state.lai, s.state.chl, s.state.stress);
   const v = ndvi(canopy);
-  const solved = ndviSolved(s.state.lai, s.state.chl, s.state.stress);
+  const solved = lookalikeSolved(s.state.lai, s.state.chl, s.state.stress);
+  const thin = shown(THIN_LAI);
 
   const o = useScenario('orbit', { season: 'reference' as SeasonKey, revisit: 5, cloud: 0.3 });
   const def = SEASONS[o.state.season];
   const run = useMemo(() => fieldSeason(def.year, def.blight ? blightField('none') : { district: 'prairie', crop: 'corn' }), [def]);
   const truth = useMemo(() => seasonNdvi(run), [run]);
   const ref = useMemo(() => seasonNdvi(fieldSeason(REFERENCE_YEAR, { district: 'prairie', crop: 'corn' })), []);
-  const from = dayOf(4, 15);
-  const to = dayOf(10, 15);
+  const from = ORBIT_FROM;
+  const to = ORBIT_TO;
   const obs = useMemo(() => satellitePasses(truth, simulatedYear(def.year, 'prairie'), o.state.revisit, o.state.cloud, 7000 + def.year, from, to), [truth, def.year, o.state.revisit, o.state.cloud, from, to]);
   const july = obs.filter((x) => x.day >= dayOf(7, 1) && x.day < dayOf(8, 1));
-  const midSummer = clearMean(obs, dayOf(7, 15), dayOf(8, 15));
+  const midSummer = clearMean(obs, MID_FROM, MID_TO);
+  const blightSeen = useMemo(() => blightLooks(), []);
   const days = Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
   return (
@@ -110,24 +155,25 @@ export default function Lesson() {
       <P>
         <a href={lessonHref('agriculture/3.2')}>The previous lesson</a> struck Cedar Bend’s crops with droughts and freezes and watched the damage in the model. A grain
         trader in the real world can’t run the model on the real valley; they need to see the crops. Walking fields is slow and samples only a few. Satellites look
-        at all of them every few days — the two European Sentinel-2 satellites, for instance, return to the same spot every five days and measure visible and
-        near-infrared light in squares 10 meters across — and what they measure is light. This lesson is about what that light can and can’t tell us.
+        at all of them every few days — the European Sentinel-2 satellites, for instance, working in pairs, return to the same spot every five days or sooner and
+        measure visible and near-infrared light in squares 10 meters across — and what they measure is light. This lesson is about what that light can and can’t tell us.
       </P>
       <P>
         Sunlight striking a field is partly absorbed and partly reflected, and how much comes back depends on the wavelength. A green leaf absorbs most of the{' '}
         <K tone="red">red</K> light, because chlorophyll uses it for photosynthesis — the same light the leaves of <a href={lessonHref('agriculture/1.1')}>Lesson
         1.1</a> turned into sugar. But it reflects about half of the <K tone="violet">near-infrared</K> light just beyond what our eyes can see, scattered back by
         the spongy cells inside the leaf. Bare soil does neither particularly: it reflects a little more of each as the wavelength rises. In the next demonstration,
-        the heavy green line is the reflectance of a field of corn in six bands like those of the Sentinel-2 satellites; the thin line is a single leaf and the
-        dashed line bare soil. Grow the canopy, drain its chlorophyll, stress it for water:
+        the heavy line is the reflectance of a field of corn in six bands like those of the Sentinel-2 satellites; the thin line is a single leaf and the
+        dashed line bare soil. The canopy’s size is its leaf area index, the square meters of leaf over each square meter of ground from{' '}
+        <a href={lessonHref('agriculture/1.1')}>Lesson 1.1</a>. Grow the canopy, drain its chlorophyll, stress it for water:
       </P>
 
       <Figure name="Vegetation Index Explorer" scenario={s}>
         <Spectrum lai={s.state.lai} chl={s.state.chl} stress={s.state.stress} />
         <Legend
           items={[
-            { label: 'Canopy', color: GREEN, kind: 'line' },
-            { label: 'One leaf', color: GREEN, kind: 'line' },
+            { label: 'Canopy', color: CANOPY, kind: 'line' },
+            { label: 'One leaf', color: CANOPY, kind: 'line' },
             { label: 'Bare soil', color: SOIL_COLOR, kind: 'line', dashed: true },
           ]}
         />
@@ -139,7 +185,7 @@ export default function Lesson() {
           ]}
         />
         <Slider label="Leaf area index" tone="teal" value={s.state.lai} min={0} max={6} step={0.1} onChange={(x) => s.set({ lai: Math.round(x * 10) / 10 })} display={fmt(s.state.lai, 1)} />
-        <Slider label="Chlorophyll" tone="green" value={s.state.chl} min={0} max={1} step={0.05} onChange={(x) => s.set({ chl: Math.round(x * 20) / 20 })} display={`${fmt(s.state.chl * 100)}%`} />
+        <Slider label="Chlorophyll" value={s.state.chl} min={0} max={1} step={0.05} onChange={(x) => s.set({ chl: Math.round(x * 20) / 20 })} display={`${fmt(s.state.chl * 100)}%`} />
         <Slider label="Water stress" tone="blue" value={s.state.stress} min={0} max={1} step={0.05} onChange={(x) => s.set({ stress: Math.round(x * 20) / 20 })} display={`${fmt(s.state.stress * 100)}%`} />
       </Figure>
 
@@ -147,26 +193,26 @@ export default function Lesson() {
         The contrast between red and near-infrared is the signature of green leaf, and remote sensing condenses it into one number, the{' '}
         <K tone="teal">normalized difference vegetation index</K>: NDVI = (near-infrared − red) ÷ (near-infrared + red). Bare soil reads about 0.20. A canopy with
         a leaf area index of 1 reads 0.51; at 3, 0.74; at 5, 0.81. Notice how the index flattens: once the canopy covers the ground, the red is already gone, and
-        extra leaf adds only a little near-infrared. Yellowing leaves pull it down fast — at 70% chlorophyll a full canopy reads 0.64 — and water stress more gently,
-        to 0.75 at its worst, mostly through the near-infrared.
+        extra leaf adds only a little near-infrared. Yellowing leaves pull it down fast — at 70% chlorophyll a full canopy, with a leaf area index of 5, reads 0.64
+        — and water stress more gently, to 0.75 at its worst for the same canopy, mostly through the near-infrared.
       </P>
       <P>
-        The other bands carry information too. In the red edge, where a leaf’s reflectance climbs steeply from red to near-infrared, the climb starts later as
-        chlorophyll is lost, so it is sensitive to the yellowing of a stressed or nitrogen-starved crop. In the shortwave infrared, water inside the leaf absorbs
+        The other bands carry information too. In the red edge, where a leaf’s reflectance climbs steeply from red to near-infrared, the climb starts earlier, at
+        shorter wavelengths, as chlorophyll is lost, so it is sensitive to the yellowing of a stressed or nitrogen-starved crop. In the shortwave infrared, water inside the leaf absorbs
         light, so a drying leaf reflects more of it: watch the right-hand end of the line rise as you add water stress. Indices built from those bands are used
         alongside NDVI, but NDVI, simple and decades old, is still the workhorse.
       </P>
 
       <Challenge
         id="a"
-        question="Keep the leaves fully green and unstressed. What is the smallest leaf area index, in steps of 0.1, at which the canopy’s NDVI reaches 0.75?"
+        question={`Predict first: a thin, healthy canopy with a leaf area index of ${THIN_LAI} reads an NDVI of ${fmt(thin, 3)}. How much of its chlorophyll would a full canopy, with a leaf area index of ${FULL_LAI} and no water stress, have to lose to read the same from orbit? Then set it, in 5% steps, to within 0.01.`}
         solved={solved}
         status={
-          s.state.chl !== 1 || s.state.stress !== 0
-            ? 'Set chlorophyll to 100% and water stress to 0%.'
-            : `At a leaf area index of ${fmt(s.state.lai, 1)}, NDVI is ${fmt(v, 3)}.`
+          s.state.lai !== FULL_LAI || s.state.stress !== 0
+            ? `Set the leaf area index to ${FULL_LAI} and water stress to 0%, then lower the chlorophyll.`
+            : `At ${fmt(s.state.chl * 100)}% chlorophyll the full canopy reads ${fmt(v, 3)}, against ${fmt(thin, 3)} for the thin, healthy one.`
         }
-        success={`Solved: NDVI reaches 0.75 at a leaf area index of ${fmt(s.state.lai, 1)}. Doubling the leaf area from there adds only about 0.07, so a satellite can tell a thin crop from a good one far more easily than a good crop from a great one.`}
+        success={`Solved: with ${fmt(s.state.chl * 100)}% of its chlorophyll, a canopy with two and a half times the leaf reads ${fmt(v, 3)}, against ${fmt(thin, 3)} for the thin, healthy one. From orbit the two fields look alike: losing ${fmt((1 - s.state.chl) * 100)}% of its green undoes all the extra leaf. A low NDVI says that something is short — leaf, or the green in it — but not which.`}
       />
 
       <H2>Watching a season from orbit</H2>
@@ -188,7 +234,7 @@ export default function Lesson() {
           days={days}
           series={[
             { values: days.map((d) => ref[d]), color: '#999', dash: '6 4', width: 1.5 },
-            { values: days.map((d) => truth[d]), color: GREEN, width: 2.5 },
+            { values: days.map((d) => truth[d]), color: CANOPY, width: 2.5 },
           ]}
           from={from}
           to={to}
@@ -215,7 +261,7 @@ export default function Lesson() {
         />
         <Legend
           items={[
-            { label: 'True NDVI', color: GREEN, kind: 'line' },
+            { label: 'True NDVI', color: CANOPY, kind: 'line' },
             { label: 'Reference season', color: '#999', kind: 'line', dashed: true },
             { label: 'Clear pass', color: GRAPHIC.violet },
             { label: 'Cloud (×)', color: '#bbb' },
@@ -234,13 +280,21 @@ export default function Lesson() {
 
       <P>
         In the reference season, a pass every five days sees the field on 20 of its 37 visits, and the index climbs from bare soil in May to about 0.81 by early
-        July, holds there until the kernels dent in August, and falls as the leaves yellow. The drought tracks it closely until late July — its true index is still
-        0.78 on July 20 — then drops away, to 0.72 on August 1 and 0.37 by mid-August, as the leaves roll, wilt and die early. That is the warning sign the market
-        watches for, and it arrives two to three weeks after the trouble began in the soil, as <FigRef to="Drought and Frost Lab · inside the season">the
-        previous lesson’s dry spell</FigRef> showed. The bumper season, by contrast, looks exactly like the reference until mid-August: a canopy can’t get greener
-        than full, so the index can’t see the extra kernels the cool July set. And in the wet, blighted summer the satellite is nearly blind — only 14 of 37 passes
-        see the field, and none between mid-July and mid-August, the month when the blight is spreading. Clouds come with the weather that makes them, which is why
-        real crop monitoring combines many satellites, radar that sees through cloud, and reports from the ground.
+        July, holds there until the kernels dent in August, and falls as the leaves yellow. The drought season looks better than the reference at first — 0.74
+        against 0.58 on June 15, because its warm, sunny start races the canopy ahead — and a hot early summer that looks good from orbit is worth remembering. It
+        matches the reference through July, still 0.78 on July 20, then drops away, to 0.72 on August 1 and 0.37 by mid-August, as the leaves roll, wilt and die
+        early. That is the warning sign the market watches for, and it arrives two to three weeks after the trouble began in the soil, as{' '}
+        <FigRef to="Drought and Frost Lab · inside the season">the previous lesson’s dry spell</FigRef> showed. The bumper season, by contrast, is all but
+        indistinguishable from the reference from July to mid-August: a canopy can’t get greener than full. Its extra 45 bushels come from a long, cool grain fill
+        that keeps the leaves working two weeks longer, to September 30 instead of September 16, and the index sees that only from late August, when the
+        reference’s leaves yellow and the bumper’s stay green — 0.61 against 0.45 on September 1.
+      </P>
+      <P>
+        In the wet, blighted summer the satellite is nearly blind: only {blightSeen.all} of {blightSeen.passes} passes see the field, and none between mid-July and
+        mid-August, the month when the blight is spreading. Passing more often helps only so much. With a pass every day the field shows through on{' '}
+        {blightSeen.daily} of those {blightSeen.days} days, and clearing the sky on the dry days adds none, because {blightSeen.wet} of the {blightSeen.days} brought
+        rain and a rainy day is almost always overcast. Clouds come with the weather that makes them, which is why real crop monitoring combines many satellites,
+        radar that sees through cloud, and reports from the ground.
       </P>
 
       <P>

@@ -80,16 +80,16 @@ export function freezeSolved(st: LabState): boolean {
   return y(st.date) < half && y(st.date - 1) >= half;
 }
 
-/** Challenge 2: the start date (within a bushel) on which a three-week dry spell costs the corn the most. */
+/** The reference season's silking date (R1), and the share of the corn, in whole percent as the readout shows it, that a 21-day dry spell starting then costs. */
+export const SILKING = BASE.corn.stageDays[STAGES.corn.findIndex((x) => x.code === 'R1')];
+export const SILKING_LOSS_PCT = Math.round((1 - grow('corn', [{ kind: 'drought', start: SILKING, days: 21 }]).yield / BASE.corn.yield) * 100);
+
+/** Challenge 2: a 21-day dry spell whose start date costs the corn at least twice what one starting at silking costs (in the readout's whole percent). */
 export function droughtSolved(st: LabState): boolean {
   if (st.crop !== 'corn' || st.kind !== 'drought' || st.days !== 21) return false;
-  if (worstDrought === null) {
-    worstDrought = Infinity;
-    for (let d = RANGE.corn[0]; d <= RANGE.corn[1]; d++) worstDrought = Math.min(worstDrought, grow('corn', [{ kind: 'drought', start: d, days: 21 }]).yield);
-  }
-  return grow('corn', [eventOf(st)]).yield <= worstDrought + 1;
+  const loss = 1 - grow('corn', [eventOf(st)]).yield / BASE.corn.yield;
+  return Math.round(loss * 100) >= 2 * SILKING_LOSS_PCT;
 }
-let worstDrought: number | null = null;
 
 /** Shaded stage bands for a crop's season: leaves, flowering, grain fill. */
 function stageBands(r: SeasonResult): DayBand[] {
@@ -117,25 +117,33 @@ function stageOn(r: SeasonResult, day: number): string {
 }
 
 export default function Lesson() {
-  const s = useScenario('lab', { crop: 'corn' as Crop, kind: 'drought' as EventKind, date: dayOf(7, 10), days: 21, degrees: 6, low: -3 } as LabState);
+  const s = useScenario('lab', { crop: 'corn' as Crop, kind: 'frost' as EventKind, date: dayOf(8, 15), days: 21, degrees: 6, low: -3 } as LabState);
   const st = s.state;
   const sw = useMemo(() => sweep(st), [st.crop, st.kind, st.days, st.degrees, st.low]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = useMemo(() => grow(st.crop, [eventOf(st)]), [st]); // eslint-disable-line react-hooks/exhaustive-deps
   const base = BASE[st.crop];
   const loss = 1 - run.yield / base.yield;
   const solved1 = useMemo(() => freezeSolved(st), [st]);
-  const solved2 = useMemo(() => droughtSolved(st), [st]);
   const [a, b] = RANGE[st.crop];
   const date = Math.max(a, Math.min(b, st.date));
-  const eventBand: DayBand = st.kind === 'frost' ? { from: date, to: date + 1, color: 'rgba(69, 144, 206, .5)' } : { from: date, to: date + (st.kind === 'drought' ? st.days : 5), color: st.kind === 'drought' ? 'rgba(231, 91, 85, .2)' : 'rgba(231, 91, 85, .3)' };
   const severity = st.kind === 'drought' ? `${st.days} days without rain` : st.kind === 'heat' ? `five days ${st.degrees} °C hotter` : `a ${fmt(st.low)} °C night`;
+
+  // The second demonstration: corn and a dry spell, with its own start date and length.
+  const ds = useScenario('inside', { date: SILKING, days: 21 });
+  const dry: LabState = { crop: 'corn', kind: 'drought', date: Math.max(RANGE.corn[0], Math.min(RANGE.corn[1], ds.state.date)), days: ds.state.days, degrees: 6, low: -3 };
+  const dryRun = useMemo(() => grow('corn', [eventOf(dry)]), [dry.date, dry.days]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dryBase = BASE.corn;
+  const dryLoss = 1 - dryRun.yield / dryBase.yield;
+  const dryBand: DayBand = { from: dry.date, to: dry.date + dry.days, color: 'rgba(231, 91, 85, .2)' };
+  const solved2 = useMemo(() => droughtSolved(dry), [dry.date, dry.days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <LessonPage id="agriculture/3.2">
       <P>
         <a href={lessonHref('agriculture/3.1')}>The previous lesson</a> showed how much a district’s harvest swings from season to season. Most of those swings are
-        made in a few weeks. A crop can shrug off a dry June and be ruined by a dry July; it can survive a hard frost in April and lose most of its grain to a
-        lighter one in late May. The difference is the crop’s stage, and in this lesson we’ll inflict the weather’s worst on Cedar Bend’s crops at every point in
+        made in a few weeks, and when the weather strikes matters as much as how hard. A crop can survive a hard frost in April and lose most of its grain to a
+        lighter one in late May, and a dry spell can do its damage weeks after the rain returns. The difference is the crop’s stage, and in this lesson we’ll
+        inflict the weather’s worst on Cedar Bend’s crops at every point in
         their calendar to see where they are most exposed. Everything else stays as it was in the reference season, so every difference comes from the event.
       </P>
       <P>
@@ -197,16 +205,14 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Start with wheat and a freeze. A −4 °C night does almost nothing to the reference season’s wheat in April or early May, when the developing head is still
-        tucked inside the stem; it takes about 2% in mid-May. Then, from May 21 — the day after the head reaches the boot — to the end of flowering, the same night
-        cuts the crop from 69.5 bushels to about 20: the cold kills the flowers, and a flower that dies never becomes a kernel. A week later the kernels have set,
-        and a freeze costs almost nothing again. A −2 °C night in the same window costs only a few percent. The danger is narrow, but on a date that farmers can see
-        coming weeks ahead — which is why a late spring freeze forecast on the High Plains moves wheat prices.
+        Start with wheat and a freeze. Winter wheat spends the winter as a low tuft of leaves and lives through nights far colder than −4 °C. In spring it
+        joints: the stem lengthens and carries the young head up inside it. At the <b>boot</b> stage the head swells inside the sheath of the top leaf, just
+        before it emerges; then it heads out and flowers, and the flowers that are fertilized become kernels.
       </P>
 
       <Challenge
         id="a"
-        question="Choose winter wheat and a −4 °C freeze. What is the earliest date on which it costs the wheat more than half its yield?"
+        question="Predict first: at which stage does a −4 °C night start to cost the wheat more than half its crop — jointing, boot, heading or flowering? Then choose winter wheat and a −4 °C freeze, and find the earliest date on which it does."
         solved={solved1}
         status={
           st.crop !== 'wheat' || st.kind !== 'frost'
@@ -215,8 +221,17 @@ export default function Lesson() {
               ? `The night’s low is ${st.low} °C. Set it to −4 °C.`
               : `A −4 °C night on ${dateLabel(date)} leaves ${buAc(run.yield, 1)}, ${fmt(loss * 100)}% below normal.`
         }
-        success={`Solved: on ${dateLabel(date)}, the head has just pushed into the boot and its flowers are forming, and a −4 °C night leaves ${buAc(run.yield, 1)} of the usual ${buAc(base.yield, 1)}. A day earlier the head was still protected inside the stem. Winter wheat survives far colder nights in winter; what it can’t survive is cold at the moment it makes its flowers.`}
+        success={`Solved: on ${dateLabel(date)} the head has just pushed into the boot, its flowers still forming inside the leaf sheath, and a −4 °C night leaves ${buAc(run.yield, 1)} of the usual ${buAc(base.yield, 1)}. A day earlier the head was still deep in the stem. The danger begins before the flowers open, while they are still being made: winter wheat that shrugs off far colder nights in winter can’t survive cold at the moment it makes its flowers.`}
       />
+
+      <P>
+        A −4 °C night does almost nothing to the reference season’s wheat in April or early May, when the developing head is still tucked inside the stem; it
+        takes about 2% in mid-May. Then, from May 21, the day after the head reaches the boot, to the end of flowering, the same night cuts the crop from 69.5
+        bushels to about 20: the cold kills the flowers, and a flower that dies never becomes a kernel. A week later the kernels have set, and a freeze costs almost
+        nothing again. A −2 °C night in the same window costs only a few percent in our model; real wheat in flower is more tender, and agronomists warn of injury
+        from about −1 °C held for a couple of hours. The danger is narrow, but on a date that farmers can see coming weeks ahead — which is why a late spring
+        freeze forecast on the High Plains moves wheat prices.
+      </P>
 
       <P>
         Corn’s calendar has its own weak points. Five days 6 °C hotter than normal cost it little in June, but up to 6% when they arrive at the end of July, when
@@ -228,78 +243,84 @@ export default function Lesson() {
 
       <H2>A dry spell does its damage later</H2>
       <P>
-        Now switch to corn and a three-week dry spell. You might expect the worst start date to be silking itself, but in the reference season it is June 13,
-        five weeks earlier: that spell cuts the yield from 188 bushels to 153, while the same three weeks starting at silking cost only 16 bushels. The reason is
-        the root zone. Cedar Bend’s deep soil holds a reserve of water, and a dry spell does no harm until the reserve runs low. In the next demonstration, the upper
-        chart is the root zone’s water through the season with and without the event, and the lower one the crop’s growth each day:
+        Corn and a three-week dry spell hold a surprise. Silking is when the crop decides how many kernels to keep, so you might expect a dry spell to do the
+        most harm when it starts there. In the next demonstration the crop is corn and the event a dry spell, starting at silking on July 17; the upper chart is
+        the root zone’s water through the season with and without it, and the lower one the crop’s growth each day. Move the dry spell’s start and change its
+        length:
       </P>
 
-      <Figure name="Drought and Frost Lab · inside the season" scenario={s}>
+      <Figure name="Drought and Frost Lab · inside the season" scenario={ds}>
         <DayChart
-          days={run.days.map((x) => x.day)}
+          days={dryRun.days.map((x) => x.day)}
           series={[
-            { values: base.days.map((x) => x.water * 100), days: base.days.map((x) => x.day), color: '#999', dash: '6 4', width: 1.8 },
-            { values: run.days.map((x) => x.water * 100), color: GRAPHIC.blue, width: 2.5 },
+            { values: dryBase.days.map((x) => x.water * 100), days: dryBase.days.map((x) => x.day), color: '#999', dash: '6 4', width: 1.8 },
+            { values: dryRun.days.map((x) => x.water * 100), color: GRAPHIC.blue, width: 2.5 },
           ]}
-          from={st.crop === 'corn' ? dayOf(5, 1) : dayOf(3, 1)}
-          to={st.crop === 'corn' ? dayOf(10, 1) : dayOf(7, 10)}
+          from={dayOf(5, 1)}
+          to={dayOf(10, 1)}
           yMin={0}
           yMax={100}
           yTicks={[0, 25, 50, 75, 100]}
           yLabel="Water left in the root zone, %"
           yFormat={(v) => `${v}%`}
-          bands={[eventBand]}
+          bands={[dryBand]}
           refLines={[{ y: 45, label: 'stress begins', color: GRAPHIC.red }]}
           height={170}
-          ariaLabel={`Root-zone water through the season, with ${severity} from ${dateLabel(date)} and without it.`}
+          ariaLabel={`Root-zone water through the season, with ${dry.days} days without rain from ${dateLabel(dry.date)} and without it.`}
         />
         <DayChart
-          days={run.days.map((x) => x.day)}
+          days={dryRun.days.map((x) => x.day)}
           series={[
-            { values: base.days.map((x) => x.growth), days: base.days.map((x) => x.day), color: '#999', dash: '6 4', width: 1.8 },
-            { values: run.days.map((x) => x.growth), color: GRAPHIC.teal, width: 2 },
+            { values: dryBase.days.map((x) => x.growth), days: dryBase.days.map((x) => x.day), color: '#999', dash: '6 4', width: 1.8 },
+            { values: dryRun.days.map((x) => x.growth), color: GRAPHIC.teal, width: 2 },
           ]}
-          from={st.crop === 'corn' ? dayOf(5, 1) : dayOf(3, 1)}
-          to={st.crop === 'corn' ? dayOf(10, 1) : dayOf(7, 10)}
+          from={dayOf(5, 1)}
+          to={dayOf(10, 1)}
           yMin={0}
           yMax={60}
           yTicks={[0, 20, 40, 60]}
           yLabel="Growth, g per m² per day"
           yFormat={(v) => fmt(v)}
-          bands={[eventBand]}
+          bands={[dryBand]}
           height={150}
-          ariaLabel={`Daily growth through the season, with ${severity} from ${dateLabel(date)} and without it. The crop yields ${fmt(run.yield)} bushels against ${fmt(base.yield)}.`}
+          ariaLabel={`Daily growth through the season, with ${dry.days} days without rain from ${dateLabel(dry.date)} and without it. The corn yields ${fmt(dryRun.yield)} bushels against ${fmt(dryBase.yield)}.`}
         />
         <Legend
           items={[
-            { label: 'With the event', color: GRAPHIC.blue, kind: 'line' },
+            { label: 'Water, with the dry spell', color: GRAPHIC.blue, kind: 'line' },
+            { label: 'Growth, with it', color: GRAPHIC.teal, kind: 'line' },
             { label: 'Without it', color: '#999', kind: 'line', dashed: true },
-            { label: 'The event', color: 'rgba(231, 91, 85, .4)' },
+            { label: 'The dry spell', color: 'rgba(231, 91, 85, .4)' },
           ]}
         />
+        <Readouts
+          items={[
+            { label: 'corn yield', value: buAc(dryRun.yield), tone: 'gold' },
+            { label: 'lost to the dry spell', value: `${fmt(Math.max(0, dryLoss) * 100)}%`, tone: 'red' },
+          ]}
+        />
+        <Slider label="Dry spell starts" value={dry.date} min={RANGE.corn[0]} max={RANGE.corn[1]} onChange={(v) => ds.set({ date: v })} display={dateLabel(dry.date)} />
+        <Slider label="Dry spell length" tone="red" value={dry.days} min={7} max={35} step={7} onChange={(v) => ds.set({ days: v })} display={`${dry.days} days`} />
       </Figure>
-
-      <P>
-        With the June 13 spell, the crop barely notices at first — clear skies even make it grow faster for a week. But the reserve drains day by day, the summer’s
-        later rains never refill it, and by the time the crop silks in mid-July the root zone is below half full. The crop sets nearly as many kernels as usual, 530
-        an ear against 538, then spends August short of water and fills them light. A dry spell that starts at silking finds the reserve full and does less. What
-        hurts a crop is not dry weather but dry soil at the wrong time, and the soil keeps a memory of the weeks before. Real droughts often last longer, and then
-        the harms compound: stretch the spell to four weeks starting June 26, so that it empties the soil and runs through silking too, and the yield falls to 148.
-      </P>
 
       <Challenge
         id="b"
-        question="Choose corn and a 21-day dry spell. Find a start date that costs the corn the most — within a bushel of the worst."
+        question={`Predict first: does a three-week dry spell do the most harm when it starts at silking, or weeks before or after it? Then, with a 21-day spell, find a start date that costs the corn at least ${2 * SILKING_LOSS_PCT}% of its crop — twice the ${SILKING_LOSS_PCT}% that a spell starting at silking costs.`}
         solved={solved2}
-        status={
-          st.crop !== 'corn' || st.kind !== 'drought'
-            ? 'Choose corn and a dry spell.'
-            : st.days !== 21
-              ? `The dry spell lasts ${st.days} days. Set it to 21.`
-              : `Starting ${dateLabel(date)}, the spell leaves ${buAc(run.yield, 1)}.`
-        }
-        success={`Solved: a dry spell starting ${dateLabel(date)} leaves ${buAc(run.yield, 1)} of the usual ${buAc(base.yield)}. It does its harm weeks after it starts, by emptying the root zone ahead of silking and grain fill. That is why crop watchers track soil moisture, not just rain.`}
+        status={dry.days !== 21 ? `The dry spell lasts ${dry.days} days. Set it to 21.` : `Starting ${dateLabel(dry.date)}, the spell costs ${fmt(Math.max(0, dryLoss) * 100)}% of the crop.`}
+        success={`Solved: a dry spell starting ${dateLabel(dry.date)} leaves ${buAc(dryRun.yield, 1)} of the usual ${buAc(dryBase.yield)}, ${fmt(dryLoss * 100)}% of the crop, against ${SILKING_LOSS_PCT}% for the same spell at silking. It does its harm weeks after it starts, by emptying the root zone ahead of silking and grain fill. That is why crop watchers track soil moisture, not just rain.`}
       />
+
+      <P>
+        The worst start date in the reference season is June 13, five weeks before silking: that spell cuts the yield from 188 bushels to 153, while the same three
+        weeks starting at silking cost only 16 bushels. The reason is the root zone. Cedar Bend’s deep soil holds a reserve of water, and a dry spell does no harm
+        until the reserve runs low. With the June 13 spell, the crop barely notices at first — clear skies even make it grow faster for a week. But the reserve
+        drains day by day, the summer’s later rains never refill it, and by the time the crop silks in mid-July the root zone is below half full. The crop sets
+        nearly as many kernels as usual, 530 an ear against 538, then spends August short of water and fills them light. A dry spell that starts at silking finds
+        the reserve full and does less. What hurts a crop is not dry weather but dry soil at the wrong time, and the soil keeps a memory of the weeks before. Real
+        droughts often last longer, and then the harms compound: stretch the spell to four weeks starting June 26, so that it empties the soil and runs through
+        silking too, and the yield falls to 148.
+      </P>
 
       <P>
         Each of these events leaves fingerprints on the crop before the harvest does: leaves that roll and turn gray-green in a drought, heads that stay pale after a

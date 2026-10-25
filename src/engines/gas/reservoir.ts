@@ -83,6 +83,50 @@ export function wellRate(rock: Rock, pR: number, pwf: number, skin = 0, c: Compo
   return (coef * (pR * pR - pwf * pwf)) / 1000;
 }
 
+// ---------------------------------------------------------------------------
+// A horizontal well with fracture stages. Gas flows straight toward the flat faces of the fractures
+// (linear flow) instead of converging on a hole, so Darcy's law takes its linear form,
+//   q [Mscf/d] = k·A·(P̄² − Pwf²) / (8,935 · T · μ · Z · d),
+// where A is the rock face and d the distance the gas crosses. 8,935 is 2π × 1,422: the radial form's
+// constant already contains the circle's 2π. Once the flow between neighboring fractures has settled
+// (pseudo-steady state), d is a third of the distance from the midpoint between two fractures to a face.
+
+/** The constant of Darcy's law for gas in linear flow, in the field units of `wellCoefficient`. */
+export const LINEAR_FLOW_CONSTANT = 2 * Math.PI * 1422;
+
+export interface FracturedWell {
+  /** Fracture stages along the horizontal section, one fracture each. */
+  stages: number;
+  /** Distance between neighboring fractures along the well, ft. */
+  stageSpacingFt: number;
+  /** How far each fracture reaches into the rock on either side of the well, ft. */
+  halfLengthFt: number;
+}
+
+/** Rock face the gas flows into: both faces of every fracture, tip to tip, through the layer's full thickness, ft². */
+export function fractureFaceArea(rock: Rock, w: FracturedWell): number {
+  return w.stages * 2 * (2 * w.halfLengthFt) * rock.thicknessFt;
+}
+
+/** Effective distance (ft) gas crosses to a fracture face once the flow between fractures has settled: a third of half the spacing. */
+export function fractureFlowDistance(w: FracturedWell): number {
+  return w.stageSpacingFt / 2 / 3;
+}
+
+/**
+ * Rate (MMcf/d) a fractured horizontal well flows at reservoir pressure pR with its bottom held at pwf
+ * (psia), once the flow in the rock between its fractures has settled, with the gas properties taken at
+ * the average of the two pressures (as in `wellRate`). The rock beyond the fracture tips is ignored.
+ */
+export function fracturedWellRate(rock: Rock, pR: number, pwf: number, w: FracturedWell, c: Composition = PIPELINE_GAS): number {
+  if (pR <= pwf || w.stages <= 0) return 0;
+  const pAvg = (pR + pwf) / 2;
+  const mu = gasViscosity(pAvg, rock.tempF, c);
+  const z = zFactor(pAvg, rock.tempF, c);
+  const coef = (rock.permMd * fractureFaceArea(rock, w)) / (LINEAR_FLOW_CONSTANT * rankine(rock.tempF) * mu * z * fractureFlowDistance(w));
+  return (coef * (pR * pR - pwf * pwf)) / 1000;
+}
+
 /** P/Z at a pressure and temperature. */
 export function pOverZ(pPsia: number, tempF: number, c: Composition = PIPELINE_GAS): number {
   return pPsia / zFactor(pPsia, tempF, c);

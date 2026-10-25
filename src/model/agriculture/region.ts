@@ -241,7 +241,7 @@ export const PLACES: Place[] = [
   { id: 'landing', name: 'Crane Landing', kind: 'terminal', district: 'bottoms', x: 470, y: 322 },
   { id: 'bluestem', name: 'Bluestem Ethanol', kind: 'ethanol', district: 'prairie', x: 372, y: 246 },
   { id: 'feedyards', name: 'Plains feedyards', kind: 'feedlot', district: 'plains', x: 150, y: 330 },
-  { id: 'mill', name: 'Marlow flour mill', kind: 'mill', district: 'bottoms', x: 566, y: 346 },
+  { id: 'mill', name: 'Brackley flour mill', kind: 'mill', district: 'bottoms', x: 566, y: 346 },
   { id: 'sable', name: 'Port Sable', kind: 'port', x: 640, y: 380 },
   { id: 'westhaven', name: 'Westhaven', kind: 'port', x: 0, y: 200 },
 ];

@@ -7,7 +7,7 @@
 
 import { CRUDE_IDS, type CrudeId } from '../../model/oil/crudes';
 import { crudeBreakeven, planRefinery, type RefineryInputs } from './refinery';
-import { CALDER } from '../../model/oil/refinery';
+import { CORRAN } from '../../model/oil/refinery';
 
 export interface ArbInputs {
   /** Purchase price at the origin hub, $/bbl. */
@@ -65,12 +65,14 @@ export function closingFreight(a: ArbInputs): number {
 }
 
 /**
- * A crude's netback value at a refinery: run the refinery on that crude alone, at full crude-unit
- * capacity, and divide what the products earn, less operating costs, by the barrels run. This is
- * the most the refinery could pay for the crude and break even.
+ * A crude's stand-alone value at a refinery: run the refinery on that crude alone, at full
+ * crude-unit capacity, and divide what the products earn, less operating costs, by the barrels run.
+ * It is the most a refinery running nothing else could pay for the crude and still cover its
+ * operating costs: an average over a whole refinery's worth of the crude, not the marginal value
+ * of one more barrel in a mixed slate (crudeBreakeven), nor a producer's netback (economics.ts).
  */
-export function crudeNetback(k: CrudeId, inp: RefineryInputs = {}): number {
-  const runs = (inp.config ?? CALDER).capacity.cdu;
+export function standaloneValue(k: CrudeId, inp: RefineryInputs = {}): number {
+  const runs = (inp.config ?? CORRAN).capacity.cdu;
   const avail = Object.fromEntries(CRUDE_IDS.map((c) => [c, c === k ? runs : 0])) as Record<CrudeId, number>;
   // Price the crude at zero so the plan always runs it in full; its value doesn't depend on its price.
   const plan = planRefinery({ ...inp, crudeAvailable: avail, crudePrice: { ...inp.crudePrice, [k]: 0 } });
@@ -78,10 +80,13 @@ export function crudeNetback(k: CrudeId, inp: RefineryInputs = {}): number {
   return bbl > 0 ? (plan.revenue - plan.opex) / bbl : 0;
 }
 
-/** Each crude's netback value less Ridgeback Light's: the refinery's quality differentials, $/bbl. */
+/** The older name for standaloneValue. */
+export const crudeNetback = standaloneValue;
+
+/** Each crude's stand-alone value less Pinyon Light's: the refinery's quality differentials, $/bbl. */
 export function qualityDifferentials(inp: RefineryInputs = {}): Record<CrudeId, number> {
-  const v = Object.fromEntries(CRUDE_IDS.map((k) => [k, crudeNetback(k, inp)])) as Record<CrudeId, number>;
-  return Object.fromEntries(CRUDE_IDS.map((k) => [k, v[k] - v.ridgeback])) as Record<CrudeId, number>;
+  const v = Object.fromEntries(CRUDE_IDS.map((k) => [k, standaloneValue(k, inp)])) as Record<CrudeId, number>;
+  return Object.fromEntries(CRUDE_IDS.map((k) => [k, v[k] - v.pinyon])) as Record<CrudeId, number>;
 }
 
 /** The marginal value of a crude to a refinery already running its best slate (see crudeBreakeven). */

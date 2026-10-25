@@ -15,7 +15,6 @@ import {
   P,
   Readouts,
   Segmented,
-  Slider,
   TEXT,
   Tn,
   fmt,
@@ -33,6 +32,8 @@ import { WorldMap, type MapPort } from '../shared/WorldMap';
 /** Kestrel carrying 75,000 t, as in Chapter 2. */
 const LADEN = ladenDraft(KESTREL, 75_000);
 const CARGO_PORTS = PLACES.filter((p) => p.port).map((p) => p.id);
+/** The chapter's laden speed, knots. */
+export const SPEED = 12;
 const nm = (x: number) => `${fmt(x)} nm`;
 const days1 = (x: number) => `${fmt(x, 1)} days`;
 
@@ -47,6 +48,23 @@ export const FARTHEST_FROM_QINGDAO = CARGO_PORTS.filter((p) => p !== 'QIN').redu
 /** The challenge: a route between Qingdao and the cargo port farthest from it. */
 export function farthestSolved(from: string, to: string): boolean {
   return (from === 'QIN' && to === FARTHEST_FROM_QINGDAO) || (to === 'QIN' && from === FARTHEST_FROM_QINGDAO);
+}
+
+export interface RoutePick {
+  from: string;
+  to: string;
+  /** What the next click on a port sets. */
+  setting: 'from' | 'to';
+}
+
+/**
+ * A click on a port: the first click chooses where the voyage starts, the next where it ends, and
+ * later clicks keep moving the end until the switch is set back to the origin. Clicking the other
+ * end of the voyage swaps the two.
+ */
+export function pickPort(cur: RoutePick, id: string): RoutePick {
+  if (cur.setting === 'from') return id === cur.to ? { from: id, to: cur.from, setting: 'to' } : { from: id, to: cur.to, setting: 'to' };
+  return id === cur.from ? { from: cur.to, to: id, setting: 'to' } : { from: cur.from, to: id, setting: 'to' };
 }
 
 /** Days at sea for a passage, plus canal transits. */
@@ -100,27 +118,22 @@ const INDO = KMAX.find((r) => r.id === 'P-SAM-QIN')!;
 const TUB_QIN = routeBetween('TUB', 'QIN');
 const PHE_QIN = routeBetween('PHE', 'QIN');
 const NOL_QIN = routeBetween('NOL', 'QIN');
-const ROT_SIN = routeBetween('ROT', 'SIN');
-const PAR_SIN = routeBetween('PAR', 'SIN');
+const ROT_QIN = routeBetween('ROT', 'QIN');
 const FAR = routeBetween(FARTHEST_FROM_QINGDAO, 'QIN');
+/** A distance rounded to the nearest hundred miles, for the prose’s “about.” */
+const about = (x: number) => fmt(Math.round(x / 100) * 100);
 
 export default function Lesson() {
-  const s = useScenario('route', { from: 'TUB', to: 'QIN', setting: 'to' as 'from' | 'to', speed: 12 });
-  const { from, to, setting, speed } = s.state;
+  const s = useScenario('route', { from: 'TUB', to: 'QIN', setting: 'from' as 'from' | 'to' });
+  const { from, to, setting } = s.state;
   const r = routeBetween(from, to);
-  const days = passageDays(r, speed);
-  const fuel = fuelPerDay(KESTREL, speed, LADEN) * (r.nm / (24 * speed));
+  const days = passageDays(r, SPEED);
+  const fuel = fuelPerDay(KESTREL, SPEED, LADEN) * (r.nm / (24 * SPEED));
   const gc = greatCircle(from, to);
   const solved = farthestSolved(from, to);
   const chokeNames = r.chokepoints.map((c) => CHOKEPOINTS[c].name);
 
-  const pick = (id: string) => {
-    if (setting === 'from') {
-      if (id === to) s.set({ from: id, to: from, setting: 'to' });
-      else s.set({ from: id, setting: 'to' });
-    } else if (id === from) s.set({ from: to, to: id });
-    else s.set({ to: id });
-  };
+  const pick = (id: string) => s.set(pickPort({ from, to, setting }, id));
   const ports: MapPort[] = CARGO_PORTS.map((id) => ({
     id,
     color: id === from ? TEXT.blue : id === to ? TEXT.orange : '#777',
@@ -145,11 +158,11 @@ export default function Lesson() {
         of the world while ships sit idle in another, and the answer starts with geography: where the ships go, by which lanes, and how long it takes.
       </P>
       <P>
-        Distances at sea are measured in <K tone="blue">nautical miles</K>. One nautical mile is 1,852 meters, a length chosen because it is one minute of latitude
-        — a sixtieth of a degree — along a meridian, which made it easy to measure on a chart. A knot is a nautical mile per hour, so a ship making 12 knots covers
-        288 miles a day. The next demonstration is our world: real ports at their real positions, joined by the sea lanes (the faint gray lines) that the course’s
-        ships use. Click a port to choose where a voyage starts, then another for where it ends; the blue line is the shortest open way between them along the
-        lanes. It starts with Kestrel carrying 75,000 tonnes from Tubarão, in Brazil, to Qingdao, in China:
+        Distances at sea are measured in nautical miles and speeds in knots, as in <a href={lessonHref('shipping/1.2')}>Lesson 1.2</a>: a knot is a nautical mile
+        an hour, so a ship making {SPEED} knots covers {fmt(24 * SPEED)} miles a day. The next demonstration is our world: real ports at their real positions,
+        joined by the sea lanes (the faint gray lines) that the course’s ships use. Click a port to choose where a voyage starts, then another for where it ends; further clicks move the end, and the switch at the top of the
+        demonstration sets the start again. The blue line is the shortest open way between the two along the lanes. It starts with Kestrel carrying 75,000
+        tonnes from Tubarão, in Brazil, to Qingdao, in China:
       </P>
 
       <Figure name="Shipping Network Map" scenario={s}>
@@ -163,29 +176,40 @@ export default function Lesson() {
           ]}
         />
         <WorldMap
-          ariaLabel={`Sea route from ${PLACE[from].name} to ${PLACE[to].name}: ${nm(r.nm)}${chokeNames.length ? `, through ${chokeNames.join(', ')}` : ''}. ${days1(days)} at ${fmt(speed, 1)} knots.`}
+          ariaLabel={`Sea route from ${PLACE[from].name} to ${PLACE[to].name}: ${nm(r.nm)}${chokeNames.length ? `, through ${chokeNames.join(', ')}` : ''}. ${days1(days)} at ${SPEED} knots.`}
           routes={[{ points: r.points, color: GRAPHIC.blue, width: 3, flow: true }]}
           ports={ports}
           chokepoints={r.chokepoints.map((id) => ({ id, closed: false, label: true }))}
         />
+        <Eq
+          label={`Days equal distance divided by 24 hours times speed${r.canalDays ? ', plus the canal' : ''}: ${fmt(r.nm)} nautical miles over 24 times ${SPEED} knots${r.canalDays ? `, plus ${fmt(r.canalDays)} in a canal,` : ''} is ${days1(days)}`}
+        >
+          <K tone="teal">days</K>
+          <Op>=</Op>
+          <Frac top={<K tone="blue">distance</K>} bottom={<span>24 h × speed</span>} />
+          {r.canalDays > 0 && (
+            <>
+              <Op>+</Op>
+              <span>canal days</span>
+            </>
+          )}
+          <Op>=</Op>
+          <Frac top={<Tn tone="blue">{nm(r.nm)}</Tn>} bottom={<span>24 h × {SPEED} kn</span>} />
+          {r.canalDays > 0 && (
+            <>
+              <Op>+</Op>
+              <span>{fmt(r.canalDays)}</span>
+            </>
+          )}
+          <Op>=</Op>
+          <K tone="teal">{days1(days)}</K>
+        </Eq>
         <Readouts
           items={[
-            { label: 'distance by sea', value: nm(r.nm), tone: 'blue' },
-            { label: r.canalDays ? `days at sea, plus ${fmt(r.canalDays)} in a canal` : 'days at sea', value: days1(days), tone: 'teal' },
             { label: 'Kestrel’s fuel, laden', value: `${fmt(fuel)} t`, tone: 'gold' },
             { label: 'chokepoints passed', value: chokeNames.length ? chokeNames.join(' · ') : 'none' },
           ]}
         />
-        <Slider label="Speed" tone="teal" value={speed} min={10} max={15} step={0.5} onChange={(v) => s.set({ speed: v })} display={`${fmt(speed, 1)} kn`} />
-        <Eq label={`Days at sea equal distance divided by 24 hours times speed: ${fmt(r.nm)} nautical miles over 24 times ${fmt(speed, 1)} knots is ${fmt(r.nm / (24 * speed), 1)} days`}>
-          <K tone="teal">days</K>
-          <Op>=</Op>
-          <Frac top={<K tone="blue">distance</K>} bottom={<span>24 h × speed</span>} />
-          <Op>=</Op>
-          <Frac top={<Tn tone="blue">{nm(r.nm)}</Tn>} bottom={<span>24 h × {fmt(speed, 1)} kn</span>} />
-          <Op>=</Op>
-          <K tone="teal">{days1(r.nm / (24 * speed))}</K>
-        </Eq>
         <Caption>
           A great circle, the shortest path over the globe with land ignored, would be {nm(gc)}; the sea route is {pct(r.nm / gc - 1)} longer.
           {roundabout(r) ? ' Our lanes are drawn for the course’s trades; this one crosses the North Pacific and comes down through Indonesia, so it is longer than a real ship’s passage would be.' : ''}
@@ -194,10 +218,10 @@ export default function Lesson() {
 
       <P>
         In our model, Kestrel sails from Tubarão south and east round the Cape of Good Hope, crosses the Indian Ocean, passes the Sunda Strait into the South China Sea and
-        runs north to Qingdao: about {fmt(Math.round(TUB_QIN.nm / 100) * 100)} nautical miles in our model, {days1(passageDays(TUB_QIN, 12))} at 12 knots, on{' '}
-        {fmt(fuelPerDay(KESTREL, 12, LADEN) * (TUB_QIN.nm / 288))} tonnes of fuel. A great circle between the two ports is only {nm(greatCircle('TUB', 'QIN'))}, but
-        it runs straight across Africa. Notice, too, that the route bends on the flat map. The map stretches the world east to west, more so the farther from the
-        equator, so the shortest paths over the globe look curved on it; and on any given passage a master’s track bends further still around the weather, as{' '}
+        runs north to Qingdao: about {about(TUB_QIN.nm)} nautical miles in our model, {days1(passageDays(TUB_QIN, SPEED))} at {SPEED} knots, on{' '}
+        {fmt(fuelPerDay(KESTREL, SPEED, LADEN) * (TUB_QIN.nm / (24 * SPEED)))} tonnes of fuel. A great circle between the two ports is only {nm(greatCircle('TUB', 'QIN'))}, but
+        it runs straight across Africa. That is why the route bends: it swings far south to round the Cape, then turns north to pass between the islands of
+        Indonesia, because a ship can only go where the sea goes. On any given passage a master’s track bends further still around the weather, as{' '}
         <a href={lessonHref('shipping/1.5')}>Lesson 1.5</a> showed.
       </P>
       <P>
@@ -205,32 +229,25 @@ export default function Lesson() {
         shipbrokers use, close enough for this course, but they are the model’s own numbers, which is why we’ll quote them with an “about.”
       </P>
 
-      <H2>Corridors and chokepoints</H2>
+      <H2>Near and far</H2>
       <P>
-        Now set Port Hedland, in Western Australia, as the origin. Its ore reaches Qingdao in about {fmt(Math.round(PHE_QIN.nm / 100) * 100)} miles,{' '}
-        {days1(passageDays(PHE_QIN, 12))} at 12 knots: Australia is about a third as far from China as Brazil is. Try New Orleans to Qingdao, the route US grain
-        takes to China. The shortest way is through the Panama Canal and across the Pacific, about {fmt(Math.round(NOL_QIN.nm / 100) * 100)} miles plus a day for
-        the canal. Rotterdam to Singapore runs through the Strait of Gibraltar, the Mediterranean, the Suez Canal and the Red Sea, about{' '}
-        {fmt(Math.round(ROT_SIN.nm / 100) * 100)} miles; Paradip, on India’s east coast, reaches Singapore in about {fmt(Math.round(PAR_SIN.nm / 100) * 100)} through
-        the Strait of Malacca.
-      </P>
-      <P>
-        Those narrow places carry a remarkable share of the world’s trade. The Suez Canal opened in 1869 and has no locks: it is a sea-level channel between the
-        Mediterranean and the Red Sea. The Panama Canal opened in 1914 and lifts ships through locks to a lake in the middle of the isthmus and back down again. The
-        Strait of Malacca is the shortest sea route between the Indian Ocean and the Pacific. Each saves thousands of miles on the routes that use it, and{' '}
-        <a href={lessonHref('shipping/3.3')}>Lesson 3.3</a> will close them one at a time to see what that costs.
+        Now make Port Hedland, in Western Australia, the origin. Its ore reaches Qingdao in about {about(PHE_QIN.nm)} miles,{' '}
+        {days1(passageDays(PHE_QIN, SPEED))} at {SPEED} knots: Australia is about a third as far from China as Brazil is. Set the switch back to the origin and try New
+        Orleans to Qingdao, the route US grain takes to China. The shortest way is through the Panama Canal and across the Pacific, about{' '}
+        {about(NOL_QIN.nm)} miles plus a day for the canal. Routes like these funnel through a few narrow passages — canals such as Panama and Suez, and
+        straits such as Malacca — that the map marks and the readouts list as chokepoints; <a href={lessonHref('shipping/3.3')}>Lesson 3.3</a> closes them one at a time to see what each one saves.
       </P>
 
       <Challenge
         id="a"
-        question="Qingdao takes ore, coal and grain from all over the world. Which of our cargo ports is farthest from it by sea?"
+        question={`Qingdao takes ore, coal and grain from all over the world, and Tubarão, about ${about(TUB_QIN.nm)} nautical miles away, is a long haul. Predict first, from the map: is any of our cargo ports farther from Qingdao by sea, and if so, which? Then make Qingdao the origin and click the ports to check.`}
         solved={solved}
         status={
           from !== 'QIN' && to !== 'QIN'
-            ? 'Make Qingdao one end of the voyage, then try the other ports.'
+            ? 'Make Qingdao the origin, then click the other ports in turn.'
             : `${PLACE[from === 'QIN' ? to : from].name} is ${nm(r.nm)} from Qingdao. Is anywhere farther?`
         }
-        success={`Solved. ${PLACE[FARTHEST_FROM_QINGDAO].name} is about ${fmt(Math.round(FAR.nm / 100) * 100)} nautical miles from Qingdao, round the Cape of Good Hope: ${days1(passageDays(FAR, 12))} at 12 knots. Brazil is close to the far side of the world from northern China, and it is also one of China’s largest suppliers of iron ore and soybeans — a fact that will shape every chapter from here on.`}
+        success={`Solved. ${PLACE[FARTHEST_FROM_QINGDAO].name} is about ${about(FAR.nm)} nautical miles from Qingdao, ${fmt(FAR.nm - TUB_QIN.nm)} more than Tubarão: it lies farther south and west along the same coast, so its ships have farther to go to round the Cape of Good Hope, ${days1(passageDays(FAR, SPEED))} at ${SPEED} knots. Rotterdam, through Suez (about ${about(ROT_QIN.nm)}), and New Orleans, through Panama (about ${about(NOL_QIN.nm)}), are both nearer. Brazil is close to the far side of the world from northern China, and it is also one of China’s largest suppliers of iron ore and soybeans — a fact that will shape every chapter from here on.`}
       />
 
       <H2>Where the cargo goes</H2>
@@ -278,17 +295,18 @@ export default function Lesson() {
       <P>
         Among the Capesizes, Port Hedland to Qingdao dominates the tonnage: {fmt(C5.mtpa)} million tonnes a year, {pct(C5.tonneShare)} of everything the class
         carries. But a laden voyage from Port Hedland lasts {days1(C5.days12)} at 12 knots, and one from Tubarão {days1(C3.days12)}, so each tonne of Brazilian ore
-        keeps a ship busy {fmt(C3.nm / C5.nm, 1)} times as long as a tonne of Australian ore. Brazil’s ore is {pct(C3.tonneShare)} of the tonnes and{' '}
+        sails {fmt(C3.nm / C5.nm, 1)} times as far as a tonne of Australian ore. Brazil’s ore to China is {pct(C3.tonneShare)} of the tonnes and{' '}
         {pct(C3.dayShare)} of the laden days at sea — more than Australia’s {pct(C5.dayShare)}. The Kamsarmax trades tell the same story. Indonesian coal to
         China is {pct(INDO.tonneShare)} of the class’s tonnes but only {pct(INDO.dayShare)} of its laden days; Brazilian soybeans to China are{' '}
         {pct(SOY.tonneShare)} of the tonnes and {pct(SOY.dayShare)} of the days.
       </P>
       <P>
         So counting tonnes misreads how much shipping the world needs. Because every ship in a class carries the same cargo, a trade’s share of laden days is also
-        its share of tonnes multiplied by miles — its <b>ton-miles</b>, the measure of shipping demand that <a href={lessonHref('shipping/3.5')}>Lesson 3.5</a> builds
-        on. There is a second pattern in <FigRef to="Shipping Network Map · the course’s trades">this demonstration</FigRef>, too: almost every line ends in China or
-        India, while the cargoes start in Brazil, Australia, Indonesia, South Africa and the US Gulf. A ship that delivers in Qingdao is in the wrong place for her
-        next cargo, and <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a> will follow her back.
+        its share of the class’s <K tone="orange">tonne-miles</K>: tonnes multiplied by the nautical miles they travel, so that one tonne carried one mile is one
+        tonne-mile. Tonne-miles are how the industry measures the demand for ships, and <a href={lessonHref('shipping/3.5')}>Lesson 3.5</a> turns them into a
+        number of ships. There is a second pattern in <FigRef to="Shipping Network Map · the course’s trades">this demonstration</FigRef>, too: almost
+        every line ends in China or India, while the cargoes start in Brazil, Australia, Indonesia, South Africa and the US Gulf — which, as{' '}
+        <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a> will show, leaves each ship in the wrong place once she has delivered.
       </P>
       <P>
         Distance isn’t the only thing that keeps a ship busy, though. Every voyage starts and ends in a port, and ports have only so many berths. When too many

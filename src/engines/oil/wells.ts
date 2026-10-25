@@ -42,8 +42,8 @@ export interface Rock {
   drawdown: number;
 }
 
-/** The drawdown each field is produced at: Northfield is held above its bubble point; Ridgeback is drawn hard. */
-export const DRAWDOWN: Record<FieldId, number> = { northfield: 1000, ridgeback: 4200, coldwater: 400 };
+/** The drawdown each field is produced at: Northfield is held above its bubble point; Pinyon is drawn hard. */
+export const DRAWDOWN: Record<FieldId, number> = { northfield: 1000, pinyon: 4200, coldwater: 400 };
 
 export function rockOf(field: FieldId): Rock {
   const f = FIELDS[field];

@@ -16,6 +16,7 @@ import {
   Readouts,
   Segmented,
   Slider,
+  TEXT,
   clamp,
   fmt,
   lessonHref,
@@ -23,11 +24,13 @@ import {
   pct,
   useScenario,
 } from '../../../framework';
+import { lineCapacity } from '../../../engines/gas/compression';
 import { simulateYear, type YearDay } from '../../../engines/gas/market';
+import { psia } from '../../../engines/gas/properties';
 import { withdrawCapacity } from '../../../engines/gas/storage';
 import { LNG_VALUE, OIL_SWITCH_VALUE, PROTECTED_VALUE, demandBlocks } from '../../../model/gas/demand';
 import { cdd, gasDayLabel, hdd, weatherYear, type WeatherYear } from '../../../model/gas/weather';
-import { BASINS, BAYPORT_LNG_FEEDGAS_BCFD, PIPELINE, STORAGE_SPECS, type GasNodeId } from '../../../model/gas/world';
+import { BASINS, BAYPORT_LNG_FEEDGAS_BCFD, PIPELINE, STORAGE_SPECS, stationLineOf, type GasNodeId } from '../../../model/gas/world';
 import { GasMap } from '../shared/GasMap';
 import { XYChart } from '../shared/XYChart';
 import { bcfd, gp } from '../shared/format';
@@ -156,13 +159,25 @@ export function giveWay(d: YearDay, s: CrisisSpec): GiveWay {
   };
 }
 
-/** The storm of the prose's worst case: −5 °F, 30% frozen off, Northline cut to 1.4 Bcf/d. */
-export const WORST_STORM = { temp: -5, freeze: 0.3, northline: 1.4 };
+/** What Northline carries at its promised pressure with one of its three compressor stations out (Lesson 1.4), MMcf/d. */
+export const NORTHLINE_STATION_OUT_MMCFD = lineCapacity({ ...stationLineOf(NL), stations: NL.stations - 1 }, psia(NL.minDeliveryPsig));
+/** The same on the Northline slider's 0.05 Bcf/d steps, as in Lesson 5.1: 1.45 Bcf/d. */
+export const NORTHLINE_STATION_OUT = round2(Math.round(NORTHLINE_STATION_OUT_MMCFD / 1000 / 0.05) * 0.05);
+
+/** The storm of the prose's worst case: −5 °F, 30% frozen off, a compressor station out on Northline. */
+export const WORST_STORM = { temp: -5, freeze: 0.3, northline: NORTHLINE_STATION_OUT };
 
 /** The first challenge's storm: late January at −5 °F with 30% of production frozen off and cargoes giving way. */
 export const NORTHLINE_CHALLENGE = { when: 'jan' as StormWhen, temp: -5, freeze: 0.3, lngHold: false };
 export const NL_STEP = 0.05;
 export const NL_MIN = 0.8;
+
+/** Metro's shortfall on each storm day of the challenge's storm with a compressor station out, Bcf/d. */
+export function challengeShortfalls(): number[] {
+  return crisisRun({ ...NORTHLINE_CHALLENGE, northline: NORTHLINE_STATION_OUT })
+    .slice(STORM_LEAD, STORM_LEAD + STORM_DAYS)
+    .map((d) => d.rationed);
+}
 
 /** The least Northline capacity (on the slider's steps) at which the challenge's storm rations no one. */
 export function northlineNeeded(): number {
@@ -211,6 +226,15 @@ function priceTint(p: number): string {
 
 const money1 = (x: number) => gp(x, x >= 99.995 ? 0 : 2);
 
+/** "30% frozen off, Northline 1.45, cargoes give way": the storm's settings that the defenses figure doesn't show. */
+export function stormSettings(s: Pick<CrisisSpec, 'freeze' | 'northline' | 'lngHold'>): string {
+  return `${s.freeze > 0 ? `${pct(s.freeze)} frozen off` : 'no freeze-offs'}, Northline ${fmt(s.northline, 2)}, cargoes ${s.lngHold ? 'keep loading' : 'give way'}`;
+}
+
+/** The map is drawn small so the figure stays short: its 600-unit viewBox, trimmed to 384 high, at most 440 px wide (about 280 px tall). */
+export const MAP_HEIGHT = 384;
+export const MAP_WIDTH = 440;
+
 export default function Lesson() {
   const sc = useScenario('storm', CRISIS_DEFAULTS);
   const st = sc.state;
@@ -253,15 +277,18 @@ export default function Lesson() {
   const maxRation = Math.max(0.5, ...rows.map((r) => r.stats.rationedBcf));
 
   const solvedA = stormNorthlineSolved(st);
+  const shortfalls = challengeShortfalls();
+  const SHORT_FIRST = shortfalls[0];
+  const SHORT_WORST = Math.max(...shortfalls);
   const needed = northlineNeeded();
   const solvedB = marchDefenseSolved(st);
   const warmest = warmestRationing();
 
   const sliders = (
     <>
-      <Slider label="Storm temperature at Metro" tone="teal" value={st.temp} min={TEMP_MIN} max={TEMP_MAX} onChange={(v) => sc.set({ temp: v })} display={`${fmt(st.temp)} °F for ${STORM_DAYS} days`} />
+      <Slider label="Storm at Metro" tone="teal" value={st.temp} min={TEMP_MIN} max={TEMP_MAX} onChange={(v) => sc.set({ temp: v })} display={`${fmt(st.temp)} °F for ${STORM_DAYS} days`} />
       <Slider label="Wells frozen off" tone="orange" value={st.freeze} min={0} max={0.5} step={0.05} onChange={(v) => sc.set({ freeze: v })} display={st.freeze > 0 ? `${pct(st.freeze)} of production` : 'none'} />
-      <Slider label="Northline during the storm" tone="orange" value={st.northline} min={NL_MIN} max={NORTHLINE_EXPANDED} step={NL_STEP} onChange={(v) => sc.set({ northline: round2(v) })} display={bcfd(st.northline)} />
+      <Slider label="Northline in the storm" tone="orange" value={st.northline} min={NL_MIN} max={NORTHLINE_EXPANDED} step={NL_STEP} onChange={(v) => sc.set({ northline: round2(v) })} display={bcfd(st.northline)} />
       <Checkbox label="Bayport’s LNG cargoes keep loading whatever the price" checked={st.lngHold} onChange={(v) => sc.set({ lngHold: v })} />
     </>
   );
@@ -322,7 +349,9 @@ export default function Lesson() {
 
       <Figure name="Winter Supply Crisis" scenario={sc}>
         {whenSeg}
+        <div style={{ maxWidth: MAP_WIDTH, margin: '0 auto' }}>
         <GasMap
+          height={MAP_HEIGHT}
           ariaLabel={`The region on ${label(day)}${inStorm ? ', during the storm' : ''}: Metro ${money1(d.price.metro)}, Calder ${money1(d.price.calder)}, Bayport ${money1(d.price.bayport)} per MMBtu. Northline carries ${fmt(d.flow[NL.id] ?? 0, 2)} of ${fmt(caps[NL.id], 2)} Bcf/d.${d.rationed > 1e-6 ? ` ${fmt(d.rationed, 2)} Bcf/d of homes in Metro go without.` : ''}`}
           flows={d.flow}
           capacities={caps}
@@ -338,6 +367,7 @@ export default function Lesson() {
             return `${fmt(inv)} Bcf left · ${f < -1e-6 ? `out ${fmt(-f, 2)}` : f > 1e-6 ? `in ${fmt(f, 2)}` : 'idle'}`;
           }}
         />
+        </div>
         <XYChart
           xDomain={[0, STORM_WINDOW - 1]}
           yDomain={[LOG_MIN, LOG_MAX]}
@@ -346,7 +376,7 @@ export default function Lesson() {
           xTicks={[0, 4, 8, 12, 16, 20]}
           xFormat={(v) => label(v)}
           yLabel="Price, $/MMBtu (each step a multiple)"
-          height={190}
+          height={165}
           bands={[{ from: STORM_LEAD - 0.5, to: STORM_LEAD + STORM_DAYS - 0.5, color: 'rgba(42, 157, 144, 0.10)', label: 'storm' }]}
           series={[
             { xs, ys: run.map((x) => lg(x.price.bayport)), color: BAYPORT_COLOR, width: 1.5, dash: '5 4' },
@@ -372,10 +402,10 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'Metro’s highest price', value: money1(stats.peakMetro), tone: 'green' },
-            { label: 'Calder’s highest price', value: money1(stats.peakCalder), tone: 'green' },
-            { label: 'LNG not loaded in the storm', value: `${fmt(stats.lngGivenUp, 2)} Bcf` },
-            { label: 'homes left without gas', value: stats.rationedBcf > 1e-6 ? `${fmt(stats.rationedBcf, 2)} Bcf` : 'none', tone: stats.rationedBcf > 1e-6 ? 'red' : 'ink' },
+            { label: 'Metro’s peak', value: money1(stats.peakMetro), tone: 'green' },
+            { label: 'Calder’s peak', value: money1(stats.peakCalder), tone: 'green' },
+            { label: 'LNG not loaded', value: `${fmt(stats.lngGivenUp, 2)} Bcf` },
+            { label: 'homes without gas', value: stats.rationedBcf > 1e-6 ? `${fmt(stats.rationedBcf, 2)} Bcf` : 'none', tone: stats.rationedBcf > 1e-6 ? 'red' : 'ink' },
           ]}
         />
         {sliders}
@@ -396,13 +426,16 @@ export default function Lesson() {
       <H2>When the wells freeze</H2>
       <P>
         Now let the storm freeze off {pct(FREEZE.freeze)} of both basins’ production. The hub feels it at once: Calder rises to {money1(P1.peakCalder)}, until
-        something there gives way. What gives way is Bayport’s LNG terminal. Its cargoes pay only while the price at Bayport is below the {money1(LNG_VALUE)} that
-        overseas buyers’ netback supports (<a href={lessonHref('gas/5.4')}>Lesson 5.4</a>), so at that price the terminal loads less: {bcfd(P1gw.lng)} less on the first storm
-        day, {fmt(P1.lngGivenUp, 2)} Bcf over the storm. Exports are the region’s shock absorber. Metro, oddly, is no worse off. Its limit is the pipes and the
+        something there gives way. What gives way is Bayport’s LNG terminal. Its feed gas is worth {money1(LNG_VALUE)} at Bayport, the value{' '}
+        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a> gave it — in the terms of <a href={lessonHref('gas/5.4')}>Lesson 5.4</a>, a cap of{' '}
+        {money1(LNG_VALUE - PIPELINE['calder-bayport'].variableCost)} at Calder — so at that price the terminal loads less: {bcfd(P1gw.lng)} less on the first storm
+        day, {fmt(P1.lngGivenUp, 2)} Bcf over the storm. Exports are the region’s release valve, as Lesson 5.4 found. Metro, oddly, is no worse off. Its limit is the pipes and the
         storage field that feed it, not the gas at the hub, and Metro’s price was already set by the oil burners.
       </P>
       <P>
-        Then take a compressor station off Northline, cutting it to {bcfd(OUTAGE.northline)} for the storm. Less gas reaches the city, every power plant that
+        Then take one of Northline’s three compressor stations out for the storm. The two left can push about {fmt(NORTHLINE_STATION_OUT_MMCFD)} MMcf/d through it (
+        <a href={lessonHref('gas/1.4')}>Lesson 1.4</a>), so Northline drops to {bcfd(OUTAGE.northline)}, as in{' '}
+        <a href={lessonHref('gas/5.1')}>Lesson 5.1</a>. Less gas reaches the city, every power plant that
         can burn oil does — {bcfd(P2gw.oil)} of gas freed — and the next buyers to give way are Metro’s factories: the price reaches {money1(P2.peakMetro)}. Finally make the storm colder, {fmt(WORST.temp)} °F.
         Now there is no one left to give way but homes. Metro’s price hits the {money1(PROTECTED_VALUE)} that stands for rationing in our model, and{' '}
         {bcfd(P3gw.homes)} of protected demand goes without on the first day — {fmt(P3.rationedBcf, 2)} Bcf over {P3.rationDays} days. In real systems the
@@ -413,7 +446,7 @@ export default function Lesson() {
       <Challenge
         id="a"
         figure="Winter Supply Crisis"
-        question={`A late-January storm at ${fmt(NORTHLINE_CHALLENGE.temp)} °F freezes off ${pct(NORTHLINE_CHALLENGE.freeze)} of production, and Bayport’s cargoes give way as usual. What’s the least Northline capacity during the storm, to the nearest 0.05 Bcf/d, at which no home in Metro goes without?`}
+        question={`A late-January storm at ${fmt(NORTHLINE_CHALLENGE.temp)} °F freezes off ${pct(NORTHLINE_CHALLENGE.freeze)} of production, and Bayport’s cargoes give way as usual. What’s the least Northline capacity during the storm, to the nearest 0.05 Bcf/d, at which no home in Metro goes without? Estimate first: with Northline at ${bcfd(WORST_STORM.northline)}, drag across the chart through the storm’s ${STORM_DAYS} days and read on the map how short Metro is. How much more pipe would cover the worst day? Then check.`}
         solved={solvedA}
         status={
           st.when !== NORTHLINE_CHALLENGE.when || st.temp !== NORTHLINE_CHALLENGE.temp || Math.abs(st.freeze - NORTHLINE_CHALLENGE.freeze) > 1e-9 || st.lngHold
@@ -422,7 +455,7 @@ export default function Lesson() {
               ? `At ${bcfd(st.northline)}, ${fmt(stats.rationedBcf, 2)} Bcf of homes go without.`
               : `At ${bcfd(st.northline)} no one is rationed. Would less Northline do?`
         }
-        success={`Solved: ${bcfd(needed)}. At ${bcfd(round2(needed - NL_STEP))}, ${fmt(crisisStats({ ...NORTHLINE_CHALLENGE, northline: round2(needed - NL_STEP) }).rationedBcf, 2)} Bcf of homes would go without. Every 0.05 Bcf/d of Northline the storm takes away is gas Metro must find elsewhere, and in that storm there is nowhere else: Hollow Creek is already delivering all its wells can, and the power plants and factories have already given way. The freeze-offs don’t enter into it — the city’s limit is its pipes.`}
+        success={`Solved: ${bcfd(needed)}. At ${bcfd(WORST_STORM.northline)}, Metro was ${fmt(SHORT_FIRST, 2)} Bcf/d short on the storm’s first day and ${fmt(SHORT_WORST, 2)} on its last, as Hollow Creek’s wells delivered a little less each day; ${fmt(WORST_STORM.northline, 2)} + ${fmt(SHORT_WORST, 2)} = ${fmt(WORST_STORM.northline + SHORT_WORST, 2)}, so ${bcfd(round2(needed - NL_STEP))} still leaves ${fmt(crisisStats({ ...NORTHLINE_CHALLENGE, northline: round2(needed - NL_STEP) }).rationedBcf, 2)} Bcf of homes without gas. Every 0.05 Bcf/d of Northline the storm takes away is gas Metro must find elsewhere, and in that storm there is nowhere else: Hollow Creek is already delivering all its wells can, and the power plants and factories have already given way. The freeze-offs don’t enter into it — the city’s limit is its pipes.`}
       />
 
       <H2>Defenses</H2>
@@ -439,10 +472,16 @@ export default function Lesson() {
         scenario={sc}
         actions={
           <>
-            <Button onClick={() => sc.set({ temp: WORST_STORM.temp, freeze: WORST_STORM.freeze, northline: WORST_STORM.northline, lngHold: false })} label="Set up the worst storm: −5 °F, 30% frozen off, Northline at 1.4 Bcf/d">
+            <Button
+              onClick={() => sc.set({ temp: WORST_STORM.temp, freeze: WORST_STORM.freeze, northline: WORST_STORM.northline, lngHold: false })}
+              label={`Set up the worst storm: ${fmt(WORST_STORM.temp)} °F, ${pct(WORST_STORM.freeze)} frozen off, Northline at ${bcfd(WORST_STORM.northline)}`}
+            >
               Worst storm
             </Button>
-            <Button onClick={() => sc.set({ freeze: EVERY_DEFENSE.freeze, northline: EVERY_DEFENSE.northline, lngHold: EVERY_DEFENSE.lngHold })} label="Put every defense in place: no freeze-offs, Northline at 2.05 Bcf/d, cargoes give way">
+            <Button
+              onClick={() => sc.set({ freeze: EVERY_DEFENSE.freeze, northline: EVERY_DEFENSE.northline, lngHold: EVERY_DEFENSE.lngHold })}
+              label={`Put every defense in place: no freeze-offs, Northline at ${bcfd(EVERY_DEFENSE.northline)}, cargoes give way`}
+            >
               Every defense
             </Button>
           </>
@@ -455,7 +494,19 @@ export default function Lesson() {
           rowKey={(r) => r.key}
           rowClass={(r) => (r.key === 'set' ? 'hl' : '')}
           columns={[
-            { label: 'Change', cell: (r) => r.name },
+            {
+              label: 'Change',
+              cell: (r) =>
+                r.key === 'set' ? (
+                  <span style={{ whiteSpace: 'normal' }}>
+                    {r.name}
+                    <br />
+                    <span style={{ fontSize: 12.5, fontWeight: 400, color: TEXT.gray }}>{stormSettings(r.s)}</span>
+                  </span>
+                ) : (
+                  r.name
+                ),
+            },
             {
               label: 'Homes go without',
               cell: (r) => (
@@ -481,7 +532,7 @@ export default function Lesson() {
         />
         <Slider label="Storm temperature at Metro" tone="teal" value={st.temp} min={TEMP_MIN} max={TEMP_MAX} onChange={(v) => sc.set({ temp: v })} display={`${fmt(st.temp)} °F`} />
         <Caption>
-          {`Metro and Calder: average prices over the storm’s ${STORM_DAYS} days, $/MMBtu. The storm as set: ${fmt(st.temp)} °F, ${st.freeze > 0 ? `${pct(st.freeze)} frozen off` : 'no freeze-offs'}, Northline at ${bcfd(st.northline)}, cargoes ${st.lngHold ? 'keep loading' : 'give way'}. “Every defense” means no freeze-offs, Northline at ${fmt(NORTHLINE_EXPANDED, 2)} with its fourth station, and cargoes that give way.`}
+          {`Metro and Calder: average prices over the storm’s ${STORM_DAYS} days, $/MMBtu. The first row is the storm as you set it in the first demonstration, at the temperature and timing chosen here; “Every defense” means no freeze-offs, Northline at ${fmt(NORTHLINE_EXPANDED, 2)} with its fourth station, and cargoes that give way.`}
         </Caption>
       </Figure>
 
@@ -494,8 +545,11 @@ export default function Lesson() {
         to a region as a supplier.
       </P>
       <P>
-        Now move the storm. The same storm in early December rations {fmt(WORST_DEC.rationedBcf, 2)} Bcf; in early March, {fmt(WORST_MAR.rationedBcf, 2)} Bcf. Hollow
-        Creek is the difference: it enters a December storm nearly full, and a March storm with what a whole winter has left it, so its wells deliver less, as{' '}
+        Now move the storm.{' '}
+        {WORST_DEC.rationedBcf < 1e-6
+          ? 'In early December the same storm rations no one at all'
+          : `The same storm in early December rations ${fmt(WORST_DEC.rationedBcf, 2)} Bcf`}
+        ; in early March it rations {fmt(WORST_MAR.rationedBcf, 2)} Bcf. Hollow Creek is the difference: it enters a December storm nearly full, and a March storm with what a whole winter has left it, so its wells deliver less, as{' '}
         <a href={lessonHref('gas/3.4')}>Lesson 3.4</a> showed. Even with Northline repaired, the March storm still leaves {fmt(MAR_NL.rationedBcf, 2)} Bcf of homes
         without gas. The most dangerous cold isn’t the coldest; it’s the cold that comes late.
       </P>
@@ -523,11 +577,10 @@ export default function Lesson() {
 
       <H2>Where price differences come from</H2>
       <P>
-        This chapter asked where economically meaningful price differences originate. Each one we found traces back to a physical limit that binds. Prices differ
-        between places when a pipeline is full, and the gap is a rent for whoever holds the space (Lesson 5.1). They differ between seasons when storage is full, and
-        between days when a field’s deliverability runs out (Lesson 5.2). Gas and power prices differ by what a plant’s heat rate costs to bridge (Lesson 5.3), and
-        Calder’s price differs from the world’s by the cost of liquefying, shipping and regasifying a cargo, with the plant’s fee sunk once it’s signed (Lesson 5.4).
-        When several limits bind together, the difference stops being set by any cost at all and is set by the value of the last use given up: oil-fired power,
+        This chapter asked where economically meaningful price differences originate. Each one we found traces back to a physical limit that binds: a full pipeline (
+        <a href={lessonHref('gas/5.1')}>Lesson 5.1</a>), full storage and a field’s speed (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>), a plant’s heat rate (
+        <a href={lessonHref('gas/5.3')}>Lesson 5.3</a>), a ship’s voyage and a fee sunk once it’s signed (<a href={lessonHref('gas/5.4')}>Lesson 5.4</a>) and, from
+        one day to the next, a storage field’s deliverability running out, as in this lesson’s late storms. When several limits bind together, the difference stops being set by any cost at all and is set by the value of the last use given up: oil-fired power,
         idled factories, cancelled cargoes and, last of all, cold homes.
       </P>
       <P>

@@ -1,10 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
+  Button,
   Caption,
   Challenge,
-  Controls,
   DataTable,
-  FigRef,
   Figure,
   GRAPHIC,
   H2,
@@ -24,14 +23,25 @@ import {
 } from '../../../framework';
 import { cargoOffers, freightRatios, DEFAULT_WORLD, type CargoOffer, type CargoWorld } from '../../../engines/shipping/company';
 import { geography } from '../../../engines/shipping/market';
-import { seaRoute } from '../../../engines/shipping/network';
+import { seaDistance, seaRoute } from '../../../engines/shipping/network';
 import { ballastPlan } from '../../../engines/shipping/transport';
-import { ladenDraft } from '../../../engines/shipping/voyage';
+import { ballastDraft, ladenDraft } from '../../../engines/shipping/voyage';
 import { HISTORY_EVENTS, MONTH_SHORT, eventAt, monthLabel, standardHistory } from '../../../model/shipping/history';
 import { PLACE } from '../../../model/shipping/geo';
 import { MARKET_CLASSES, OFF_HIRE_DAYS, ROUTES, TRADE_PORTS, type ClassId, type Route } from '../../../model/shipping/trades';
 import { WorldMap } from '../shared/WorldMap';
-import { START_MONTH, resetCompany, updateCompany, useCompany } from '../shared/company';
+import {
+  STARTING,
+  START_MONTH,
+  confirmReset,
+  partChanged,
+  resetWorldFields,
+  updateCompany,
+  useCompany,
+  when,
+  worldFieldsChanged,
+} from '../shared/company';
+import { CompanySoFar, ViewSwitch, worldText, type CompanyView } from '../shared/CompanyUi';
 
 const HIST = standardHistory();
 const MONTH = 365 / 12;
@@ -87,11 +97,38 @@ export function expectedSoyShare(w: CargoWorld): number {
 }
 
 export const SOY_TARGET = 0.25;
+/**
+ * The longest window anywhere in the history in which soybeans are expected to make up a quarter of
+ * the Kamsarmax cargoes: 25 weeks, from a March (checked by longestSoyWindow in the tests).
+ */
+export const LONGEST_SOY = { weeks: 25, month: 2 };
+/** The challenge accepts a window within a week of the longest. */
+export const SOY_MIN_WEEKS = LONGEST_SOY.weeks - 1;
 
-/** The challenge: every export at its normal strength, and soybeans at least a quarter of the expected Kamsarmax cargoes. */
+/** The longest qualifying window over every start the demonstration allows, and the starts that reach it. */
+export function longestSoyWindow(): { weeks: number; starts: number[] } {
+  let weeks = 0;
+  let starts: number[] = [];
+  for (let start = 0; start <= 117; start++) {
+    let m = 0;
+    for (let k = 13; k <= 52; k++) if (expectedSoyShare({ ...W0, start, weeks: k }) >= SOY_TARGET - 1e-9) m = k;
+    if (m > weeks) {
+      weeks = m;
+      starts = [];
+    }
+    if (m === weeks && m > 0) starts.push(start);
+  }
+  return { weeks, starts };
+}
+
+const isNormal = (w: CargoWorld) => Object.values(w.routeScale).every((v) => Math.abs(v - 1) < 1e-9);
+
+/**
+ * The challenge: every export at its normal strength, soybeans at least a quarter of the expected
+ * Kamsarmax cargoes, over a window within a week of the longest that can manage it.
+ */
 export function soySolved(w: CargoWorld): boolean {
-  const normal = Object.values(w.routeScale).every((v) => Math.abs(v - 1) < 1e-9);
-  return normal && expectedSoyShare(w) >= SOY_TARGET - 1e-9;
+  return isNormal(w) && w.weeks >= SOY_MIN_WEEKS && expectedSoyShare(w) >= SOY_TARGET - 1e-9;
 }
 
 export interface RouteRow {
@@ -178,12 +215,23 @@ const OFFERS0 = cargoOffers(W0);
 const ROWS0 = routeRows(OFFERS0);
 const row0 = (id: string) => ROWS0.find((r) => r.route.id === id)!;
 const COUNT0 = { cape: OFFERS0.filter((o) => o.cls === 'cape').length, kmax: OFFERS0.filter((o) => o.cls === 'kmax').length };
-const PACIFIC0 = OFFERS0.filter((o) => !ATLANTIC.has(o.route.from)).length / OFFERS0.length;
+/** Share of the starting book that loads in Brazil or the US Gulf. */
+export const ATLANTIC0 = OFFERS0.filter((o) => ATLANTIC.has(o.route.from)).length / OFFERS0.length;
 const NEEDS0 = { cape: bookNeeds(OFFERS0, W0, 'cape'), kmax: bookNeeds(OFFERS0, W0, 'kmax') };
 /** The starting window with the brokers' reach at its lowest. */
 const W_NARROW: CargoWorld = { ...W0, reach: 0.005 };
 const OFFERS_NARROW = cargoOffers(W_NARROW);
 const NEEDS_NARROW = { cape: bookNeeds(OFFERS_NARROW, W_NARROW, 'cape'), kmax: bookNeeds(OFFERS_NARROW, W_NARROW, 'kmax') };
+/** How long the history's Panama drought lasts, in words. */
+const PANAMA_EVENT = HISTORY_EVENTS.find((e) => e.closed?.includes('panama'))!;
+const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+const PANAMA_SPAN = WORDS[PANAMA_EVENT.to - PANAMA_EVENT.from] ?? fmt(PANAMA_EVENT.to - PANAMA_EVENT.from);
+/** How much longer Tubarão's round trip to Qingdao is than Port Hedland's, laden out and empty back. */
+const capeRound = (port: string) => {
+  const v = MARKET_CLASSES.cape.vessel;
+  return seaDistance(port, 'QIN', { draft: ladenDraft(v, MARKET_CLASSES.cape.cargo) }) + seaDistance('QIN', port, { draft: ballastDraft(v) });
+};
+export const ROUND_RATIO = capeRound('TUB') / capeRound('PHE');
 /** New Orleans grain against Brazilian soybeans in a normal month and during the drought. */
 const NORMAL_MONTH = 99;
 const NOL_NORMAL = HIST.cls.kmax[NORMAL_MONTH].freights['P-NOL-QIN'];
@@ -245,8 +293,11 @@ function OfferStrip({ offers, w }: { offers: CargoOffer[]; w: CargoWorld }) {
       {rows.map((c) => (
         <g key={c}>
           <line className="base" x1={X0} x2={X1} y1={ys[c]} y2={ys[c]} />
-          <text x={X0 - 8} y={ys[c] + 4} textAnchor="end" style={{ fontSize: 12, fontWeight: 500, fill: CLASS_TEXT[c] }}>
+          <text x={X0 - 8} y={ys[c] - 2} textAnchor="end" style={{ fontSize: 12, fontWeight: 500, fill: CLASS_TEXT[c] }}>
             {CLASS_NAME[c]}
+          </text>
+          <text x={X0 - 8} y={ys[c] + 12} textAnchor="end" className="ax">
+            {offers.filter((o) => o.cls === c).length} cargoes
           </text>
         </g>
       ))}
@@ -291,17 +342,38 @@ export default function Lesson() {
   const rows = useMemo(() => routeRows(offers), [offers]);
   const soyShare = useMemo(() => expectedSoyShare(w), [key]); // eslint-disable-line react-hooks/exhaustive-deps
   const solved = soySolved(w);
-  const normal = Object.values(w.routeScale).every((v) => Math.abs(v - 1) < 1e-9);
-  const count = { cape: offers.filter((o) => o.cls === 'cape').length, kmax: offers.filter((o) => o.cls === 'kmax').length };
+  const normal = isNormal(w);
   const atlShare = offers.length ? offers.filter((o) => ATLANTIC.has(o.route.from)).length / offers.length : 0;
   const maxN = Math.max(1, ...rows.map((r) => r.n));
-  const lastMonth = w.start + Math.floor(((w.weeks - 1) * 7) / MONTH);
+  const lastMonth = (x: CargoWorld) => x.start + Math.floor(((x.weeks - 1) * 7) / MONTH);
   const loadsAt = (port: string) => offers.filter((o) => o.route.from === port).length;
+  const WINDOW: Array<keyof CargoWorld> = ['start', 'weeks', 'reach'];
+  const windowChanged = worldFieldsChanged(design, WINDOW);
+  const resetWindow = () => {
+    if (confirmReset('your trading window and your brokers’ reach', windowChanged)) resetWorldFields(WINDOW);
+  };
 
-  const book = useScenario('book', { cls: 'kmax' as ClassId });
+  // Demonstration 2: the freights, in the starting window (which the text describes) or the reader's.
+  const [fView, setFView] = useState<CompanyView>('start');
+  const fw: CargoWorld = !windowChanged || fView === 'start' ? { ...W0, routeScale: w.routeScale } : w;
+  const fKey = JSON.stringify(fw);
+  const fOffers = useMemo(() => cargoOffers(fw), [fKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fRows = useMemo(() => routeRows(fOffers), [fOffers]);
+  const resetExports = () => {
+    if (!confirmReset('your export strengths', !normal)) return;
+    resetWorldFields(['routeScale']);
+    setFView('start');
+  };
+
+  // Demonstration 3: what the book needs, for the starting company or the reader's.
+  const book = useScenario('book', { cls: 'kmax' as ClassId, view: 'start' as CompanyView });
   const cls = book.state.cls;
-  const needs = useMemo(() => bookNeeds(offers, w, cls), [offers, cls, key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const fleetCount = design.ships.filter((s) => s.cls === cls).length;
+  const bookChanged = partChanged(design, 'world') || partChanged(design, 'ships');
+  const bStart = !bookChanged || book.state.view === 'start';
+  const bw = bStart ? W0 : w;
+  const bOffers = bStart ? OFFERS0 : offers;
+  const needs = useMemo(() => bookNeeds(bOffers, bw, cls), [bOffers, bw, cls]);
+  const fleetCount = (bStart ? STARTING : design).ships.filter((s) => s.cls === cls).length;
   const totalT = needs.byRoute.reduce((a, r) => a + r.tonnes, 0);
   const totalTm = needs.byRoute.reduce((a, r) => a + r.tonMiles, 0);
   const BX0 = 196;
@@ -309,6 +381,7 @@ export default function Lesson() {
   const barH = 9;
   const rowH = 30;
   const chartH = 34 + Math.max(1, needs.byRoute.length) * rowH;
+  const minSoy = Math.min(...SOY_BY_MONTH);
 
   return (
     <LessonPage id="shipping/6.2">
@@ -317,17 +390,18 @@ export default function Lesson() {
         chartered, each with a daily cost to cover. A fleet earns nothing until it has cargo. This lesson builds the market the company will trade in — not the
         whole world’s, which no company sees, but the slice its brokers bring it. Which cargoes, loading where, on which dates, at what freight?
       </P>
+      <CompanySoFar d={design} lesson={2} />
       <P>
         The cargoes come from the trades we have followed since <a href={lessonHref('shipping/3.1')}>Chapter 3</a>: iron ore from Port Hedland and Tubarão, coal
         from Indonesia, Australia and South Africa, soybeans from Santos and grain from the US Gulf. Each week, each trade sends the company a random number of
         cargoes. On average it is that trade’s share of the world’s voyages that week — its volume divided by a ship’s cargo, shaped by its season, as in{' '}
         <a href={lessonHref('shipping/3.5')}>Lesson 3.5</a> — times the brokers’ <K tone="orange">reach</K>, the share of the world market they hear about.
-        Each cargo has a week-long loading window, a laycan, like the cargoes of <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a>, and offers the freight its
-        route paid that month in the simulated history, give or take a few percent of negotiation. In the next demonstration, choose when the company starts
-        trading, for how long, how far its brokers reach and how strongly each region exports:
+        Each cargo has a week-long loading window, a laycan, like the cargoes of <a href={lessonHref('shipping/3.4')}>Lesson 3.4</a>. In the next demonstration,
+        choose when the company starts trading, for how long and how far its brokers reach; the map draws the cargoes by trade, and the strip by the day each
+        loading window opens:
       </P>
 
-      <Figure name="Global Cargo Simulator" onReset={() => resetCompany('world')}>
+      <Figure name="Global Cargo Simulator" onReset={resetWindow}>
         <WorldMap
           ariaLabel={`The company’s cargo offers from ${monthLabel(w.start)} for ${w.weeks} weeks, drawn by trade: ${rows
             .filter((r) => r.n > 0)
@@ -348,23 +422,80 @@ export default function Lesson() {
         <OfferStrip offers={offers} w={w} />
         <Readouts
           items={[
-            { label: 'Capesize cargoes', value: fmt(count.cape), tone: 'blue' },
-            { label: 'Kamsarmax cargoes', value: fmt(count.kmax), tone: 'orange' },
             { label: 'soybeans’ share of the Kamsarmax cargoes to expect', value: pct(soyShare, 1), tone: soyShare >= SOY_TARGET ? 'green' : undefined },
-            { label: 'loading in Brazil or the US Gulf', value: pct(atlShare) },
+            { label: 'cargoes loading in Brazil or the US Gulf', value: pct(atlShare) },
           ]}
         />
-        <Controls columns={2}>
-          <Slider label="Start" tone="teal" value={w.start} min={0} max={117} onChange={(v) => setWorld({ start: v })} display={monthLabel(w.start)} />
-          <Slider label="Period" tone="teal" value={w.weeks} min={13} max={52} onChange={(v) => setWorld({ weeks: v })} display={`${w.weeks} weeks`} />
-          <Slider label="Brokers’ reach" tone="orange" value={Math.round(w.reach * 1000) / 10} min={0.5} max={5} step={0.25} onChange={(v) => setWorld({ reach: v / 100 })} display={`${fmt(w.reach * 100, 2)}% of cargoes`} />
-          {GROUPS.map((g) => (
-            <Slider key={g.key} label={g.label} tone="orange" value={groupValue(w, g.routes)} min={0.5} max={1.5} step={0.05} onChange={(v) => setGroup(g.routes, v)} display={pct(groupValue(w, g.routes))} />
-          ))}
-        </Controls>
+        <Slider label="Start" tone="teal" value={w.start} min={0} max={117} onChange={(v) => setWorld({ start: v })} display={monthLabel(w.start)} />
+        <Slider label="Period" tone="teal" value={w.weeks} min={13} max={52} onChange={(v) => setWorld({ weeks: v })} display={`${w.weeks} weeks`} />
+        <Slider label="Brokers’ reach" tone="orange" value={Math.round(w.reach * 1000) / 10} min={0.5} max={5} step={0.25} onChange={(v) => setWorld({ reach: v / 100 })} display={`${fmt(w.reach * 100, 2)}% of cargoes`} />
+        <Caption>
+          {monthLabel(w.start)} to {monthLabel(lastMonth(w))}: {fmt(offers.length)} cargoes on offer.
+          {normal ? '' : ' Exports at the strengths set in the next demonstration.'}
+        </Caption>
+      </Figure>
+
+      <P>
+        At the start the company trades from {when(W0.start)} for {W0.weeks} weeks, with brokers reaching {pct(W0.reach)} of the world’s cargoes. They bring{' '}
+        {fmt(OFFERS0.length)} cargoes, the company’s <K tone="orange">book</K>: the cargoes on offer to it, to take or leave. Of these, {fmt(COUNT0.cape)} are
+        for Capesizes and {fmt(COUNT0.kmax)} for Kamsarmaxes, and only {pct(ATLANTIC0)} load in Brazil or the US Gulf — Port Hedland’s ore alone sends{' '}
+        {fmt(row0('C-PHE-QIN').n)}. Widen the reach and the book grows in proportion; the trades it is made of stay the same.
+      </P>
+
+      <H2>The harvest calendar</H2>
+      <P>
+        Now move the start. The Kamsarmax book changes character with the seasons, because Brazil ships its soybeans mostly from March to July and the US its
+        grain in the northern autumn (<a href={lessonHref('shipping/3.5')}>Lesson 3.5</a>). The starting window opens as Brazil’s season is ending, so soybeans
+        should be only about {pct(SOY_SHARE0)} of its Kamsarmax cargoes: the share in the readout, the average of what the brokers can expect week by week. The
+        dots in the strip are one random draw around those expectations, so a short window can come out ahead of or behind its season — the same randomness that
+        made ships queue at the port of <a href={lessonHref('shipping/3.2')}>Lesson 3.2</a>.
+      </P>
+
+      <Challenge
+        id="a"
+        figure="Global Cargo Simulator"
+        question={`Estimate first from the season, then check: leaving every export at its normal strength, how long can a window be — starting when you like — and still expect Brazilian soybeans to make up at least ${pct(SOY_TARGET)} of the Kamsarmax cargoes? Find the longest window you can.`}
+        solved={solved}
+        status={
+          !normal ? (
+            <>
+              Put every export back to 100% first: the harvest has to do the work.{' '}
+              <Button onClick={() => confirmReset('your export strengths', true) && resetWorldFields(['routeScale'])}>Set every export to 100%</Button>
+            </>
+          ) : soyShare < SOY_TARGET - 1e-9 ? (
+            `From ${when(w.start)} for ${w.weeks} weeks, soybeans are ${pct(soyShare, 1)} of the Kamsarmax cargoes to expect: short of ${pct(SOY_TARGET)}.`
+          ) : (
+            `From ${when(w.start)} for ${w.weeks} weeks, soybeans are ${pct(soyShare, 1)}: that qualifies. Can a longer window still manage it?`
+          )
+        }
+        success={`Solved: ${w.weeks} weeks from ${when(w.start)}, at ${pct(soyShare, 1)}. The longest window anywhere in the history is ${LONGEST_SOY.weeks} weeks, and it starts in ${MONTH_NAMES[LONGEST_SOY.month]}, with Brazil’s season; every week added after July brings slack months that dilute the harvest. The richest 13 weeks start in ${MONTH_NAMES[BEST_SOY]}, at ${pct(SOY_BY_MONTH[BEST_SOY])}; start in ${MONTH_NAMES[SOY_BY_MONTH.indexOf(minSoy)]} and soybeans are just ${pct(minSoy)}. The same ships will be wanted in Santos then, which is why Lesson 5.4 found that a Kamsarmax ballasting from China should leave in February.`}
+      />
+
+      <P>
+        The window you leave here is the one Northwind trades in from now on. The later lessons can also run the starting window, which their text describes.
+      </P>
+
+      <H2>Export strength moves the freight</H2>
+      <P>
+        Each cargo offers the freight its route paid that month in the simulated history, give or take a few percent of negotiation. In the next demonstration the
+        book is sorted by trade, with the freight each pays, and the dials set how strongly each region exports:
+      </P>
+
+      <Figure name="Global Cargo Simulator · freights" onReset={resetExports}>
+        {windowChanged && (
+          <ViewSwitch
+            value={fView}
+            onChange={setFView}
+            labels={['Starting window', 'Your window']}
+            note={`The text describes the starting window, ${W0.weeks} weeks from ${when(W0.start)}; yours is ${w.weeks} weeks from ${when(w.start)}.`}
+          />
+        )}
+        {GROUPS.map((g) => (
+          <Slider key={g.key} label={g.label} tone="orange" value={groupValue(w, g.routes)} min={0.5} max={1.5} step={0.05} onChange={(v) => setGroup(g.routes, v)} display={pct(groupValue(w, g.routes))} />
+        ))}
         <DataTable
           caption="The cargoes on offer by trade, with the freight they pay"
-          rows={rows.filter((r) => r.n > 0)}
+          rows={fRows.filter((r) => r.n > 0)}
           rowKey={(r) => r.route.id}
           columns={[
             { label: 'Trade', cell: (r) => `${routeName(r.route)}, ${r.route.commodity}` },
@@ -375,60 +506,33 @@ export default function Lesson() {
           ]}
         />
         <Caption>
-          {monthLabel(w.start)} to {monthLabel(lastMonth)}. Freight is simulated and illustrative: each route’s rate in the course’s history for its month,
-          re-solved for the export strengths you set.
+          {monthLabel(fw.start)} to {monthLabel(lastMonth(fw))}, brokers reaching {fmt(fw.reach * 100, 2).replace(/\.?0+$/, '')}% of cargoes. Freight is simulated and illustrative:
+          each route’s rate in the course’s history for its month, re-solved for the export strengths you set.
         </Caption>
       </Figure>
 
       <P>
-        At the start the company trades from {monthLabel(W0.start)} for {W0.weeks} weeks, with brokers reaching {pct(W0.reach)} of the world’s cargoes. They bring{' '}
-        {fmt(OFFERS0.length)} cargoes: {fmt(COUNT0.cape)} for Capesizes and {fmt(COUNT0.kmax)} for Kamsarmaxes, and {pct(PACIFIC0)} of them load outside the
-        Atlantic — Port Hedland’s ore alone sends {fmt(row0('C-PHE-QIN').n)}. Look at the freights. Port Hedland’s ore pays about{' '}
-        {perT(row0('C-PHE-QIN').avg)} for a 3,800-mile voyage and Tubarão’s about {perT(row0('C-TUB-QIN').avg)} for 11,100 miles, because a Brazilian cargo must
-        also pay for the empty voyage that brings a ship from China (<a href={lessonHref('shipping/4.3')}>Lesson 4.3</a>). These are slump freights: the window
-        opens late in the long trough of Years 6 to 10.
+        Look at the freights. Port Hedland’s ore pays about {perT(row0('C-PHE-QIN').avg)} for a 3,800-mile voyage and Tubarão’s about{' '}
+        {perT(row0('C-TUB-QIN').avg)} for 11,100 miles. Each freight pays for a round trip, out laden and back empty to the next cargo (
+        <a href={lessonHref('shipping/4.3')}>Lesson 4.3</a>), and Tubarão’s round trip is about {WORDS[Math.round(ROUND_RATIO)]} times as long. These are slump
+        freights: the starting window opens late in the long trough of Years 6 to 10.
       </P>
       <P>
-        The window also catches the drought that restricts the Panama Canal in the history, and the trade it hits shows it. In a normal month,{' '}
-        {monthLabel(NORMAL_MONTH)}, grain from New Orleans to Qingdao pays {perT(NOL_NORMAL)} against {perT(SAN_NORMAL)} for Brazilian soybeans: a shorter haul,
-        but with a canal toll to pay and a longer empty voyage to reach the Gulf, so it comes out about the same. In {monthLabel(W0.start)} it pays{' '}
-        {perT(NOL_DROUGHT)} against {perT(SAN_DROUGHT)}: with the canal shut to it, the cargo goes the long way by Suez{' '}
-        (<a href={lessonHref('shipping/3.3')}>Lesson 3.3</a>), and the freight must pay for the extra weeks.
+        The window also catches the history’s drought at the Panama Canal, which in our model closes it to bulk carriers for {PANAMA_SPAN} months, and the trade
+        it hits shows it. In a normal month, {monthLabel(NORMAL_MONTH)}, grain from New Orleans to Qingdao pays {perT(NOL_NORMAL)} against {perT(SAN_NORMAL)} for
+        Brazilian soybeans: a shorter haul through the canal, and a shorter empty voyage back to the Gulf, but with the canal’s toll and a day in
+        the locks to pay for, so it comes out about the same. In {monthLabel(W0.start)} it pays{' '}
+        {perT(NOL_DROUGHT)} against {perT(SAN_DROUGHT)}: with the canal shut to it, the cargo goes the long way by Suez (
+        <a href={lessonHref('shipping/3.3')}>Lesson 3.3</a>), and the freight must pay for the extra weeks.
       </P>
-
-      <H2>Export strength moves the freight</H2>
       <P>
         Now raise Brazil’s iron ore. More Tubarão cargoes appear, as you’d expect — but in the starting window the freight on every Capesize trade rises too,
-        not just Brazil’s. The
-        dials don’t only add cargoes; they change the market the cargoes are priced in. The model re-solves each month’s Capesize market with the extra long-haul
-        ore (<a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>): the fleet must sail more tonne-miles, ships speed up, and earnings rise until the fleet carries
-        it all. At {pct(ORE_UP['C-TUB-QIN'])} of Brazil’s normal exports, the {MONTH_NAMES[HIST.cls.cape[W0.start].month]} freight from Port Hedland rises by{' '}
-        {pct(ORE_RATIO['C-PHE-QIN'] - 1)} and Tubarão’s by {pct(ORE_RATIO['C-TUB-QIN'] - 1)}, though Port Hedland’s trade hasn’t changed at all. Ships are one
-        pool; a strong trade anywhere pulls them from everywhere else.
+        not just Brazil’s. The dials don’t only add cargoes; they change the market the cargoes are priced in. The model re-solves each month’s Capesize market
+        with the extra long-haul ore (<a href={lessonHref('shipping/4.1')}>Lesson 4.1</a>): the fleet must sail more tonne-miles, ships speed up, and earnings
+        rise until the fleet carries it all. At {pct(ORE_UP['C-TUB-QIN'])} of Brazil’s normal exports, the {MONTH_NAMES[HIST.cls.cape[W0.start].month]} freight
+        from Port Hedland rises by {pct(ORE_RATIO['C-PHE-QIN'] - 1)} and Tubarão’s by {pct(ORE_RATIO['C-TUB-QIN'] - 1)}, though Port Hedland’s trade hasn’t
+        changed at all. Ships are one pool; a strong trade anywhere pulls them from everywhere else.
       </P>
-
-      <H2>The harvest calendar</H2>
-      <P>
-        Leave the dials and move the start instead. The Kamsarmax book changes character with the seasons, because Brazil ships its soybeans mostly from March
-        to July and the US its grain in the northern autumn (<a href={lessonHref('shipping/3.5')}>Lesson 3.5</a>). Over the starting window, soybeans should be
-        about {pct(SOY_SHARE0)} of the Kamsarmax cargoes. Start a 13-week window in {MONTH_NAMES[BEST_SOY]} and the share expected rises to{' '}
-        {pct(SOY_BY_MONTH[BEST_SOY])}; start it in {MONTH_NAMES[SOY_BY_MONTH.indexOf(Math.min(...SOY_BY_MONTH))]} and it falls to{' '}
-        {pct(Math.min(...SOY_BY_MONTH))}. The dots in the strip are one random draw around those expectations, so a short window can come out ahead of or behind
-        its season — the same randomness that made ships queue at the port of <a href={lessonHref('shipping/3.2')}>Lesson 3.2</a>.
-      </P>
-
-      <Challenge
-        id="a"
-        figure="Global Cargo Simulator"
-        question={`Leaving every export at its normal strength, choose a start and a period in which Brazilian soybeans make up at least ${pct(SOY_TARGET)} of the Kamsarmax cargoes your brokers can expect.`}
-        solved={solved}
-        status={
-          normal
-            ? `From ${monthLabel(w.start)} for ${w.weeks} weeks, soybeans are ${pct(soyShare, 1)} of the Kamsarmax cargoes to expect.`
-            : 'Put every export back to 100% first: the harvest has to do the work.'
-        }
-        success={`Solved: ${pct(soyShare, 1)} from ${monthLabel(w.start)}. Every window that gets there starts between February and May and lasts no more than 25 weeks; longer ones run on into the slack months, which dilute the harvest. The same ships will be wanted in Santos then, which is why Lesson 5.4 found that a Kamsarmax ballasting from China should leave in February.`}
-      />
 
       <H2>Enough ships for the book?</H2>
       <P>
@@ -440,6 +544,14 @@ export default function Lesson() {
       </P>
 
       <Figure name="Global Cargo Simulator · the book’s tonne-miles" scenario={book}>
+        {bookChanged && (
+          <ViewSwitch
+            value={book.state.view}
+            onChange={(v) => book.set({ view: v })}
+            labels={['Starting book', 'Your book']}
+            note={<>The text describes the starting company’s book. Yours: {worldText(design)}.</>}
+          />
+        )}
         <Segmented
           label="Size class"
           value={cls}
@@ -500,13 +612,13 @@ export default function Lesson() {
             { label: 'tonnes in the book', value: `${fmt(needs.tonnes / 1e6, 2)} Mt`, tone: 'orange' },
             { label: 'tonne-miles', value: `${fmt(needs.tonMiles, 1)} bn`, tone: 'blue' },
             { label: `${CLASS_NAME[cls]}s needed to carry it all`, value: fmt(needs.ships, 1) },
-            { label: `${CLASS_NAME[cls]}s in your fleet`, value: fmt(fleetCount), tone: fleetCount >= needs.ships ? 'green' : undefined },
+            { label: `${CLASS_NAME[cls]}s in ${bStart ? 'the starting' : 'your'} fleet`, value: fmt(fleetCount), tone: fleetCount >= needs.ships ? 'green' : undefined },
           ]}
         />
         <Caption>
-          {fmt(needs.shipDays)} ship-days: {fmt(needs.portDays)} in port, {fmt(needs.ladenMiles / (24 * LADEN_KN))} laden at sea and{' '}
-          {fmt(needs.ballastMiles / (24 * BALLAST_KN))} in ballast, against {fmt(w.weeks * 7 * ((365 - OFF_HIRE_DAYS) / 365))} earning days per ship in{' '}
-          {w.weeks} weeks.
+          {bStart ? 'The starting book' : 'Your book'}: {fmt(needs.shipDays)} ship-days, {fmt(needs.portDays)} in port, {fmt(needs.ladenMiles / (24 * LADEN_KN))}{' '}
+          laden at sea and {fmt(needs.ballastMiles / (24 * BALLAST_KN))} in ballast, against {fmt(bw.weeks * 7 * ((365 - OFF_HIRE_DAYS) / 365))} earning days per
+          ship in {bw.weeks} weeks.
         </Caption>
       </Figure>
 
@@ -524,8 +636,10 @@ export default function Lesson() {
         cargoes on a three-times-longer haul, takes{' '}
         {pct((NEEDS0.cape.byRoute.find((r) => r.route.id === 'C-TUB-QIN')?.tonMiles ?? 0) / NEEDS0.cape.tonMiles)} of the tonne-miles. A ship that takes a Brazilian
         cargo is gone for {fmt(seaRoute('TUB', 'QIN')!.nm / (24 * LADEN_KN), 0)} days laden and comes back empty; one that takes Port Hedland’s is back in about
-        a month. If your fleet is heavy in one size, move the export dials in <FigRef to="Global Cargo Simulator">the first demonstration</FigRef> and watch
-        the ships needed here move: the fleet and the trades have to fit each other.
+        a month.{' '}
+        {bookChanged
+          ? 'Switch this demonstration to your book and set the ships it needs against the ships you have: the fleet and the trades have to fit each other.'
+          : 'Once you have changed the fleet or the window, this demonstration can switch to your own book: the fleet and the trades have to fit each other.'}
       </P>
       <P>
         The company now has ships and a stream of cargoes it could carry. Which ship should take which cargo, at what speed, and when is it better to wait?{' '}

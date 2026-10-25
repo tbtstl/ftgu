@@ -1,5 +1,5 @@
-// The Calder region's simulated weather history: 41 years of daily temperatures at its three
-// stations, daily rain at Calder Bay and Marlow, daily wind on Hollin Ridge, the Pacific's
+// The Fenwick region's simulated weather history: 41 years of daily temperatures at its three
+// stations, daily rain at Fenwick Bay and Marlow, daily wind on Hollin Ridge, the Pacific's
 // Niño-3.4 index month by month — and every forecast the course's model issued along the way.
 //
 // Nothing here is real data. It's a simulated archive, built so that forecasts are honest: the
@@ -26,8 +26,8 @@ export const PREDICTABILITY_DAYS = 7;
 export const SAME_DAY_CORRELATION = 0.72;
 /** Long-run warming of every station, °F per year (the normals are centered on year 21). */
 export const TREND_F_PER_YEAR = 0.03;
-/** Correlation of Marlow's and Hollin Ridge's daily anomalies with Calder Bay's. */
-export const STATION_CORRELATION: Record<StationId, number> = { calder: 1, marlow: 0.8, ridge: 0.92 };
+/** Correlation of Marlow's and Hollin Ridge's daily anomalies with Fenwick Bay's. */
+export const STATION_CORRELATION: Record<StationId, number> = { fenwick: 1, marlow: 0.8, ridge: 0.92 };
 /** Day-to-day persistence of each station's own part of its anomaly. */
 const LOCAL_PERSISTENCE = 0.65;
 
@@ -77,7 +77,7 @@ export function monthDays(year: number, month: number): { start: number; days: n
 }
 
 export interface ArchiveData {
-  /** Calder Bay's standardized weather anomaly, one per day. */
+  /** Fenwick Bay's standardized weather anomaly, one per day. */
   z: Float64Array;
   /**
    * Pieces of information: piece[d·(LEAD_MAX+1) + k] is what was revealed about day d, k days
@@ -91,7 +91,7 @@ export interface ArchiveData {
   /** The Niño-3.4 index and thermocline state, month by month (12 more than the archive's months). */
   enso: EnsoState[];
   /** Daily precipitation, inches. */
-  rain: Record<'calder' | 'marlow', Float64Array>;
+  rain: Record<'fenwick' | 'marlow', Float64Array>;
   /** Daily mean wind speed at hub height on Hollin Ridge, m/s. */
   wind: Float64Array;
 }
@@ -132,8 +132,8 @@ export function archive(): ArchiveData {
 
   // Rain: wet days follow a two-state Markov chain; amounts are gamma-distributed. At Marlow a
   // hot spell makes a wet day less likely in the growing season (hot summers tend to be dry).
-  const rain = { calder: new Float64Array(DAYS), marlow: new Float64Array(DAYS) };
-  for (const id of ['calder', 'marlow'] as const) {
+  const rain = { fenwick: new Float64Array(DAYS), marlow: new Float64Array(DAYS) };
+  for (const id of ['fenwick', 'marlow'] as const) {
     const cfg = RAIN[id];
     let wet = false;
     for (let d = 0; d < DAYS; d++) {
@@ -172,8 +172,8 @@ export function archive(): ArchiveData {
 }
 
 /** Monthly rainfall normals (inches) and the share of days that are wet, by month. */
-export const RAIN: Record<'calder' | 'marlow', { monthly: number[]; wetShare: number[] }> = {
-  calder: { monthly: [3.6, 3.1, 4.2, 4.1, 4.0, 4.2, 4.4, 4.2, 4.0, 3.9, 3.6, 4.0], wetShare: [0.33, 0.32, 0.35, 0.36, 0.36, 0.33, 0.32, 0.3, 0.29, 0.29, 0.32, 0.34] },
+export const RAIN: Record<'fenwick' | 'marlow', { monthly: number[]; wetShare: number[] }> = {
+  fenwick: { monthly: [3.6, 3.1, 4.2, 4.1, 4.0, 4.2, 4.4, 4.2, 4.0, 3.9, 3.6, 4.0], wetShare: [0.33, 0.32, 0.35, 0.36, 0.36, 0.33, 0.32, 0.3, 0.29, 0.29, 0.32, 0.34] },
   marlow: { monthly: [1.6, 1.7, 2.4, 3.5, 4.4, 4.6, 4.0, 4.1, 3.2, 2.8, 2.4, 2.0], wetShare: [0.28, 0.27, 0.3, 0.34, 0.36, 0.35, 0.31, 0.29, 0.28, 0.27, 0.28, 0.29] },
 };
 
@@ -268,7 +268,7 @@ export function ninoForecast(year: number, month: number, ahead: number): number
 /** A station's standardized anomaly on a day. */
 export function stationZ(id: StationId, d: number): number {
   const a = archive();
-  if (id === 'calder') return a.z[d];
+  if (id === 'fenwick') return a.z[d];
   const c = STATION_CORRELATION[id];
   return c * a.z[d] + Math.sqrt(1 - c * c) * a.local[id][d];
 }
@@ -314,7 +314,7 @@ export function forecastTemp(id: StationId, d: number, lead: number, knobs: Worl
   const share = knownShare(lead);
   let mean: number;
   let varZ: number;
-  if (id === 'calder') {
+  if (id === 'fenwick') {
     mean = knownZ;
     varZ = 1 - share;
   } else {
@@ -335,10 +335,10 @@ export function forecastTemp(id: StationId, d: number, lead: number, knobs: Worl
 
 /**
  * Temperature on day `d` at an imagined station with climate `cl`, driven by the weather sequence
- * of one of the region's stations (Calder Bay's by default), °F. Lets a lesson build a station
+ * of one of the region's stations (Fenwick Bay's by default), °F. Lets a lesson build a station
  * anywhere and give it the same days of weather, reshaped by its own climate.
  */
-export function tempForClimate(cl: Climate, d: number, like: StationId = 'calder', knobs: WorldKnobs = {}): number {
+export function tempForClimate(cl: Climate, d: number, like: StationId = 'fenwick', knobs: WorldKnobs = {}): number {
   const { doy, month } = dayInfo(d);
   const trend = (knobs.trend ?? TREND_F_PER_YEAR) * yearsFromMiddle(d);
   const enso = (knobs.ensoF ?? cl.ensoF) * ENSO_MONTH_WEIGHT[month] * ninoAt(d);

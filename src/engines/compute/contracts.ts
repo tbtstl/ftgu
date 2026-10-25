@@ -71,6 +71,8 @@ export interface ContractResult {
   /** Net present value of each path, $, sorted ascending. */
   npvs: number[];
   mean: number;
+  /** Standard deviation of the paths' net present values: the square root of their mean squared distance from the mean, $. */
+  sd: number;
   p5: number;
   p95: number;
   probLoss: number;
@@ -104,9 +106,11 @@ export function runContract(c: ContractParams): ContractResult {
   }
   npvs.sort((a, b) => a - b);
   const mean = npvs.reduce((a, b) => a + b, 0) / npvs.length;
+  const sd = Math.sqrt(npvs.reduce((a, b) => a + (b - mean) ** 2, 0) / npvs.length);
   return {
     npvs,
     mean,
+    sd,
     p5: pct(npvs, 0.05),
     p95: pct(npvs, 0.95),
     probLoss: npvs.filter((x) => x < 0).length / npvs.length,

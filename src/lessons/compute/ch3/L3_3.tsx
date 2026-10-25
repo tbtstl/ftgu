@@ -18,6 +18,7 @@ import {
   Segmented,
   Slider,
   TEXT,
+  Tn,
   fmt,
   lessonHref,
   linePath,
@@ -37,6 +38,14 @@ export const BATCH_TOKENS = 4 * 1024 * 1024;
 export const SEQ_LEN = 4096;
 /** Tokens to train on, for either model. */
 export const TRAIN_TOKENS = 2e12;
+
+/** Share of each GPU's memory a training job can use; the training engine's split fits only within it. The rest goes to the software that runs the job. */
+export const TRAIN_USABLE = 0.95;
+
+/** Memory a training job can use on one GPU, GB. */
+export function usableGB(gpu: GpuId): number {
+  return ACCELERATORS[gpu].memoryGB * TRAIN_USABLE;
+}
 
 export const SPLITS = [1, 2, 4, 8, 16] as const;
 type SplitText = '1' | '2' | '4' | '8' | '16';
@@ -113,6 +122,11 @@ export function pct1(x: number): string {
   return `${fmt(x * 100, 1)}%`;
 }
 
+/** "76", "45.6": whole numbers without a decimal. */
+function gbFmt(gb: number): string {
+  return fmt(gb, Math.abs(gb - Math.round(gb)) < 1e-9 ? 0 : 1);
+}
+
 function secs(s: number): string {
   return s >= 1 ? `${fmt(s, 2)} s` : `${fmt(s * 1000)} ms`;
 }
@@ -156,6 +170,7 @@ function TrainDiagram({ model, gpu, gpus, tp, pp, r, ariaLabel }: { model: Model
   const memMax = Math.max(g.memoryGB, r.valid ? r.memoryGB : 0) * 1.05;
   const MX = scale(0, memMax, mx0, mx1);
   const over = r.valid && !r.fits;
+  const usable = usableGB(gpu);
 
   // Step bar.
   const sx0 = 20;
@@ -209,9 +224,10 @@ function TrainDiagram({ model, gpu, gpus, tp, pp, r, ariaLabel }: { model: Model
           <rect x={mx0} y={34} width={MX(r.stateGB) - mx0} height={26} fill={STATE} />
           <rect x={MX(r.stateGB)} y={34} width={MX(r.memoryGB) - MX(r.stateGB)} height={26} fill={ACTS} />
           {over && <rect x={mx0} y={34} width={MX(r.memoryGB) - mx0} height={26} fill="none" stroke={TEXT.red} strokeWidth={2} />}
-          <line x1={MX(g.memoryGB)} x2={MX(g.memoryGB)} y1={26} y2={68} stroke="#111" strokeWidth={1.5} strokeDasharray="4 3" />
-          <text className="ax ax-m" x={Math.max(mx0 + 52, Math.min(MX(g.memoryGB), mx1 - 56))} y={82}>
-            {g.memoryGB} GB on the card
+          <line x1={MX(g.memoryGB)} x2={MX(g.memoryGB)} y1={30} y2={64} stroke="#b5b5b0" strokeWidth={1.5} />
+          <line x1={MX(usable)} x2={MX(usable)} y1={26} y2={68} stroke="#111" strokeWidth={1.5} strokeDasharray="4 3" />
+          <text className="ax ax-m" x={Math.max(mx0 + 66, Math.min(MX(usable), mx1 - 66))} y={82}>
+            {`usable ${gbFmt(usable)} of ${g.memoryGB} GB`}
           </text>
           <text className="lab" x={mx0} y={102} style={over ? { fill: TEXT.red } : undefined}>
             {fmt(r.memoryGB, 1)} GB{over ? ': doesn’t fit' : ''}
@@ -360,6 +376,10 @@ export const NUMBERS = (() => {
     s32768: scaleRun('8x4', 15),
     p4096: scaleRun('8x1', 12),
     s32: scaleRun('8x4', 5),
+    /** The 8B model with one GPU per layer and one stage: a whole copy on every GPU. */
+    small: runOf('8B', 'A', 1024, 1, 1),
+    /** GPUs that would finish the starting run in a week if scaling were perfect. */
+    weekIdealGpus: (base.days * 1024) / WEEK_DAYS,
   };
 })();
 
@@ -387,7 +407,8 @@ export default function Lesson() {
   // Live sentence for the first figure.
   let caption: string;
   if (!r.valid) caption = r.reason ?? '';
-  else if (!r.fits) caption = `Each GPU would need ${fmt(r.memoryGB, 1)} GB but has ${g.memoryGB} GB. Split the model further: more GPUs per layer or more stages.`;
+  else if (!r.fits)
+    caption = `Each GPU would need ${fmt(r.memoryGB, 1)} GB but can use only ${gbFmt(usableGB(gpu))} GB of its ${g.memoryGB} GB. Split the model further: more GPUs per layer or more stages.`;
   else {
     const losses = [
       { v: r.bubbleS, t: `the pipeline bubble costs ${secs(r.bubbleS)} of every step` },
@@ -409,7 +430,7 @@ export default function Lesson() {
   else if (gpu !== 'A') status = `The run is on ${g.name} GPUs. Choose the A-class.`;
   else if (gpus !== 1024) status = `The run uses ${fmt(gpus)} GPUs. Set it to 1,024.`;
   else if (!r.valid) status = r.reason ?? '';
-  else if (!r.fits) status = `This split needs ${fmt(r.memoryGB, 1)} GB per GPU: more than the A-class’s 80 GB.`;
+  else if (!r.fits) status = `This split needs ${fmt(r.memoryGB, 1)} GB per GPU: more than the ${gbFmt(usableGB('A'))} GB of the A-class’s 80 GB that training can use.`;
   else status = `This split takes ${daysText(r.days)}. Can another that fits finish sooner?`;
 
   const sCaption = !sr.valid
@@ -451,16 +472,20 @@ export default function Lesson() {
         Memory rules out one GPU even before time does. Training keeps far more per weight than serving: the BF16 weights and gradients, two bytes each, and for the
         optimizer that takes the steps, a full-precision copy of every weight and two running averages of its gradients, four bytes each — sixteen bytes per parameter,
         or about {fmt(N.stateTB, 1)} TB of <K tone="violet">training state</K> for the 70B model. On top of that sit the{' '}
-        <K tone="violet">activations</K>: every layer’s intermediate results, kept from the forward pass because the backward pass needs them. An A-class holds 80 GB.
+        <Tn tone="violet">activations</Tn> of <a href={lessonHref('compute/3.1')}>Lesson 3.1</a>: every layer’s intermediate results, which serving discards as
+        soon as the next operation has used them but training must keep from the forward pass, because the backward pass needs them. An A-class holds 80 GB.
       </P>
       <P>
         So the model is split across many GPUs, in three ways at once. <b>Data parallelism</b>, from Lesson 2.5, runs whole copies of the model on different sequences
         and sums their gradients after every step; the twelve bytes of optimizer state per parameter can be shared out among the copies, but every copy still holds its
-        own weights and gradients. <b>Tensor parallelism</b> splits each layer’s matrices across several GPUs, which must then exchange partial results four times per
+        own weights and gradients. <b>Tensor parallelism</b>, which served the model in <a href={lessonHref('compute/3.2')}>Lesson 3.2</a>, splits each layer’s
+        matrices across several GPUs, which must then exchange partial results four times per
         layer for every sequence — two forward, two backward — so they need the fastest links there are. <b>Pipeline parallelism</b> gives each group of GPUs a
-        consecutive stage of the layers, and passes sequences from stage to stage like work along an assembly line. In the next demonstration, choose the model, the
-        accelerator, the number of GPUs, how many GPUs share each layer and how many pipeline stages there are. The grid is one copy of the model, the bar beside it is
-        what each GPU must hold, and the bar beneath is one training step of {fmt(BATCH_TOKENS)} tokens:
+        consecutive stage of the layers, and passes sequences from stage to stage like work along an assembly line; while the line fills and drains, some stages
+        sit idle, a loss called the <K>pipeline bubble</K>. In the next demonstration, choose the model, the accelerator, the number of GPUs, how many GPUs share
+        each layer and how many pipeline stages there are. The grid is one copy of the model. The bar beside it is what each GPU must hold, against a dashed line
+        at {fmt(TRAIN_USABLE * 100)}% of the card’s memory, the most a training job can use: the software that runs it needs the rest. The bar beneath is one
+        training step of {fmt(BATCH_TOKENS)} tokens:
       </P>
 
       <Figure name="Training Workload Simulator" scenario={s}>
@@ -496,12 +521,10 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'days to train on 2 trillion tokens', value: r.valid ? daysText(r.days) : '—', tone: 'teal' },
-            { label: 'model FLOPs utilization', value: r.valid ? pct1(r.mfu) : '—' },
             { label: 'GPU-hours', value: r.valid ? gpuHoursText(r.gpuHours) : '—' },
-            { label: 'memory per GPU', value: r.valid ? `${fmt(r.memoryGB, 1)} of ${g.memoryGB} GB` : '—', tone: r.valid && !r.fits ? 'red' : 'violet' },
           ]}
         />
-        <Eq label="Days to train equals tokens times FLOPs per token, divided by the GPUs' combined peak times the utilization">
+        <Eq label={`Days to train equals tokens times FLOPs per token, divided by the GPUs' combined peak times the model FLOPs utilization${r.valid ? `, here ${pct1(r.mfu)}` : ''}`}>
           <span>days</span>
           <Op>=</Op>
           <Frac
@@ -512,12 +535,10 @@ export default function Lesson() {
             }
             bottom={
               <span>
-                {fmt(gpus)} × <K tone="orange">{fmt(g.bf16Tflops)} TFLOPS</K> × {r.valid ? pct1(r.mfu) : '—'}
+                {fmt(gpus)} × <K tone="orange">{fmt(g.bf16Tflops)} TFLOPS</K> × {r.valid ? pct1(r.mfu) : '—'} utilization
               </span>
             }
           />
-          <Op>=</Op>
-          <K tone="teal">{r.valid ? daysText(r.days) : '—'}</K>
         </Eq>
         <Caption>{caption}</Caption>
       </Figure>
@@ -532,7 +553,7 @@ export default function Lesson() {
         for the reasons of Chapter 2: not every operation is a large matrix multiply, and not every byte arrives in time.
       </P>
       <P>
-        The pipeline bubble needs a word. A sequence enters stage one, then moves to stage two while stage one starts the next, and so on; until the pipeline fills, the
+        The bubble is worth a closer look. A sequence enters stage one, then moves to stage two while stage one starts the next, and so on; until the pipeline fills, the
         later stages have nothing to do, and as it drains at the end of the step, the earlier ones wait. With 4 stages and 32 sequences per copy per step, the idle
         share is 3 sequences’ worth out of 35. More stages, or fewer sequences per copy, and the bubble grows.
       </P>
@@ -540,12 +561,14 @@ export default function Lesson() {
         Now push the split around. Let 16 GPUs share each layer and every layer spans two servers, so its exchanges cross the network at 50 GB/s instead of the GPU links’
         450: the MFU falls to {pct1(N.tp16.mfu)} and the run stretches to {daysText(N.tp16.days)}. Go the other way, one GPU per layer and a single stage, and each GPU
         would need {fmt(N.flat.memoryGB)} GB. Swap the accelerator, too. The B-class 192 GB finishes in {daysText(N.bClass.days)}. The L-class 48 GB takes{' '}
-        {daysText(N.lClass.days)}: its arithmetic is slower, and its exchanges within layers, through PCIe, take {secs(N.lClass.tpCommS)} of every step.
+        {daysText(N.lClass.days)}: its arithmetic is slower, and its exchanges within layers, through PCIe, take {secs(N.lClass.tpCommS)} of every step. A smaller
+        model needs less of all this: choose the 8B model and even one GPU per layer and a single stage fits, {fmt(N.small.memoryGB, 1)} GB per GPU, so every GPU can
+        hold a whole copy and data parallelism alone will do.
       </P>
 
       <Challenge
         id="a"
-        question="Train the 70B model on 1,024 A-class GPUs as fast as possible, with a split that fits in each GPU’s memory."
+        question="Predict first: which of the losses in the step bar can a split remove entirely, and what stops it removing the rest? Then train the 70B model on 1,024 A-class GPUs as fast as possible, with a split that fits in each GPU’s memory."
         solved={solved}
         status={status}
         success={`Solved: eight GPUs per layer and a single stage, ${daysText(N.fastest.days)}. Keeping each layer inside one server keeps its exchanges on the GPU links, and with no pipeline there is no bubble. Four GPUs per layer would be faster still, ${daysText(N.tp4pp1.days)}, but each would need ${fmt(N.tp4pp1.memoryGB, 1)} GB — memory, not arithmetic, sets the limit.`}
@@ -572,13 +595,6 @@ export default function Lesson() {
         />
         <Segmented label="Split" value={sc.state.split} onChange={(v) => sc.set({ split: v })} options={SCALE_SPLITS.map((x) => ({ value: x.id, label: x.label }))} />
         <Slider label="GPUs" value={sc.state.lg} min={LG_MIN} max={LG_MAX} onChange={(v) => sc.set({ lg: v })} display={fmt(2 ** sc.state.lg)} />
-        <Readouts
-          items={[
-            { label: 'days to train', value: sr.valid ? daysText(sr.days) : '—', tone: 'teal' },
-            { label: 'model FLOPs utilization', value: sr.valid ? pct1(sr.mfu) : '—' },
-            { label: 'GPU-hours', value: sr.valid ? gpuHoursText(sr.gpuHours) : '—' },
-          ]}
-        />
         <Caption>{sCaption}</Caption>
       </Figure>
 
@@ -589,20 +605,26 @@ export default function Lesson() {
         {gpuHoursText(N.s32768.gpuHours)} GPU-hours, against {gpuHoursText(b.gpuHours)} at 1,024. Every GPU-hour is paid for, used or not, so finishing sooner costs
         more.
       </P>
-      <P>
-        The best split also changes with scale. With a single stage there is no bubble, which made it the fastest at 1,024 GPUs in the{' '}
-        <FigRef to="Training Workload Simulator">first demonstration</FigRef>. But each copy is then only eight GPUs, so at 4,096 GPUs there are 512 copies, each GPU
-        holds an eighth of every gradient, and summing them over the network no longer hides behind the arithmetic: the single-stage run takes{' '}
-        {daysText(N.p4096.days)} at {pct1(N.p4096.mfu)}, while 4 stages take {daysText(N.s4096.days)} at {pct1(N.s4096.mfu)}.
-      </P>
 
       <Challenge
         id="b"
-        question="Train the 70B model in under a week while spending no more than 600,000 GPU-hours."
+        question={`Estimate first: at 1,024 GPUs the run takes ${daysText(b.days)} and ${gpuHoursText(b.gpuHours)} GPU-hours. If scaling were perfect, how many GPUs would finish it in under a week, and for how many GPU-hours? Then find a split and a number of GPUs that train the 70B model in under a week for no more than ${gpuHoursText(BUDGET_GPU_HOURS)} GPU-hours.`}
         solved={weekOk}
         status={weekStatus}
-        success={`Solved: 4,096 GPUs split 8 per layer in 4 stages, ${daysText(N.s4096.days)} and ${gpuHoursText(N.s4096.gpuHours)} GPU-hours. Fewer GPUs can’t finish in a week, and 8,192 waste too much of every hour: ${gpuHoursText(N.s8192.gpuHours)} GPU-hours.`}
+        success={`Solved: 4,096 GPUs split 8 per layer in 4 stages, ${daysText(N.s4096.days)} and ${gpuHoursText(N.s4096.gpuHours)} GPU-hours. Perfect scaling would need ${fmt(b.days, 1)} × 1,024 ÷ 7 ≈ ${fmt(
+          Math.round(N.weekIdealGpus / 50) * 50,
+        )} GPUs, so 2,048 are too few, and would spend the same ${gpuHoursText(b.gpuHours)} GPU-hours at any size. The real run spends ${fmt(
+          (N.s4096.gpuHours / b.gpuHours - 1) * 100,
+        )}% more, because MFU slips from ${pct1(b.mfu)} to ${pct1(N.s4096.mfu)}; at 8,192 GPUs it would slip to ${pct1(N.s8192.mfu)}, and the run would cost ${gpuHoursText(N.s8192.gpuHours)} GPU-hours.`}
       />
+
+      <P>
+        The split matters here too. With a single stage there is no bubble, which made it the fastest at 1,024 GPUs in the{' '}
+        <FigRef to="Training Workload Simulator">first demonstration</FigRef>. But each copy is then only eight GPUs, so at 4,096 GPUs there are 512 copies, each GPU
+        holds an eighth of every gradient, and summing them over the network no longer hides behind the arithmetic: the single-stage run takes{' '}
+        {daysText(N.p4096.days)} at {pct1(N.p4096.mfu)}, and {gpuHoursText(N.p4096.gpuHours)} GPU-hours, while 4 stages take {daysText(N.s4096.days)} at{' '}
+        {pct1(N.s4096.mfu)}. The best split changes with scale.
+      </P>
 
       <H2>What training asks of a data center</H2>
       <P>
@@ -616,7 +638,7 @@ export default function Lesson() {
         That difference is why the same GPU-hour can be worth such different amounts. An hour of an A-class GPU inside a 1,024-GPU block on a fast network is one
         thing; an hour of a lone card in a server with slow links is another, even if the chips are identical. Chapter 4 looks at what it takes to build the block, and
         Chapter 5 at how its hours are priced. First, in <a href={lessonHref('compute/3.4')}>Lesson 3.4</a>, we return to serving, and to what happens when requests
-        arrive faster than one at a time.
+        arrive at random.
       </P>
     </LessonPage>
   );

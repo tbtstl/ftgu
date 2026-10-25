@@ -1,7 +1,7 @@
 // Oil market price formation (Chapter 5, and the simulated history of Chapters 6–7).
 //
 // One stylized world market, in million barrels a day (mb/d):
-//   supply = non-group producers (including the Ridgeback Basin) + a producer group that holds
+//   supply = non-group producers (including the Pinyon Basin) + a producer group that holds
 //            spare capacity (like OPEC+) + refinery processing gains
 //   demand = world consumption, seasonal, responding a little to price
 // The gap between them changes commercial inventories, and inventories set price: when stocks are

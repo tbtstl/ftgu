@@ -37,9 +37,19 @@ export function paritySolved(hfoPrice: number): boolean {
   return Math.abs(usdPerGJ(FUEL_BY_ID.fuelOil, hfoPrice) - usdPerGJ(FUEL_BY_ID.diesel, PRICE.diesel)) <= 0.1;
 }
 
-/** Challenge b: the hydrogen-to-carbon ratio that needs 14.7 kg of air per kg of fuel. */
+/**
+ * Challenge b: a hydrogen-to-carbon ratio that needs 14.7 kg of air per kg of fuel, judged on the
+ * readout as displayed (two decimals) to within 0.05 kg, so 1.90–1.97 all pass.
+ */
 export function airSolved(r: number): boolean {
-  return Math.round(airFuelRatio(r) * 10) / 10 === 14.7;
+  return Math.abs(Math.round(airFuelRatio(r) * 100) - 1470) <= 5;
+}
+
+/** Gasoline's and diesel's prices per gigajoule differ by this many percent (of the lower). */
+export function gasDieselGapPct(): number {
+  const g = usdPerGJ(FUEL_BY_ID.gasoline, PRICE.gasoline);
+  const d = usdPerGJ(FUEL_BY_ID.diesel, PRICE.diesel);
+  return (Math.abs(g - d) / Math.min(g, d)) * 100;
 }
 
 function hc(r: number): string {
@@ -131,31 +141,33 @@ export default function Lesson() {
         {fmt(mjPerLiter(FUEL_BY_ID.lpg), 1)}. Ethanol sits apart: it’s already partly oxidized, since a third of its weight is oxygen, so it has less left to give.
       </P>
       <P>
-        Fuels are sold by volume — by the gallon at the pump and by the barrel in bulk — and volume is what this chart’s vertical axis measures. A barrel of diesel
+        In the United States, fuels are sold by volume — by the gallon at the pump and by the barrel in bulk — and volume is what this chart’s vertical axis measures.
+        In Europe and Asia, wholesale diesel and fuel oil are often priced by the tonne instead. A barrel of diesel
         carries {fmt(gjPerBarrel(dsl), 2)} gigajoules, {fmt((gjPerBarrel(dsl) / gjPerBarrel(gas) - 1) * 100)}% more than a barrel of gasoline at{' '}
         {fmt(gjPerBarrel(gas), 2)}. Jet fuel sits between them and is the kerosene cut of <a href={lessonHref('oil/1.1')}>Lesson 1.1</a>: dense enough to carry a long way
-        in an aircraft’s tanks, light enough per kilogram to lift, and, crucially, slow to freeze at altitude.
+        in an aircraft’s tanks, energy-rich enough per kilogram to be worth lifting, and, crucially, slow to freeze at altitude.
       </P>
 
       <H2>Price per unit of energy</H2>
       <P>
         The bars in the demonstration divide each fuel’s price by the energy in a barrel. The prices are the course’s reference prices: simulated, for a calm month in
         our model, not market data. Gasoline sells for {usd(PRICE.gasoline)} a barrel ({usd(perGallon(PRICE.gasoline), 2)} a gallon) and diesel for {usd(PRICE.diesel)}{' '}
-        ({usd(perGallon(PRICE.diesel), 2)} a gallon), yet per gigajoule they’re within a few cents of each other — diesel’s higher price per barrel buys more energy. Heavy
+        ({usd(perGallon(PRICE.diesel), 2)} a gallon), yet per gigajoule they’re within about {fmt(gasDieselGapPct())}% of each other — diesel’s higher price per barrel
+        buys more energy. Heavy
         fuel oil and LPG are another matter: each costs about half as much per gigajoule.
       </P>
       <P>
         Energy alone doesn’t set the price, then. What a fuel can do matters too. Heavy fuel oil is the residue of <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>: it’s
-        too thick to pour cold, it carries most of the crude’s sulfur, and only large engines and boilers built for it can burn it. LPG must be stored under pressure. A
+        too thick to pour cold, it carries much of the crude’s sulfur, and only large engines and boilers built for it can burn it. LPG must be stored under pressure. A
         gigajoule in diesel, which any truck can use, is worth more than a gigajoule in fuel oil.
       </P>
 
       <Challenge
         id="a"
-        question="Find the price of heavy fuel oil at which it would cost exactly as much per gigajoule as diesel."
+        question="At what price per barrel would heavy fuel oil cost exactly as much per gigajoule as diesel? Predict it first from two numbers in the demonstration — diesel’s price per gigajoule, on its bar, and the energy in a barrel of heavy fuel oil, in the readouts when you choose it — then set the fuel-oil price to check."
         solved={solvedA}
-        status={`At ${usd(s1.state.hfo, 2)} a barrel, heavy fuel oil costs ${usd(perGJ('fuelOil'), 2)} per gigajoule, against diesel’s ${usd(perGJ('diesel'), 2)}.`}
-        success={`Solved: about ${usd(parityPrice(), 0)} a barrel — far above the ${usd(PRICE.fuelOil)} it sells for in our model. That gap is a refinery’s opportunity. Every barrel of residue it can turn into diesel instead of fuel oil is worth tens of dollars more, which is why refiners build the expensive conversion units of Chapter 3.`}
+        status={`At ${usd(s1.state.hfo, 2)} a barrel, heavy fuel oil costs ${usd(perGJ('fuelOil'), 2)} per gigajoule.`}
+        success={`Solved: ${usd(s1.state.hfo, 2)} a barrel. Diesel’s ${usd(perGJ('diesel'), 2)} per gigajoule times the ${fmt(gjPerBarrel(hfo), 2)} GJ in a barrel of fuel oil comes to about ${usd(parityPrice(), 0)} — far above the ${usd(PRICE.fuelOil)} fuel oil sells for in our model. That gap is a refinery’s opportunity. Every barrel of residue it can turn into diesel instead of fuel oil is worth tens of dollars more, which is why refiners build the expensive conversion units of Chapter 3.`}
       />
 
       <H2>Hydrogen, carbon and air</H2>
@@ -209,7 +221,7 @@ export default function Lesson() {
             { label: 'air per kg of fuel', value: `${fmt(airFuelRatio(r), 2)} kg` },
           ]}
         />
-        <Slider label="Hydrogen atoms per carbon" tone="teal" value={r} min={1} max={4} step={0.01} onChange={(v) => s2.set({ r: Math.round(v * 100) / 100 })} display={hc(r)} />
+        <Slider label="Hydrogen atoms per carbon" value={r} min={1} max={4} step={0.01} onChange={(v) => s2.set({ r: Math.round(v * 100) / 100 })} display={hc(r)} />
       </Figure>
 
       <P>
@@ -227,10 +239,10 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question="Gasoline engines are tuned to burn 14.7 kilograms of air for each kilogram of fuel. Find the hydrogen-to-carbon ratio that needs exactly that much air (to one decimal place)."
+        question="Gasoline engines are tuned to burn 14.7 kilograms of air for each kilogram of gasoline. Predict the hydrogen-to-carbon ratio that needs that much air from where the gasoline, jet fuel and diesel dots sit on the chart, then set it to check: the air readout should come within 0.05 kg of 14.7."
         solved={solvedB}
         status={`At ${hc(r)} hydrogens per carbon, the fuel needs ${fmt(airFuelRatio(r), 2)} kg of air per kilogram.`}
-        success={`Solved: about ${hc(r)} hydrogen atoms per carbon atom — gasoline’s ratio. Each kilogram of such a fuel releases about ${fmt(lhvFromHC(r), 1)} MJ.`}
+        success={`Solved: ${hc(r)} hydrogen atoms per carbon atom, which needs ${fmt(airFuelRatio(r), 2)} kg of air. Gasoline itself has about ${fmt(gas.hc, 1)}. Each kilogram of such a fuel releases about ${fmt(lhvFromHC(r), 1)} MJ.`}
       />
 
       <P>
@@ -240,7 +252,7 @@ export default function Lesson() {
         the energy they hold.
       </P>
       <P>
-        None of it matters until the oil is out of the ground. Chapter 2 goes underground, to the rock that holds Northfield Sour and Ridgeback Light, and asks how oil
+        Before any of it reaches a refinery, though, the oil has to come out of the ground. Chapter 2 goes underground, to the rock that holds Northfield Sour and Pinyon Light, and asks how oil
         flows to a well and what it costs to bring up. Its first lesson begins with <a href={lessonHref('oil/2.1')}>the reservoir</a>. You can return to{' '}
         <FigRef to="Fuel Energy Lab">the first demonstration</FigRef> to compare any fuel’s energy and price.
       </P>

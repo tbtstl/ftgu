@@ -45,15 +45,17 @@ import { dayInfo, ninoAt, type WorldKnobs } from '../../../model/weather/archive
 import { MONTH_NAMES } from '../../../model/weather/region';
 import {
   DESK_DEFAULTS,
+  DESK_RANGE,
   REGION_DEFAULTS,
-  isCalder,
+  confirmResetPart,
+  isFenwick,
   regionKnobs,
-  resetCapstone,
   updateCapstone,
   useWeatherCapstone,
   type DeskSettings,
   type RegionSettings,
 } from '../shared/capstone';
+import { CapstoneStrip } from '../shared/CapstoneStrip';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -67,9 +69,9 @@ export const OFFSET_MIN = -60;
 export const OFFSET_MAX = 119;
 export const WINTER_MIN = 2;
 export const WINTER_MAX = 40;
-/** Strips are chosen in hundreds, up to 4,000. */
-export const STRIP_STEP = 100;
-export const STRIP_GRID = Array.from({ length: 41 }, (_, i) => i * STRIP_STEP);
+/** Strips are chosen in hundreds, up to 6,000, as in Lessons 6.3 and 6.5. */
+export const STRIP_STEP = DESK_RANGE.strips.step;
+export const STRIP_GRID = Array.from({ length: DESK_RANGE.strips.max / STRIP_STEP + 1 }, (_, i) => i * STRIP_STEP);
 
 export interface DeskView {
   winter: number;
@@ -137,10 +139,49 @@ export function hedgeSolved(region: RegionSettings, v: DeskView, d: DeskSettings
   return d.hedgeStrips === bestStrips(v.winter, d, business, scaleBy, marketOf(v), knobsOf(region, v.ensoF)).strips;
 }
 
+/** The utility's minimum-variance hedge in a world, at a size: its dollars per degree day across the archive's winters, divided by the strip's $20. */
+export function minVarianceStrips(knobs: WorldKnobs, scaleBy: number): number {
+  const ws = utilityWinters(knobs);
+  const slope = regress(
+    ws.map((w) => w.hdd),
+    ws.map((w) => w.margin),
+  ).slope;
+  return (slope * scaleBy) / CME_TICK;
+}
+
+/**
+ * The second challenge's success message, from the reader's own answer: the best strips, their
+ * 1-in-20 result, the minimum-variance hedge, the strip's bid on October 31 and our expected index
+ * that day. It has to stay true in any region, at any size, against either market.
+ */
+export function hedgeSuccessText(strips: number, p5: number, minVar: number, bid: number, fair: number): string {
+  const head = `Solved: ${fmt(strips)} strips, a 1-in-20 result of ${mShort(p5, 2)}.`;
+  const cheap = fair - bid > 1;
+  if (strips === 0) {
+    return `${head} In this winter the best hedge is none at all: ${
+      cheap ? `the strips go at the market’s bid of ${fmt(bid)} on October 31, when our forecast expected ${fmt(fair)}, so ` : ''
+    }each strip sold gives away more expected margin than it saves in the worst twentieth${
+      p5 >= 0 ? ' — without them, even the 1-in-20 result is a gain' : ''
+    }. The minimum-variance hedge of about ${fmt(minVar)} strips would narrow the spread, at a price this book doesn’t need to pay.`;
+  }
+  const diff = strips - minVar;
+  const where =
+    Math.abs(diff) <= STRIP_STEP / 2
+      ? 'right at'
+      : Math.abs(diff) <= 4 * STRIP_STEP
+        ? `close to, and a little ${diff < 0 ? 'below' : 'above'},`
+        : `well ${diff < 0 ? 'below' : 'above'}`;
+  return `${head} That is ${where} the minimum-variance hedge of about ${fmt(minVar)} strips — the utility’s dollars per degree day divided by $20${
+    diff < -STRIP_STEP / 2 && cheap ? '. The market sold the strip cheap, so each extra strip trims a little spread but gives away expected margin at the market’s price' : ''
+  }.`;
+}
+
 // ---------------------------------------------------------------------------
-// Numbers the prose quotes: Calder Bay's own region, the starting desk.
+// Numbers the prose quotes: Fenwick Bay's own region, the starting desk.
 
 interface ProseNumbers {
+  /** The standard deviation of the utility's winter margin across the archive's winters 1–40 (Lesson 6.1's figure), $. */
+  archiveSd: number;
   nino20: number;
   rows20: BlotterRow[];
   sep2: BlotterRow;
@@ -172,7 +213,10 @@ function proseNumbers(): ProseNumbers {
     ws.map((w) => w.margin),
   ).slope;
   const best = bestStrips(DESK_WINTER, DESK_DEFAULTS, 'utility', 1, m, knobs);
+  const margins = ws.map((w) => w.margin);
+  const meanMargin = margins.reduce((a, b) => a + b, 0) / margins.length;
   prose = {
+    archiveSd: Math.sqrt(margins.reduce((a, b) => a + (b - meanMargin) ** 2, 0) / margins.length),
     nino20: ninoAt(nov1 + DESK_OFFSET),
     rows20,
     sep2,
@@ -209,17 +253,6 @@ function mShort(x: number, digits = 1): string {
 
 const ENSO_COLOR = GRAPHIC.violet;
 const LAG_COLOR = GRAPHIC.blue;
-
-/** The physical source of a contract's gap: whichever part is at least twice the other, or both. */
-export function sourceOf(r: BlotterRow): string {
-  if (r.status === 'settled') return 'settled';
-  if (r.edge <= 0) return 'nothing to trade';
-  const e = Math.abs(r.ensoPart);
-  const l = Math.abs(r.lagPart);
-  if (e >= 2 * l) return 'the Pacific';
-  if (l >= 2 * e) return 'stale forecasts';
-  return 'both';
-}
 
 // ---------------------------------------------------------------------------
 // Figure 1: the gaps, split by source.
@@ -363,7 +396,7 @@ function BookChart({ book, reveal }: { book: BookOutcome; reveal: boolean }) {
 }
 
 const BUSINESS_NAME: Record<DeskBusiness, string> = {
-  utility: 'Calder Gas & Light',
+  utility: 'Fenwick Gas & Light',
   wind: 'the Hollin Ridge wind farm',
   farm: 'the Marlow corn farm',
 };
@@ -389,6 +422,9 @@ export default function Lesson() {
     [dv, dDesk, business, cap.business.scale, dKnobs],
   );
   const solved2 = useMemo(() => hedgeSolved(region, dv, dDesk, business, cap.business.scale), [region, dv, dDesk, business, cap.business.scale]);
+  // For the second challenge's message: the reader's own minimum-variance hedge, and our expected index for the season when the strips were sold.
+  const yourMinVar = useMemo(() => minVarianceStrips(dKnobs, cap.business.scale), [dKnobs, cap.business.scale]);
+  const yourFair = useMemo(() => expectedIndex(SEASON_STRIP, dv.winter, novemberFirst(dv.winter) - 1, { knobs: dKnobs }), [dv.winter, dKnobs]);
   const n = useMemo(() => proseNumbers(), []);
   const r20 = (id: string) => n.rows20.find((r) => r.id === id)!;
   const setDesk = (patch: Partial<DeskSettings>) => updateCapstone('desk', patch);
@@ -404,10 +440,11 @@ export default function Lesson() {
         .join('; ')
     : 'no months traded';
   const minVar = Math.round(n.slope / CME_TICK);
-  const calder = isCalder(region);
+  const fenwick = isFenwick(region);
 
   return (
     <LessonPage id="weather/6.4">
+      <CapstoneStrip parts={['region', 'business', 'desk']} />
       <P>
         The capstone so far has built a region (<a href={lessonHref('weather/6.1')}>Lesson 6.1</a>), a forecaster for it (
         <a href={lessonHref('weather/6.2')}>Lesson 6.2</a>) and a business whose cash moves with its winters (<a href={lessonHref('weather/6.3')}>Lesson 6.3</a>). This
@@ -416,7 +453,8 @@ export default function Lesson() {
         name the physical reason for every position it takes.
       </P>
       <P>
-        Four contracts sit on the blotter: the November–March seasonal strip and the December, January and February monthly futures, all at $20 a degree day, as in{' '}
+        Four contracts sit on the desk’s <K tone={WX.money}>blotter</K>, its table of what the market quotes and what we make of each quote: the November–March
+        seasonal strip and the December, January and February monthly futures, all at $20 a degree day, as in{' '}
         <a href={lessonHref('weather/5.1')}>Lesson 5.1</a>. A future is linear, so its fair value is simply the expected index (
         <a href={lessonHref('weather/5.2')}>Lesson 5.2</a>), and ours comes from the calibrated forecaster of Lesson 6.2: the days already settled, the forecast
         issued that day for the next fortnight, and the climate tilted by the Pacific beyond it. The quotes come from the course’s simulated market, which knows the
@@ -440,7 +478,7 @@ export default function Lesson() {
           ]}
         />
         <DataTable
-          caption="The blotter: each contract's bid and ask, our expected index, the gap after the spread in dollars per contract, the desk's side at its threshold and the gap's physical source"
+          caption="The blotter: each contract's bid and ask, our expected index, the gap after the spread in dollars per contract, and the desk's side at its threshold"
           rows={rows}
           rowKey={(r) => r.id}
           rowClass={(r) => (r.status === 'settled' ? 'dim' : r.side ? 'hl' : '')}
@@ -450,15 +488,9 @@ export default function Lesson() {
             { label: 'Ours', cell: (r) => (r.status === 'settled' ? fmt(r.settled) : fmt(r.fair)), align: 'right' },
             { label: 'After spread', cell: (r) => (r.status === 'settled' || r.edge <= 0 ? '—' : usd(r.edge * CME_TICK)), align: 'right' },
             { label: 'Desk', cell: (r) => (r.side > 0 ? 'buy' : r.side < 0 ? 'sell' : '—') },
-            { label: 'Source', cell: (r) => sourceOf(r) },
           ]}
         />
-        <Readouts
-          items={[
-            { label: 'the date', value: `${dateLabel(day)}, year ${dayInfo(day).year}` },
-            { label: 'Niño-3.4 that day', value: `${signed(ninoAt(day), 1)} °C`, tone: WX.temperature },
-          ]}
-        />
+        <Readouts items={[{ label: `Niño-3.4 on ${dateLabel(day)}, year ${dayInfo(day).year}`, value: `${signed(ninoAt(day), 1)} °C`, tone: WX.temperature }]} />
         <Slider label="Winter" value={v.winter} min={WINTER_MIN} max={WINTER_MAX} onChange={(x) => s.set({ winter: x })} display={`year ${v.winter}–${v.winter + 1}`} />
         <Slider label="Date" value={v.offset} min={OFFSET_MIN} max={OFFSET_MAX} onChange={(x) => s.set({ offset: x })} display={dateLabel(day)} />
         <Slider
@@ -474,15 +506,15 @@ export default function Lesson() {
         <Slider label="Market’s forecasts are" tone={WX.probability} value={v.lag} min={0} max={5} onChange={(x) => s.set({ lag: x })} display={v.lag === 0 ? 'fresh' : `${v.lag} day${v.lag > 1 ? 's' : ''} stale`} />
         <Checkbox label="The market prices ENSO" checked={v.usesEnso} onChange={(x) => s.set({ usesEnso: x })} />
         <Caption>
-          {calder
-            ? 'Region: Calder Bay, as the course built it.'
-            : `Region: your own from Lesson 6.1, at ${fmt(region.latitude, 1)}° north. The prose quotes Calder Bay’s numbers.`}{' '}
+          {fenwick
+            ? 'Region: Fenwick Bay, as the course built it.'
+            : `Region: your own from Lesson 6.1, at ${fmt(region.latitude, 1)}° north. The prose quotes Fenwick Bay’s numbers.`}{' '}
           The desk trades when a gap beats the spread by its threshold of {fmt(desk.threshold)} points, set in the next demonstration.
         </Caption>
       </Figure>
 
       <P>
-        It opens on November 20 of year {DESK_WINTER}, with the region left as Calder Bay’s. Niño-3.4 stands at {signed(n.nino20, 1)} °C, a strong La Niña, and as{' '}
+        It opens on November 20 of year {DESK_WINTER}, with the region left as Fenwick Bay’s. Niño-3.4 stands at {signed(n.nino20, 1)} °C, a strong La Niña, and as{' '}
         <a href={lessonHref('weather/2.4')}>Lesson 2.4</a> showed, La Niña tilts the city’s winters cold. Every contract is cheap. We expect the strip to settle at{' '}
         {fmt(r20('strip').fair)} degree days against a mid of {fmt(r20('strip').mid)}, a gap of {fmt(r20('strip').gap)} points: {fmt(r20('strip').ensoPart)} from the
         Pacific and {fmt(r20('strip').lagPart)} from the market’s two-day-old forecasts of the next fortnight. After the spread that is {usd(r20('strip').edge * CME_TICK)}{' '}
@@ -514,20 +546,22 @@ export default function Lesson() {
 
       <H2>The book</H2>
       <P>
-        A desk doesn’t trade contracts in isolation; it runs a book around the business it serves. <a href={lessonHref('weather/5.5')}>Lesson 5.5</a> worked out the
-        hedge: Calder Gas &amp; Light earns about {usd(n.slope)} for each heating degree day of its winter, so selling the strip at $20 a point offsets it at about{' '}
-        {fmt(minVar)} strips. A position that size would be arranged mostly as an over-the-counter swap on the same index, while the monthly trades stay within the
+        A desk doesn’t trade contracts in isolation; it runs a <K tone={WX.money}>book</K> — every position it holds, together with the business it serves, judged
+        as one result. <a href={lessonHref('weather/5.5')}>Lesson 5.5</a> worked out the hedge: in Fenwick Bay, Fenwick Gas &amp; Light at × 1 earns about{' '}
+        {usd(n.slope)} for each heating degree day of its winter, so selling the strip at $20 a point offsets it at about {fmt(minVar)} strips. A position that size would be arranged mostly as an over-the-counter swap on the same index, while the monthly trades stay within the
         market’s depth of <a href={lessonHref('weather/5.4')}>Lesson 5.4</a>.
       </P>
       <P>
         In the next demonstration, set the desk: how many strips to sell on October 31 at the market’s bid, which months to trade, how many days before each month
         to decide, the threshold a gap must beat, and the size of each trade. These settings are saved and replayed over every winter in the next lesson. The chart
-        shows the winter’s result for {BUSINESS_NAME[business]} from <a href={lessonHref('weather/6.3')}>Lesson 6.3</a>, against its average year, plus the hedge
-        and the trades, as simulated paths seen from the day the last position went on — so every position is decided with what was known on its own day, and the
-        paths carry everything still unknown:
+        shows the winter’s result for {BUSINESS_NAME[business]} from <a href={lessonHref('weather/6.3')}>Lesson 6.3</a>, plus the hedge and the trades, measured
+        against the business’s <b>average year</b> in the archive — the yardstick of Lesson 6.1, not the plan of Lesson 6.3. It is drawn as simulated paths seen
+        from the day the last position went on: every position is priced with what was known on its own day, and the paths carry everything still unknown. That
+        view knows more than the October 31 hedge did — with the desk deciding {fmt(DESK_DEFAULTS.lead)} days ahead, it is {dateLabel(n.book0.viewDay)}, with
+        November settled — so treat the hedge it favors as a judgment on this one winter; the next lesson tests a fixed hedge on every winter:
       </P>
 
-      <Figure name="Weather Trading Desk · the book" onReset={() => resetCapstone('desk')}>
+      <Figure name="Weather Trading Desk · the book" onReset={() => confirmResetPart('desk')}>
         <BookChart book={book} reveal={v.reveal} />
         <Legend
           items={[
@@ -554,7 +588,7 @@ export default function Lesson() {
           tone={WX.index}
           value={desk.hedgeStrips}
           min={0}
-          max={4000}
+          max={DESK_RANGE.strips.max}
           step={STRIP_STEP}
           onChange={(x) => setDesk({ hedgeStrips: x })}
           display={fmt(desk.hedgeStrips)}
@@ -564,9 +598,9 @@ export default function Lesson() {
             <Checkbox key={mo} label={`Trade ${MONTH_NAMES[mo]}`} checked={desk.months.includes(mo)} onChange={(on) => toggleMonth(mo, on)} />
           ))}
         </div>
-        <Slider label="Decide, days before each month" value={desk.lead} min={0} max={90} step={5} onChange={(x) => setDesk({ lead: x })} display={`${desk.lead} days`} />
-        <Slider label="Threshold beyond the spread" value={desk.threshold} min={0} max={50} step={5} onChange={(x) => setDesk({ threshold: x })} display={`${desk.threshold} points`} />
-        <Slider label="Contracts per trade" tone={WX.money} value={desk.size} min={0} max={50} step={5} onChange={(x) => setDesk({ size: x })} display={fmt(desk.size)} />
+        <Slider label="Decide, days before each month" value={desk.lead} min={0} max={DESK_RANGE.lead.max} step={DESK_RANGE.lead.step} onChange={(x) => setDesk({ lead: x })} display={`${fmt(desk.lead)} days`} />
+        <Slider label="Threshold beyond the spread" value={desk.threshold} min={0} max={DESK_RANGE.threshold.max} step={DESK_RANGE.threshold.step} onChange={(x) => setDesk({ threshold: x })} display={`${fmt(desk.threshold)} points`} />
+        <Slider label="Contracts per trade" tone={WX.money} value={desk.size} min={0} max={DESK_RANGE.size.max} step={DESK_RANGE.size.step} onChange={(x) => setDesk({ size: x })} display={fmt(desk.size)} />
         <Slider label="Winter" value={v.winter} min={WINTER_MIN} max={WINTER_MAX} onChange={(x) => s.set({ winter: x })} display={`year ${v.winter}–${v.winter + 1}`} />
         <Slider
           label="Pacific’s pull on the winter"
@@ -587,7 +621,10 @@ export default function Lesson() {
         {fmt(n.book0.trades[0].price)} when we expected {fmt(n.book0.trades[0].fair)}, January at {fmt(n.book0.trades[1].price)} against{' '}
         {fmt(n.book0.trades[1].fair)}, February at {fmt(n.book0.trades[2].price)} against {fmt(n.book0.trades[2].fair)}. The book is seen from{' '}
         {dateLabel(n.book0.viewDay)}, when February’s trade goes on. A La Niña winter promises the utility more gas sold than in an average year, so the expected result
-        is {millions(n.book0.mean)} — but the spread is {millions(n.book0.sd)}, and one winter in 20 still comes in {millions(-n.book0.p5)} short.
+        is {millions(n.book0.mean)} — but the spread is {millions(n.book0.sd)}, and one winter in 20 still comes in {millions(-n.book0.p5)} short of an average
+        year. That spread is narrower than the {millions(n.archiveSd)} by which the utility’s winters vary across the archive (
+        <a href={lessonHref('weather/6.1')}>Lesson 6.1</a>), because this is one winter seen from {dateLabel(n.book0.viewDay)}: the warming trend and the La Niña
+        are already in the forecast, and November has settled.
       </P>
       <P>
         Now sell {fmt(2800)} strips. The spread collapses to {millions(n.book2800.sd, 2)}, and so does the expected result, to {millions(n.book2800.mean, 2)}. The
@@ -600,7 +637,7 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Weather Trading Desk · the book"
-        question={`For the gas utility, keep the desk trading (any months, at least one contract a trade). How many strips, to the nearest hundred, give the winter its best 1-in-20 result?`}
+        question={`Predict first. For ${business === 'utility' ? `the gas utility at × ${fmt(cap.business.scale, 2)}${fenwick ? '' : ' in your region'}` : 'the gas utility'}, the minimum-variance hedge is about ${fmt(yourMinVar)} strips, but on October 31 of year ${dv.winter} the market bid ${fmt(book.hedgePrice)} for the strip when our forecast expected ${fmt(yourFair)}. With the desk still trading (any months, at least one contract a trade), will the hedge that gives the winter its best 1-in-20 result sit above ${fmt(yourMinVar)} strips, or below? Then find it, to the nearest hundred.`}
         solved={solved2}
         status={
           business !== 'utility'
@@ -609,11 +646,11 @@ export default function Lesson() {
               ? 'Keep the desk trading: at least one month, and at least one contract a trade.'
               : `With ${fmt(desk.hedgeStrips)} strips, the 1-in-20 result is ${mShort(book.p5, 2)}.`
         }
-        success={`Solved: ${fmt(desk.hedgeStrips)} strips, a 1-in-20 result of ${mShort(book.p5, 2)}. That is close to the minimum-variance hedge of about ${fmt(minVar)} strips — the utility’s dollars per degree day divided by $20 — and, in a winter the market misprices, a little below it: each extra strip trims a little spread but gives away expected margin at the market’s price.`}
+        success={hedgeSuccessText(dDesk.hedgeStrips, book.p5, yourMinVar, book.hedgePrice, yourFair)}
       />
 
       <P>
-        In Calder Bay’s own winter {DESK_WINTER}–{DESK_WINTER + 1} that is {fmt(n.bestN)} strips, a 1-in-20 result of {millions(n.bestBook.p5, 2)} against{' '}
+        In Fenwick Bay’s own winter {DESK_WINTER}–{DESK_WINTER + 1} that is {fmt(n.bestN)} strips, a 1-in-20 result of {millions(n.bestBook.p5, 2)} against{' '}
         {millions(n.book0.p5)} unhedged. Tick “Show how the winter turned out”: the season settled at {fmt(n.settledSeason)} degree days, almost exactly what the
         forecast expected by December, and the unhedged book made {millions(n.book0.actual)} while the hedged one made {millions(n.bestBook.actual, 2)}. That is
         one winter, one draw from the distribution — <FigRef to="Weather Trading Desk">the blotter</FigRef> said it would probably be cold, and it was, but a

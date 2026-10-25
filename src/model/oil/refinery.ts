@@ -1,4 +1,4 @@
-// The Calder refinery at Port Calder: the course's refinery from Chapter 3 to the capstone.
+// The Corran refinery at Port Corran: the course's refinery from Chapter 3 to the capstone.
 //
 // A 150,000-barrel-a-day cracking and coking refinery: a crude unit with a vacuum column, a
 // catalytic reformer for octane, a fluid catalytic cracker (FCC) for gas oil, a delayed coker for
@@ -26,7 +26,7 @@ export interface RefineryConfig {
   sulfurPlant: number;
 }
 
-export const CALDER: RefineryConfig = {
+export const CORRAN: RefineryConfig = {
   capacity: { cdu: 150, reformer: 30, fcc: 50, coker: 25, dht: 55 },
   hydrogenPlant: 40,
   sulfurPlant: 300,
@@ -38,8 +38,8 @@ export const UNIT_OPEX: Record<UnitId, number> = { cdu: 1.0, reformer: 2.0, fcc:
 /** Cost of hydrogen from the hydrogen plant, $ per thousand standard cubic feet (natural gas at about $3.50/MMBtu). */
 export const HYDROGEN_COST = 3.0;
 
-/** Crude delivered to Port Calder, $/bbl: the reference month (simulated). */
-export const CRUDE_PRICE: Record<CrudeId, number> = { ridgeback: 76.5, seaboard: 79.5, northfield: 72, coldwater: 62 };
+/** Crude delivered to Port Corran, $/bbl: the reference month (simulated). */
+export const CRUDE_PRICE: Record<CrudeId, number> = { pinyon: 76.5, seaboard: 79.5, northfield: 72, coldwater: 62 };
 
 export type ProductId = 'lpg' | 'naphtha' | 'gasoline' | 'jet' | 'diesel' | 'hsfo' | 'coke';
 
@@ -63,5 +63,5 @@ export const PRODUCT_COLOR: Record<ProductId, string> = {
   coke: '#3d3d3d',
 };
 
-/** Product prices at Port Calder, $/bbl (coke $/tonne): the reference month (simulated). */
+/** Product prices at Port Corran, $/bbl (coke $/tonne): the reference month (simulated). */
 export const PRODUCT_PRICE: Record<ProductId, number> = { lpg: 36, naphtha: 68, gasoline: 96, jet: 102, diesel: 106, hsfo: 62, coke: 70 };

@@ -22,12 +22,12 @@ import {
   scale,
   usd,
 } from '../../../framework';
-import { BIN_COST_PER_BU, PIVOT_COST_PER_ACRE, farmRecord, summarizeFarm, type FarmDesign, type FarmSummary, type Hybrid } from '../../../engines/agriculture/capstone';
+import { BIN_COST_PER_BU, CEDAR_DESIGN, ELEVATOR_OF, PIVOT_COST_PER_ACRE, farmRecord, storagePerBushel, summarizeFarm, type FarmDesign, type FarmSummary, type Hybrid } from '../../../engines/agriculture/capstone';
 import { MARKET_YEARS } from '../../../engines/agriculture/market';
 import { DISTRICT, DISTRICTS, type DistrictId } from '../../../model/agriculture/region';
 import { LAND_RENT, PROPERTY_TAX } from '../../../model/agriculture/economics';
 import { ValleyMap } from '../shared/ValleyMap';
-import { resetFarm, setFarm, useCapstone } from '../shared/capstone';
+import { resetBins, resetFarmDesign, sameFarm, setFarm, useCapstone } from '../shared/capstone';
 
 const YEARS = Array.from({ length: MARKET_YEARS }, (_, i) => i + 1);
 export const BIN_SIZES = Array.from({ length: 13 }, (_, i) => i * 25000);
@@ -61,11 +61,11 @@ const k$ = (v: number) => `${v < 0 ? '−' : ''}$${fmt(Math.abs(v) / 1000)}k`;
 function YearBars({ totals }: { totals: number[] }) {
   const [lo, hi] = niceDomain(Math.min(0, ...totals), Math.max(0, ...totals), 4);
   const x = scale(0.5, totals.length + 0.5, 60, 620);
-  const y = scale(lo, hi, 200, 24);
+  const y = scale(lo, hi, 182, 24);
   const w = (x(1) - x(0)) * 0.72;
   const mean = totals.reduce((a, b) => a + b, 0) / totals.length;
   return (
-    <svg className="chart" viewBox="0 0 640 228" role="img" aria-label={`The farm’s profit in each of sixty simulated seasons, from ${k$(Math.min(...totals))} to ${k$(Math.max(...totals))}, averaging ${k$(mean)}.`}>
+    <svg className="chart" viewBox="0 0 640 208" role="img" aria-label={`The farm’s profit in each of sixty simulated seasons, from ${k$(Math.min(...totals))} to ${k$(Math.max(...totals))}, averaging ${k$(mean)}.`}>
       <text className="ax" x={60} y={14}>
         Profit in each season
       </text>
@@ -78,7 +78,7 @@ function YearBars({ totals }: { totals: number[] }) {
         average {k$(mean)}
       </text>
       {[1, 10, 20, 30, 40, 50, 60].map((t) => (
-        <text key={t} className="ax ax-m" x={x(t)} y={220}>
+        <text key={t} className="ax ax-m" x={x(t)} y={200}>
           {t === 1 ? 'season 1' : t}
         </text>
       ))}
@@ -122,7 +122,13 @@ export default function Lesson() {
   const best = useMemo(() => bestBins(farm), [farm]);
   const solved2 = farm.bins === best;
   const stored = record.reduce((a, r) => a + r.stored, 0) / record.length;
-  const perBu = record.reduce((a, r) => a + r.storageGain, 0) / Math.max(1, record.reduce((a, r) => a + r.stored, 0));
+  // What a stored bushel earned; a farm with nothing stored still has its elevator's average to compare with the bins' cost.
+  const perBu =
+    stored > 0
+      ? record.reduce((a, r) => a + r.storageGain, 0) / record.reduce((a, r) => a + r.stored, 0)
+      : YEARS.reduce((a, y) => a + storagePerBushel(y, ELEVATOR_OF[farm.district]), 0) / YEARS.length;
+  const isCedar = sameFarm(farm, CEDAR_DESIGN);
+  const storagePays = stored > 0 && perBu > BIN_COST_PER_BU;
 
   return (
     <LessonPage id="agriculture/6.1">
@@ -137,13 +143,14 @@ export default function Lesson() {
         more nitrogen, as in <a href={lessonHref('agriculture/2.1')}>Lesson 2.1</a> — whether the corn gets center pivots, and which hybrid. Pivots pump water at $11
         an acre-inch and cost about ${PIVOT_COST_PER_ACRE} an acre a year to own. A later hybrid fills grain longer when the season allows, as in{' '}
         <a href={lessonHref('agriculture/1.2')}>Lesson 1.2</a>, but matures later and leaves more water to dry out of the grain. The corn is sold at harvest at the
-        district’s elevator, with the basis of <a href={lessonHref('agriculture/5.3')}>Lesson 5.3</a>, and the wheat at its plan price moved with corn futures. Every
+        district’s elevator, with the basis of <a href={lessonHref('agriculture/5.3')}>Lesson 5.3</a> — all but what the farm’s bins hold, which is sold hedged
+        the next July — and the wheat at its plan price moved with corn futures. Every
         season is one of the sixty simulated years of Chapter 5, so a dry summer cuts the yield and raises the price in the same year. In the next demonstration
         the bars are the farm’s <K tone="green">profit</K> in each of the sixty seasons — revenue less every cost — and the map shows its average profit if it
         stood in each district. Click a district to move the farm there:
       </P>
 
-      <Figure name="Farm Region Builder" onReset={resetFarm}>
+      <Figure name="Farm Region Builder" onReset={resetFarmDesign}>
         <ValleyMap
           fill={(id) => mix('#f4f1e8', byDistrict[id] >= 0 ? GRAPHIC.green : GRAPHIC.red, 0.15 + 0.5 * Math.min(1, Math.abs(byDistrict[id]) / 150000))}
           label={(id) => [`${k$(byDistrict[id])} a year`]}
@@ -158,7 +165,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'average season', value: k$(s.mean), tone: s.mean >= 0 ? 'green' : 'red' },
-            { label: 'one-in-ten bad season', value: k$(s.p10), tone: s.p10 >= 0 ? 'green' : 'red' },
+            { label: '1-in-10 bad season', value: k$(s.p10), tone: s.p10 >= 0 ? 'green' : 'red' },
             { label: 'seasons with a loss', value: `${s.losses} of ${MARKET_YEARS}` },
             { label: 'corn yield, average', value: `${fmt(cornYield)} bu/ac`, tone: 'gold' },
           ]}
@@ -179,27 +186,34 @@ export default function Lesson() {
 
       <P>
         As Cedar Bend farms today — 1,000 acres of corn on the Black Prairie, a standard hybrid, no pivots, 125,000 bushels of bins — the farm made $25,000 in
-        an average season, lost money in 26 of the sixty and lost $125,000 in a one-in-ten bad one. Grow 800 acres of corn instead and every corn acre follows
-        wheat: the average rises to $54,000 and the bad season shrinks to a $76,000 loss. A late hybrid lifts the average too, but it is a bet on long, warm
-        autumns: its worst season loses $213,000, against $160,000 with the standard hybrid. Pivots don’t pay on the Prairie’s deep soils: they add 18 bushels an acre but cost more than
+        an average season, lost money in 26 of the sixty and lost $125,000 in a one-in-ten bad one
+        {isCedar ? '' : ' (the demonstration shows the farm you saved; its Reset puts the design back to Cedar Bend’s)'}. A late hybrid lifts the average, but it is a
+        bet on long, warm autumns: its worst season loses $213,000, against $160,000 with the standard hybrid. Pivots don’t pay on the Prairie’s deep soils: they add 18 bushels an acre but cost more than
         those bushels earn. Move to the High Plains and they become essential — dryland corn there yields 70 bushels and loses $283,000 a year — but even
-        irrigated, corn on the Plains loses money; the district is wheat country, as <a href={lessonHref('agriculture/3.1')}>Lesson 3.1</a> found. The River
-        Bottoms earn the most on average, but not reliably: their worst season loses $350,000, more than twice the Prairie’s worst.
+        irrigated, Cedar Bend’s 1,000 acres of corn lose money there. <a href={lessonHref('agriculture/3.1')}>Lesson 3.1</a> found the Plains suit wheat better
+        than corn, but at this farm’s costs an all-wheat farm there loses money too, and the best the Plains can do is about break even. The River Bottoms earn
+        the most on average, but not reliably: their worst season loses $350,000, more than twice the Prairie’s worst.
       </P>
 
       <Challenge
         id="a"
-        question="Design a farm that earns at least $50,000 in an average season and loses no more than $100,000 in its one-in-ten bad season."
+        question="Design a farm that earns at least $50,000 in an average season and loses no more than $100,000 in its one-in-ten bad season. Before you search, decide which of Cedar Bend’s choices costs it yield on some of its acres every year."
         solved={solved1}
         status={`This farm earns ${k$(s.mean)} in an average season and ${s.p10 >= 0 ? 'makes' : 'loses'} ${k$(Math.abs(s.p10))} in a one-in-ten bad one.`}
         success={`Solved: in ${DISTRICT[farm.district].name}, with ${fmt(farm.cornAcres)} acres of corn, a${farm.hybrid === 'early' ? 'n early' : farm.hybrid === 'late' ? ' late' : ' standard'} hybrid${farm.irrigated ? ' and pivots' : ''}, the farm earns ${k$(s.mean)} in an average season and ${s.p10 >= 0 ? 'makes' : 'loses'} ${k$(Math.abs(s.p10))} in a bad one. That is the farm the rest of the chapter runs; change it any time and the later lessons follow.`}
       />
 
       <P>
+        The cheapest fix is the rotation. Cedar Bend grows corn after corn on 400 of its acres; grow 800 acres of corn instead and every corn acre follows
+        wheat, the average rises to $54,000 and the bad season shrinks to a $76,000 loss. The River Bottoms pass too, with a late hybrid on 500 to 900 acres of
+        corn: their long season pays the late hybrid’s bet more often than not, and fewer acres of corn after corn trim the bad seasons.
+      </P>
+      <P>
         Two things in this design are fixed, and they matter as much as anything you can change. The family owns most of its land, and so pays tax on those
         acres rather than rent; charge them the district’s rent, as <a href={lessonHref('agriculture/2.5')}>Lesson 2.5</a> did, and almost every design here loses
-        money in an average season. Owned land is the farm’s largest hidden asset. And the farm sells its corn at harvest at the elevator’s bid, the weakest price
-        of the year, with the rush discount of <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> taken off. That is where the last choice comes in.
+        money in an average season. Owned land is the farm’s largest hidden asset. And the farm sells most of its corn at harvest at the elevator’s bid, the weakest price
+        of the year, with the rush discount of <a href={lessonHref('agriculture/4.3')}>Lesson 4.3</a> taken off; only what fits in its bins —{' '}
+        {fmt(farm.bins)} bushels in this design, already counted in the bars — waits for a better price. That is where the last choice comes in.
       </P>
 
       <H2>How much bin space?</H2>
@@ -210,11 +224,10 @@ export default function Lesson() {
         is the farm’s average profit against its bin space, and the dot is the space it has:
       </P>
 
-      <Figure name="Farm Region Builder · bins" onReset={() => setFarm({ bins: 125000 })}>
+      <Figure name="Farm Region Builder · bins" onReset={resetBins}>
         <BinCurve d={farm} />
         <Readouts
           items={[
-            { label: 'bin space', value: `${fmt(farm.bins)} bu` },
             { label: 'stored, average season', value: `${fmt(stored)} bu`, tone: 'gold' },
             { label: 'storage earns', value: `${fmt(perBu * 100)}¢ a bushel`, tone: 'green' },
             { label: 'bins cost', value: `${fmt(BIN_COST_PER_BU * 100)}¢ a bushel of space`, tone: 'red' },
@@ -226,10 +239,14 @@ export default function Lesson() {
       <P>
         Bins earn in ways the curve doesn’t show, too. A farm with its own storage keeps its combines running while the elevator’s line of trucks is an hour
         long, and it can wait out a harvest when the network is full and the basis has fallen off its cliff. American farms, together, own about half of the
-        country’s grain storage space; the rest is at elevators and terminals. In this demonstration, storage earns more than the bins cost, so more bins pay — up
-        to a point. Beyond it, the extra space is full only in big years and empty in short ones,
-        and an empty bin costs as much as a full one. The best size is a little under the farm’s average crop, because the crop varies: for Cedar Bend, whose corn
-        ranged from 73,000 to 211,000 bushels across the sixty seasons, it is 150,000 bushels.
+        country’s grain storage space; the rest is at elevators and terminals.{' '}
+        {storagePays
+          ? 'For this farm a full bin earns more than it costs, so more bins pay — up to a point. Beyond it, the extra space is full only in big years and empty in short ones, and an empty bin costs as much as a full one.'
+          : stored > 0
+            ? 'For this farm a full bin earns less than it costs, so the bins don’t pay at all.'
+            : 'This farm grows no corn to store, so every bushel of bin space is a cost.'}{' '}
+        Where storage pays, the best size is under the farm’s average crop, because the crop varies: for Cedar Bend, whose corn ranged from 73,000 to 211,000
+        bushels across the sixty seasons, it is 150,000 bushels.
       </P>
 
       <Challenge

@@ -5,7 +5,7 @@ import { TERMS } from '../../../engines/oil/economics';
 import { NETWORK_DEFAULTS } from '../../../engines/oil/network';
 import { HISTORY_DEFAULTS, oilHistory, type HistoryParams, type HistoryWeek } from '../../../model/oil/history';
 import { BusinessCard } from '../shared/BusinessCard';
-import { resetBusinessPart, updateBusiness, useBusiness } from '../shared/business';
+import { confirmResetPart, updateBusiness, useBusiness } from '../shared/business';
 import { XYChart, type XYBand } from '../shared/charts';
 
 // ---------------------------------------------------------------------------
@@ -14,9 +14,10 @@ import { XYChart, type XYBand } from '../shared/charts';
 export type ExpansionYear = '1' | '2' | '3' | '4' | '5' | 'never';
 
 export interface ChainState {
-  /** Ridgeback Basin growth, kb/d per year. */
+  /** Pinyon Basin growth, kb/d per year. */
   growth: number;
-  /** Year the Kessler–Calder expansion opens (or never), and the capacity it adds, kb/d. */
+  /** Year the Kessler–Corran expansion opens (or never), and the capacity it adds, kb/d: the first
+   * demonstration keeps the course's (only the second lets the reader move the opening). */
   year: ExpansionYear;
   add: number;
   /** Rail capacity from Kessler to the coast, kb/d. */
@@ -36,7 +37,7 @@ export const CHAIN_DEFAULTS: ChainState = {
   week: 80,
 };
 
-/** The walk-up tariff on the Kessler–Calder line, $/bbl (Lesson 4.1). */
+/** The walk-up tariff on the Kessler–Corran line, $/bbl (Lesson 4.1). */
 export const WALKUP_TARIFF = NETWORK_DEFAULTS.pipelineTariff;
 /** The producer's share of each dollar of price, after royalty and production tax (Lesson 2.5). */
 export const NET_SHARE = (1 - TERMS.royalty) * (1 - TERMS.productionTax);
@@ -48,9 +49,9 @@ export function chainParams(st: Pick<ChainState, 'growth' | 'year' | 'add' | 'ra
   return { basinGrowth: st.growth, rail: st.rail, expansion: st.year === 'never' ? null : { year: Number(st.year), add: st.add } };
 }
 
-/** Port Calder's light-crude price less Kessler's, $/bbl. */
+/** Port Corran's light-crude price less Kessler's, $/bbl. */
 export function spreadOf(w: HistoryWeek): number {
-  return w.calderCrude - w.wti;
+  return w.corranCrude - w.wti;
 }
 
 export function lineFull(w: HistoryWeek): boolean {
@@ -86,14 +87,19 @@ export function firmPaysAt(growth: number, st: Pick<ChainState, 'year' | 'add' |
   return firmPerKbd(oilHistory(chainParams({ ...st, growth }))) > 0;
 }
 
+/** The first demonstration's history: its growth and rail, with the course's expansion. */
+export function chainHistoryParams(st: Pick<ChainState, 'growth' | 'rail'>): HistoryParams {
+  return chainParams({ growth: st.growth, rail: st.rail, year: CHAIN_DEFAULTS.year, add: CHAIN_DEFAULTS.add });
+}
+
 /**
- * Challenge a: with the expansion and the railroad at their starting values and some firm space
- * held, the slowest basin growth (10 kb/d steps) at which firm space pays for itself.
+ * Challenge a: with the railroad at its starting value, the slowest basin growth (10 kb/d steps) at
+ * which firm space pays for itself — predicted from the break-even share of weeks with the line
+ * full. It doesn't depend on how much space is held.
  */
-export function slowestPayingSolved(st: ChainState, firmSpace: number): boolean {
-  if (firmSpace <= 0) return false;
-  if (st.year !== CHAIN_DEFAULTS.year || st.add !== CHAIN_DEFAULTS.add || st.rail !== CHAIN_DEFAULTS.rail) return false;
-  return firmPaysAt(st.growth, st) && (st.growth < GROWTH_STEP || !firmPaysAt(st.growth - GROWTH_STEP, st));
+export function slowestPayingSolved(st: Pick<ChainState, 'growth' | 'rail'>): boolean {
+  if (st.rail !== CHAIN_DEFAULTS.rail) return false;
+  return firmPaysAt(st.growth) && (st.growth < GROWTH_STEP || !firmPaysAt(st.growth - GROWTH_STEP));
 }
 
 /** The answer to challenge a. */
@@ -161,8 +167,12 @@ export function steadiestFirmSpace(plan: ProductionPlan, st: SweepState): number
   return best;
 }
 
-/** Challenge b: firm space set to the steadiest value for the reader's production plan and the figure's drivers. */
-export function steadiestSolved(firmSpace: number, plan: ProductionPlan, st: SweepState): boolean {
+/**
+ * Challenge b: with the expansion and rail at their starting values (where the year-four exposure
+ * was read), firm space set to the steadiest value for the reader's production plan.
+ */
+export function steadiestSolved(firmSpace: number, plan: ProductionPlan, st: SweepState = SWEEP_DEFAULTS): boolean {
+  if (st.year !== SWEEP_DEFAULTS.year || st.rail !== SWEEP_DEFAULTS.rail) return false;
   return firmSpace === steadiestFirmSpace(plan, st);
 }
 
@@ -273,7 +283,7 @@ function fullBands(h: HistoryWeek[]): XYBand[] {
   return out;
 }
 
-/** The chain for one week: our wells, Kessler, the line and rail, Port Calder, the refinery. */
+/** The chain for one week: our wells, Kessler, the line and rail, Port Corran, the refinery. */
 function ChainDiagram({ w, production, firmSpace, rail, runs }: { w: HistoryWeek; production: number; firmSpace: number; rail: number; runs: number }) {
   const f = lineFlows(w, rail);
   const full = lineFull(w);
@@ -285,12 +295,12 @@ function ChainDiagram({ w, production, firmSpace, rail, runs }: { w: HistoryWeek
   return (
     <svg
       className="diagram"
-      viewBox="0 0 640 200"
+      viewBox="0 0 640 172"
       role="img"
-      aria-label={`${weekName(w.week)}: our wells produce ${bpd(production)}. Kessler $${w.wti.toFixed(2)}, Port Calder $${w.calderCrude.toFixed(2)}, a spread of $${sp.toFixed(2)}. The Kessler–Calder line carries ${fmt(f.pipe)} of ${fmt(w.pipelineCapacity)} kb/d${full ? ', full' : ''}, ${firmSpace > 0 ? `${fmt(firmSpace)} kb/d of it in our firm space, ` : ''}rail ${fmt(f.rail)} of ${fmt(rail)} kb/d${f.held > 0.5 ? `, and ${fmt(f.held)} kb/d is held back` : ''}. The Calder refinery runs ${fmt(runs)} kb/d.`}
+      aria-label={`${weekName(w.week)}: our wells produce ${bpd(production)}. Kessler $${w.wti.toFixed(2)}, Port Corran $${w.corranCrude.toFixed(2)}, a spread of $${sp.toFixed(2)}. The Kessler–Corran line carries ${fmt(f.pipe)} of ${fmt(w.pipelineCapacity)} kb/d${full ? ', full' : ''}, ${firmSpace > 0 ? `${fmt(firmSpace)} kb/d of it in our firm space, ` : ''}rail ${fmt(f.rail)} of ${fmt(rail)} kb/d${f.held > 0.5 ? `, and ${fmt(f.held)} kb/d is held back` : ''}. The Corran refinery runs ${fmt(runs)} kb/d.`}
     >
       <text x={345} y={18} textAnchor="middle" style={{ fontSize: 13, fontWeight: 600, fill: TEXT.green }}>
-        Port Calder − Kessler: {price2(sp)} a barrel
+        Port Corran − Kessler: {price2(sp)} a barrel
       </text>
       {/* Wells. */}
       <rect x={8} y={72} width={120} height={56} rx={6} fill="#f3efe8" stroke="#8a7a66" />
@@ -298,7 +308,7 @@ function ChainDiagram({ w, production, firmSpace, rail, runs }: { w: HistoryWeek
         Our wells
       </text>
       <text x={68} y={106} textAnchor="middle" style={small}>
-        Northfield · Ridgeback
+        Northfield · Pinyon
       </text>
       <text x={68} y={121} textAnchor="middle" style={{ ...label, fill: TEXT.orange }}>
         {fmt(production / 1000, 1)} kb/d
@@ -337,18 +347,18 @@ function ChainDiagram({ w, production, firmSpace, rail, runs }: { w: HistoryWeek
       <text x={346} y={164} textAnchor="middle" style={label}>
         rail {fmt(f.rail)} of {fmt(rail)} kb/d
       </text>
-      {/* Port Calder and the refinery. */}
+      {/* Port Corran and the refinery. */}
       <circle cx={482} cy={100} r={30} fill="#eef4e6" stroke="#333" />
       <text x={482} y={104} textAnchor="middle" style={{ fontSize: 12.5, fontWeight: 600, fill: '#1f3d0c' }}>
-        {usd(w.calderCrude, 2)}
+        {usd(w.corranCrude, 2)}
       </text>
       <text x={482} y={146} textAnchor="middle" style={label}>
-        Port Calder
+        Port Corran
       </text>
       <path d="M512 100 L528 100" stroke="#8a7a66" strokeWidth={3} markerEnd="url(#l73arrow)" />
       <rect x={530} y={72} width={102} height={56} rx={6} fill="#f3efe8" stroke="#8a7a66" />
       <text x={581} y={92} textAnchor="middle" style={label}>
-        Calder refinery
+        Corran refinery
       </text>
       <text x={581} y={110} textAnchor="middle" style={{ ...label, fill: TEXT.orange }}>
         runs {fmt(runs)} kb/d
@@ -359,13 +369,12 @@ function ChainDiagram({ w, production, firmSpace, rail, runs }: { w: HistoryWeek
 
 const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
 
-/** A figure's Reset puts back both its own drivers and the firm space it edits in the reader's business. */
+/** A figure's Reset puts back its own drivers and, once the reader confirms, the firm space it edits in the reader's business. */
 function withLogisticsReset<T>(s: Scenario<T>): Scenario<T> {
   return {
     ...s,
     reset: () => {
-      s.reset();
-      resetBusinessPart('logistics');
+      if (confirmResetPart('logistics')) s.reset();
     },
   };
 }
@@ -380,7 +389,7 @@ export default function Lesson() {
   // ---- Figure 1: the chain through five years.
   const s1 = useScenario<ChainState>('chain', CHAIN_DEFAULTS);
   const st = s1.state;
-  const hp = useMemo(() => chainParams({ growth: st.growth, year: st.year, add: st.add, rail: st.rail }), [st.growth, st.year, st.add, st.rail]);
+  const hp = useMemo(() => chainHistoryParams({ growth: st.growth, rail: st.rail }), [st.growth, st.rail]);
   const r = useMemo(() => runBusiness({ ...business, logistics: { firmSpace } }, hp), [business, firmSpace, hp]);
   const h = r.h;
   const week = Math.min(st.week, h.length - 1);
@@ -413,11 +422,11 @@ export default function Lesson() {
   }, [h, r]);
   const cumVals = [...cum.firm, ...cum.up, ...cum.both].map((p) => p[1]);
   const [cLo, cHi] = niceDomain(Math.min(0, ...cumVals), Math.max(10, ...cumVals), 4);
-  const solvedA = useMemo(() => slowestPayingSolved(st, firmSpace), [st, firmSpace]);
+  const solvedA = useMemo(() => slowestPayingSolved(st), [st]);
   const perK = useMemo(() => firmPerKbd(h), [h]);
-  const prevPerK = useMemo(() => (st.growth >= GROWTH_STEP ? firmPerKbd(oilHistory(chainParams({ ...st, growth: st.growth - GROWTH_STEP }))) : NaN), [st]);
-  const prevFull = useMemo(() => (st.growth >= GROWTH_STEP ? oilHistory(chainParams({ ...st, growth: st.growth - GROWTH_STEP })).filter(lineFull).length : 0), [st]);
-  const flows = lineFlows(w, st.rail);
+  const prevHistory = useMemo(() => (st.growth >= GROWTH_STEP ? oilHistory(chainHistoryParams({ growth: st.growth - GROWTH_STEP, rail: st.rail })) : null), [st.growth, st.rail]);
+  const prevPerK = prevHistory ? firmPerKbd(prevHistory) : NaN;
+  const prevFull = prevHistory ? prevHistory.filter(lineFull).length : 0;
   const thisWeek = firmSpaceWeek(w, firmSpace);
 
   // ---- Figure 2: committing before the basin's growth is known.
@@ -426,8 +435,8 @@ export default function Lesson() {
   const rows = useMemo(() => growthSweep(plan, sw), [plan, sw]);
   const mine = useMemo(() => combined(rows, firmSpace), [rows, firmSpace]);
   const none = useMemo(() => combined(rows, 0), [rows]);
-  const steadiest = useMemo(() => steadiestFirmSpace(plan, sw), [plan, sw]);
-  const solvedB = firmSpace === steadiest;
+  const solvedB = useMemo(() => steadiestSolved(firmSpace, plan, sw), [firmSpace, plan, sw]);
+  const swAtStart = sw.year === SWEEP_DEFAULTS.year && sw.rail === SWEEP_DEFAULTS.rail;
   const sweepVals = [...none, ...mine, ...rows.map((x) => firmSpace * x.perKbd)].map((v) => v / 1e6);
   const [gLo, gHi] = niceDomain(Math.min(0, ...sweepVals), Math.max(10, ...sweepVals), 4);
   const pt = (vals: number[]) => rows.map((x, i) => [x.growth, vals[i] / 1e6] as [number, number]);
@@ -457,14 +466,14 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/7.3">
       <P>
-        <a href={lessonHref('oil/7.2')}>Lesson 7.2</a> settled what the Calder refinery will be. It stands at Port Calder, on the coast, and buys its crude there. The
-        company’s own oil comes out of the ground far inland, at Northfield and in the Ridgeback Basin, and the plan from{' '}
+        <a href={lessonHref('oil/7.2')}>Lesson 7.2</a> settled what the Corran refinery will be. It stands at Port Corran, on the coast, and buys its crude there. The
+        company’s own oil comes out of the ground far inland, at Northfield and in the Pinyon Basin, and the plan from{' '}
         <a href={lessonHref('oil/7.1')}>Lesson 7.1</a> has it producing about {bpd(f.year1)} in year one and {bpd(f.peak)} in year {YEAR_WORDS[f.peakYear - 1] ?? f.peakYear}. That oil is sold at
-        the Kessler hub, at the WTI-like price. Between the company’s wells and its refinery runs the 500-mile Kessler–Calder line of{' '}
+        the Kessler hub, at the WTI-like price. Between the company’s wells and its refinery runs the 500-mile Kessler–Corran line of{' '}
         <a href={lessonHref('oil/4.1')}>Lesson 4.1</a>, and with it the spread of <a href={lessonHref('oil/5.2')}>Lesson 5.2</a>.
       </P>
       <P>
-        <a href={lessonHref('oil/4.4')}>Lesson 4.4</a> found how Kessler’s price is set: it is Port Calder’s price less the cost of whatever route the next barrel takes
+        <a href={lessonHref('oil/4.4')}>Lesson 4.4</a> found how Kessler’s price is set: it is Port Corran’s price less the cost of whatever route the next barrel takes
         to the coast. While the line has room, that is the {price2(WALKUP_TARIFF)} tariff. When the basin outgrows the line, the next barrel goes by rail, and Kessler
         falls about {usd(NETWORK_DEFAULTS.railCost)} under the coast. For our company the gap is a cost. Each dollar of it beyond the tariff comes off every barrel the
         upstream sells, less the share that would have gone in royalty and production tax; over the five simulated years, with the starting drivers, it costs the
@@ -477,42 +486,36 @@ export default function Lesson() {
         {kbd(PLAN_LIMITS.firmSpace[1])} for the five years on a <K c="price">take-or-pay</K> basis: it pays the tariff on all of it whether it ships or not. Space that is
         guaranteed when the line is full is worth more than walk-up space, so we charge {price2(COMMITTED_TARIFF)} a barrel, the {price2(WALKUP_TARIFF)} tariff plus an
         illustrative {price2(COMMITTED_TARIFF - WALKUP_TARIFF)} premium. Each week the company fills its space, buying crude at Kessler if its own wells don’t supply
-        enough, and sells it at Port Calder. Per barrel it earns the spread less {price2(COMMITTED_TARIFF)}: a loss of about {price2(COMMITTED_TARIFF - f.roomAvg)} in a
+        enough, and sells it at Port Corran. Per barrel it earns the spread less {price2(COMMITTED_TARIFF)}: a loss of about {price2(COMMITTED_TARIFF - f.roomAvg)} in a
         week the line has room, a gain of about {price2(f.fullAvg - COMMITTED_TARIFF)} in a week it doesn’t. As <a href={lessonHref('oil/6.2')}>Lesson 6.2</a> put it,
         owning space on a pipeline is a long position in the spread. All prices here are simulated.
       </P>
+      <BusinessCard current="logistics" parts={['production', 'refinery', 'logistics']} />
       <P>
         In the next demonstration, the diagram shows one week: what the company’s wells produce, the prices at both ends, and how the basin’s crude leaves Kessler. Drag
         across the first chart, or use the arrow keys on it, to pick the week; the shaded weeks are those with the line full. The second chart adds up, week by week,
-        what the firm space earns, what the upstream loses to the discount beyond the tariff, and the two together. Your firm space is kept as part of your business; the
-        sliders under it change the basin, the expansion that opens in year three, and the railroad:
+        what the firm space earns, the upstream’s result from the discount beyond the tariff (a loss, so its line falls), and the two together. Your firm space is kept
+        as part of your business; the two sliders after it set how fast the basin grows and how much rail runs from Kessler to the coast. The line’s{' '}
+        {kbd(CHAIN_DEFAULTS.add)} expansion opens {YEAR_WORDS[Number(CHAIN_DEFAULTS.year) - 1] ?? CHAIN_DEFAULTS.year} years in, as in Chapter 5:
       </P>
 
       <Figure name="Petroleum Supply Chain" scenario={withLogisticsReset(s1)}>
         <ChainDiagram w={w} production={r.production[week]} firmSpace={firmSpace} rail={st.rail} runs={runs} />
-        <Legend
-          items={[
-            { label: 'Port Calder − Kessler', color: SPREAD, kind: 'line' },
-            { label: 'line full', color: 'rgba(208, 112, 42, .35)' },
-            { label: `${price2(WALKUP_TARIFF)} walk-up tariff`, color: '#777', kind: 'line', dashed: true },
-            { label: `${price2(COMMITTED_TARIFF)} committed tariff`, color: FIRM, kind: 'line', dashed: true },
-          ]}
-        />
         <XYChart
-          ariaLabel={`Port Calder’s price less Kessler’s over five simulated years, from ${price2(Math.min(...spreadPts.map((p) => p[1])))} to ${price2(spreadMax)} a barrel; the line is full in ${fullWeeks} of ${h.length} weeks. Selected: ${weekName(week)}, ${price2(spreadOf(w))}.`}
-          height={170}
+          ariaLabel={`Port Corran’s price less Kessler’s over five simulated years, from ${price2(Math.min(...spreadPts.map((p) => p[1])))} to ${price2(spreadMax)} a barrel; the line is full in ${fullWeeks} of ${h.length} weeks (shaded). Dashed lines mark the ${price2(WALKUP_TARIFF)} walk-up tariff and the ${price2(COMMITTED_TARIFF)} committed tariff. Selected: ${weekName(week)}, ${price2(spreadOf(w))}.`}
+          height={150}
           x={[0, 5]}
           y={[sLo, sHi]}
           xTicks={[0, 1, 2, 3, 4, 5]}
           xFormat={yearTick}
           yTicks={niceTicks(sLo, sHi, 4)}
           yFormat={(v) => `$${v}`}
-          yLabel="Port Calder − Kessler, $ per barrel"
+          yLabel="Port Corran − Kessler, $ per barrel (shaded: line full)"
           bands={bands}
           series={[{ points: spreadPts, color: SPREAD, width: 1.8 }]}
           refs={[
-            { axis: 'y', at: WALKUP_TARIFF, color: '#777', dash: '4 4' },
-            { axis: 'y', at: COMMITTED_TARIFF, color: FIRM, dash: '6 4' },
+            { axis: 'y', at: WALKUP_TARIFF, color: '#777', dash: '4 4', label: 'walk-up tariff', labelBelow: true },
+            { axis: 'y', at: COMMITTED_TARIFF, color: FIRM, dash: '6 4', label: 'committed tariff' },
             { axis: 'x', at: (week + 0.5) / 52, cursor: true },
           ]}
           onScrub={(x) => s1.set({ week: Math.max(0, Math.min(h.length - 1, Math.floor(x * 52))) })}
@@ -522,7 +525,7 @@ export default function Lesson() {
         />
         <XYChart
           ariaLabel={`Running totals over five years: firm space ${money(firmTotal)}, the upstream’s result from the discount beyond the tariff ${money(-loss)}, together ${money(firmTotal - loss)}.`}
-          height={170}
+          height={150}
           x={[0, 5]}
           y={[cLo, cHi]}
           xTicks={[0, 1, 2, 3, 4, 5]}
@@ -538,30 +541,26 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: <K c="price">firm space, five years</K>, value: money(firmTotal), tone: tone(firmTotal) },
-            { label: <K tone="red">upstream’s loss to the discount</K>, value: money(loss), tone: 'red' },
+            { label: <K c="price">firm space, 5 years</K>, value: money(firmTotal), tone: tone(firmTotal) },
+            { label: <K tone="red">upstream, 5 years</K>, value: money(-loss), tone: tone(-loss) },
             { label: <K tone="orange">weeks the line is full</K>, value: `${fullWeeks} of ${h.length}`, tone: 'orange' },
-            { label: <K tone="violet">basis exposure, mid year 1</K>, value: perDay(e1), tone: 'violet' },
-            { label: <K tone="violet">basis exposure, mid year 4</K>, value: perDay(e4), tone: 'violet' },
+            { label: <K tone="violet">exposure, year 1</K>, value: perDay(e1), tone: 'violet' },
+            { label: <K tone="violet">exposure, year 4</K>, value: perDay(e4), tone: 'violet' },
           ]}
         />
         {firmSlider}
         <Slider label="Basin growth" tone="orange" value={st.growth} min={0} max={GROWTH_MAX} step={GROWTH_STEP} onChange={(v) => s1.set({ growth: v })} display={`${kbd(st.growth)} a year`} />
-        <Segmented label="Expansion opens" value={st.year} onChange={(v) => s1.set({ year: v as ExpansionYear })} options={expansionOptions} />
-        <Slider label="Expansion size" tone="orange" value={st.add} min={0} max={500} step={25} onChange={(v) => s1.set({ add: v })} display={st.year === 'never' ? 'not built' : kbd(st.add)} />
         <Slider label="Rail capacity" tone="orange" value={st.rail} min={0} max={300} step={25} onChange={(v) => s1.set({ rail: v })} display={kbd(st.rail)} />
         <Caption>
-          In {weekName(week)} the line carries {kbd(Math.round(flows.pipe))} of {kbd(w.pipelineCapacity)}
-          {flows.rail > 0.5 ? ` and rail ${kbd(Math.round(flows.rail))}` : ''}
-          {flows.held > 0.5 ? `, with ${kbd(Math.round(flows.held))} held back in the basin` : ''}. Port Calder is {price2(spreadOf(w))} over Kessler, so{' '}
-          {firmSpace > 0 ? `the firm space ${thisWeek >= 0 ? 'earns' : 'loses'} ${money(Math.abs(thisWeek))} that week.` : 'firm space would earn the spread less the committed tariff on every barrel.'} Exposures are in dollars a day for each dollar
-          Kessler falls against the coast.
+          {firmSpace > 0
+            ? `In ${weekName(week)} the firm space ${thisWeek >= 0 ? 'earns' : 'loses'} ${money(Math.abs(thisWeek))}. `
+            : `In ${weekName(week)} firm space would earn the spread less the committed tariff on every barrel. `}
+          Exposures are dollars a day for each dollar Kessler falls against the coast.
         </Caption>
-        <BusinessCard current="logistics" />
       </Figure>
 
       <P>
-        With the starting drivers, the line is full in {f.fullWeeks} of the {f.weeks} weeks. In those weeks Port Calder trades {price2(f.fullAvg)} over Kessler on
+        With the starting drivers, the line is full in {f.fullWeeks} of the {f.weeks} weeks. In those weeks Port Corran trades {price2(f.fullAvg)} over Kessler on
         average, and in the rest {price2(f.roomAvg)}. At {price2(COMMITTED_TARIFF)} a barrel, firm space breaks even if the line is full in about {pct(f.breakeven)} of
         weeks; here it is full in {pct(f.fullWeeks / f.weeks)}, so each 1,000 barrels a day of space earns {money(f.perKbd)} over the five years, and{' '}
         {kbd(100)} earns {money(100 * f.perKbd)}. Now slow the basin’s growth to {kbd(f.slowGrowth)} a year. The line never fills, the spread sits on the tariff, and
@@ -571,16 +570,14 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question="Keep the expansion and the railroad at their starting values and hold some firm space. What is the slowest basin growth, to the nearest 10 kb/d a year, at which the firm space pays for itself over the five years?"
+        question={`Firm space pays for itself when the line is full in more than about ${pct(f.breakeven)} of weeks — about ${Math.ceil(f.breakeven * f.weeks)} of the ${f.weeks}. Use that rule and the count of full weeks to predict the slowest basin growth, to the nearest ${GROWTH_STEP} kb/d a year, at which firm space pays over the five years, with rail at ${kbd(CHAIN_DEFAULTS.rail)}. Set it to check.`}
         solved={solvedA}
         status={
-          firmSpace <= 0
-            ? 'Commit some firm space first.'
-            : st.year !== CHAIN_DEFAULTS.year || st.add !== CHAIN_DEFAULTS.add || st.rail !== CHAIN_DEFAULTS.rail
-              ? `Set the expansion back to year ${CHAIN_DEFAULTS.year} and ${kbd(CHAIN_DEFAULTS.add)}, and rail to ${kbd(CHAIN_DEFAULTS.rail)}.`
-              : `At ${kbd(st.growth)} a year the line is full in ${fullWeeks} weeks, and each kb/d of firm space ${perK >= 0 ? 'earns' : 'loses'} ${money(Math.abs(perK))}.`
+          st.rail !== CHAIN_DEFAULTS.rail
+            ? `Set rail back to ${kbd(CHAIN_DEFAULTS.rail)}.`
+            : `At ${kbd(st.growth)} a year the line is full in ${fullWeeks} of ${h.length} weeks.`
         }
-        success={`Solved: ${kbd(st.growth)} a year. The line is full in ${fullWeeks} weeks and each kb/d of space earns ${money(perK)}; at ${kbd(st.growth - GROWTH_STEP)} a year it is full in only ${prevFull}, and each kb/d ${Number.isFinite(prevPerK) && prevPerK < 0 ? 'loses' : 'earns'} ${money(Math.abs(prevPerK))}. The answer doesn’t depend on how much space you hold: every barrel of it earns the same spread.`}
+        success={`Solved: ${kbd(st.growth)} a year. The line is full in ${fullWeeks} weeks, ${pct(fullWeeks / h.length)}, and each kb/d of space earns ${money(perK)}; at ${kbd(st.growth - GROWTH_STEP)} a year it is full in only ${prevFull}, ${pct(prevFull / h.length)}, and each kb/d ${Number.isFinite(prevPerK) && prevPerK < 0 ? 'loses' : 'earns'} ${money(Math.abs(prevPerK))}. The answer doesn’t depend on how much space you hold: every barrel of it earns the same spread.`}
       />
 
       <H2>A physical hedge</H2>
@@ -588,9 +585,9 @@ export default function Lesson() {
         Firm space earns when the spread widens, which is exactly when the upstream loses. The readouts measure both as <K tone="violet">basis exposure</K>: how the
         company’s cash changes, in dollars a day, for each dollar Kessler falls against the coast. Without firm space it is {perDay(f.e1)} in the middle of year one and{' '}
         {perDay(f.e4)} in the middle of year four: each is the company’s production at the time, after royalty and tax, since every one of its barrels loses the
-        dollar. Each 1,000 barrels a day of firm space adds $1,000 a day. So about {kbd(f.matchF)} brings the year-four exposure close to zero ({perDay(f.e4Matched)}): from then on, a wider spread costs the upstream about what
-        the space earns. For the barrels it matches, the company sells its crude in effect at the coast less {price2(COMMITTED_TARIFF)}, not at Kessler. This is a{' '}
-        <K tone="violet">physical hedge</K>. Unlike the futures of Chapter 6, it moves the barrels themselves.
+        dollar. Each 1,000 barrels a day of firm space adds $1,000 a day, so enough of it brings the exposure to zero: from then on, a wider spread costs the upstream
+        about what the space earns. For the barrels it matches, the company sells its crude in effect at the coast less {price2(COMMITTED_TARIFF)}, not at Kessler.
+        This is a <K tone="violet">physical hedge</K>. Unlike the futures of Chapter 6, it moves the barrels themselves.
       </P>
       <P>
         A hedge sized for year four doesn’t fit every year, because the plan’s production doesn’t stay put. And the commitment has to be signed before anyone knows how
@@ -601,7 +598,7 @@ export default function Lesson() {
       <H2>Committing before you know</H2>
       <P>
         In the next demonstration, each point along the bottom is a different five years, with the basin growing anywhere from nothing to {kbd(GROWTH_MAX)} a year;
-        everything else is as you set it. The red line is what the upstream loses to the discount beyond the tariff, the green line what your firm space earns, and the
+        everything else is as you set it. The red line is the upstream’s result from the discount beyond the tariff, the green line what your firm space earns, and the
         black line their sum, the company’s basis result:
       </P>
 
@@ -634,42 +631,47 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: <K tone="violet">range with no firm space</K>, value: money(rangeOf(none)), tone: 'violet' },
-            { label: <K tone="violet">range with yours</K>, value: money(rangeOf(mine)), tone: 'violet' },
             { label: <K c="price">space if the basin stalls</K>, value: money(firmVals[0]), tone: tone(firmVals[0]) },
             { label: <K c="price">space if it grows fastest</K>, value: money(firmVals[firmVals.length - 1]), tone: tone(firmVals[firmVals.length - 1]) },
+            ...(solvedB ? [{ label: <K tone="violet">range with yours</K>, value: money(rangeOf(mine)), tone: 'violet' as const }] : []),
           ]}
         />
         {firmSlider}
         <Segmented label="Expansion opens" value={sw.year} onChange={(v) => s2.set({ year: v as ExpansionYear })} options={expansionOptions} />
         <Slider label="Rail capacity" tone="orange" value={sw.rail} min={0} max={300} step={25} onChange={(v) => s2.set({ rail: v })} display={kbd(sw.rail)} />
         <Caption>
-          The expansion, when built, adds {kbd(CHAIN_DEFAULTS.add)}. With {firmSpace === 0 ? 'no firm space' : kbd(firmSpace)}, the company’s five-year basis result runs
-          from {money(Math.min(...mine))} to {money(Math.max(...mine))} across these basins.
+          The expansion, when built, adds {kbd(CHAIN_DEFAULTS.add)}; the readouts and lines use your production plan from Lesson 7.1.
         </Caption>
-        <BusinessCard current="logistics" parts={['production', 'logistics']} />
       </Figure>
 
       <P>
         With the starting drivers and no firm space, the upstream’s result from the discount is{' '}
         {Math.abs(f.upStall) < 5e6 ? 'roughly nothing' : money(f.upStall)} if the basin stalls and {money(f.upFast)} if it grows by {kbd(GROWTH_MAX)} a year, a range
-        of {money(f.rangeNone)}. With {kbd(f.steadiest)} of space, the sum stays between {money(f.bestMin)} and {money(f.bestMax)} in every one of these basins. The
-        hedge isn’t free: if the basin stalls, the space {f.costStalled < 0 ? 'costs' : 'earns'} {money(Math.abs(f.costStalled))} and saves the upstream nothing,
-        while if the basin grows fastest it earns {money(f.gainFast)}. What it buys is a result the company can plan on.
+        of {money(f.rangeNone)}. Firm space can narrow that range, since it earns most in exactly the basins where the upstream loses most. How much does it take?
       </P>
 
       <Challenge
         id="b"
-        question="Find the firm space, to the nearest 10 kb/d, that keeps the company’s five-year basis result within the narrowest range across every rate of basin growth."
+        question={`Predict first, from the year-four basis exposure in the first demonstration: ${perDay(f.e4)} a day with no firm space, and each kb/d of space adds $1,000. How much firm space, to the nearest 10 kb/d, keeps the company’s five-year basis result within the narrowest range across every rate of basin growth? Set it here, with the expansion and rail at their starting values, to check.`}
         solved={solvedB}
-        status={`With ${firmSpace === 0 ? 'no firm space' : kbd(firmSpace)}, the result spans ${money(rangeOf(mine))}.`}
-        success={`Solved: ${kbd(firmSpace)} keeps the result within ${money(rangeOf(mine))}, against ${money(rangeOf(none))} with none. The more the basin outgrows the line, the more the upstream loses and the more the space earns; this much space makes the two nearly cancel.`}
+        status={
+          !swAtStart
+            ? `Set the expansion back to year ${SWEEP_DEFAULTS.year} and rail to ${kbd(SWEEP_DEFAULTS.rail)}.`
+            : 'Make your estimate from the exposure, then set the firm space; the black line shows the company’s result in each basin.'
+        }
+        success={`Solved: ${kbd(firmSpace)} keeps the result within ${money(rangeOf(mine))}, against ${money(rangeOf(none))} with none — close to the ${fmt(-f.e4 / 1000)} kb/d the year-four exposure pointed to. The more the basin outgrows the line, the more the upstream loses and the more the space earns; this much space makes the two nearly cancel.`}
       />
 
       <P>
-        The answer lands close to the space that brought the year-four exposure near zero in <FigRef to="Petroleum Supply Chain">the first demonstration</FigRef>,
-        because both ask the same question: how many of the company’s barrels does the spread reach? It also depends on choices made elsewhere. Plan more production
-        in <a href={lessonHref('oil/7.1')}>Lesson 7.1</a> and the answer rises; plan less and it falls. An earlier expansion, or more rail, keeps the spread lower in
-        the fast-growing basins, and with it both the upstream’s losses and what the space can earn.
+        With {kbd(f.steadiest)} of space, the company’s basis result stays between {money(f.bestMin)} and {money(f.bestMax)} in every one of these basins. The hedge
+        isn’t free: if the basin stalls, the space {f.costStalled < 0 ? 'costs' : 'earns'} {money(Math.abs(f.costStalled))} and saves the upstream nothing, while if
+        the basin grows fastest it earns {money(f.gainFast)}. What it buys is a result the company can plan on.
+      </P>
+      <P>
+        The answer lands close to what the year-four exposure in <FigRef to="Petroleum Supply Chain">the first demonstration</FigRef> suggested, because both ask the
+        same question: how many of the company’s barrels does the spread reach? It also depends on choices made elsewhere. Plan more production in{' '}
+        <a href={lessonHref('oil/7.1')}>Lesson 7.1</a> and the answer rises; plan less and it falls. An earlier expansion, or more rail, keeps the spread lower in the
+        fast-growing basins, and with it both the upstream’s losses and what the space can earn.
       </P>
       <P>
         Every decision so far has rested on a view of the future: the prices the wells will fetch, the cracks the refinery’s units will earn, and now how fast the basin

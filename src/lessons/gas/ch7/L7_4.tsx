@@ -25,6 +25,7 @@ import {
   PASSIVE,
   PORTFOLIO_DEFAULTS,
   PRACTICE_SEEDS,
+  monthForecasts,
   portfolioYear,
   summarizeYear,
   systemCost,
@@ -37,11 +38,12 @@ import {
   type PortfolioYear,
 } from '../../../engines/gas/capstone';
 import { MMBTU_PER_MCF } from '../../../engines/gas/properties';
-import { GAS_MONTHS, GAS_MONTH_NAMES } from '../../../model/gas/weather';
+import { GAS_MONTHS, GAS_MONTH_DAYS, GAS_MONTH_NAMES, GAS_MONTH_START } from '../../../model/gas/weather';
 import { CORRIDORS, GAS_NODES, PIPELINE, STORAGE_SPECS } from '../../../model/gas/world';
 import { XYChart } from '../shared/XYChart';
+import { CapstoneSoFar, ConfirmReset, isStartingPortfolio } from '../shared/CapstoneUi';
 import { resetGasPortfolio, updateGasPortfolio, useGasCapstone } from '../shared/capstone';
-import { basis, bcf, money as moneyExact } from '../shared/format';
+import { basis, bcf, gp, money as moneyExact } from '../shared/format';
 
 // ---------------------------------------------------------------------------
 // The reader's portfolio over the eight practice winters.
@@ -54,8 +56,8 @@ export const PM_LEASE_STEP = 0.25;
 /** Firm capacity and Metro basis volumes on offer, MMBtu/d. */
 export const PM_VOLUME_MAX = 50_000;
 export const PM_VOLUME_STEP = 5_000;
-/** The challenge: money in every practice winter, this much on average, and no more than this cash at any time, $. */
-export const PM_TARGET = { mean: 1.5e6, capital: 15e6 };
+/** The challenge asks for this much more than the starting portfolio's average winter (a fifth), on no more cash. */
+export const PM_TARGET_GAIN = 0.2;
 /** Figure 1: the practice winter shown (0–7). */
 export const PM_DEFAULTS = { winter: 0 };
 
@@ -133,24 +135,37 @@ export function pmEight(s: GasSystem, p: PortfolioSettings): PmEight {
   return r;
 }
 
-/** The challenge: money in every practice winter, at least PM_TARGET.mean on average, and never more than PM_TARGET.capital of cash. */
+/**
+ * The challenge's targets on a network, rounded to the $10,000 the prose shows: a fifth more than the
+ * starting portfolio's average winter, on no more than the cash the starting portfolio needs.
+ */
+export function pmTarget(s: GasSystem): { mean: number; capital: number } {
+  const ref = pmEight(s, PORTFOLIO_DEFAULTS);
+  const r = (x: number) => Math.round(x / 1e4) * 1e4;
+  return { mean: r(ref.mean + PM_TARGET_GAIN * Math.abs(ref.mean)), capital: r(ref.peakCapital) };
+}
+
+/** The challenge: money in every practice winter, at least the target average, and never more than the target cash. */
 export function portfolioManagerSolved(s: GasSystem, p: PortfolioSettings): boolean {
   const e = pmEight(s, p);
-  return e.worst > 0 && e.mean >= PM_TARGET.mean - 1e-6 && e.peakCapital <= PM_TARGET.capital + 1e-6;
+  const t = pmTarget(s);
+  return e.worst > 0 && e.mean >= t.mean - 1e-6 && e.peakCapital <= t.capital + 1e-6;
 }
 
 export interface PmDrivers {
-  /** Degree-days colder than normal over November–March (negative = milder). */
+  /** Heating degree days above normal over November–March (negative = milder). */
   colder: number[];
   /** Days Northline ran full. */
   northlineFull: number[];
+  /** Metro's highest daily price, $/MMBtu: how far its basis broke away. */
+  metroMax: number[];
   /** Ridgeback's average basis, $/MMBtu. */
   ridgebackBasis: number[];
 }
 
 const driverCache = new Map<string, PmDrivers>();
 
-/** What decided each practice winter on a network: its cold, Northline's full days and Ridgeback's basis (cached). */
+/** What decided each practice winter on a network: its cold, Northline's full days, Metro's highest price and Ridgeback's basis (cached). */
 export function pmDrivers(s: GasSystem): PmDrivers {
   const key = systemKey(s);
   const hit = driverCache.get(key);
@@ -162,6 +177,7 @@ export function pmDrivers(s: GasSystem): PmDrivers {
   const r: PmDrivers = {
     colder: sums.map((x) => winterColder(x.y.weather)),
     northlineFull: sums.map((x) => x.sum.fullDays['calder-metro']),
+    metroMax: sums.map((x) => x.sum.max.metro),
     ridgebackBasis: sums.map((x) => x.sum.avg.ridgeback - x.sum.avg.calder),
   };
   driverCache.set(key, r);
@@ -172,6 +188,7 @@ export function pmDrivers(s: GasSystem): PmDrivers {
 const LEASE_ONLY: PortfolioSettings = { ...PASSIVE, storageShare: PORTFOLIO_DEFAULTS.storageShare, storageHedged: true };
 const LEASE_UNHEDGED: PortfolioSettings = { ...LEASE_ONLY, storageHedged: false };
 const FIRM_ONLY: PortfolioSettings = { ...PASSIVE, firmLine: 'calder-metro', firmMMBtuD: PORTFOLIO_DEFAULTS.firmMMBtuD };
+const EXPRESS_ONLY: PortfolioSettings = { ...FIRM_ONLY, firmLine: 'ridgeback-calder' };
 const METRO_GUARDED: PortfolioSettings = { ...PASSIVE, metroSellMMBtuD: PORTFOLIO_DEFAULTS.metroSellMMBtuD, metroSkipColderF: PORTFOLIO_DEFAULTS.metroSkipColderF };
 const METRO_OPEN: PortfolioSettings = { ...METRO_GUARDED, metroSkipColderF: null };
 const BOTH_SIDES: PortfolioSettings = { ...FIRM_ONLY, metroSellMMBtuD: PORTFOLIO_DEFAULTS.metroSellMMBtuD, metroSkipColderF: null };
@@ -181,11 +198,53 @@ const WEATHER_ONLY: PortfolioSettings = { ...PASSIVE, weatherLots: PORTFOLIO_DEF
 const argmax = (xs: number[]) => xs.indexOf(Math.max(...xs));
 const argmin = (xs: number[]) => xs.indexOf(Math.min(...xs));
 
+/** A part's average winter, $. */
+export function partMean(e: PmEight, part: PmPart): number {
+  return e.years.reduce((a, y) => a + y[part].total, 0) / e.years.length;
+}
+
 /** Running totals from monthly profits, starting at zero (13 values). */
 export function pmRunning(monthly: number[]): number[] {
   const out = [0];
   monthly.forEach((m) => out.push(out[out.length - 1] + m));
   return out;
+}
+
+/** Days the forecast behind the weather trades and the guard covers (as in `monthForecasts`). */
+const PM_FORECAST_DAYS = 14;
+
+export interface PmGuardMonth {
+  /** The winter month (gas-year index) in which Metro's basis, sold every month, lost the most. */
+  month: number;
+  /** What the guard's forecast said on its first day: how much colder than normal its two weeks looked, °F (negative = warmer). */
+  signal: number;
+  /** The month's coldest day (0 = the 1st), its mean temperature, °F, and whether it fell inside the forecast's two weeks. */
+  coldDay: number;
+  coldTemp: number;
+  inWindow: boolean;
+}
+
+/** In a practice winter, the month Metro's basis sold cost the most, and what the guard's forecast saw of it. */
+export function pmGuardMonth(s: GasSystem, winter: number): PmGuardMonth {
+  const seed = PRACTICE_SEEDS[winter];
+  const y = systemYear(s, seed);
+  const sold = portfolioYear(s, seed, METRO_OPEN).metro.monthly;
+  const month = [8, 9, 10].reduce((b, m) => (sold[m] < sold[b] ? m : b), 8);
+  const temps = y.weather.temp.slice(GAS_MONTH_START[month], GAS_MONTH_START[month] + GAS_MONTH_DAYS[month]);
+  const coldDay = argmin(temps);
+  return { month, signal: monthForecasts(y, METRO_GUARDED.skill)[month], coldDay, coldTemp: temps[coldDay], inWindow: coldDay < PM_FORECAST_DAYS };
+}
+
+/** Of the parts a portfolio holds, the one that fell furthest below its own median winter in a given winter: what made that winter what it was. */
+export function pmShortfall(e: PmEight, p: PortfolioSettings, winter: number): PmPart | null {
+  const held = PM_PARTS.filter((part) => pmHolds(p, part));
+  if (!held.length) return null;
+  const median = (xs: number[]) => {
+    const v = [...xs].sort((a, b) => a - b);
+    return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+  };
+  const gap = (part: PmPart) => e.years[winter][part].total - median(e.years.map((y) => y[part].total));
+  return held.reduce((b, part) => (gap(part) < gap(b) ? part : b), held[0]);
 }
 
 export interface PmNumbers {
@@ -211,6 +270,9 @@ export interface PmNumbers {
   toll: PmEight;
   tollFee: number;
   weather: PmEight;
+  /** The same firm volume on Ridgeback Express instead of Northline, and its fee. */
+  express: PmEight;
+  expressFee: number;
   drivers: PmDrivers;
 }
 
@@ -230,6 +292,7 @@ export function pmNumbers(s: GasSystem): PmNumbers {
   const openExposure = leaseOpen.years[0].exposure;
   const firm = pmEight(s, FIRM_ONLY);
   const toll = pmEight(s, TOLL_ONLY);
+  const express = pmEight(s, EXPRESS_ONLY);
   const r: PmNumbers = {
     ref,
     first,
@@ -250,6 +313,8 @@ export function pmNumbers(s: GasSystem): PmNumbers {
     toll,
     tollFee: toll.years[0].toll.fee,
     weather: pmEight(s, WEATHER_ONLY),
+    express,
+    expressFee: express.years[0].firm.fee,
     drivers: pmDrivers(s),
   };
   numbersCache.set(key, r);
@@ -286,6 +351,16 @@ function madeLost(x: number): string {
   return `${x >= 0 ? 'made' : 'lost'} ${money(Math.abs(x))}`;
 }
 
+/** A day's price: "$100", "$15", "$5.92". */
+function peakPrice(x: number): string {
+  return gp(x, Math.abs(x - Math.round(x)) < 0.005 ? 0 : 2);
+}
+
+function listWords(xs: string[]): string {
+  if (xs.length <= 1) return xs.join('');
+  return `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+}
+
 /** "+$1.2 million" / "−$40,000". */
 function signedMoney(x: number): string {
   return `${x >= 0 ? '+' : '−'}${money(Math.abs(x))}`;
@@ -302,9 +377,10 @@ function guardKey(v: number | null): GuardKey {
   return v <= 1 ? '0' : v <= 3 ? '2' : '4';
 }
 
-/** The portfolio's controls, shared by both demonstrations; every change is saved for Lesson 7.5. */
-function PortfolioControls({ p }: { p: PortfolioSettings }) {
-  const set = (patch: Partial<PortfolioSettings>) => updateGasPortfolio((q) => ({ ...q, ...patch }));
+const setPortfolio = (patch: Partial<PortfolioSettings>) => updateGasPortfolio((q) => ({ ...q, ...patch }));
+
+/** The lease's controls: its size and its hedge (the first demonstration). Every change is saved for Lesson 7.5. */
+function LeaseControls({ p }: { p: PortfolioSettings }) {
   const lease = pmLeaseBcf(p);
   return (
     <div>
@@ -315,14 +391,37 @@ function PortfolioControls({ p }: { p: PortfolioSettings }) {
         min={0}
         max={PM_LEASE_MAX}
         step={PM_LEASE_STEP}
-        onChange={(v) => set({ storageShare: pmShare(v) })}
+        onChange={(v) => setPortfolio({ storageShare: pmShare(v) })}
         display={lease > 0 ? bcf(lease, 2) : 'none'}
       />
-      <Checkbox label="Hedge the lease’s schedule with futures" checked={p.storageHedged} onChange={(v) => set({ storageHedged: v })} />
+      <Checkbox label="Hedge the lease’s schedule with futures" checked={p.storageHedged} onChange={(v) => setPortfolio({ storageHedged: v })} />
+    </div>
+  );
+}
+
+/** Every position's controls (the second demonstration). Every change is saved for Lesson 7.5. */
+function PortfolioControls({ p }: { p: PortfolioSettings }) {
+  const lease = pmLeaseBcf(p);
+  return (
+    <div>
+      <Slider
+        label="Salt Flat lease"
+        tone="gold"
+        value={lease}
+        min={0}
+        max={PM_LEASE_MAX}
+        step={PM_LEASE_STEP}
+        onChange={(v) => setPortfolio({ storageShare: pmShare(v) })}
+        display={lease > 0 ? bcf(lease, 2) : 'none'}
+      />
+      <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 28 }}>
+        <Checkbox label="Hedge the lease" checked={p.storageHedged} onChange={(v) => setPortfolio({ storageHedged: v })} />
+        <Checkbox label="Toll Lakeside for the year" checked={p.toll} onChange={(v) => setPortfolio({ toll: v })} />
+      </div>
       <Segmented<FirmLine>
         label="Line for firm capacity"
         value={p.firmLine}
-        onChange={(v) => set({ firmLine: v })}
+        onChange={(v) => setPortfolio({ firmLine: v })}
         options={[
           { value: 'calder-metro', label: 'Firm capacity on Northline' },
           { value: 'ridgeback-calder', label: 'on Ridgeback Express' },
@@ -335,29 +434,8 @@ function PortfolioControls({ p }: { p: PortfolioSettings }) {
         min={0}
         max={PM_VOLUME_MAX}
         step={PM_VOLUME_STEP}
-        onChange={(v) => set({ firmMMBtuD: v })}
+        onChange={(v) => setPortfolio({ firmMMBtuD: v })}
         display={p.firmMMBtuD > 0 ? `${fmt(p.firmMMBtuD)} MMBtu/d` : 'none'}
-      />
-      <Checkbox label="Toll Lakeside for the year" checked={p.toll} onChange={(v) => set({ toll: v })} />
-      <Slider
-        label="Weather trades"
-        value={p.weatherLots}
-        min={0}
-        max={50}
-        step={5}
-        onChange={(v) => set({ weatherLots: v })}
-        display={p.weatherLots > 0 ? `${fmt(p.weatherLots)} lots` : 'none'}
-      />
-      <Slider label="Weather forecast skill" tone="teal" value={p.skill} min={0} max={1} step={0.05} onChange={(v) => set({ skill: v })} display={fmt(p.skill, 2)} />
-      <Slider
-        label="Trade when forecast is off by"
-        tone="teal"
-        value={p.weatherThresholdF}
-        min={0}
-        max={5}
-        step={0.5}
-        onChange={(v) => set({ weatherThresholdF: v })}
-        display={`${fmt(p.weatherThresholdF, 1)} °F`}
       />
       <Slider
         label="Metro basis sold"
@@ -366,13 +444,13 @@ function PortfolioControls({ p }: { p: PortfolioSettings }) {
         min={0}
         max={PM_VOLUME_MAX}
         step={PM_VOLUME_STEP}
-        onChange={(v) => set({ metroSellMMBtuD: v })}
+        onChange={(v) => setPortfolio({ metroSellMMBtuD: v })}
         display={p.metroSellMMBtuD > 0 ? `${fmt(p.metroSellMMBtuD)} MMBtu/d` : 'none'}
       />
       <Segmented<GuardKey>
         label="When to stand aside from selling Metro’s basis"
         value={guardKey(p.metroSkipColderF)}
-        onChange={(v) => set({ metroSkipColderF: v === 'never' ? null : Number(v) })}
+        onChange={(v) => setPortfolio({ metroSkipColderF: v === 'never' ? null : Number(v) })}
         options={[
           { value: 'never', label: 'Sell Metro’s basis always' },
           { value: '0', label: 'not if colder' },
@@ -380,7 +458,28 @@ function PortfolioControls({ p }: { p: PortfolioSettings }) {
           { value: '4', label: 'not if 4 °F colder' },
         ]}
       />
+      <Slider
+        label="Weather trades"
+        value={p.weatherLots}
+        min={0}
+        max={50}
+        step={5}
+        onChange={(v) => setPortfolio({ weatherLots: v })}
+        display={p.weatherLots > 0 ? `${fmt(p.weatherLots)} lots` : 'none'}
+      />
+      <Slider label="Weather forecast skill" tone="teal" value={p.skill} min={0} max={1} step={0.05} onChange={(v) => setPortfolio({ skill: v })} display={fmt(p.skill, 2)} />
     </div>
+  );
+}
+
+/** The footer's Reset for the portfolio: it asks first, and leaves the network alone. */
+function PortfolioReset() {
+  return (
+    <ConfirmReset
+      label="Reset portfolio"
+      prompt="Put back the starting portfolio? This changes only Lesson 7.4’s positions; your network from 7.1 is kept."
+      onConfirm={resetGasPortfolio}
+    />
   );
 }
 
@@ -434,7 +533,6 @@ export default function Lesson() {
   const totalRun = useMemo(() => pmRunning(year.monthly).map((v) => v / MILLION), [year]);
   const runAll = [...totalRun, ...held.flatMap((part) => runs[part])];
   const ax1 = moneyAxis(Math.min(...runAll), Math.max(...runAll));
-  const fees = year.storage.fee + year.firm.fee + year.toll.fee;
   const leaseBcf = pmLeaseBcf(live);
   const inventory = leaseBcf > 0 ? [...year.storage.inventory, year.storage.inventory[11] + year.storage.moves[11]] : Array<number>(13).fill(0);
   const exposure = year.exposure.map((e) => e / MMBTU_PER_BCF);
@@ -461,7 +559,6 @@ export default function Lesson() {
   const ax2 = moneyAxis(Math.min(...downs), Math.max(...ups));
   const solved = portfolioManagerSolved(system, p);
   const ePeak = eight.peakCapital;
-  const status = `Now: ${money(eight.mean)} a winter on average, ${eight.worst > 0 ? `${money(eight.worst)} in the worst` : `${madeLost(eight.worst)} in the worst`}, money in ${eight.wins === 8 ? 'all eight' : `${word(eight.wins)} of the eight`}, and at most ${money(ePeak)} of cash.`;
 
   // ---- Prose numbers (the portfolio as it starts, on this network).
   const r = n.ref;
@@ -474,32 +571,60 @@ export default function Lesson() {
   const bothSpread = Math.max(...n.both.totals.map(Math.abs));
   const stale = n.firm.mean < -0.1 * n.firmFee && n.metroOpen.mean > 0;
   const refWorst = argmin(r.totals);
-  const refWorstParts = PM_PARTS.filter((part) => r.years[refWorst][part].total < 0).map((part) => PART_NAME[part]);
   const tollWins = n.toll.years.filter((y) => y.toll.total > 0).length;
   const guardHurts = n.metroGuarded.mean < n.metroOpen.mean - 10_000;
   const guardMissed = n.metroOpen.totals[metroWorst] < 0 && n.metroGuarded.totals[metroWorst] <= n.metroOpen.totals[metroWorst] + 1000;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const gm = useMemo(() => (guardMissed ? pmGuardMonth(system, metroWorst) : null), [sysKey, guardMissed, metroWorst]);
+  const refWorstPart = pmShortfall(r, PORTFOLIO_DEFAULTS, refWorst);
+  const expressHeld = n.expressFee > 50_000;
+  const worstPartText = (() => {
+    if (!refWorstPart) return '';
+    const got = r.years[refWorst][refWorstPart].total;
+    const avg = partMean(r, refWorstPart);
+    const did = got >= 0 ? `made ${got < avg ? 'only ' : ''}${money(got)}` : `lost ${money(-got)}`;
+    return `: the ${PART_NAME[refWorstPart]} ${did} there, against ${avg >= 0 ? money(avg) : signedMoney(avg)} in an average winter`;
+  })();
   const weatherBest = n.weather.returnOnCash > Math.max(n.lease.returnOnCash, n.toll.returnOnCash, n.firm.returnOnCash, n.metroGuarded.returnOnCash);
   const leaseShare = n.first.storage.total >= n.first.total ? 'all of it' : n.first.storage.total >= n.first.total / 2 ? 'most of it' : 'part of it';
   const refFirmBest = argmax(r.years.map((y) => y.firm.total));
   const refMetroWorst = argmin(r.years.map((y) => y.metro.total));
-  const refLeaseWins = r.years.filter((y) => y.storage.total > 0).length;
-  const mineLeaseAlways = pmHolds(p, 'storage') && eight.years.every((y) => y.storage.total > 0);
 
   const netLink = (
     <a href={lessonHref('gas/7.1')}>{net.asBuilt ? 'the network as built' : 'your network from Lesson 7.1'}</a>
   );
 
+  // ---- The challenge: a fifth more than the starting portfolio, on no more cash.
+  const target = pmTarget(system);
+  const missing = [
+    eight.mean < target.mean - 1e-6 ? `${money(target.mean - eight.mean)} short of the average` : '',
+    eight.peakCapital > target.capital + 1e-6 ? `${money(eight.peakCapital - target.capital)} over the cash` : '',
+    eight.worst <= 0 ? `a loss in winter ${argmin(eight.totals) + 1}` : '',
+  ].filter(Boolean);
+  const challengeStatus = `Now: ${money(eight.mean)} a winter on average, money in ${eight.wins === 8 ? 'all eight' : `${word(eight.wins)} of the eight`}, at most ${money(ePeak)} of cash${missing.length ? ` — ${missing.join(', ')}` : ''}.`;
+  // Each position held alone at its starting size: what it earned a year for each dollar of cash it needed.
+  const perCash = (
+    [
+      ['the weather trades', n.weather],
+      ['the toll', n.toll],
+      ['the hedged lease', n.lease],
+      ['firm Northline capacity', n.firm],
+      ['the guarded sale of Metro’s basis', n.metroGuarded],
+    ] as Array<[string, PmEight]>
+  )
+    .map(([name, e]) => ({ name, roc: e.returnOnCash }))
+    .sort((a, b) => b.roc - a.roc);
+  const starting = isStartingPortfolio(p);
+  const differs = starting ? '' : ' Your portfolio differs from the starting one the text describes; Reset portfolio puts it back.';
+
   return (
     <LessonPage id="gas/7.4">
+      <CapstoneSoFar capstone={cap} />
       <P>
         <a href={lessonHref('gas/7.3')}>The previous lesson</a> ended with forecasts that are right on average and wrong, sometimes badly, in the months that matter
         most. A trader can live with forecasts like that only by holding positions whose misses can be survived. This lesson puts such positions together into a{' '}
         <K c="price">portfolio</K> on your network — the pieces Chapter 6 tested one at a time, now held side by side — and runs it through the eight practice
-        winters of <a href={lessonHref('gas/7.2')}>Lesson 7.2</a>. The network running is {netLink}
-        {net.asBuilt
-          ? ', the region’s six pipelines in Year 9'
-          : `, with ${net.changed.length === 1 ? 'one change' : `${word(net.changed.length)} changes`} (${net.changed.join('; ')}) costing ${money(net.capital)} of capital`}
-        ; change it in Lesson 7.1 and everything here follows.
+        winters of <a href={lessonHref('gas/7.2')}>Lesson 7.2</a>, on {netLink}.
       </P>
       <P>
         There are five kinds of position, each from a lesson you’ve met. A lease of space in Salt Flat, run like the storage desk of{' '}
@@ -507,30 +632,27 @@ export default function Lesson() {
         month’s move is bought or sold at the month’s average price, with every later move locked in with futures if you hedge it.{' '}
         <K tone="orange">Firm capacity</K> on Northline or Ridgeback Express, used on every day the price at the far end beats the near end by more than the trip
         (<a href={lessonHref('gas/4.3')}>Lesson 4.3</a>). A toll on Lakeside, the right to run the plant for the year and keep its spark spread (
-        <a href={lessonHref('gas/5.3')}>Lesson 5.3</a>). The prompt month’s gas, bought or sold on its first day when the two-week forecast leans cold or warm (
-        <a href={lessonHref('gas/6.1')}>Lesson 6.1</a>). And Metro’s winter <K c="price">basis</K>, sold on the first of December, January and February unless the
-        forecast warns of cold (<a href={lessonHref('gas/6.3')}>Lesson 6.3</a>).
+        <a href={lessonHref('gas/5.3')}>Lesson 5.3</a>). The prompt month’s gas, bought or sold on its first day from October to April when the two-week forecast
+        leans cold or warm (<a href={lessonHref('gas/6.1')}>Lesson 6.1</a>). And Metro’s winter <K c="price">basis</K>, sold on the first of December, January and
+        February unless the forecast warns of cold (<a href={lessonHref('gas/6.3')}>Lesson 6.3</a>).
       </P>
       <P>
         Each physical asset is sold to you at the price April 1’s curve puts on it, its intrinsic value: on this network, {money(n.first.storage.fee)} for a{' '}
         {bcf(pmLeaseBcf(PORTFOLIO_DEFAULTS), 0)} lease, {money(n.firmFee)} for {fmt(PORTFOLIO_DEFAULTS.firmMMBtuD)} MMBtu a day of firm Northline capacity, and{' '}
-        {money(n.tollFee)} for the toll. It is a fair price, so an asset pays its holder only what the year adds to the curve’s value: what redrawing a schedule
-        earns, the days a pipe or a plant is worth more than its month’s forward price said, or something about your network the market has missed. Trades pay
-        Chapter 6’s costs and post its margin (<a href={lessonHref('gas/6.5')}>Lesson 6.5</a>), and as everywhere in this course, the prices are simulated.
+        {money(n.tollFee)} for the toll. That price pays for April’s schedule — the moves, flows and running hours the curve itself would reward — but not for the
+        right to change it, the extrinsic value of <a href={lessonHref('gas/5.2')}>Lesson 5.2</a>, which comes with the asset for nothing. So an asset pays its
+        holder what the year adds to the curve’s value: what redrawing a schedule earns, the days a pipe or a plant is worth more than its month’s forward price
+        said, or something about your network the market has missed. Trades pay Chapter 6’s costs and post its margin (<a href={lessonHref('gas/6.5')}>Lesson 6.5</a>),
+        and as everywhere in this course, the prices are simulated.
       </P>
       <P>
-        In the next demonstration, set up the portfolio and choose a practice winter. Your settings are saved: <a href={lessonHref('gas/7.5')}>Lesson 7.5</a> will
-        play them. The upper chart adds up each position’s profit month by month, with the assets’ fees spread over the year; the lower one is the gas in the lease
-        at the start of each month and, in gray, how much gas its schedule still has to buy or sell at prices not yet fixed:
+        In the next demonstration, choose a practice winter and size the lease. The upper chart adds up each position’s profit month by month, with the assets’
+        fees spread over the year; the lower one is the gas in the lease at the start of each month and, in gray, how much gas its schedule still has to buy or
+        sell at prices not yet fixed. The other positions are set in the second demonstration, and everything you set is saved for{' '}
+        <a href={lessonHref('gas/7.5')}>Lesson 7.5</a>:
       </P>
 
-      <Figure
-        name="Gas Portfolio Manager"
-        onReset={() => {
-          resetGasPortfolio();
-          setWinter(PM_DEFAULTS.winter);
-        }}
-      >
+      <Figure name="Gas Portfolio Manager" actions={<PortfolioReset />}>
         <Segmented label="Practice winter" value={String(winter)} onChange={(v) => setWinter(Number(v))} options={WINTER_OPTIONS} />
         <XYChart
           xDomain={[0, 12]}
@@ -587,18 +709,18 @@ export default function Lesson() {
             { label: 'gas still to price', color: '#b5b5b5' },
           ]}
         />
-        <PortfolioControls p={p} />
+        <LeaseControls p={p} />
         <Readouts
           items={[
             { label: 'profit for the winter', value: money(year.total), tone: 'green' },
-            { label: 'fees paid on April 1', value: money(fees), tone: 'green' },
             { label: 'most cash needed', value: money(year.peakCapital), tone: 'green' },
             { label: 'profit on that cash', value: year.peakCapital > 0 ? pct(ret) : '—' },
           ]}
         />
         <Caption>
-          Practice winter {winter + 1}, {fmt(Math.abs(n.drivers.colder[winter]))} degree-days {n.drivers.colder[winter] >= 0 ? 'colder' : 'warmer'} than normal:{' '}
-          {partWords.length ? `${partWords.join('; ')}.` : 'the portfolio holds nothing.'}
+          Practice winter {winter + 1}, {fmt(Math.abs(n.drivers.colder[winter]))} heating degree days {n.drivers.colder[winter] >= 0 ? 'colder' : 'warmer'} than
+          normal: {partWords.length ? `${partWords.join('; ')}.` : 'the portfolio holds nothing.'}
+          {differs}
         </Caption>
       </Figure>
 
@@ -607,7 +729,8 @@ export default function Lesson() {
         capacity; {fmt(PORTFOLIO_DEFAULTS.weatherLots)} lots of weather trades on a forecast of skill {fmt(PORTFOLIO_DEFAULTS.skill, 1)}; and{' '}
         {fmt(PORTFOLIO_DEFAULTS.metroSellMMBtuD)} MMBtu a day of Metro’s basis sold whenever the forecast isn’t colder than normal. On this network, in the first
         practice winter, it {madeLost(n.first.total)}, and the lease {n.first.storage.total >= 0 ? `earned ${leaseShare}` : 'decided it'}:{' '}
-        {money(n.first.storage.fee + n.first.storage.total)} on its {money(n.first.storage.fee)} fee. Its line in the upper chart sinks to{' '}
+        {money(n.first.storage.fee + n.first.storage.total)} against its {money(n.first.storage.fee)} fee,{' '}
+        {n.first.storage.total >= 0 ? money(n.first.storage.total) : `a loss of ${money(-n.first.storage.total)}`} after it. Its line in the upper chart sinks to{' '}
         {money(n.leaseLow)} by the end of {GAS_MONTH_NAMES[n.leaseLowMonth]} while the lease pays its fee and buys gas it won’t sell until winter, then climbs:{' '}
         {GAS_MONTH_NAMES[n.leaseBestMonth]} alone brings in {money(n.leaseBestMonthCash)}. That is why the portfolio needs {money(n.first.peakCapital)} of cash at
         its peak to make {money(Math.abs(n.first.total))} — the fees, the gas bought ahead, and the margin on the futures that lock in its later moves.
@@ -622,53 +745,15 @@ export default function Lesson() {
         (<a href={lessonHref('gas/5.2')}>Lesson 5.2</a>).
       </P>
 
-      <H2>Two sides of a breakaway</H2>
-      <P>
-        Firm capacity on Northline earns when Metro breaks away from Calder; selling Metro’s basis earns when it doesn’t. Held alone,{' '}
-        {fmt(PORTFOLIO_DEFAULTS.firmMMBtuD)} MMBtu a day of Northline capacity earned more than its {money(n.firmFee)} fee in {word(firmWins)} of the eight
-        winters, {money(n.firm.years[firmBest].firm.total + n.firmFee)} in winter {firmBest + 1}, when Northline ran full on {fmt(n.drivers.northlineFull[firmBest])}{' '}
-        days. The same volume of Metro’s basis, sold every winter month with no forecast watching, averaged {signedMoney(n.metroOpen.mean)} a winter and{' '}
-        {madeLost(n.metroOpen.totals[metroWorst])} in winter {metroWorst + 1}. Hold both and they cancel: the portfolio then never makes or loses more than{' '}
-        {money(bothSpread)} in a winter, about the fees. They are two sides of the same bet on the same full pipe.
-      </P>
-      <P>
-        {stale ? (
-          <>
-            On your network that bet is mispriced. The market prices Metro’s basis with the premium it learned in Chapter 6, on a network whose pipes into Metro
-            ran full more often than yours do, so firm capacity costs more than it earns — {signedMoney(n.firm.mean)} a winter on average — and selling the basis
-            pays. Knowing your own network is an edge the curve doesn’t have.
-          </>
-        ) : (
-          <>
-            On this network the market’s premium for Metro’s breakaways is about right: firm capacity averaged {signedMoney(n.firm.mean)} a winter after its fee.
-          </>
-        )}{' '}
-        {guardHelps
-          ? `The forecast’s guard improves the sale, to ${signedMoney(n.metroGuarded.mean)} a winter, by standing aside from cold months it can see coming.`
-          : `The forecast’s guard ${guardHurts ? 'costs the sale' : 'doesn’t improve the sale'} here — ${signedMoney(n.metroGuarded.mean)} a winter with it, against ${signedMoney(n.metroOpen.mean)} without${
-              guardMissed
-                ? ` — because on the first of winter ${metroWorst + 1}’s worst month the forecast didn’t see the cold that would fill the pipes${guardHurts ? ', and in other months it turned the desk away from basis that would have paid' : ''}: Lesson 7.3’s lesson, in money.`
-                : '.'
-            }`}
-      </P>
-      <P>
-        The toll is a different kind of option. April’s value prices each month at its forward price, but the plant runs day by day: through the night when gas is
-        cheap enough to beat coal, only in the evening when it isn’t (Lesson 5.3). A plant that runs only when it pays turns the days’ swings into earnings, and on
-        this network it earned more than its {money(n.tollFee)} fee in {tollWins === 8 ? 'all eight winters' : `${word(tollWins)} of the eight winters`},{' '}
-        {signedMoney(n.toll.mean)} a winter on average. The weather trades are small: at {fmt(PORTFOLIO_DEFAULTS.weatherLots)} lots they averaged{' '}
-        {signedMoney(n.weather.mean)} a winter and made money in {word(n.weather.wins)} of eight, but they never needed more than {money(n.weather.peakCapital)} of
-        cash{weatherBest ? ', the best return on cash of anything here' : ''}.
-      </P>
-
       <H2>Eight winters</H2>
       <P>
         One winter is one draw of the weather. In the next demonstration the same portfolio runs through all eight practice winters. Each bar is a winter, built up
         from its positions, with losses below the line and the winter’s total marked; under the bars are the facts that decided each winter — how much colder than
-        normal it was, how many days Northline ran full, and Ridgeback’s <K c="price">basis</K>. The controls are the first demonstration’s, and they change the same
-        saved portfolio:
+        normal it was, in heating degree days (HDD); Metro’s highest price, the measure of how far its basis broke away; and Ridgeback’s <K c="price">basis</K>.
+        Every position can be set here:
       </P>
 
-      <Figure name="Gas Portfolio Manager · eight winters" onReset={resetGasPortfolio}>
+      <Figure name="Gas Portfolio Manager · eight winters" actions={<PortfolioReset />}>
         <XYChart
           xDomain={[0, PRACTICE_SEEDS.length]}
           yDomain={ax2.domain}
@@ -677,7 +762,7 @@ export default function Lesson() {
           xFormat={(v) => `Winter ${Math.floor(v) + 1}`}
           yFormat={(v) => (v === 0 ? '$0' : `${v < 0 ? '−' : ''}$${fmt(Math.abs(v), Math.abs(v) < 1 ? 1 : 0)}M`)}
           yLabel="Profit for the winter, $ million"
-          height={240}
+          height={220}
           series={[]}
           hLines={[{ at: 0, color: '#9a9a9a', width: 1 }]}
           ariaLabel={`The portfolio over the eight practice winters: ${eight.totals.map((t, i) => `winter ${i + 1} ${madeLost(t)}`).join(', ')}. Average ${money(eight.mean)}, at most ${money(ePeak)} of cash.`}
@@ -708,10 +793,10 @@ export default function Lesson() {
           )}
         </XYChart>
         <WinterRows
-          ariaLabel={`Each winter’s degree-days colder than normal: ${n.drivers.colder.map((c) => fmt(c)).join(', ')}; days Northline ran full: ${n.drivers.northlineFull.join(', ')}; Ridgeback’s basis: ${n.drivers.ridgebackBasis.map((b) => basis(b)).join(', ')}.`}
+          ariaLabel={`Each winter’s heating degree days colder than normal: ${n.drivers.colder.map((c) => fmt(c)).join(', ')}; Metro’s highest price: ${n.drivers.metroMax.map(peakPrice).join(', ')}; Ridgeback’s basis: ${n.drivers.ridgebackBasis.map((b) => basis(b)).join(', ')}.`}
           rows={[
-            { label: '°F-days colder', color: TEXT.teal, cells: n.drivers.colder.map((c) => `${c >= 0 ? '+' : '−'}${fmt(Math.abs(c))}`) },
-            { label: 'Northline full', color: TEXT.orange, cells: n.drivers.northlineFull.map((d) => `${fmt(d)} days`) },
+            { label: 'HDD vs normal', color: TEXT.teal, cells: n.drivers.colder.map((c) => `${c >= 0 ? '+' : '−'}${fmt(Math.abs(c))}`) },
+            { label: 'Metro’s highest', color: TEXT.orange, cells: n.drivers.metroMax.map(peakPrice) },
             { label: 'Ridgeback basis', color: TEXT.green, cells: n.drivers.ridgebackBasis.map((b) => basis(b)) },
           ]}
         />
@@ -731,44 +816,96 @@ export default function Lesson() {
             { label: 'average profit on that cash', value: ePeak > 0 ? pct(eight.returnOnCash) : '—' },
           ]}
         />
-        <Caption>
-          {eight.wins === PRACTICE_SEEDS.length
-            ? `The portfolio made money in every practice winter, least in winter ${argmin(eight.totals) + 1}.`
-            : `The portfolio lost money in ${word(PRACTICE_SEEDS.length - eight.wins)} of the eight practice winters, most in winter ${argmin(eight.totals) + 1}.`}
-        </Caption>
+        {differs ? <Caption>{differs.trim()}</Caption> : null}
       </Figure>
 
+      <H2>Two sides of a breakaway</H2>
+      <P>
+        Firm capacity on Northline earns when Metro breaks away from Calder; selling Metro’s basis earns when it doesn’t. Held alone,{' '}
+        {fmt(PORTFOLIO_DEFAULTS.firmMMBtuD)} MMBtu a day of Northline capacity earned more than its {money(n.firmFee)} fee in {word(firmWins)} of the eight
+        winters, {money(n.firm.years[firmBest].firm.total + n.firmFee)} in winter {firmBest + 1}, the winter Metro’s price reached{' '}
+        {peakPrice(n.drivers.metroMax[firmBest])}. The same volume of Metro’s basis, sold every winter month with no forecast watching, averaged{' '}
+        {signedMoney(n.metroOpen.mean)} a winter and {madeLost(n.metroOpen.totals[metroWorst])} in winter {metroWorst + 1}. Set the two to the same volume, selling
+        always, and their bars cancel: held together they never make or lose more than {money(bothSpread)} in a winter, about the fees. They are two sides of the
+        same bet on the same full pipe.
+      </P>
+      <P>
+        {stale ? (
+          <>
+            On your network that bet is mispriced. The market prices Metro’s basis with the premium it learned in Chapter 6, on a network whose pipes into Metro
+            ran full more often than yours do, so firm capacity costs more than it earns — {signedMoney(n.firm.mean)} a winter on average — and selling the basis
+            pays. Knowing your own network is an edge the curve doesn’t have.
+          </>
+        ) : (
+          <>
+            On this network the market’s premium for Metro’s breakaways is about right: firm capacity averaged {signedMoney(n.firm.mean)} a winter after its fee.
+          </>
+        )}{' '}
+        {guardHelps
+          ? `The forecast’s guard improves the sale, to ${signedMoney(n.metroGuarded.mean)} a winter, by standing aside from cold months it can see coming.`
+          : `The forecast’s guard ${guardHurts ? 'costs the sale' : 'doesn’t improve the sale'} here — ${signedMoney(n.metroGuarded.mean)} a winter with it, against ${signedMoney(n.metroOpen.mean)} without${
+              guardMissed && gm
+                ? ` — because on ${GAS_MONTH_NAMES[gm.month]} 1 of winter ${metroWorst + 1}, the first of its worst month, the forecast read ${
+                    gm.signal < -0.005 ? `${fmt(-gm.signal, 2)} °F warmer than normal` : gm.signal > 0.005 ? `only ${fmt(gm.signal, 2)} °F colder than normal` : 'normal'
+                  }, ${gm.inWindow ? 'though' : 'and'} the cold that filled the pipes, ${fmt(gm.coldTemp, 1)} °F on ${GAS_MONTH_NAMES[gm.month]} ${gm.coldDay + 1}, ${
+                    gm.inWindow ? 'fell inside its two weeks' : 'came after its two weeks'
+                  }${guardHurts ? '; in other months it turned the desk away from basis that would have paid' : ''}. That is Lesson 7.3’s lesson in money: ${
+                    gm.inWindow ? 'a forecast’s skill fades inside its window.' : 'a forecast sees two weeks at most.'
+                  }`
+                : '.'
+            }`}
+      </P>
+      <P>
+        Switch the firm capacity to Ridgeback Express and it becomes the nearest thing here to Chapter 6’s biggest earner, the trade on Ridgeback’s basis.{' '}
+        {expressHeld ? (
+          <>
+            {Math.abs(n.express.mean) < 0.1 * n.expressFee ? 'It earns little' : 'It costs a great deal'}, because this market isn’t Chapter 6’s. That one priced
+            next year as if nothing would change (<a href={lessonHref('gas/6.5')}>Lesson 6.5</a>); this one draws its curve on your network in Year 9, so a
+            stranded basin is already in April’s prices. The same {fmt(PORTFOLIO_DEFAULTS.firmMMBtuD)} MMBtu a day on Express costs {money(n.expressFee)}, and
+            after that fee it averaged {signedMoney(n.express.mean)} a winter.
+          </>
+        ) : (
+          <>
+            On your network it has nothing to trade: Ridgeback’s gas gets out, its basis sits at the cost of the trip, and the same{' '}
+            {fmt(PORTFOLIO_DEFAULTS.firmMMBtuD)} MMBtu a day on Express costs {money(n.expressFee)} and averages {signedMoney(n.express.mean)} a winter.
+          </>
+        )}
+      </P>
+      <P>
+        The toll is a different kind of option. April’s value prices each month at its forward price, but the plant runs day by day: through the night when gas is
+        cheap enough to beat coal, only in the evening when it isn’t (Lesson 5.3). A plant that runs only when it pays turns the days’ swings into earnings, and on
+        this network it earned more than its {money(n.tollFee)} fee in {tollWins === 8 ? 'all eight winters' : `${word(tollWins)} of the eight winters`},{' '}
+        {signedMoney(n.toll.mean)} a winter on average. The weather trades are small: at {fmt(PORTFOLIO_DEFAULTS.weatherLots)} lots they averaged{' '}
+        {signedMoney(n.weather.mean)} a winter and made money in {word(n.weather.wins)} of eight, but they never needed more than {money(n.weather.peakCapital)} of
+        cash{weatherBest ? ', the best return on cash of anything here' : ''}.
+      </P>
       <P>
         As it starts, the portfolio averages {money(r.mean)} a winter on this network, makes money in {r.wins === 8 ? 'all eight winters' : `${word(r.wins)} of the eight`},
         and needs at most {money(r.peakCapital)} of cash: {pct(r.returnOnCash)} a year on that cash. Its worst winter is winter {refWorst + 1},{' '}
         {r.totals[refWorst] >= 0 ? `still making ${money(r.totals[refWorst])}` : `losing ${money(-r.totals[refWorst])}`}
-        {refWorstParts.length ? `, pulled down by the ${refWorstParts.join(' and the ')}` : ''}. Its positions do well in different winters, which is the point of
-        holding several.{' '}
+        {worstPartText}. Its positions do well in different winters, which is the point of holding several:{' '}
         {refFirmBest === refMetroWorst
-          ? `Winter ${refFirmBest + 1} is the one in which Metro’s basis sold cost the most and firm capacity into Metro earned the most, so one paid for much of the other; `
-          : `Metro’s basis sold cost the most in winter ${refMetroWorst + 1} and firm capacity into Metro earned the most in winter ${refFirmBest + 1}; `}
-        the hedged lease made money in {refLeaseWins === 8 ? 'every one' : `${word(refLeaseWins)} of them`}. Notice, too, that what earns the money is what ties up
-        the cash: the lease earns most of the portfolio’s profit and needs most of its cash, and the weather trades earn little but need almost none.
+          ? `winter ${refFirmBest + 1} is the one in which Metro’s basis sold cost the most and firm capacity into Metro earned the most, so one paid for much of the other.`
+          : `Metro’s basis sold cost the most in winter ${refMetroWorst + 1} and firm capacity into Metro earned the most in winter ${refFirmBest + 1}.`}{' '}
+        But what earns the money is also what ties up the cash. Held alone at its starting size, each position earned, a year, for each dollar of cash it needed at
+        its peak: {listWords(perCash.map((x) => `${x.name} ${pct(x.roc)}`))}.
       </P>
 
       <Challenge
         id="a"
         figure="Gas Portfolio Manager · eight winters"
-        question={`Using the eight practice winters, set up a portfolio that makes money in every one of them, averages at least $${fmt(PM_TARGET.mean / 1e6, 1)} million a winter, and never needs more than $${fmt(PM_TARGET.capital / 1e6)} million of cash.`}
+        question={`Predict first which positions earn the most for the cash they tie up. Then, needing no more than ${money(target.capital)} of cash — what the starting portfolio needs on this network — set up a portfolio that makes money in every practice winter and averages at least ${money(target.mean)}, a fifth more than the start.`}
         solved={solved}
-        status={status}
-        success={`Solved: ${money(eight.mean)} a winter on average, ${money(eight.worst)} in the worst, at most ${money(ePeak)} of cash — ${pct(eight.returnOnCash)} a year on it. ${
-          mineLeaseAlways ? `The lease of ${bcf(pmLeaseBcf(p), 2)} made money in every winter and does the heavy lifting. ` : ''
-        }You tuned this portfolio on the winters you could see, though — the habit Lesson 6.5 warned against — and eight winters are a small sample of what weather can do.`}
+        status={challengeStatus}
+        success={`Solved: ${money(eight.mean)} a winter on average with at most ${money(ePeak)} of cash, ${pct(eight.returnOnCash)} a year on it against the starting portfolio’s ${pct(r.returnOnCash)}. With the cash fixed, the size of each position is the choice: cash moved from what earns little for it to what earns more makes the same balance sheet go further. You tuned this portfolio on the winters you could see, though — the habit Lesson 6.5 warned against — and eight winters are a small sample of what weather can do.`}
       />
 
       <P>
         A portfolio built this way says what you believe about your network: that its storage is worth more than April’s curve says once the schedule is redrawn
-        and hedged, that the market prices its pipes into Metro right or wrong, that a forecast can see two weeks and no further. Every one of those beliefs was
+        and hedged, that the market prices its pipes into Metro right or wrong, that a forecast’s two weeks are worth trading on. Every one of those beliefs was
         checked on the winters you could see, and the portfolio in <FigRef to="Gas Portfolio Manager · eight winters">the second demonstration</FigRef> was tuned
-        on exactly the winters it was scored on. A portfolio tested that way flatters itself. The honest test is the one of Lesson 6.5: winters no one has seen.{' '}
-        <a href={lessonHref('gas/7.5')}>The next lesson</a> plays your saved portfolio on twelve of them, on your network, against desks that each play one of
-        Chapter 6’s strategies alone.
+        on exactly the winters it was scored on. The honest test is the one of Lesson 6.5: winters no one has seen. <a href={lessonHref('gas/7.5')}>The next lesson</a>{' '}
+        plays your saved portfolio on twelve of them, on your network, against desks that each play one of Chapter 6’s strategies alone.
       </P>
     </LessonPage>
   );

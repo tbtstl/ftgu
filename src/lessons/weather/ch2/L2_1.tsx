@@ -35,6 +35,8 @@ export const THETA0_K = 300;
 /** The first demonstration's starting contrast, K: a third of 300 K. */
 export const CONTRAST_DEFAULT_K = 100;
 export const ROTATION_STEP = 0.05;
+/** The tropopause height the Held–Hou reach uses, km (the dynamics engine's default). */
+export const TROPOPAUSE_KM = 15;
 
 /** The circulation for a rotation rate (× Earth's) and a contrast in kelvins. */
 export function circulationFor(rotation: number, contrastK: number): Circulation {
@@ -43,7 +45,7 @@ export function circulationFor(rotation: number, contrastK: number): Circulation
 
 /**
  * The first challenge: with the starting contrast, the fastest spin (on the slider's steps) at
- * which the Hadley cell still reaches Calder Bay's 41°, putting the city in the trade winds.
+ * which the Hadley cell still reaches Fenwick Bay's 41°, putting the city in the trade winds.
  */
 export function tradesSolved(rotation: number, contrastK: number): boolean {
   if (contrastK !== CONTRAST_DEFAULT_K) return false;
@@ -123,8 +125,8 @@ function Arrow({ x, y, dx, dy, color }: { x: number; y: number; dx: number; dy: 
 
 function GlobeCells({ circ, rotation }: { circ: Circulation; rotation: number }) {
   const one = circ.cells.length === 1;
-  const calder = pt(LATITUDE, GR);
-  const calderX = GX + (calder[0] - GX) * 0.1;
+  const fenwick = pt(LATITUDE, GR);
+  const fenwickX = GX + (fenwick[0] - GX) * 0.1;
   const beltAt = circ.belts.find((b) => LATITUDE >= b.from && LATITUDE < b.to) ?? circ.belts[0];
   const speed = 1.4 / Math.max(0.25, Math.min(4, rotation));
   return (
@@ -136,7 +138,7 @@ function GlobeCells({ circ, rotation }: { circ: Circulation; rotation: number })
         one
           ? 'A single Hadley cell reaches from the equator to the pole, with easterly winds at the surface.'
           : `The Hadley cell reaches ${fmt(circ.hadleyEdge)}°, the Ferrel cell from there to 60° and the polar cell beyond. The surface winds are trade winds from the east up to ${fmt(circ.hadleyEdge)}°, westerlies to 60° and polar easterlies beyond.`
-      } Calder Bay, at 41°, lies in the ${beltAt.name.toLowerCase()}.`}
+      } Fenwick Bay, at 41°, lies in the ${beltAt.name.toLowerCase()}.`}
     >
       {/* The globe's face, with its wind belts. */}
       <path d={`M${GX - GR} ${GY} A${GR} ${GR} 0 0 1 ${GX + GR} ${GY} Z`} fill="#f2f0e9" stroke="#bdb7a8" strokeWidth={1.2} />
@@ -179,10 +181,10 @@ function GlobeCells({ circ, rotation }: { circ: Circulation; rotation: number })
       <text x={GX - GR - 6} y={GY + 4} textAnchor="end" className="ax">
         0°
       </text>
-      {/* Calder Bay. */}
-      <circle cx={calderX} cy={calder[1]} r={4.5} fill="#333" stroke="#fcfcfb" strokeWidth={1.5} />
-      <text x={calderX + 8} y={calder[1] + 4} className="lab">
-        Calder Bay
+      {/* Fenwick Bay. */}
+      <circle cx={fenwickX} cy={fenwick[1]} r={4.5} fill="#333" stroke="#fcfcfb" strokeWidth={1.5} />
+      <text x={fenwickX + 8} y={fenwick[1] + 4} className="lab">
+        Fenwick Bay
       </text>
 
       {/* The cells, along the limb. */}
@@ -329,24 +331,26 @@ export default function Lesson() {
   return (
     <LessonPage id="weather/2.1">
       <P>
-        Chapter 1 took the weather apart. Sunlight heats the tropics more than the poles (<a href={lessonHref('weather/1.1')}>Lesson 1.1</a>); warmed air grows
-        lighter and rises, carrying water vapor and its latent heat; and pressure differences push the air sideways across a planet that turns beneath it, so the
-        wind is deflected and ends up circling the highs and lows instead of filling them (<a href={lessonHref('weather/1.5')}>Lesson 1.5</a>). This chapter puts
-        the pieces back together, at larger and larger scales, until we arrive at the weather of one city on one coast. We’ll start with the largest scale of all:
-        the circulation of the whole planet.
+        Chapter 1 took the weather apart, ending with winds that circle the highs and lows instead of filling them (
+        <a href={lessonHref('weather/1.5')}>Lesson 1.5</a>). This chapter puts the pieces back together, at larger and larger scales, until we arrive at the
+        weather of one city on one coast. We’ll start with the largest scale of all: the circulation of the whole planet.
       </P>
       <P>
-        The simplest guess was made by George Hadley in 1735, to explain the steady winds sailors met in the tropics. Air heated at the equator rises, flows toward
-        the pole high up, sinks where it’s cold and returns along the surface: one great loop in each hemisphere, carrying the tropical surplus of Lesson 1.1
-        poleward. It would work on a planet that didn’t turn. On ours, air flowing poleward is deflected to the east, and the further it goes the faster it turns. The
-        loop can’t reach the pole. It closes much sooner, and the circulation breaks into several pieces.
+        The first explanation was George Hadley’s, in 1735, for the steady winds sailors met in the tropics. Air heated at the equator rises and flows toward the
+        pole high up, and cooler air flows in along the surface to replace it: one great loop in each hemisphere, carrying the tropical surplus of{' '}
+        <a href={lessonHref('weather/1.1')}>Lesson 1.1</a> poleward. Hadley saw that Earth’s turning matters too. The ground at the equator moves east faster
+        than the ground on either side of it, so air flowing in toward the equator lags behind the ground beneath it and blows from the east. What his picture
+        missed is that the turning also limits how far the loop can reach. On a planet that turns as fast as ours, it closes long before the pole, and the
+        circulation breaks into several pieces.
       </P>
       <P>
         In the next demonstration, the half-disk is one hemisphere seen from the side, with the equator along the bottom and the pole at the top. Its face shows the
         winds at the surface, shaded violet where they blow from the east and teal where they blow from the west. Along its edge is the atmosphere, its height
-        exaggerated many times, with its <b>circulation cells</b>; the moving dots follow the air around each one. Change how fast the planet turns and the{' '}
-        <K tone={WX.temperature}>temperature contrast</K> between equator and pole that sunlight would impose if no air moved — in Lesson 1.1’s model without
-        transport, it was about {fmt(contrast11)} °C:
+        exaggerated many times, with its <b>circulation cells</b>; the moving dots follow the air around each one, and the violet dot high above the Hadley cell’s
+        edge marks a fast wind, the subtropical jet, that the second half of this lesson explains. Change how fast the planet turns and the{' '}
+        <K tone={WX.temperature}>temperature contrast</K> between equator and pole that sunlight would impose if no air moved. It starts at{' '}
+        {fmt(CONTRAST_DEFAULT_K)} °C, a standard value for Earth; the cruder model of <a href={lessonHref('weather/1.1')}>Lesson 1.1</a>, without transport, put
+        it at about {fmt(contrast11)} °C:
       </P>
 
       <Figure name="Global Circulation Simulator" scenario={s}>
@@ -361,8 +365,7 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: 'Hadley cell reaches', value: one ? 'the pole' : `${fmt(circ.hadleyEdge)}°`, tone: WX.temperature },
-            { label: 'jet, if no momentum were lost', value: one ? '—' : `${fmt(circ.jetSpeedIdeal)} m/s`, tone: WX.wind },
+            { label: 'jet, if no spin were lost', value: one ? '—' : `${fmt(circ.jetSpeedIdeal)} m/s`, tone: WX.wind },
             { label: 'the ground’s speed at the equator', value: `${fmt(surfaceSpeed(0, rotation))} m/s` },
           ]}
         />
@@ -409,7 +412,7 @@ export default function Lesson() {
         <Caption>
           {one
             ? 'Turning this slowly, the planet has one Hadley cell in each hemisphere, reaching from the equator to the pole.'
-            : `Calder Bay, at 41°, lies in the ${belt.name.toLowerCase()}${belt.fromThe === 'west' ? ': its weather arrives from the west.' : '.'}`}
+            : `Fenwick Bay, at 41°, lies in the ${belt.name.toLowerCase()}${belt.fromThe === 'west' ? ': its weather arrives from the west.' : '.'} Only the Hadley cell’s edge is computed; the Ferrel and polar cells meet at 60°, where they do on Earth, whatever the settings.`}
         </Caption>
       </Figure>
 
@@ -421,52 +424,61 @@ export default function Lesson() {
         Australian interior — lie in the subtropics.
       </P>
       <P>
-        The reach is set by a balance worked out by Isaac Held and Arthur Hou in 1980, and the equation in the demonstration is their result. Air leaving the
-        equator high up carries the eastward spin of the equator’s ground with it; by 35° it would be racing east at {fmt(earth.jetSpeedIdeal)} m/s, faster than the
-        cell’s temperature contrast can support, so the cell stops there. Spin the planet faster and the deflection grows, so the cell shrinks: at twice Earth’s rate
-        it reaches only {fmt(circulationFor(2, CONTRAST_DEFAULT_K).hadleyEdge)}°. A stronger contrast pushes it further out. Turn the planet slowly enough and a single
-        cell spans the whole hemisphere, much as Hadley imagined. Venus, which takes 243 Earth days to turn once, is thought to have Hadley cells reaching most of
-        the way to its poles. Fast-spinning Jupiter goes the other way: its clouds are striped with many alternating bands of wind, more than our three-cell picture
-        draws.
+        The reach is set by a balance worked out by Isaac Held and Arthur Hou in 1980, and the equation in the demonstration is their result. φ<Sub>H</Sub> is the
+        latitude the cell reaches, in radians, and g is gravity’s pull, 9.81 m/s². H is the height of the <b>tropopause</b>, the top of the lowest layer of the
+        atmosphere, in which the temperature falls with height and nearly all the weather happens; this model puts it at {fmt(TROPOPAUSE_KM)} km, roughly its height
+        over the tropics. Δθ is the contrast, measured against a reference temperature θ<Sub>0</Sub> of {fmt(THETA0_K)} K; Ω is how fast the planet turns, and a is
+        its radius, {fmt(EARTH_RADIUS_M / 1000)} km. The starting contrast is a third of θ<Sub>0</Sub>, the value commonly used with this theory; at the{' '}
+        {fmt(contrast11)} °C of <a href={lessonHref('weather/1.1')}>Lesson 1.1</a> the cell would reach {fmt(circulationFor(1, contrast11).hadleyEdge)}°.
+      </P>
+      <P>
+        Read the equation for its shape. The reach grows with the square root of the contrast and is inversely proportional to the spin: at twice Earth’s rate the
+        cell reaches only {fmt(circulationFor(2, CONTRAST_DEFAULT_K).hadleyEdge, 1)}°, half as far. Turn the planet slowly enough and a single cell spans the whole
+        hemisphere, much as Hadley imagined. Venus, which takes 243 Earth days to turn once, is thought to have Hadley cells reaching most of the way to its poles.
+        Fast-spinning Jupiter goes the other way: its clouds are striped with many alternating bands of wind, more than our three-cell picture draws. Why the
+        turning holds the cell back is the subject of the second half of this lesson.
       </P>
       <P>
         The cells set the winds at the surface. Air returning to the equator along the bottom of the Hadley cell moves toward latitudes where the ground travels east
-        faster: {fmt(surfaceSpeed(0))} m/s at the equator against {fmt(surfaceSpeed(30))} at 30°. It lags behind the ground, and the deflection of Lesson 1.5 turns it
-        westward. Air that left 30° at rest and kept all its spin would reach 10° blowing from the east at about {fmt(Math.round(-trade10 / 10) * 10)} m/s; friction with the sea holds
-        the real <b>trade winds</b> to a steady 5 to 8 m/s or so, from the north-east in the Northern Hemisphere. Poleward of the Hadley cell the surface air moves
-        poleward, gets ahead of the slower ground and becomes the <b>westerlies</b>. The two are linked. Easterly winds drag on the ground and take eastward spin
+        faster: {fmt(surfaceSpeed(0))} m/s at the equator against {fmt(surfaceSpeed(30))} at 30°. It lags behind the ground, and the deflection of{' '}
+        <a href={lessonHref('weather/1.5')}>Lesson 1.5</a> turns it westward. Friction with the sea holds these <b>trade winds</b> to a steady 5 to 8 m/s or so,
+        blowing from the north-east in the Northern Hemisphere. Poleward of the Hadley cell the surface air moves poleward, gets ahead of the slower ground and
+        becomes the <b>westerlies</b>. The two are linked. Easterly winds drag on the ground and take eastward spin
         from the solid Earth; westerlies give it back. Earth’s spin doesn’t change from year to year, so the trades on their own can’t be the whole story: somewhere
         there must be westerlies to return what they take.
       </P>
       <P>
-        Calder Bay, at 41°, lies in the westerlies. Weather there arrives from the west: the storms and fronts that cross it have been crossing the continent for
+        Fenwick Bay, at 41°, lies in the westerlies. Weather there arrives from the west: the storms and fronts that cross it have been crossing the continent for
         days. When Chapter 3 asks how far ahead its weather can be forecast, that’s where the forecaster will look.
       </P>
 
       <Challenge
         id="a"
-        question="With the contrast at 100 °C, what’s the fastest the planet could turn and still have its Hadley cell reach Calder Bay’s 41°, putting the city in the trade winds?"
+        question={`Predict first: at Earth’s rate the cell reaches ${fmt(earth.hadleyEdge, 1)}°, and the reach is inversely proportional to the spin. How fast could the planet turn, as a multiple of Earth’s rate, and still have its Hadley cell reach Fenwick Bay’s ${LATITUDE}°, putting the city in the trade winds? Work it out, then set the spin to your answer, rounded down to the slider’s steps of 0.05, with the contrast at ${fmt(CONTRAST_DEFAULT_K)} °C.`}
         solved={solved}
         status={
           contrastK !== CONTRAST_DEFAULT_K
-            ? 'First set the contrast back to 100 °C.'
-            : circ.hadleyEdge >= LATITUDE
-              ? `At ${fmt(rotation, 2)} × Earth’s spin the Hadley cell reaches ${one ? 'the pole' : `${fmt(circ.hadleyEdge)}°`}. Could the planet turn faster and still reach 41°?`
-              : `At ${fmt(rotation, 2)} × Earth’s spin the Hadley cell reaches only ${fmt(circ.hadleyEdge)}°.`
+            ? `First set the contrast back to ${fmt(CONTRAST_DEFAULT_K)} °C.`
+            : Math.abs(rotation - 1) < 1e-9
+              ? `At Earth’s rate the cell reaches ${fmt(earth.hadleyEdge, 1)}°. What spin does the inverse proportion give for ${LATITUDE}°?`
+              : circ.hadleyEdge >= LATITUDE
+                ? `At ${fmt(rotation, 2)} × Earth’s spin the Hadley cell reaches ${one ? 'the pole' : `${fmt(circ.hadleyEdge, 1)}°`}. Could the planet turn faster and still reach ${LATITUDE}°?`
+                : `At ${fmt(rotation, 2)} × Earth’s spin the Hadley cell reaches only ${fmt(circ.hadleyEdge, 1)}°.`
         }
-        success={`Solved. At ${fmt(rotation, 2)} times Earth’s rate — a day of about ${fmt(24 / rotation)} hours — the cell reaches ${fmt(circ.hadleyEdge, 1)}°, and the city has trade winds from the north-east and a desert climate’s sinking air nearby. The reach falls in proportion to the spin, so a planet turning about ${fmt((1 - earth.hadleyEdge / LATITUDE) * 100)}% slower than ours would move Calder Bay out of the westerlies.`}
+        success={`Solved. ${fmt(earth.hadleyEdge, 1)} ÷ ${LATITUDE} = ${fmt(earth.hadleyEdge / LATITUDE, 2)}, so at ${fmt(rotation, 2)} times Earth’s rate — a day of about ${fmt(24 / rotation)} hours — the cell reaches ${fmt(circ.hadleyEdge, 1)}°, and the city has trade winds from the north-east and a desert climate’s sinking air nearby. A planet turning about ${fmt((1 - earth.hadleyEdge / LATITUDE) * 100)}% slower than ours would move Fenwick Bay out of the westerlies.`}
       />
 
       <H2>A ring of air</H2>
       <P>
-        The Hadley cell’s air keeps its spin because of the conservation of angular momentum. Think of a ring of air circling the planet along the equator, at rest
+        The Hadley cell’s air keeps its spin because of the conservation of <b>angular momentum</b>. Think of a ring of air circling the planet along the equator, at rest
         relative to the ground beneath it. It is still moving east at {fmt(omegaA)} m/s, carried round with the planet. Now move the whole ring poleward. The ring
         shrinks, since a line of latitude is shorter than the equator, and like a figure skater pulling in her arms it spins faster. But the ground under it is
         moving more slowly than at the equator. The difference is a west wind.
       </P>
       <P>
         In the next demonstration, choose how far poleward the ring travels. The dashed curve is its wind relative to the ground if it keeps all its angular
-        momentum, and the violet curve the wind it’s left with if something drains away a share of its excess spin. That share starts at zero:
+        momentum, and the violet curve the wind it’s left with if something drains away a share of its excess spin. In the real atmosphere that something is the
+        swirling <b>eddies</b> of the middle latitudes, which the end of this lesson describes. The share starts at zero:
       </P>
 
       <Figure name="Global Circulation Simulator · a ring of air" scenario={r}>
@@ -481,7 +493,6 @@ export default function Lesson() {
           items={[
             { label: 'the ground’s eastward speed', value: `${fmt(surfaceSpeed(lat))} m/s` },
             { label: 'the ring’s wind over the ground', value: `${fmt(ringWind(lat, loss))} m/s`, tone: WX.wind },
-            { label: 'at 30°', value: `${fmt(ringWind(30, loss))} m/s`, tone: WX.wind },
           ]}
         />
         <Slider label="Latitude reached" value={lat} min={0} max={60} onChange={(v) => r.set({ lat: v })} display={`${fmt(lat)}°`} />
@@ -513,30 +524,41 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Kept whole, the ring’s spin makes absurd winds: {fmt(angularMomentumWind(30))} m/s at 30° and {fmt(angularMomentumWind(LATITUDE))} m/s at 41°. The air at the
-        top of the Hadley cell really does spin up this way, and that’s where the <K tone={WX.wind}>subtropical jet stream</K> comes from: a river of fast westerly
-        wind near the tropopause, around 12 km up, at the cell’s poleward edge. But in a Northern Hemisphere winter, averaged around the globe, it blows at about 40
-        m/s, not 134.
+        Kept whole, the ring’s spin makes absurd winds: {fmt(angularMomentumWind(30))} m/s at 30° and {fmt(angularMomentumWind(LATITUDE))} m/s at 41°. At{' '}
+        {fmt(earth.hadleyEdge)}°, the edge of the model’s Hadley cell, it would be {fmt(earth.jetSpeedIdeal)} m/s, the speed in the readout of{' '}
+        <FigRef to="Global Circulation Simulator">the first demonstration</FigRef>. That is why the cell stops there: in Held and Hou’s balance, it closes
+        where the wind its spin would make is faster than its temperature contrast can support. The same bookkeeping, run the other way, makes the trade winds. Air
+        that left 30° at rest and kept all its spin would reach 10° blowing from the east at about {fmt(Math.round(-trade10 / 10) * 10)} m/s, far more than
+        friction lets the real ones keep.
+      </P>
+      <P>
+        The air at the top of the Hadley cell really does spin up this way, and that’s where the <K tone={WX.wind}>subtropical jet stream</K> comes from: a river
+        of fast westerly wind near the tropopause, around 12 km up, at the cell’s poleward edge. But in a Northern Hemisphere winter, averaged around the globe, it
+        blows at about {JET_TARGET} m/s, not {fmt(angularMomentumWind(30))}.
       </P>
       <P>
         What drains the rest is the subject of the next few lessons. The smooth loops of <FigRef to="Global Circulation Simulator">the first demonstration</FigRef>{' '}
-        are averages. In the middle latitudes the real air moves in swirling <b>eddies</b> — the lows and highs of Lesson 1.5, the storms on a weather map — that
-        carry heat poleward and spin away from the jets. The Ferrel cell, in particular, isn’t a conveyor at all: it is what those eddies look like when their
+        are averages. In the middle latitudes the real air moves in eddies — the lows and highs of <a href={lessonHref('weather/1.5')}>Lesson 1.5</a>, the storms
+        on a weather map — that carry heat poleward and spin away from the jets. The Ferrel cell, in particular, isn’t a conveyor at all: it is what those eddies look like when their
         motion is averaged around a latitude circle, which is why it turns the “wrong” way, rising in the cold and sinking in the warm.
       </P>
 
       <Challenge
         id="b"
-        question="What share of the ring’s excess spin must eddies drain to bring its wind at 30° down to a realistic 40 m/s, within 2 m/s?"
+        question={`Predict first: whatever share of the excess spin the eddies drain, the ring keeps the rest of its ${fmt(angularMomentumWind(30))} m/s at 30°. What share must they drain to leave a realistic ${JET_TARGET} m/s? Work it out, then set the slider to your answer, to the nearest 5%, and check it at 30°.`}
         solved={solved2}
-        status={`With ${fmt(loss * 100)}% drained, the ring blows at ${fmt(ringWind(30, loss), 1)} m/s at 30°.`}
-        success={`Solved. With ${fmt(loss * 100)}% of the excess spin drained, the ring blows at ${fmt(ringWind(30, loss), 1)} m/s at 30°. Most of the spin the Hadley cell builds up is handed on by the eddies — some to the westerly winds further poleward, and through them, by friction, back to the ground.`}
+        status={
+          loss === 0
+            ? `Nothing drained yet: the ring blows at ${fmt(angularMomentumWind(30))} m/s at 30°. What share leaves ${JET_TARGET}?`
+            : `With ${fmt(loss * 100)}% drained, the ring blows at ${fmt(ringWind(30, loss), 1)} m/s at 30°.`
+        }
+        success={`Solved. 1 − ${JET_TARGET}/${fmt(angularMomentumWind(30))} = ${fmt(1 - JET_TARGET / angularMomentumWind(30), 2)}: with ${fmt(loss * 100)}% of the excess spin drained, the ring blows at ${fmt(ringWind(30, loss), 1)} m/s at 30°. The eddies must take most of what the Hadley cell builds up, handing it on to the westerly winds further poleward and, through them, by friction, back to the ground.`}
       />
 
       <P>
         Jets form wherever temperature changes sharply with latitude, because the wind aloft strengthens with height in proportion to that contrast. The middle
         latitudes have a second jet, the <b>polar-front jet</b>, which wanders north and south above the boundary where cold polar air meets warm subtropical air.
-        That boundary — the polar front — runs right across the latitudes of Calder Bay, and it’s where the eddies are born. The next lesson zooms in on it: on air
+        That boundary — the polar front — runs right across the latitudes of Fenwick Bay, and it’s where the eddies are born. The next lesson zooms in on it: on air
         masses, and the fronts where they meet.
       </P>
     </LessonPage>

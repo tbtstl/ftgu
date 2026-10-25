@@ -1,10 +1,10 @@
 // Forecast skill of the miniature weather model (nwp.ts), averaged over many weather situations.
 // One forecast is a single throw of the dice; skill is what happens on average. For each of many
 // random truths, the model starts from its analysis of the observations and carries it east with
-// the wind; the error at Calder Bay is compared, lead by lead, with the error of knowing nothing
+// the wind; the error at Fenwick Bay is compared, lead by lead, with the error of knowing nothing
 // (forecasting no anomaly at all).
 
-import { CALDER_I, DX_KM, NX, analysis, observationSites, truthField, truthWaves, type Wave } from './nwp';
+import { FENWICK_I, DX_KM, NX, analysis, observationSites, truthField, truthWaves, type Wave } from './nwp';
 
 /** The true anomaly at one grid point — the same sum of waves as truthField, evaluated at a single point. */
 export function truthAt(waves: Wave[], i: number, tDays: number, windMs: number, evolution: number): number {
@@ -23,23 +23,23 @@ export function cellsPerDay(windMs: number): number {
   return (windMs * 86400) / 1000 / DX_KM;
 }
 
-/** Where the air that reaches Calder Bay `lead` days from now is at the start: a grid index, 0–359. */
+/** Where the air that reaches Fenwick Bay `lead` days from now is at the start: a grid index, 0–359. */
 export function upstreamIndex(lead: number, windMs: number): number {
-  const j = CALDER_I - cellsPerDay(windMs) * lead;
+  const j = FENWICK_I - cellsPerDay(windMs) * lead;
   return ((j % NX) + NX) % NX;
 }
 
 export interface SkillCurve {
   /** Lead times, days. */
   leads: number[];
-  /** Root-mean-square forecast error at Calder Bay, °F. */
+  /** Root-mean-square forecast error at Fenwick Bay, °F. */
   rms: number[];
   /** Root-mean-square error of forecasting no anomaly at all (the size of the weather itself), °F. */
   none: number[];
 }
 
 /**
- * Forecast error at Calder Bay by lead, over `cases` random weather situations (seeds 1…cases),
+ * Forecast error at Fenwick Bay by lead, over `cases` random weather situations (seeds 1…cases),
  * with observations every `land` grid points over land and every `ocean` over the ocean (0 = none).
  */
 export function forecastSkill(opts: { land: number; ocean: number; windMs: number; evolution: number; days?: number; step?: number; cases?: number }): SkillCurve {
@@ -59,7 +59,7 @@ export function forecastSkill(opts: { land: number; ocean: number; windMs: numbe
       const j0 = Math.floor(j);
       const fr = j - j0;
       const forecast = an[j0] * (1 - fr) + an[(j0 + 1) % NX] * fr;
-      const truth = truthAt(waves, CALDER_I, lead, opts.windMs, opts.evolution);
+      const truth = truthAt(waves, FENWICK_I, lead, opts.windMs, opts.evolution);
       se[k] += (forecast - truth) ** 2;
       s0[k] += truth * truth;
     });

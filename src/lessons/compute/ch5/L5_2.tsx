@@ -38,7 +38,9 @@ import {
   type Stage,
   type SupplyParams,
 } from '../../../engines/compute/supplyChain';
+import { productivity } from '../../../engines/compute/marketplace';
 import { GPU_COLOR } from '../../../model/compute/hardware';
+import { WORKLOAD_IDS } from '../../../model/compute/workloads';
 import { rng } from '../../../model/random';
 
 // ---------------------------------------------------------------------------
@@ -301,6 +303,13 @@ export function goodDies(dies: DieCell[], side: number, defects: DieCell[]): boo
 
 /** The second challenge's target share of good dies. */
 export const YIELD_TARGET = 0.6;
+/** The wafer figure's defect slider: its floor and step, per cm². */
+export const WAFER_DEFECTS_MIN = 0.02;
+export const WAFER_DEFECTS_STEP = 0.01;
+/** The highest defect density that still yields the target on the A-class's die: −ln 0.6 ÷ 8.14 cm². */
+export const CLEAN_LIMIT = -Math.log(YIELD_TARGET) / (BUILD.A.dieMm2 / 100);
+/** The answer to the second challenge: that limit rounded down to the slider's hundredths. */
+export const CLEAN_ANSWER = Math.floor(CLEAN_LIMIT * 100 + 1e-9) / 100;
 
 /** The second challenge: the A-class's 814 mm² die, and the highest defect density on the slider that still yields 60%. */
 export function cleanSolved(area: number, defects: number): boolean {
@@ -381,6 +390,9 @@ const A_DIES = diesPerWafer(BUILD.A.dieMm2);
 const A_YIELD = dieYield(SUPPLY_DEFAULTS.defectsPerCm2, BUILD.A.dieMm2);
 const A_PER_WAFER = A_DIES * A_YIELD;
 const B_PER_WAFER = (diesPerWafer(BUILD.B.dieMm2) * dieYield(SUPPLY_DEFAULTS.defectsPerCm2, BUILD.B.dieMm2)) / BUILD.B.dies;
+const B_DIE_YIELD = dieYield(SUPPLY_DEFAULTS.defectsPerCm2, BUILD.B.dieMm2);
+/** The yield of one die as big as the B-class's two together. */
+const DOUBLE_DIE_YIELD = dieYield(SUPPLY_DEFAULTS.defectsPerCm2, 2 * BUILD.B.dieMm2);
 const HALF_AREA = 400;
 const HALF_DIES = diesPerWafer(HALF_AREA);
 const HALF_YIELD = dieYield(SUPPLY_DEFAULTS.defectsPerCm2, HALF_AREA);
@@ -391,8 +403,18 @@ const RETICLE_MM2 = 26 * 33;
 /** The settings that keep supply ahead of demand with the fewest changes: packaging, memory and power. */
 export const AHEAD_EXAMPLE: Omit<ChainState, 'quarter'> = { ...CHAIN_DEFAULTS, hbm: 4.0, packaging: 800, power: 1200 };
 const AHEAD_QS = runChain(AHEAD_EXAMPLE);
+/** A-class GPUs (thousands) installed before the first quarter. */
+const START_BASE = Q1.installed.A - Q1.deployed.A;
 /** GPUs (thousands) the first quarter needs built and switched on to meet demand. */
-const Q1_NEEDED = Q1.demandAEq - 1000;
+const Q1_NEEDED = Q1.demandAEq - START_BASE;
+/** GPUs (thousands) ready to switch on in Q4: Q3's output plus any still waiting from before. */
+const Q4_READY = Q4.deployed.A + Q4.deployed.B + Q4.waiting;
+/** A-class output once the B-class has ramped (Q7 on), as shares of Q4's. */
+const A_LATE = DEFAULT_QS.slice(SUPPLY_DEFAULTS.bStart + 2).map((q) => q.built.A / Q4.built.A);
+/** Lesson 5.1's job-by-job range of A-class equivalents in a B-class hour. */
+const B_EQ = WORKLOAD_IDS.map((w) => productivity(w, 'B'));
+const B_EQ_LOW = Math.min(...B_EQ);
+const B_EQ_HIGH = Math.max(...B_EQ);
 
 export const LESSON_NUMBERS = {
   aDies: A_DIES,
@@ -420,6 +442,15 @@ export const LESSON_NUMBERS = {
   halfSilicon: HALF_SILICON,
   aheadQ12Margin: AHEAD_QS[QUARTERS - 1].installedAEq - AHEAD_QS[QUARTERS - 1].demandAEq,
   q1Needed: Q1_NEEDED,
+  bDieYield: B_DIE_YIELD,
+  doubleDieYield: DOUBLE_DIE_YIELD,
+  startBase: START_BASE,
+  q3Built: DEFAULT_QS[2].built.A,
+  q4Ready: Q4_READY,
+  aLateLow: Math.min(...A_LATE),
+  aLateHigh: Math.max(...A_LATE),
+  bEqLow: B_EQ_LOW,
+  bEqHigh: B_EQ_HIGH,
 };
 
 export default function Lesson() {
@@ -434,13 +465,13 @@ export default function Lesson() {
   const statusA = firstShort
     ? `Q${firstShort.q + 1} falls short: ${millions(firstShort.installedAEq)} A-class equivalents in service against ${millions(firstShort.demandAEq)} wanted, and ${STAGE_NAME[firstShort.binding]} ${firstShort.binding === 'wafers' ? 'set' : 'sets'} the pace there.`
     : '';
-  const builtTotal = q.built.A + q.built.B;
   const deployedTotal = q.deployed.A + q.deployed.B;
   const describeBuilt = (a: number, b: number) => (b > 0.5 ? `${gpus(a)} A-class and ${gpus(b)} B-class` : `${gpus(a)} A-class`);
+  const inService = `In service: ${millions(q.installedAEq)} A-class equivalents, ${q.installedAEq < q.demandAEq - SHORT_TOLERANCE ? 'short of' : 'against'} the ${millions(q.demandAEq)} wanted.`;
   const caption =
     q.binding === 'power'
-      ? `Q${q.q + 1}: ${describeBuilt(q.built.A, q.built.B)} GPUs built, but new data centers can switch on only ${gpus(deployedTotal)} of the GPUs ready; ${gpus(q.waiting)} wait for power.`
-      : `Q${q.q + 1}: ${STAGE_NAME[q.binding]} ${q.binding === 'wafers' ? 'set' : 'sets'} the pace, so ${describeBuilt(q.built.A, q.built.B)} GPUs are built. ${q.installedAEq < q.demandAEq - SHORT_TOLERANCE ? `In service: ${millions(q.installedAEq)} A-class equivalents, short of the ${millions(q.demandAEq)} wanted.` : `In service: ${millions(q.installedAEq)} A-class equivalents, against ${millions(q.demandAEq)} wanted.`}`;
+      ? `Q${q.q + 1}: ${describeBuilt(q.built.A, q.built.B)} GPUs built. Of the ${gpus(deployedTotal + q.waiting)} ready to switch on (built last quarter, or still waiting), new data centers can power only ${gpus(deployedTotal)}; ${gpus(q.waiting)} wait for power. ${inService}`
+      : `Q${q.q + 1}: ${STAGE_NAME[q.binding]} ${q.binding === 'wafers' ? 'set' : 'sets'} the pace, so ${describeBuilt(q.built.A, q.built.B)} GPUs are built. ${inService}`;
 
   const s2 = useScenario('wafer', WAFER_DEFAULTS);
   const w = s2.state;
@@ -463,9 +494,11 @@ export default function Lesson() {
         powered rack, through a chain of quite different industries, each with a capacity of its own.
       </P>
       <P>
-        The scale here is the whole market’s, not one cloud’s, and every quantity is simulated. We count GPUs in thousands a quarter, and capacity in{' '}
-        <b>A-class equivalents</b>: an A-class 80 GB counts as one, and a B-class 192 GB, with {fmt(A_EQUIVALENT.B, 2)} times its arithmetic (
-        <a href={lessonHref('compute/2.4')}>Lesson 2.4</a>), as {fmt(A_EQUIVALENT.B, 2)}.
+        The scale here is the whole market’s, not one cloud’s, and every quantity is simulated. We count GPUs in thousands a quarter, and capacity in the A-class
+        equivalents of <a href={lessonHref('compute/5.1')}>Lesson 5.1</a>. A whole market runs every kind of job, so we need one rough exchange rate: an A-class 80 GB
+        counts as one, and a B-class 192 GB, with {fmt(A_EQUIVALENT.B, 2)} times its arithmetic (<a href={lessonHref('compute/2.4')}>Lesson 2.4</a>), as{' '}
+        {fmt(A_EQUIVALENT.B, 2)}. That is a supply-side approximation, counting arithmetic alone; for any one job, Lesson 5.1’s rate runs from{' '}
+        {fmt(B_EQ_LOW)} to {fmt(B_EQ_HIGH)}.
       </P>
       <P>
         A GPU begins as a die cut from a silicon wafer {WAFER_MM} mm across. An A-class die is {fmt(BUILD.A.dieMm2)} mm², so {A_DIES} fit on a wafer, and not all of them work. A
@@ -480,9 +513,9 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the bars at the top are what each stage could support in the quarter you choose, measured in GPUs, and the outlined one is the stage that
-        sets the pace. A GPU built in one quarter can be switched on in the next, if there is power for it. The chart follows three years: the GPUs in service, stacked by
-        generation in A-class equivalents, against the dashed line of what the market wants. Every stage grows each quarter — wafers and power by 4%, memory by 8%, packaging
-        by 10% — while demand grows by 20%. Step through the quarters, then change the stages:
+        sets the pace. A GPU built in one quarter can be switched on in the next, if there is power for it. The chart follows three years: the GPUs in service, starting
+        from {millions(START_BASE, 0)} A-class GPUs already installed, stacked by generation in A-class equivalents, against the dashed line of what the market wants.
+        Every stage grows each quarter — wafers and power by 4%, memory by 8%, packaging by 10% — while demand grows by 20%. Step through the quarters, then change the stages:
       </P>
 
       <Figure name="Accelerator Supply Chain" scenario={s1}>
@@ -499,14 +532,6 @@ export default function Lesson() {
             { label: 'Demand', color: '#333', kind: 'line', dashed: true },
           ]}
         />
-        <Readouts
-          items={[
-            { label: `built in Q${q.q + 1}`, value: `${gpus(builtTotal)}` },
-            { label: 'switched on', value: `${gpus(deployedTotal)}` },
-            { label: 'waiting for power', value: `${gpus(q.waiting)}`, tone: q.waiting > 0.5 ? 'red' : undefined },
-            { label: 'in service, A-class equivalents', value: millions(q.installedAEq), tone: q.installedAEq < q.demandAEq - SHORT_TOLERANCE ? 'red' : undefined },
-          ]}
-        />
         <Caption>{caption}</Caption>
         <Slider label="Quarter" value={st.quarter} min={0} max={QUARTERS - 1} onChange={(v) => s1.set({ quarter: v })} display={`Q${st.quarter + 1}, year ${Math.floor(st.quarter / 4) + 1}`} />
         <Slider label="Wafers a quarter" value={st.wafers} min={10} max={60} onChange={(v) => s1.set({ wafers: v })} display={`${fmt(st.wafers)},000`} />
@@ -521,8 +546,9 @@ export default function Lesson() {
         In the first quarter, packaging sets the pace. The wafers could supply {gpus(Q1.capacity.wafers.A)} good A-class dies and the memory makers enough stacks for{' '}
         {gpus(Q1.capacity.memory.A)} GPUs, but only {gpus(Q1.capacity.packaging.A)} can be packaged, so {gpus(Q1.built.A)} are built — and a market that wants{' '}
         {millions(Q1.demandAEq)} A-class equivalents has {millions(Q1.installedAEq)}. Packaging grows fastest, though, and by Q{FIRST_POWER_LIMIT.q + 1} the limit has moved to
-        the end of the chain: {gpus(Q4.built.A)} GPUs are built, but the new data centers can switch on only {gpus(Q4.deployed.A)}, and {gpus(Q4.waiting)} sit waiting for
-        power. By Q{Q6.q + 1}, {gpus(Q6.waiting)} are waiting. A GPU in a warehouse is not supply.
+        the end of the chain. Of the {gpus(Q4_READY)} GPUs built in Q{Q4.q} and ready to switch on, the new data centers can power only{' '}
+        {gpus(Q4.deployed.A)}, and {gpus(Q4.waiting)} sit waiting, while another {gpus(Q4.built.A)} come off the lines. By Q{Q6.q + 1}, {gpus(Q6.waiting)} are waiting. A GPU
+        in a warehouse is not supply.
       </P>
       <P>
         Then the B-class arrives. From Q{SUPPLY_DEFAULTS.bStart + 1} it takes a growing share of the same wafers, memory and packaging — {pct(SUPPLY_DEFAULTS.bShareMax)} of them
@@ -567,8 +593,7 @@ export default function Lesson() {
         <Readouts
           items={[
             { label: 'dies per wafer', value: fmt(n) },
-            { label: 'good, on average', value: pct(y, 1) },
-            { label: 'good dies per wafer', value: fmt(n * y, 1) },
+            { label: 'good dies per wafer, on average', value: fmt(n * y, 1) },
             { label: 'working silicon per wafer', value: `${fmt((n * y * w.area) / 100)} cm²` },
           ]}
         />
@@ -582,7 +607,15 @@ export default function Lesson() {
           <span>{pct(y, 1)}</span>
         </Eq>
         <Slider label="Die area" value={w.area} min={100} max={850} step={2} onChange={(v) => s2.set({ area: v })} display={`${fmt(w.area)} mm²`} />
-        <Slider label="Killer defects" value={w.defects} min={0.05} max={0.3} step={0.01} onChange={(v) => s2.set({ defects: v })} display={`${w.defects.toFixed(2)} per cm²`} />
+        <Slider
+          label="Killer defects"
+          value={w.defects}
+          min={WAFER_DEFECTS_MIN}
+          max={0.3}
+          step={WAFER_DEFECTS_STEP}
+          onChange={(v) => s2.set({ defects: Math.round(v * 100) / 100 })}
+          display={`${w.defects.toFixed(2)} per cm²`}
+        />
       </Figure>
 
       <P>
@@ -593,22 +626,26 @@ export default function Lesson() {
       </P>
       <P>
         That is why the B-class joins two dies of {fmt(BUILD.B.dieMm2)} mm² in one package: it gets the arithmetic of a die nearly twice the limit, at the yield of the
-        smaller ones. A wafer makes {fmt(B_PER_WAFER, 1)} B-class GPUs on average, against {fmt(A_PER_WAFER, 1)} A-class GPUs — but in arithmetic that is{' '}
-        {fmt(B_PER_WAFER * A_EQUIVALENT.B, 1)} A-class equivalents, {pct((B_PER_WAFER * A_EQUIVALENT.B) / A_PER_WAFER - 1)} more from the same wafer.
+        smaller ones — {pct(B_DIE_YIELD, 1)} of its dies are good, about the A-class’s {pct(A_YIELD, 1)}, where a single {fmt(2 * BUILD.B.dieMm2)} mm² die would yield{' '}
+        {pct(DOUBLE_DIE_YIELD)}. A wafer makes {fmt(B_PER_WAFER, 1)} B-class GPUs on average, against {fmt(A_PER_WAFER, 1)} A-class GPUs, and in arithmetic that is{' '}
+        {fmt(B_PER_WAFER * A_EQUIVALENT.B, 1)} A-class equivalents, {pct((B_PER_WAFER * A_EQUIVALENT.B) / A_PER_WAFER - 1)} more from the same wafer. The two-die design
+        doesn’t earn that gain; it only holds the yield. The gain is mostly the newer design: each B-class die carries {pct(A_EQUIVALENT.B / BUILD.B.dies - 1)} more
+        arithmetic than an A-class die.
       </P>
 
       <Challenge
         id="b"
-        question={`Set the die to the A-class’s ${fmt(BUILD.A.dieMm2)} mm², and find the highest defect density at which at least 60% of its dies are good.`}
+        question={`What is the highest defect density at which at least 60% of the A-class’s ${fmt(BUILD.A.dieMm2)} mm² dies are good? Predict first: the good share is e to the minus density times ${fmt(BUILD.A.dieMm2 / 100, 2)} cm², so the density can be at most −ln 0.6 ÷ ${fmt(BUILD.A.dieMm2 / 100, 2)} cm², and −ln 0.6 is about ${fmt(-Math.log(YIELD_TARGET), 2)}. Then set the die to ${fmt(BUILD.A.dieMm2)} mm² and the highest density on the slider’s hundredths that still makes 60%.`}
         solved={solvedB}
         status={statusB}
-        success={`Solved: at ${w.defects.toFixed(2)} defects per cm², ${pct(y, 1)} of A-class dies are good, ${fmt(n * y, 1)} a wafer instead of ${fmt(A_PER_WAFER, 1)} at ${fmt(SUPPLY_DEFAULTS.defectsPerCm2, 1)}. A new manufacturing process starts with many defects and improves as the factory learns it, which is one reason the first chips on a new process are scarce and dear.`}
+        success={`Solved: ${fmt(-Math.log(YIELD_TARGET), 2)} ÷ ${fmt(BUILD.A.dieMm2 / 100, 2)} = ${fmt(CLEAN_LIMIT, 3)}, so ${CLEAN_ANSWER.toFixed(2)} is the highest on the slider: ${pct(dieYield(CLEAN_ANSWER, BUILD.A.dieMm2), 1)} of A-class dies are good, ${fmt(diesPerWafer(BUILD.A.dieMm2) * dieYield(CLEAN_ANSWER, BUILD.A.dieMm2), 1)} a wafer instead of ${fmt(A_PER_WAFER, 1)} at ${fmt(SUPPLY_DEFAULTS.defectsPerCm2, 1)}, and at ${(CLEAN_ANSWER + 0.01).toFixed(2)} only ${pct(dieYield(CLEAN_ANSWER + 0.01, BUILD.A.dieMm2), 1)}. A new manufacturing process starts with many defects and improves as the factory learns it, which is one reason the first chips on a new process are scarce and dear.`}
       />
 
       <H2>Each generation crowds out the last</H2>
       <P>
         A new generation doesn’t add to the old one’s supply; it competes for it. The B-class is built from the same wafers, memory and packaging as the A-class, so in{' '}
-        <FigRef to="Accelerator Supply Chain">the first demonstration</FigRef> A-class production all but stops once the B-class ramps. Move the B-class’s start earlier and
+        <FigRef to="Accelerator Supply Chain">the first demonstration</FigRef> A-class production falls to about a fifth of its Q
+        {Q4.q + 1} peak once the B-class ramps. Move the B-class’s start earlier and
         the GPUs in service grow faster in A-class equivalents, because each wafer turned into B-class GPUs carries more arithmetic. Move it later and the A-class keeps the
         lines a while longer.
       </P>

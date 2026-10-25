@@ -70,6 +70,17 @@ export function matchingFreight(o: Outcome, hire: number): number {
 }
 
 export const CHALLENGE_FREIGHT = matchingFreight(CHALLENGE_OUTCOME, START_HIRE);
+/** The exact break-even freight for the challenge's outcome, $/t, and how close the reader must come. */
+export const BREAK_EVEN = (() => {
+  const target = timeCharter(VOYAGE, START_HIRE, CHALLENGE_OUTCOME).owner.net;
+  return (target - voyageCharter(VOYAGE, 0, CHALLENGE_OUTCOME).owner.net) / (VOYAGE.cargo * (1 - COMMISSION));
+})();
+export const FREIGHT_TOLERANCE = 0.02;
+/** What each cent of freight adds to the owner's net, after commission, $. */
+export const PER_CENT = 0.01 * VOYAGE.cargo * (1 - COMMISSION);
+/** With the challenge's outcome and the starting freight, how far the voyage charter leaves the owner short of the time charter, $. */
+export const START_SHORTFALL =
+  timeCharter(VOYAGE, START_HIRE, CHALLENGE_OUTCOME).owner.net - voyageCharter(VOYAGE, START_FREIGHT, CHALLENGE_OUTCOME).owner.net;
 
 export interface ContractState {
   contract: 'voyage' | 'time';
@@ -81,19 +92,17 @@ export interface ContractState {
   offHire: number;
 }
 
+/** The challenge's outcome is set: bunkers at $800, three days lost to weather, no port delay, no breakdown, and the starting hire. */
+export function outcomeSet(s: ContractState): boolean {
+  return s.bunker === CHALLENGE_OUTCOME.bunker && s.weather === CHALLENGE_OUTCOME.weatherDays && s.delay === 0 && s.offHire === 0 && s.hire === START_HIRE;
+}
+
 /**
- * The challenge: with bunkers at $800 and three days lost to weather (no port delay, no breakdown)
- * and the hire at $15,000, set the lowest freight that leaves the owner as well off as the time charter.
+ * The challenge: with that outcome, a freight within two cents of the one at which the voyage charter
+ * leaves the owner exactly as well off as the time charter.
  */
 export function matchSolved(s: ContractState): boolean {
-  return (
-    s.bunker === CHALLENGE_OUTCOME.bunker &&
-    s.weather === CHALLENGE_OUTCOME.weatherDays &&
-    s.delay === 0 &&
-    s.offHire === 0 &&
-    s.hire === START_HIRE &&
-    Math.round(s.freight * 100) === Math.round(CHALLENGE_FREIGHT * 100)
-  );
+  return outcomeSet(s) && Math.abs(s.freight - BREAK_EVEN) <= FREIGHT_TOLERANCE + 1e-9;
 }
 
 export const DEFAULT_SPREAD = { bunkerSd: 0.12, weatherMean: 1.5, delayMean: 2 };
@@ -152,6 +161,9 @@ const STORM = at({ weatherDays: 3 });
 const DELAY = at({ portDelay: 4 });
 const BROKEN = at({ offHire: 3 });
 const BOTH = at(CHALLENGE_OUTCOME);
+/** The challenge's gap, split: the voyage owner's extra fuel bill, and the time charter's extra hire, after commission. */
+const STORM_FUEL_EXTRA = BOTH.vc.fuel * CHALLENGE_OUTCOME.bunker - PLAN_VC.fuel * PLAN.bunker;
+const STORM_HIRE_EXTRA = BOTH.tc.owner.net - PLAN_TC.owner.net;
 const RISK0 = riskRuns(DEFAULT_SPREAD, START_FREIGHT);
 const AVG_MATCH = averageMatchFreight();
 
@@ -219,11 +231,13 @@ export default function Lesson() {
   ];
 
   let status: string;
+  const short = tc.owner.net - vc.owner.net;
   if (s.bunker !== CHALLENGE_OUTCOME.bunker || s.weather !== CHALLENGE_OUTCOME.weatherDays || s.delay !== 0 || s.offHire !== 0)
     status = `First set what happened: bunkers at $800, 3 days of weather, no port delay and no time off hire. Now: ${usd(s.bunker)}, ${fmt(s.weather, 1)}, ${fmt(s.delay, 1)} and ${fmt(s.offHire, 1)}.`;
   else if (s.hire !== START_HIRE) status = `Set the hire back to ${usd(START_HIRE)} a day.`;
-  else if (vc.owner.net < tc.owner.net - 1e-6) status = `At ${usd(s.freight, 2)} a tonne the voyage charter leaves the owner ${usd(tc.owner.net - vc.owner.net)} worse off than the time charter.`;
-  else status = `At ${usd(s.freight, 2)} the voyage charter leaves the owner ${usd(vc.owner.net - tc.owner.net)} better off. Is there a lower freight that still does?`;
+  else if (Math.abs(s.freight - START_FREIGHT) < 0.005)
+    status = `At ${usd(START_FREIGHT, 2)} a tonne the voyage charter leaves her owner ${usd(short)} short of the time charter. Predict the freight that closes the gap, then set it (the arrow keys move it a cent at a time).`;
+  else status = `At ${usd(s.freight, 2)} the voyage charter leaves her owner ${short > 0 ? 'short of' : 'ahead of'} the time charter, by more than two cents’ worth of freight.`;
 
   // Demonstration 2.
   const rk = useScenario('risk', { ...DEFAULT_SPREAD, freight: START_FREIGHT });
@@ -252,14 +266,14 @@ export default function Lesson() {
   return (
     <LessonPage id="shipping/4.2">
       <P>
-        <a href={lessonHref('shipping/4.1')}>The previous lesson</a> watched a spot market clear: ships and cargoes matched at one rate per tonne. But “the
-        rate” hides a choice. A charterer who needs a ship can buy a voyage — pay so much a tonne to have its cargo carried from one port to another — or hire the
+        <a href={lessonHref('shipping/4.1')}>The previous lesson</a> watched a spot market clear: ships and cargoes matched at one freight per tonne. But a
+        freight per tonne hides a choice. A charterer who needs a ship can buy a voyage — pay so much a tonne to have its cargo carried from one port to another — or hire the
         ship itself by the day and run the voyage on its own account. The two contracts can be set to cost the same. They don’t carry the same risks, and this
         lesson is about the difference.
       </P>
       <P>
         Under a <b>voyage charter</b> the charterer pays <K tone="green">freight</K>, dollars per tonne of cargo. The owner runs the voyage and pays its
-        voyage costs: the fuel, which shipping calls <b>bunkers</b>, the port charges and any canal tolls. The charterer has a laytime to load and discharge in,
+        voyage costs: the bunkers, the port charges and any canal tolls. The charterer has a laytime to load and discharge in,
         and pays demurrage if its ports take longer, as in <a href={lessonHref('shipping/2.2')}>Lesson 2.2</a>. Under a <b>time charter</b> the charterer pays{' '}
         <K tone="green">hire</K>, dollars per day, for the use of the ship, crew and all. It buys the bunkers, pays the ports and decides where she goes and how
         fast, the decision we weighed in <a href={lessonHref('shipping/2.3')}>Lesson 2.3</a>. The owner keeps her crewed, insured and in repair, and if she breaks
@@ -337,17 +351,9 @@ export default function Lesson() {
           ]}
           footer={[`Over ${days(result.days)}`, money(result.owner.net), money(result.charterer.net)]}
         />
-        <Readouts
-          items={[
-            { label: 'owner’s TCE, voyage charter', value: perDay(vc.owner.perUnit), tone: 'green' },
-            { label: 'owner’s TCE, time charter', value: perDay(tc.owner.perUnit), tone: 'green' },
-            { label: 'charterer’s cost, voyage charter', value: perT(vc.charterer.perUnit), tone: 'green' },
-            { label: 'charterer’s cost, time charter', value: perT(tc.charterer.perUnit), tone: 'green' },
-          ]}
-        />
         <Slider label="Freight (voyage charter)" tone="green" value={s.freight} min={14} max={30} step={0.01} onChange={(v) => c.set({ freight: v })} display={`${usd(s.freight, 2)}/t`} />
         <Slider label="Hire (time charter)" tone="green" value={s.hire} min={8_000} max={30_000} step={250} onChange={(v) => c.set({ hire: v })} display={`${usd(s.hire)}/day`} />
-        <Slider label="Bunker price paid" tone="green" value={s.bunker} min={400} max={900} step={10} onChange={(v) => c.set({ bunker: v })} display={`${usd(s.bunker)}/t`} />
+        <Slider label="Bunker price paid" tone="red" value={s.bunker} min={400} max={900} step={10} onChange={(v) => c.set({ bunker: v })} display={`${usd(s.bunker)}/t`} />
         <Slider label="Days lost to weather" tone="teal" value={s.weather} min={0} max={6} step={0.5} onChange={(v) => c.set({ weather: v })} display={days(s.weather)} />
         <Slider label="Port delay beyond laytime" tone="teal" value={s.delay} min={0} max={8} step={0.5} onChange={(v) => c.set({ delay: v })} display={days(s.delay)} />
         <Slider label="Days off hire" tone="teal" value={s.offHire} min={0} max={5} step={0.5} onChange={(v) => c.set({ offHire: v })} display={days(s.offHire)} />
@@ -369,7 +375,8 @@ export default function Lesson() {
         Now let things go wrong. Raise the bunker price to $800. Under the voyage charter the owner bought the fuel, so the owner pays: earnings fall to{' '}
         {perDay(DEAR.vc.owner.perUnit)}. Under the time charter the owner doesn’t notice, and the charterer’s cost climbs from {perT(PLAN_TC.charterer.perUnit)} to{' '}
         {perT(DEAR.tc.charterer.perUnit)}. Set the bunker price back and add three days of weather instead. The voyage now takes {days(STORM.vc.days)}; the voyage
-        charterer still pays only its freight, so the owner’s {usd(STORM.vc.owner.net)} is spread over more days, {perDay(STORM.vc.owner.perUnit)}, while the time
+        charterer still pays only its freight, so the owner’s net — a smaller {usd(STORM.vc.owner.net)}, since the extra days at sea burn fuel — is spread over
+        more days, {perDay(STORM.vc.owner.perUnit)}, while the time
         charterer pays three more days of hire and the fuel burned fighting the sea.
       </P>
       <P>
@@ -389,11 +396,11 @@ export default function Lesson() {
 
       <Challenge
         id="a"
-        question={`Bunkers rise to $800 a tonne and Kestrel loses three days to weather, with no port delay and no time off hire. Set that outcome in the first demonstration, keep the hire at ${usd(START_HIRE)}, and find the lowest freight, to the cent, at which the voyage charter would have left her owner no worse off than the time charter.`}
+        question={`Bunkers rise to $800 a tonne and Kestrel loses three days to weather; no port delay, no time off hire. Set that in the first demonstration with the hire at ${usd(START_HIRE)} and the freight at ${usd(START_FREIGHT, 2)}, and compare the owner’s totals in the two contracts’ ledgers. Predict first: each cent of freight adds ${usd(PER_CENT, 2)} to her owner’s net (${fmt(CARGO)} tonnes, less commission). What freight would have left her as well off as the time charter? Set it, to within two cents.`}
         figure="Charter Contract Explorer"
         solved={solved}
         status={status}
-        success={`Solved. ${usd(CHALLENGE_FREIGHT, 2)} a tonne. The time charter pays ${usd(BOTH.tc.owner.net)} for the ${days(BOTH.tc.days)}, whatever the bunker price; to match it, the voyage freight must also cover ${fmt(BOTH.vc.fuel)} tonnes of fuel at $800 — ${usd(CHALLENGE_FREIGHT - START_FREIGHT, 2)} a tonne more than the starting freight. An owner fixing a voyage charter is betting on the fuel price and the weather; that bet is part of what freight pays for.`}
+        success={`Solved. The break-even is ${usd(BREAK_EVEN, 2)} a tonne: the ${usd(START_SHORTFALL)} gap is ${fmt(START_SHORTFALL / PER_CENT)} cents of freight, ${usd(BREAK_EVEN - START_FREIGHT, 2)} on top of the starting ${usd(START_FREIGHT, 2)}. Of that, ${usd(STORM_FUEL_EXTRA / (100 * PER_CENT), 2)} pays for the extra fuel — ${fmt(BOTH.vc.fuel)} tonnes at $800 instead of ${fmt(PLAN_VC.fuel)} at $600 — and ${usd(STORM_HIRE_EXTRA / (100 * PER_CENT), 2)} matches the three extra days of hire the time charter pays. An owner fixing a voyage charter is betting on the fuel price and the weather; that bet is part of what freight pays for.`}
       />
 
       <H2>Trips, periods and bareboats</H2>
@@ -436,9 +443,6 @@ export default function Lesson() {
                 <text x={HX0 - 10} y={p.base - 26} textAnchor="end" style={{ fontSize: 12, fontWeight: 500, fill: TEXT.ink }}>
                   {p.name}
                 </text>
-                <text x={HX0 - 10} y={p.base - 10} textAnchor="end" className="ax">
-                  avg {perDay(m.avg)}
-                </text>
                 {p.h.map((n, i) => (
                   <rect key={i} x={HX0 + i * bw + 0.5} y={p.base - (n / hmax) * 64} width={bw - 1} height={(n / hmax) * 64} fill={p.color} opacity={0.85} />
                 ))}
@@ -465,7 +469,7 @@ export default function Lesson() {
             { label: `charterer, time charter · ${fmt(cT.lo, 2)}–${fmt(cT.hi, 2)}`, value: perT(cT.avg), tone: 'green' },
           ]}
         />
-        <Slider label="Bunker price uncertainty" tone="green" value={rk.state.bunkerSd} min={0} max={0.3} step={0.01} onChange={(v) => rk.set({ bunkerSd: v })} display={`±${pct(rk.state.bunkerSd)}`} />
+        <Slider label="Bunker price uncertainty" tone="red" value={rk.state.bunkerSd} min={0} max={0.3} step={0.01} onChange={(v) => rk.set({ bunkerSd: v })} display={`±${pct(rk.state.bunkerSd)}`} />
         <Slider label="Average weather delay" tone="teal" value={rk.state.weatherMean} min={0} max={4} step={0.25} onChange={(v) => rk.set({ weatherMean: v })} display={days(rk.state.weatherMean)} />
         <Slider label="Average port delay" tone="teal" value={rk.state.delayMean} min={0} max={5} step={0.25} onChange={(v) => rk.set({ delayMean: v })} display={days(rk.state.delayMean)} />
         <Slider label="Freight (voyage charter)" tone="green" value={rk.state.freight} min={14} max={30} step={0.01} onChange={(v) => rk.set({ freight: v })} display={`${usd(rk.state.freight, 2)}/t`} />
@@ -474,8 +478,8 @@ export default function Lesson() {
       <P>
         The two histograms tell the story at a glance. Under the time charter the owner’s earnings barely move: the middle 90% of voyages pay between{' '}
         {perDay(quantile(RISK0.ownerTc, 0.05))} and {perDay(quantile(RISK0.ownerTc, 0.95))}, and only a breakdown dents them. Under the voyage charter they spread
-        from {perDay(quantile(RISK0.ownerVc, 0.05))} to {perDay(quantile(RISK0.ownerVc, 0.95))}. The charterer’s costs mirror them: steady under the voyage charter,{' '}
-        {perT(quantile(RISK0.chartVc, 0.05))} to {perT(quantile(RISK0.chartVc, 0.95))} a tonne, and spread from {perT(quantile(RISK0.chartTc, 0.05))} to{' '}
+        from {perDay(quantile(RISK0.ownerVc, 0.05))} to {perDay(quantile(RISK0.ownerVc, 0.95))}. The charterer’s costs mirror them: steadier under the voyage charter, where only demurrage moves them,{' '}
+        {perT(quantile(RISK0.chartVc, 0.05))} to {perT(quantile(RISK0.chartVc, 0.95))}, and spread from {perT(quantile(RISK0.chartTc, 0.05))} to{' '}
         {perT(quantile(RISK0.chartTc, 0.95))} under the time charter. Nothing about the voyage changed; the contract decided who carries its variance.
       </P>
       <P>

@@ -1,28 +1,28 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Caption, Challenge, Eq, FigRef, Figure, Frac, H2, K, Legend, LessonPage, Op, P, Readouts, Segmented, Slider, Sub, fmt, lessonHref, usd, useScenario } from '../../../framework';
 import { blend, blendViscosity, crude, viscosity } from '../../../engines/oil/assay';
 import { costPerBarrel, hydraulics, maxFlow, type Fluid } from '../../../engines/oil/pipeline';
-import { KESSLER_CALDER, PUMP_POWER_PRICE, TYPICAL_CRUDE } from '../../../model/oil/logistics';
+import { CAPITAL_CHARGE, KESSLER_CORRAN, PIPE_OM_PER_MILE, PUMP_POWER_PRICE, TYPICAL_CRUDE } from '../../../model/oil/logistics';
 import { XYChart } from '../shared/charts';
 
-export type FluidId = 'ridgeback' | 'mix' | 'northfield' | 'coldwater';
+export type FluidId = 'pinyon' | 'mix' | 'northfield' | 'coldwater';
 
 const COLDWATER_PARTS = [
   { crude: crude('coldwater'), share: 80 },
-  { crude: crude('ridgeback'), share: 20 },
+  { crude: crude('pinyon'), share: 20 },
 ];
 
 /** The crudes the line can carry, at its temperature (the Coldwater blend at its pipeline's 10 °C rating). */
 export const FLUIDS: Record<FluidId, Fluid> = {
-  ridgeback: { name: 'Ridgeback Light', sg: crude('ridgeback').sg, viscosity: viscosity(crude('ridgeback'), 15) },
+  pinyon: { name: 'Pinyon Light', sg: crude('pinyon').sg, viscosity: viscosity(crude('pinyon'), 15) },
   mix: TYPICAL_CRUDE,
   northfield: { name: 'Northfield Sour', sg: crude('northfield').sg, viscosity: viscosity(crude('northfield'), 15) },
   coldwater: { name: 'Coldwater blend', sg: blend(COLDWATER_PARTS).sg, viscosity: blendViscosity(COLDWATER_PARTS, 10) },
 };
-const FLUID_IDS: FluidId[] = ['ridgeback', 'mix', 'northfield', 'coldwater'];
-const FLUID_LABEL: Record<FluidId, string> = { ridgeback: 'Ridgeback Light', mix: 'Basin mix', northfield: 'Northfield Sour', coldwater: 'Coldwater blend' };
+const FLUID_IDS: FluidId[] = ['pinyon', 'mix', 'northfield', 'coldwater'];
+const FLUID_LABEL: Record<FluidId, string> = { pinyon: 'Pinyon Light', mix: 'Basin mix', northfield: 'Northfield Sour', coldwater: 'Coldwater blend' };
 
-const LINE = KESSLER_CALDER;
+const LINE = KESSLER_CORRAN;
 export const FLOW_STEP = 5;
 export const FLOW_RANGE = { min: 50, max: 700 };
 export const STATION_RANGE = { min: 1, max: 6 };
@@ -43,6 +43,24 @@ export function tariffSolved(kbd: number, capitalB: number): boolean {
   if (Math.abs(capitalB - CAPITAL_DEFAULT) > 1e-9) return false;
   const cost = (q: number) => costPerBarrel(LINE, TYPICAL_CRUDE, q * 1000).total;
   return cost(kbd) < TARIFF && cost(kbd - FLOW_STEP) >= TARIFF;
+}
+
+/** The line's yearly upkeep, $. */
+export const UPKEEP = PIPE_OM_PER_MILE * LINE.lengthMiles;
+/** The tariff figure's highest throughput, kb/d. */
+export const THROUGHPUT_MAX = 480;
+
+/** The lowest throughput (5 kb/d grid, up to the slider's 480) at which a line that cost `capitalB` billion covers the tariff; NaN if none. */
+export function lowestCovering(capitalB: number): number {
+  const line = { ...LINE, capital: capitalB * 1e9 };
+  for (let q = 100; q <= THROUGHPUT_MAX; q += FLOW_STEP) if (costPerBarrel(line, TYPICAL_CRUDE, q * 1000).total < TARIFF) return q;
+  return NaN;
+}
+
+/** The most the line could have cost to build ($ billion) and still cover the tariff at the slider's full 480 kb/d. */
+export function maxCapitalCovered(): number {
+  const c = costPerBarrel(LINE, TYPICAL_CRUDE, THROUGHPUT_MAX * 1000);
+  return ((TARIFF - c.energy - c.operations) * THROUGHPUT_MAX * 1000 * 365) / CAPITAL_CHARGE / 1e9;
 }
 
 export interface OperatingProfile {
@@ -95,6 +113,12 @@ export default function Lesson() {
   const prof = useMemo(() => operatingProfile(fl, flow * 1000, stations), [fl, flow, stations]);
   const cap = useMemo(() => maxFlow(LINE, fl, stations) / 1000, [fl, stations]);
   const solvedA = northfieldMaxSolved(fluid, flow, stations);
+  // Northfield Sour's limit is challenge a's answer, so the caption names it only once the challenge has been solved.
+  const [revealedA, setRevealedA] = useState(false);
+  useEffect(() => {
+    if (solvedA) setRevealedA(true);
+  }, [solvedA]);
+  const capHidden = fluid === 'northfield' && !revealedA;
 
   const s2 = useScenario('tariff', { throughput: 300, capital: CAPITAL_DEFAULT });
   const line2 = useMemo(() => ({ ...LINE, capital: s2.state.capital * 1e9 }), [s2.state.capital]);
@@ -126,6 +150,10 @@ export default function Lesson() {
   const c400 = costPerBarrel(LINE, TYPICAL_CRUDE, 400000);
   const c200 = costPerBarrel(LINE, TYPICAL_CRUDE, 200000);
   const cMax = costPerBarrel(LINE, TYPICAL_CRUDE, mixCap * 1000);
+  const f400 = { mix: mix400.friction, northfield: hydraulics(LINE, FLUIDS.northfield, 400000).friction };
+  const yearly = LINE.capital * CAPITAL_CHARGE + UPKEEP;
+  const build = useMemo(() => ({ at20: lowestCovering(2.0), at22: lowestCovering(2.2), max: maxCapitalCovered() }), []);
+  const fullAt26 = costPerBarrel({ ...LINE, capital: 2.6e9 }, TYPICAL_CRUDE, THROUGHPUT_MAX * 1000).total;
 
   const stationMiles = Array.from({ length: stations }, (_, k) => (k * LINE.lengthMiles) / stations);
   const needText = prof.gravity
@@ -135,13 +163,13 @@ export default function Lesson() {
   return (
     <LessonPage id="oil/4.1">
       <P>
-        <a href={lessonHref('oil/3.5')}>Lesson 3.5</a> ended at Port Calder with the refinery choosing its crudes, and a question about geography. Coldwater Heavy starts far
-        to the north; Ridgeback Light and Northfield Sour start in an inland basin; Seaboard Blend comes by sea. This chapter follows the barrels on those journeys and
+        <a href={lessonHref('oil/3.5')}>Lesson 3.5</a> ended at Port Corran with the refinery choosing its crudes, and a question about geography. Coldwater Heavy starts far
+        to the north; Pinyon Light and Northfield Sour start in an inland basin; Seaboard Blend comes by sea. This chapter follows the barrels on those journeys and
         asks what moving them costs — and what happens to prices when a route fills up.
       </P>
       <P>
         Over land, where one has been built, a pipeline is the cheapest way to move crude. In our world, the basin’s gathering lines bring its crude to the tank farms of
-        the Kessler hub, and the Coldwater line brings diluted heavy oil down from the north. From Kessler, the <b>Kessler–Calder line</b> carries crude {fmt(LINE.lengthMiles)}{' '}
+        the Kessler hub, and the Coldwater line brings diluted heavy oil down from the north. From Kessler, the <b>Kessler–Corran line</b> carries crude {fmt(LINE.lengthMiles)}{' '}
         miles to the coast: a 30-inch steel pipe with three pump stations, falling {fmt(-LINE.elevationFt)} feet on the way. A pipeline isn’t dedicated to one crude. It
         carries batches, one grade after another, with a little mixing where they meet.
       </P>
@@ -162,10 +190,12 @@ export default function Lesson() {
       </Eq>
       <P>
         where ρ is the oil’s density, <K tone="orange">v</K> its speed, and <K tone="violet">f</K> the friction factor. The friction factor depends on the{' '}
-        <b>Reynolds number</b>, the ratio of the oil’s momentum to its <K tone="violet">viscosity</K>. Below about 2,000–2,300, the flow is <b>laminar</b>, sliding in smooth
-        layers; above, it is <b>turbulent</b>, churning in eddies. In the next demonstration, the line’s pressure is drawn from Kessler to the coast. Each pump station raises
-        it, friction wears it down, and it must never exceed the pipe’s maximum allowable operating pressure of {fmt(LINE.maop)} psi or fall below the {LINE.suction} psi the next
-        pump needs at its intake. Choose a crude, and set the flow and the number of pump stations:
+        <b>Reynolds number</b>, the ratio of inertial to viscous forces in the flow, which grows with the oil’s speed and the pipe’s diameter and falls as its{' '}
+        <K tone="violet">viscosity</K> rises. Below about 2,300, the flow is <b>laminar</b>, sliding in smooth layers; above about 4,000, it is <b>turbulent</b>,
+        churning in eddies; in between, it flickers between the two. Our model switches straight from one to the other at 2,300. In the next demonstration, the
+        line’s pressure is drawn from Kessler to the coast. Each pump station raises it, friction wears it down, and it must never exceed the pipe’s maximum allowable
+        operating pressure of {fmt(LINE.maop)} psi or fall below the {LINE.suction} psi the next pump needs at its intake. Choose a crude, and set the flow and the
+        number of pump stations:
       </P>
 
       <Figure name="Oil Pipeline Simulator" scenario={s1}>
@@ -178,13 +208,13 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Pressure along the 500-mile Kessler–Calder line carrying ${fmt(flow)} thousand barrels a day of ${FLUID_LABEL[fluid]} with ${stations} pump station${stations > 1 ? 's' : ''}: ${prof.gravity ? 'no pumping needed' : prof.feasible ? `each station discharges at ${fmt(prof.discharge)} psi` : `the stations can’t keep the pressure above ${LINE.suction} psi; the line can carry at most ${fmt(cap)} thousand barrels a day`}.`}
+          ariaLabel={`Pressure along the 500-mile Kessler–Corran line carrying ${fmt(flow)} thousand barrels a day of ${FLUID_LABEL[fluid]} with ${stations} pump station${stations > 1 ? 's' : ''}: ${prof.gravity ? 'no pumping needed' : prof.feasible ? `each station discharges at ${fmt(prof.discharge)} psi` : `the stations can’t keep the pressure above ${LINE.suction} psi${capHidden ? '' : `; the line can carry at most ${fmt(cap)} thousand barrels a day`}`}.`}
           height={250}
           x={[0, LINE.lengthMiles]}
           y={[0, 1600]}
           xTicks={[0, 100, 200, 300, 400, 500]}
           yTicks={[0, 400, 800, 1200, 1600]}
-          xFormat={(v) => (v === 0 ? 'Kessler' : v === 500 ? 'Port Calder' : `${v}`)}
+          xFormat={(v) => (v === 0 ? 'Kessler' : v === 500 ? 'Port Corran' : `${v}`)}
           yFormat={(v) => fmt(v)}
           xLabel="miles from Kessler"
           yLabel="Pressure, psi"
@@ -226,9 +256,13 @@ export default function Lesson() {
         <Slider label="Flow" tone="orange" value={flow} min={FLOW_RANGE.min} max={FLOW_RANGE.max} step={FLOW_STEP} onChange={(v) => s1.set({ flow: v })} display={kbd(flow)} />
         <Slider label="Pump stations" value={stations} min={STATION_RANGE.min} max={STATION_RANGE.max} onChange={(v) => s1.set({ stations: v })} display={`${stations}`} />
         <Caption>
-          {prof.feasible
-            ? `With ${stations} station${stations > 1 ? 's' : ''}, the line can carry up to ${kbd(cap)} of ${FLUID_LABEL[fluid]}.`
-            : `With ${stations} station${stations > 1 ? 's' : ''}, ${FLUID_LABEL[fluid]} tops out at ${kbd(cap)}; ${fmt(flow)} kb/d needs ${h.stationsNeeded}.`}{' '}
+          {capHidden
+            ? prof.feasible
+              ? `With ${stations} station${stations > 1 ? 's' : ''}, the line carries ${kbd(flow)} of Northfield Sour; how much more it could take is challenge a’s question.`
+              : `With ${stations} station${stations > 1 ? 's' : ''}, ${kbd(flow)} of Northfield Sour is too much: it needs ${h.stationsNeeded}.`
+            : prof.feasible
+              ? `With ${stations} station${stations > 1 ? 's' : ''}, the line can carry up to ${kbd(cap)} of ${FLUID_LABEL[fluid]}.`
+              : `With ${stations} station${stations > 1 ? 's' : ''}, ${FLUID_LABEL[fluid]} tops out at ${kbd(cap)}; ${fmt(flow)} kb/d needs ${h.stationsNeeded}.`}{' '}
           Electricity is priced at a simulated ${PUMP_POWER_PRICE} per MWh.
         </Caption>
       </Figure>
@@ -241,16 +275,18 @@ export default function Lesson() {
         worth {fmt(-mix400.elevationPsi)} psi of free push for the basin mix, so at slow rates it can run without pumping at all.
       </P>
       <P>
-        The crude matters as much as the flow. With three stations, the line carries at most {kbd(caps.ridgeback)} of thin Ridgeback Light, {kbd(caps.mix)} of the basin
-        mix, and {kbd(caps.northfield)} of Northfield Sour, whose viscosity, as <a href={lessonHref('oil/1.3')}>Lesson 1.3</a> showed, is many times higher. The Coldwater
-        blend is thicker still: at {kbd(200)} its Reynolds number is only {fmt(cw200.reynolds)}, so it flows in smooth, laminar layers; push it past about{' '}
-        {kbd(240)} and it turns turbulent, and the friction loss jumps from {fmt(cw200.psiPerMile, 1)} to {fmt(cw250.psiPerMile, 1)} psi a mile by {kbd(250)}. Heavy
-        crude is expensive to pipe.
+        The crude matters as much as the flow. With three stations, the line carries at most {kbd(caps.pinyon)} of thin Pinyon Light, but only{' '}
+        {kbd(caps.mix)} of the basin mix, which is about twice as viscous: doubling the viscosity costs {fmt((1 - caps.mix / caps.pinyon) * 100)}% of the line’s
+        limit. The Coldwater blend is far thicker: at {kbd(200)} its Reynolds number is only{' '}
+        {fmt(cw200.reynolds)}, so it flows in smooth, laminar layers; push it past about {kbd(240)} and, in our model, it turns turbulent at once, and the friction
+        loss jumps from {fmt(cw200.psiPerMile, 1)} to {fmt(cw250.psiPerMile, 1)} psi a mile by {kbd(250)}. Northfield Sour lies between the two: as{' '}
+        <a href={lessonHref('oil/1.3')}>Lesson 1.3</a> showed, it is a heavier crude, about six times as viscous as the basin mix at the line’s
+        temperature.
       </P>
 
       <Challenge
         id="a"
-        question="With the line’s three pump stations, what is the most Northfield Sour it can carry, to the nearest 5 kb/d?"
+        question={`Predict first: if twice the viscosity cost the line ${fmt((1 - caps.mix / caps.pinyon) * 100)}% of its limit, will six times the viscosity cost it more than half? Then choose Northfield Sour and find the most of it the line’s three pump stations can carry, to the nearest 5 kb/d.`}
         solved={solvedA}
         status={
           fluid !== 'northfield' || stations !== LINE.stations
@@ -261,7 +297,7 @@ export default function Lesson() {
               ? `${kbd(flow)} of Northfield Sour flows, with ${h.stationsNeeded} of the 3 stations’ worth of pumping needed.`
               : `${kbd(flow)} is too much: the pressure runs out between stations.`
         }
-        success={`Solved: ${kbd(flow)}. Above about ${kbd(caps.northfield)}, the three stations can’t make up what friction takes. A fourth station would lift the limit — but every extra station runs into the same steeply rising curve.`}
+        success={`Solved: ${kbd(flow)}, about ${fmt((1 - caps.northfield / caps.mix) * 100)}% less than the basin mix — nowhere near half. In turbulent flow, viscosity acts only through the friction factor, which rises slowly with it: at ${kbd(400)}, six times the viscosity raises it by only ${fmt((f400.northfield / f400.mix - 1) * 100)}%. It is the laminar Coldwater blend that is truly expensive to pipe. A fourth station would lift Northfield’s limit — but every extra station runs into the same steeply rising curve.`}
       />
 
       <H2>Power</H2>
@@ -274,8 +310,9 @@ export default function Lesson() {
 
       <H2>What a barrel costs to move</H2>
       <P>
-        Most of a pipeline’s cost was paid before the first barrel moved. The Kessler–Calder line cost {usd(LINE.capital / 1e9, 1)} billion to build in our model, and its
-        owner needs a return on that whether the line is full or empty: we charge 12% of the capital a year, plus upkeep. In the next demonstration, that annual cost is
+        Most of a pipeline’s cost was paid before the first barrel moved. The Kessler–Corran line cost {usd(LINE.capital / 1e9, 1)} billion to build in our model, and its
+        owner needs a return on that whether the line is full or empty: we charge {fmt(CAPITAL_CHARGE * 100)}% of the capital a year, plus {usd(UPKEEP / 1e6)} million of
+        upkeep. In the next demonstration, that annual cost is
         spread over the year’s barrels at each throughput, together with the electricity. Set the throughput, and what the line cost to build:
       </P>
 
@@ -288,7 +325,7 @@ export default function Lesson() {
           ]}
         />
         <XYChart
-          ariaLabel={`Cost per barrel of moving the basin mix on the Kessler–Calder line against throughput, for a line that cost $${fmt(s2.state.capital, 1)} billion. At ${fmt(s2.state.throughput)} thousand barrels a day it costs ${usd(cost.total, 2)}: ${usd(cost.capital + cost.operations, 2)} of capital and upkeep and ${usd(cost.energy, 2)} of electricity. The line is full at ${fmt(mixCap)} thousand barrels a day.`}
+          ariaLabel={`Cost per barrel of moving the basin mix on the Kessler–Corran line against throughput, for a line that cost $${fmt(s2.state.capital, 1)} billion. At ${fmt(s2.state.throughput)} thousand barrels a day it costs ${usd(cost.total, 2)}: ${usd(cost.capital + cost.operations, 2)} of capital and upkeep and ${usd(cost.energy, 2)} of electricity. The line is full at ${fmt(mixCap)} thousand barrels a day.`}
           height={240}
           x={[100, 500]}
           y={[0, 8]}
@@ -317,7 +354,7 @@ export default function Lesson() {
             { label: 'electricity for one more barrel', value: usd(marginal(s2.state.throughput), 2) },
           ]}
         />
-        <Slider label="Throughput" tone="orange" value={s2.state.throughput} min={100} max={480} step={FLOW_STEP} onChange={(v) => s2.set({ throughput: v })} display={kbd(s2.state.throughput)} />
+        <Slider label="Throughput" tone="orange" value={s2.state.throughput} min={100} max={THROUGHPUT_MAX} step={FLOW_STEP} onChange={(v) => s2.set({ throughput: v })} display={kbd(s2.state.throughput)} />
         <Slider
           label="Cost to build"
           tone="green"
@@ -339,16 +376,23 @@ export default function Lesson() {
 
       <Challenge
         id="b"
-        question={`With the line at its ${usd(CAPITAL_DEFAULT, 1)} billion cost, what is the lowest throughput, to the nearest 5 kb/d, at which its full cost per barrel falls below the ${usd(TARIFF, 2)} tariff?`}
+        question={`Estimate first: at its ${usd(CAPITAL_DEFAULT, 1)} billion cost, the line needs ${fmt(CAPITAL_CHARGE * 100)}% of that a year plus ${usd(UPKEEP / 1e6)} million of upkeep. How many barrels a day pay that at the ${usd(TARIFF, 2)} tariff, leaving a nickel or so a barrel for electricity? Then find the lowest throughput, to the nearest 5 kb/d, at which the full cost per barrel falls below the tariff.`}
         solved={solvedB}
         status={
           Math.abs(s2.state.capital - CAPITAL_DEFAULT) > 1e-9
             ? `Set the cost to build back to $${fmt(CAPITAL_DEFAULT, 1)} billion.`
             : `At ${kbd(s2.state.throughput)}, a barrel costs ${usd(cost.total, 2)} to move.`
         }
-        success={`Solved: ${kbd(s2.state.throughput)}, where a barrel costs ${usd(cost.total, 2)}. Below that, the tariff doesn’t cover the line’s cost; above it, every extra barrel adds margin. That’s why pipeline companies sign shippers to long contracts before they build: committed volume is what makes the capital back.`}
+        success={`Solved: ${kbd(s2.state.throughput)}, where a barrel costs ${usd(cost.total, 2)}. The estimate gets close: ${usd((LINE.capital * CAPITAL_CHARGE) / 1e6)} million of capital charge and ${usd(UPKEEP / 1e6)} million of upkeep make ${usd(yearly / 1e6)} million a year, which at ${usd(TARIFF - 0.05, 2)} a barrel takes about ${kbd(yearly / 365 / (TARIFF - 0.05) / 1000)}; electricity, ${cents(cost.energy)} a barrel here, takes up the rest. Below that throughput the tariff doesn’t cover the line’s cost; above it, every extra barrel adds margin.`}
       />
 
+      <P>
+        What the line cost to build matters as much as what flows through it. Raise the cost in this demonstration and the whole curve rises with it: at{' '}
+        {usd(2, 1)} billion the tariff covers the cost only from {kbd(build.at20)}, and at {usd(2.2, 1)} billion from {kbd(build.at22)}. Above about{' '}
+        {usd(build.max, 1)} billion it never does: at {usd(2.6, 1)} billion, even a line running at {kbd(THROUGHPUT_MAX)} costs {usd(fullAt26, 2)} a barrel to move. So
+        pipelines aren’t built on hope. Before construction, the owner signs up shippers to long-term contracts, often for ten years or more, under which they pay
+        for their space whether they use it or not, at a tariff set to cover the cost. Committed volume is what makes the capital come back.
+      </P>
       <P>
         One more thing follows from the shape of these curves. Once the line is full, no tariff — however high — moves another barrel through it. Adding a fourth station
         would lift the basin mix’s limit to about {kbd(mixCap4)} — try it in <FigRef to="Oil Pipeline Simulator">the first demonstration</FigRef> — but beyond the
@@ -356,7 +400,7 @@ export default function Lesson() {
         wait. Lessons <a href={lessonHref('oil/4.4')}>4.4</a> and <a href={lessonHref('oil/4.5')}>4.5</a> follow what that does to prices.
       </P>
       <P>
-        First, though, the barrels that leave Port Calder by sea. Most of the oil traded between countries travels by tanker, across distances no pipe could span, with
+        First, though, the barrels that leave Port Corran by sea. Most of the oil traded between countries travels by tanker, across distances no pipe could span, with
         a very different cost structure. The <a href={lessonHref('oil/4.2')}>next lesson</a> plans a voyage.
       </P>
     </LessonPage>

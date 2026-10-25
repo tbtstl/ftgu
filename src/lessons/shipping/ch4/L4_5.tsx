@@ -26,13 +26,15 @@ import {
 } from '../../../framework';
 import { DAYS_PER_MONTH, TC_ROUTES, dailyPath, monthAverage, routeTce } from '../../../engines/shipping/indices';
 import { REVERSION, dailyIndex, ffaSettlement, longRun, type Side } from '../../../engines/shipping/ffa';
-import { replacementEarnings } from '../../../engines/shipping/cycle';
 import { HISTORY_MONTHS, MONTH_SHORT, monthLabel, standardHistory } from '../../../model/shipping/history';
 import { XYChart } from '../shared/XYChart';
 
 const INDEX = dailyIndex('kmax');
 const HIST = standardHistory().cls.kmax;
-const NOISE = dailyPath('kmax').noise;
+const PATH = dailyPath('kmax');
+const NOISE = PATH.noise;
+/** The equal-weighted index against the market's earnings, averaged over every index day (Lesson 4.3's gap). */
+export const EQUAL_GAP = INDEX.reduce((s, v, d) => s + v / PATH.tce[d] - 1, 0) / INDEX.length;
 const MAX_AHEAD = 6;
 /** Last trade date that leaves room for a contract six months ahead. */
 export const LAST_TRADE_DAY = (HISTORY_MONTHS - 1 - MAX_AHEAD) * DAYS_PER_MONTH + DAYS_PER_MONTH - 1;
@@ -42,10 +44,13 @@ export const MONTH_DAYS = 30;
 const perDay = (x: number) => `${usd(x)}/day`;
 const signedUsd = (x: number) => (x >= 0 ? `+${usd(x)}` : usd(x));
 const monthOf = (day: number) => Math.floor(day / DAYS_PER_MONTH);
+const monthName = (m: number) => monthLabel(m).split(', ')[1];
 const dayLabel = (day: number) => `${monthLabel(monthOf(day))}, index day ${(day % DAYS_PER_MONTH) + 1}`;
 
 /** The long-run level for each calendar month (cached: computing it takes a valuation search). */
 const LONG_RUN = Array.from({ length: 12 }, (_, m) => longRun('kmax', m));
+export const LONG_RUN_LOW = LONG_RUN.indexOf(Math.min(...LONG_RUN));
+export const LONG_RUN_HIGH = LONG_RUN.indexOf(Math.max(...LONG_RUN));
 
 /**
  * The Kamsarmax forward price, exactly as engines/shipping/ffa.ts's forwardPrice computes it, but
@@ -100,12 +105,30 @@ export function collapseSolved(day: number, ahead: number, side: Side, days: num
   return ffaTrade(day, ahead, side, days).pnl >= COLLAPSE_TARGET - 1e-6;
 }
 
+/** Kestrel sailing fronthauls and backhauls in turn: out to China, back to the Atlantic, again and again. */
+export const ALTERNATE = 'P-FHBH';
+
 const ROUTE_LABEL: Record<string, string> = {
   'P-TA': 'Transatlantic round',
   'P-FH': 'Fronthaul',
   'P-TP': 'Transpacific round',
   'P-BH': 'Backhaul',
+  [ALTERNATE]: 'Fronthaul, then backhaul',
 };
+
+/**
+ * Kestrel's earnings in the `i`th month of a strip, before the day-to-day noise: her route's rate that month, or, sailing
+ * fronthauls and backhauls in turn from the strip's start, the average over the month's days of whichever trip she is on.
+ */
+function routeEarnings(routeId: string, month: number, i: number): number {
+  const route = (id: string) => TC_ROUTES.kmax.find((x) => x.id === id)!;
+  if (routeId !== ALTERNATE) return routeTce(HIST[month], route(routeId));
+  const fh = route('P-FH');
+  const bh = route('P-BH');
+  let sum = 0;
+  for (let d = i * MONTH_DAYS; d < (i + 1) * MONTH_DAYS; d++) sum += routeTce(HIST[month], d % (fh.days + bh.days) < fh.days ? fh : bh);
+  return sum / MONTH_DAYS;
+}
 
 export interface HedgeMonth {
   month: number;
@@ -118,17 +141,17 @@ export interface HedgeMonth {
 
 /**
  * Northwind sells a strip of monthly FFAs on the first index day of `start`, covering the next twelve
- * months at `ratio` × 30 days each, while Kestrel trades spot on one route.
+ * months at `ratio` × 30 days each, while Kestrel trades spot on one route (or, with ALTERNATE,
+ * fronthauls and backhauls in turn).
  */
 export function hedgeStrip(start: number, routeId: string, ratio: number): HedgeMonth[] {
-  const r = TC_ROUTES.kmax.find((x) => x.id === routeId)!;
   const day = start * DAYS_PER_MONTH;
   return Array.from({ length: 12 }, (_, i) => {
     const month = start + 1 + i;
     const forward = fastForward(day, month);
     const settlement = monthAverage(INDEX, month);
     const noise = NOISE.slice(month * DAYS_PER_MONTH, (month + 1) * DAYS_PER_MONTH).reduce((a, b) => a + b, 0) / DAYS_PER_MONTH;
-    const tce = routeTce(HIST[month], r) * noise;
+    const tce = routeEarnings(routeId, month, i) * noise;
     return { month, forward, settlement, tce, hedged: tce + ratio * (forward - settlement) };
   });
 }
@@ -146,11 +169,11 @@ const total = (rows: HedgeMonth[], key: 'tce' | 'hedged' | 'forward') => rows.re
 const Y3 = 24 * DAYS_PER_MONTH;
 const BOOM = ffaTrade(Y3, 3, 'sell', 30);
 const Y6 = COLLAPSE_MONTH * DAYS_PER_MONTH;
-const SLUMP = ffaTrade(Y6, 3, 'sell', 30);
 const STRIP_START = 54;
 const TP = hedgeStrip(STRIP_START, 'P-TP', 1);
 const FH = hedgeStrip(STRIP_START, 'P-FH', 1);
 const BOOM_STRIP = hedgeStrip(24, 'P-TP', 1);
+const ALT = hedgeStrip(STRIP_START, ALTERNATE, 1);
 
 export default function Lesson() {
   const s = useScenario('ffa', { day: Y3, ahead: 3, side: 'sell' as Side, days: 30 });
@@ -187,16 +210,16 @@ export default function Lesson() {
   return (
     <LessonPage id="shipping/4.5">
       <P>
-        <a href={lessonHref('shipping/4.3')}>Lesson 4.3</a> turned the day’s fixtures into a published number, a timecharter index, and{' '}
+        <a href={lessonHref('shipping/4.3')}>Lesson 4.3</a> turned the day’s fixtures into a published number, a time-charter index, and{' '}
         <a href={lessonHref('shipping/4.4')}>Lesson 4.4</a> showed why that number never sits still: demand moves in months, the fleet in years, and earnings
         swing between them. Nobody in the market can stop the swings. An owner can’t make cargoes appear, and a charterer can’t conjure ships. What they can do is
-        trade the swings — agree today on what next quarter’s freight will cost, without fixing a ship or a cargo at all.
+        trade the swings — agree today on what a ship’s time will be worth next quarter, without fixing a ship or a cargo at all.
       </P>
       <P>
         The instrument is the <K tone="green">forward freight agreement</K>, or FFA. Two parties agree a price for an index over a future month. When the month is
         over, they compare the agreed price with the index’s average over that month, the <b>settlement price</b>, and one pays the other the difference times
         the quantity. If the index averaged more than the agreed price, the buyer collects; if less, the seller does. No ship changes hands and no cargo moves: it
-        is settled in cash. A contract on a timecharter index is sized in days, a contract on a voyage route in tonnes. Most dry bulk FFAs settle on the average
+        is settled in cash. A contract on a time-charter index is sized in days, a contract on a voyage route in tonnes. Most dry bulk FFAs settle on the average
         of the index over the contract month, not on its last day, so a single odd day can’t decide the payout, and most are cleared through exchanges’ clearing
         houses.
       </P>
@@ -211,8 +234,9 @@ export default function Lesson() {
         </span>
       </Eq>
       <P>
-        Our contracts settle on the course’s simulated Kamsarmax index: an equal-weighted average of the model’s four Kamsarmax timecharter routes, assessed
-        every index day, twenty-one to a month. In the next demonstration, choose a day to trade, how many months ahead the contract month lies, whether
+        Our contracts settle on the course’s simulated Kamsarmax index: an equal-weighted average of the model’s four Kamsarmax time-charter routes, which, as{' '}
+        <a href={lessonHref('shipping/4.3')}>Lesson 4.3</a> found, sits about {pct(Math.abs(EQUAL_GAP), 1)} {EQUAL_GAP < 0 ? 'below' : 'above'} the market’s
+        earnings on an average day. It is assessed every index day, twenty-one to a month. In the next demonstration, choose a day to trade, how many months ahead the contract month lies, whether
         to buy or sell, and how many days. The agreed price is the day’s forward price for that month. The chart follows the index, the forward price as the
         contract runs, and the settlement; the bars under it are the cash that changes hands each day before settlement:
       </P>
@@ -290,7 +314,6 @@ export default function Lesson() {
         </svg>
         <Readouts
           items={[
-            { label: `agreed for ${monthLabel(tr.month)}`, value: perDay(tr.price), tone: 'green' },
             { label: 'settlement, the month’s average', value: perDay(tr.settlement), tone: 'green' },
             { label: `${side === 'sell' ? 'seller' : 'buyer'}’s result for ${days} days`, value: signedUsd(tr.pnl), tone: tr.pnl >= 0 ? 'green' : 'red' },
             { label: 'largest margin paid in one day', value: tr.worstCall < -0.5 ? usd(-tr.worstCall) : 'none' },
@@ -308,7 +331,8 @@ export default function Lesson() {
 
       <P>
         The demonstration starts on the first index day of Year 3. Kamsarmaxes are earning {perDay(INDEX[Y3])}, and Northwind sells 30 days of April at{' '}
-        {perDay(BOOM.price)}. Then the spring comes in far stronger than anyone expected: April’s index averages {perDay(BOOM.settlement)}, and Northwind pays{' '}
+        {perDay(BOOM.price)}, {fmt(BOOM.price / INDEX[Y3], 1)} times today’s index: April falls in Brazil’s soybean season, when Kamsarmaxes usually earn
+        far more, and the next section shows how the forward price allows for that. Then the spring comes in far stronger than anyone expected: April’s index averages {perDay(BOOM.settlement)}, and Northwind pays{' '}
         {usd(-BOOM.pnl)}. It doesn’t pay it all at the end. A clearing house marks every open contract to the day’s forward price and collects the change as{' '}
         <b>variation margin</b>, so the losses arrive day by day — up to {usd(-BOOM.worstCall)} in a single day, and {usd(-BOOM.worstValue)} at the worst point —
         alongside an initial deposit against default. A seller who can’t meet the calls is closed out. That is the price of a contract that can’t default: it has to
@@ -340,15 +364,16 @@ export default function Lesson() {
         </span>
       </Eq>
       <P>
-        That is a model of expectations, not a law. Over the whole history the long-run level averages {perDay(replacementEarnings('kmax'))}, and in any one
-        month the market can be far from it for a long time. In January of Year 6, a wave of new ships has just been delivered and the index has collapsed to{' '}
+        That is a model of expectations, not a law. The long-run levels are the same every year, from {perDay(LONG_RUN[LONG_RUN_LOW])} in{' '}
+        {monthName(LONG_RUN_LOW)} to {perDay(LONG_RUN[LONG_RUN_HIGH])} in {monthName(LONG_RUN_HIGH)}, and in any one month the market can be far from them for a
+        long time. In January of Year 6, a wave of new ships has just been delivered and the index has collapsed to{' '}
         {perDay(INDEX[Y6])}. Today’s long-run level is {perDay(lr0)}; April’s, at the height of the soybean season, is {perDay(lr3)}. The forward curve assumes the
         usual spring will mostly arrive.
       </P>
 
       <Challenge
         id="a"
-        question={`Move to January of Year 6, any index day. Trading 30 days, find a side and a contract month that would have made at least ${usd(COLLAPSE_TARGET)} at settlement.`}
+        question={`Predict first, from how the forward curve is built: trading 30 days in January of Year 6, which side and which contract month would have made at least ${usd(COLLAPSE_TARGET)} at settlement? Then move the trade date to January of Year 6, any index day, and check.`}
         solved={solved}
         status={
           monthOf(day) !== COLLAPSE_MONTH
@@ -357,20 +382,25 @@ export default function Lesson() {
               ? 'Set the quantity to 30 days.'
               : `${side === 'sell' ? 'Selling' : 'Buying'} ${MONTH_SHORT[tr.month % 12]} at ${perDay(tr.price)} settles at ${perDay(tr.settlement)}: ${signedUsd(tr.pnl)}.`
         }
-        success={`Solved. Sold on the first index day, April was priced at ${perDay(SLUMP.price)} — the curve expected the spring season to lift the market most of the way back to its long-run level. It didn’t: the fleet that had been ordered in the boom was still arriving, and April averaged ${perDay(SLUMP.settlement)}. The seller collected ${usd(SLUMP.pnl)}. No other month made ${usd(COLLAPSE_TARGET)}: nearer months were priced closer to the slump, and later ones lay past the season’s peak.`}
+        success={`Solved. Sold on index day ${(day % DAYS_PER_MONTH) + 1} of January, ${monthName(tr.month)} was priced at ${perDay(tr.price)} — the curve expected the spring season to lift the market most of the way back to its long-run level. It didn’t: the fleet that had been ordered in the boom was still arriving, and ${monthName(tr.month)} averaged ${perDay(tr.settlement)}. The seller collected ${usd(tr.pnl)}. No other month made ${usd(COLLAPSE_TARGET)}: nearer months were priced closer to the slump, and later ones lay past the season’s peak.`}
       />
 
       <H2>Hedging Kestrel</H2>
       <P>
         Now use FFAs the way most owners do. On the first index day of a month, Northwind sells a strip of twelve monthly contracts covering the next year, 30
-        days each, while Kestrel keeps trading spot. Her earnings don’t follow the index exactly: she earns whatever her route pays, and the index’s four routes differ — a round voyage earns the market
-        rate, a fronthaul from the Atlantic to China pays a premium, a backhaul a discount. The difference
+        days each, while Kestrel keeps trading spot. Her earnings don’t follow the index exactly: she earns whatever her route pays, and the index’s four routes differ — a round voyage earns what
+        the market pays every ship, a fronthaul from the Atlantic to China pays a premium, a backhaul a discount. The difference
         between her earnings and the index is the <K tone="violet">basis</K>. In the next demonstration, choose when the hedge is placed, which route Kestrel
-        trades, and how much of her time is hedged; the chart compares her earnings with and without the FFAs, against the forward prices Northwind sold at:
+        trades — or a fronthaul and a backhaul in turn — and how much of her time is hedged; the chart compares her earnings with and without the FFAs, against the forward prices Northwind sold at:
       </P>
 
       <Figure name="FFA Contract Simulator · hedging Kestrel" scenario={hg}>
-        <Segmented label="Kestrel’s route" value={hg.state.route} onChange={(v) => hg.set({ route: v })} options={TC_ROUTES.kmax.map((r) => ({ value: r.id, label: ROUTE_LABEL[r.id] }))} />
+        <Segmented
+          label="Kestrel’s route"
+          value={hg.state.route}
+          onChange={(v) => hg.set({ route: v })}
+          options={[...TC_ROUTES.kmax.map((r) => ({ value: r.id, label: ROUTE_LABEL[r.id] })), { value: ALTERNATE, label: ROUTE_LABEL[ALTERNATE] }]}
+        />
         <Legend
           items={[
             { label: 'Forward price sold', color: '#555', kind: 'line', dashed: true },
@@ -411,15 +441,20 @@ export default function Lesson() {
         The hedge starts in July of Year 5, as the boom fades. Trading a transpacific round voyage unhedged, Kestrel earns {usd(total(TP, 'tce'))} over the next
         twelve months, well short of the {usd(total(TP, 'forward'))} the forward prices promised. Fully hedged she earns {usd(total(TP, 'hedged'))}, and her
         month-to-month miss against the curve falls from {perDay(missSpread(TP, false))} to {perDay(missSpread(TP, true))}. A round voyage earns almost exactly
-        the market rate, so its basis is small and the hedge works almost perfectly. Placed in January of Year 3 instead, the same hedge costs her money — the
+        what the market pays, so its basis is small and the hedge works almost perfectly. Placed in January of Year 3 instead, the same hedge costs her money — the
         twelve months unhedged bring {usd(total(BOOM_STRIP, 'tce'))}, hedged {usd(total(BOOM_STRIP, 'hedged'))} — because a hedge gives up the good surprises
         along with the bad. It is insurance, and insurance doesn’t pay in years nothing goes wrong.
       </P>
       <P>
-        Switch her to the fronthaul. She earns more, because a fronthaul pays for leaving the ship in the Pacific where ships are plentiful, and the hedge still
-        removes the market’s swings. But the miss doesn’t fall as far: {perDay(missSpread(FH, true))} instead of {perDay(missSpread(TP, true))}, because the
-        fronthaul premium itself rises and falls with the cost of repositioning ships, and no FFA on the index covers it. That leftover is <b>basis risk</b>, and every
-        real hedge has some — a different route, a different ship, a different month. Now push the hedge past 100% in{' '}
+        Switch her to the fronthaul. The strip now shows her earning {usd(total(FH, 'tce'))} unhedged, far more than on the round voyage — but no ship could
+        earn it. Every fronthaul leaves her in China, and its premium is the payment for leaving her there (<a href={lessonHref('shipping/4.3')}>Lesson
+        4.3</a>); to load in the Atlantic again she must first come back. Choose “fronthaul, then backhaul”, the schedule she could actually sail: out to China
+        and back, again and again. Over the twelve months she earns {usd(total(ALT, 'tce'))}, close to the round voyage’s {usd(total(TP, 'tce'))}: what the
+        fronthaul pays on the way out, the backhaul takes back on the way home. Month by month, though, her earnings swing between the fronthaul’s premium and
+        the backhaul’s discount, and the hedge can’t follow them, because an FFA settles on the index — the average of all four routes — not on the trip she
+        happens to be on. Fully hedged, her miss falls only from {perDay(missSpread(ALT, false))} to {perDay(missSpread(ALT, true))}, against{' '}
+        {perDay(missSpread(TP, true))} on the round voyage. That leftover is <b>basis risk</b>, and every real hedge has some — a different route, a different
+        ship, a different month. Now push the hedge past 100% in{' '}
         <FigRef to="FFA Contract Simulator · hedging Kestrel">this demonstration</FigRef>. The miss rises again: the extra contracts don’t offset anything Kestrel
         earns, so they are simply a bet that the market will fall.
       </P>

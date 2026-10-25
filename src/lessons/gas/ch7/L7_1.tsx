@@ -39,6 +39,7 @@ import { conditionsOf } from '../../../model/gas/history';
 import { GAS_MONTH_NAMES, GAS_MONTH_START, monthOfDay } from '../../../model/gas/weather';
 import { CORRIDORS, GAS_NODE, GAS_NODES, PIPELINE, type GasNodeId } from '../../../model/gas/world';
 import { GasMap } from '../shared/GasMap';
+import { ConfirmReset } from '../shared/CapstoneUi';
 import { resetGasSystem, updateGasSystem, useGasCapstone } from '../shared/capstone';
 import { bcf, bcfd, gp, money } from '../shared/format';
 
@@ -208,6 +209,8 @@ export function constructorNumbers() {
   const bayMetro = fixes.design.find((r) => r.id === 'bayport-metro')!.best!;
   const valley4: GasSystem = { sizes: { ...AS_BUILT.sizes }, stations: { ...AS_BUILT.stations, 'sandhill-metro': AS_BUILT.stations['sandhill-metro'] + 1 } };
   const v4 = constructorChecks(valley4);
+  // The Valley Line's horsepower with its stations as built, one more and two more.
+  const valleyHp = (extra: number) => lineDesign('sandhill-metro', AS_BUILT.sizes['sandhill-metro'], AS_BUILT.stations['sandhill-metro'] + extra).hp;
   const both: GasSystem = {
     sizes: { ...AS_BUILT.sizes, [glut.id]: glut.size, [design.id]: design.size },
     stations: { ...AS_BUILT.stations, [glut.id]: glut.stations, [design.id]: design.stations },
@@ -232,6 +235,8 @@ export function constructorNumbers() {
     northFix,
     bayMetro,
     valley4: { cost: v4.cost.added, cut: v4.homesCut, cap: systemCapacity(valley4)['sandhill-metro'] },
+    /** Horsepower the Valley Line's fourth station adds, and what a fifth adds on top of it. */
+    valleyHp: { fourth: valleyHp(1) - valleyHp(0), fifth: valleyHp(2) - valleyHp(1) },
     least: constructorLeastCapital(),
     bothMetro: bothDay.price.metro,
     bothRidgeback: bothDay.price.ridgeback,
@@ -245,6 +250,11 @@ const LEGEND = [
   { label: 'Full', color: '#e75b55', kind: 'line' as const },
   { label: 'Corridor, nothing built', color: '#cfc9b9', kind: 'line' as const, dashed: true },
 ];
+
+/** Rounded to the nearest hundred, as the prose quotes horsepower. */
+function hundreds(x: number): number {
+  return Math.round(x / 100) * 100;
+}
 
 function cap1(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -360,12 +370,10 @@ export default function Lesson() {
   return (
     <LessonPage id="gas/7.1">
       <P>
-        <a href={lessonHref('gas/6.5')}>Chapter 6</a> took the region as given and traded on what it could see. The capstone hands the region over. It is now Year 9,
-        the year after the history ends, and the region has kept changing in the directions it was going. Ridgeback’s{' '}
-        <K tone="orange">production</K> has reached {bcfd(PRODUCTION)}, up from {bcfd(N.y1.ridgeback)} in Year 1; Sandhill’s has slipped to{' '}
-        {bcfd(CAPSTONE_CONDITIONS.sandhill)}; Bayport’s terminal takes {bcfd(CAPSTONE_CONDITIONS.lngBcfd, 1)} of feed gas; and the region’s own demand is{' '}
-        {pct(CAPSTONE_CONDITIONS.demandScale - 1)} above Year 1’s. The network is the one Chapter 6 ended with: the six pipelines, the two storage fields, and Ridgeback
-        Express carrying {bcfd(systemCapacity(AS_BUILT)['ridgeback-calder'], 1)} since its expansion in Year 6, which in the pipeline designs of{' '}
+        <a href={lessonHref('gas/6.5')}>Chapter 6</a> took the region as given and traded on what it could see. It is now Year 9, the year after the history ends, and the region has kept growing the way it was going: Ridgeback’s{' '}
+        <K tone="orange">production</K> has reached {bcfd(PRODUCTION)}, and the region’s own demand is {pct(CAPSTONE_CONDITIONS.demandScale - 1)} above Year 1’s. The
+        network is the one Chapter 6 ended with: the six pipelines, the two storage fields, and Ridgeback Express carrying{' '}
+        {bcfd(systemCapacity(AS_BUILT)['ridgeback-calder'], 1)} since its expansion in Year 6, which in the pipeline designs of{' '}
         <a href={lessonHref('gas/3.1')}>Lesson 3.1</a> is a third compressor station on its 42-inch pipe.
       </P>
       <P>
@@ -389,7 +397,16 @@ export default function Lesson() {
         its color how full it runs. Click a line or an empty corridor, then change its pipe size and its number of compressor stations:
       </P>
 
-      <Figure name="Gas System Constructor" onReset={resetGasSystem}>
+      <Figure
+        name="Gas System Constructor"
+        actions={
+          <ConfirmReset
+            label="Reset network"
+            prompt="Put back the network as built? This undoes your changes in 7.1; your portfolio in 7.4 is kept."
+            onConfirm={resetGasSystem}
+          />
+        }
+      >
         <GasMap
           ariaLabel={mapLabel}
           flows={day.flow}
@@ -446,18 +463,32 @@ export default function Lesson() {
       <P>
         Metro’s morning is worse. Northline and the Valley Line are full; Hollow Creek, down to {bcf(N.morning.storage.hollowcreek, 0)} of working gas, can withdraw only{' '}
         {bcfd(N.hollowWd)} at its falling pressure (<a href={lessonHref('gas/3.4')}>Lesson 3.4</a>). So Metro’s demand gives way in the order of{' '}
-        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>: its power plants switch {bcfd(N.powerOff)} to coal and oil, its industry shuts down {bcfd(N.industryOff)},
-        its interruptible customers lose {bcfd(N.interruptibleOff)} — and still {bcfd(N.k.homesCut)} of the {bcfd(N.homesDemand)} its homes need doesn’t arrive, and
+        <a href={lessonHref('gas/4.1')}>Lesson 4.1</a>: its power plants switch {bcfd(N.powerOff)} to coal and oil, its interruptible customers lose{' '}
+        {bcfd(N.interruptibleOff)}, its industry shuts down {bcfd(N.industryOff)} — and still {bcfd(N.k.homesCut)} of the {bcfd(N.homesDemand)} its homes need doesn’t arrive, and
         the price goes to the {gp(N.k.day.price.metro, 0)} that rationing costs (<a href={lessonHref('gas/5.5')}>Lesson 5.5</a>). Meanwhile Bayport loads{' '}
         {bcfd(N.lng, 1)} onto LNG ships, because no pipe runs from Bayport to Metro: the shortage sits behind a cut (<a href={lessonHref('gas/3.2')}>Lesson 3.2</a>),
         and gas on the wrong side of it can’t help.
       </P>
 
+      <P>
+        Now change it. Lesson 3.1 found that when compression can relieve a constraint, it is far cheaper than steel. Before you build, decide which cut each test sits
+        behind and so which pipes could pass it; then find the cheapest network that passes both in{' '}
+        <FigRef to="Gas System Constructor">the first demonstration</FigRef>:
+      </P>
+
+      <Challenge
+        id="a"
+        figure="Gas System Constructor"
+        question="Predict first which pipes each test depends on. Then, keeping every line already in the ground, find the least capital that leaves no Ridgeback gas stranded and keeps every Metro home supplied on the design morning."
+        solved={constructorSolved(system)}
+        status={status}
+        success={`Solved: ${money(N.least)}, or ${money(N.least * CAPITAL_CHARGE)} a year — ${constructorFixText(N.glut)} on ${constructorLineRef(N.glut.id)} for Ridgeback and ${constructorFixText(N.design)} on ${constructorLineRef(N.design.id)} for Metro. On the design morning Metro’s price falls to ${gp(N.bothMetro)}, the value of the industry that still gives way, and Ridgeback’s rises to ${gp(N.bothRidgeback)}. The two tests sit behind different cuts, so the cheapest network is simply the two cheapest fixes together.`}
+      />
+
       <H2>Steel or compression</H2>
       <P>
-        Lesson 3.1 found that when compression can relieve a constraint, it is far cheaper than steel. In the next demonstration, each bar is the cheapest single
-        change on one corridor that passes one of the tests, starting from the network as built; corridors where no change of size or stations will do say so. Choose the
-        test:
+        Here is the search the challenge asks for, line by line. In the next demonstration, each bar is the cheapest single change on one corridor that passes one
+        of the tests, starting from the network as built; corridors where no change of size or stations will do say so. Choose the test:
       </P>
 
       <Figure name="Gas System Constructor · the cheapest fixes" scenario={f}>
@@ -473,10 +504,8 @@ export default function Lesson() {
         <FixBars problem={problem} />
         <Readouts
           items={[
-            { label: 'cheapest fix', value: `${cap1(constructorFixText(best))} on ${constructorLineRef(best.id)}`, tone: 'ink' },
-            { label: 'capital', value: money(best.cost), tone: 'green' },
-            { label: 'a year', value: money(best.cost * CAPITAL_CHARGE), tone: 'green' },
-            { label: 'line capacity', value: `${fmt(best.before, 2)} → ${fmt(best.after, 2)} Bcf/d`, tone: 'orange' },
+            { label: 'the cheapest fix, a year', value: money(best.cost * CAPITAL_CHARGE), tone: 'green' },
+            { label: 'its line’s capacity', value: `${fmt(best.before, 2)} → ${fmt(best.after, 2)} Bcf/d`, tone: 'orange' },
           ]}
         />
       </Figure>
@@ -486,24 +515,14 @@ export default function Lesson() {
         {constructorLineRef(N.glut.id)}, {money(N.glut.cost)}, lifts the line from {bcfd(N.glut.before)} to {bcfd(N.glut.after)}. A{' '}
         {ORDINAL[N.expressFix.stations]} station on Ridgeback Express would add far more than needed for {money(N.expressFix.cost)}, and a new pipe from Ridgeback to
         Sandhill costs {money(fixesCost('glut', 'ridgeback-sandhill'))}. Metro needs more. A fourth station on the Valley Line — the answer to Lesson 3.1’s challenge —
-        costs only {money(N.valley4.cost)} but lifts it to {bcfd(N.valley4.cap)}, which leaves {bcfd(N.valley4.cut)} of homes short; the fifth that finishes the job
-        brings the bill to {money(N.design.cost)}, because each station adds less than the one before (<a href={lessonHref('gas/1.4')}>Lesson 1.4</a>). A fourth
-        station on Northline costs {money(N.northFix.cost)}, and the cheapest new pipe up the coast from Bayport {money(N.bayMetro.cost)}. Every fix for Metro is a fix
-        to the pipes into Metro, and every fix for Ridgeback a fix to the pipes out of Ridgeback: no single change passes both tests.
+        costs only {money(N.valley4.cost)}, for {fmt(hundreds(N.valleyHp.fourth))} horsepower, but lifts the line only to {bcfd(N.valley4.cap)}, which leaves{' '}
+        {bcfd(N.valley4.cut)} of homes short. The fifth that finishes the job lifts it to {bcfd(N.design.after)}, but the bill jumps to {money(N.design.cost)}.
+        With five stations the line carries {fmt(N.design.after, 2)} Bcf/d, and more gas loses more pressure between stations, so the stations push more gas and
+        have more pressure to restore. A station’s power grows with both (<a href={lessonHref('gas/1.4')}>Lesson 1.4</a>), and the five need{' '}
+        {fmt(hundreds(N.valleyHp.fifth))} horsepower more than the four. A fourth station on Northline costs {money(N.northFix.cost)}, and the cheapest new pipe
+        up the coast from Bayport {money(N.bayMetro.cost)}. Every fix for Metro is a fix to the pipes into Metro, and every fix for Ridgeback a fix to the pipes out of
+        Ridgeback, so no single change passes both tests, and the cheapest network is the two cheapest fixes together: {money(N.least)} of capital.
       </P>
-      <P>
-        Now build it. Back in <FigRef to="Gas System Constructor">the first demonstration</FigRef>, find the cheapest network that passes both:
-      </P>
-
-      <Challenge
-        id="a"
-        figure="Gas System Constructor"
-        question="Keeping every line already in the ground, find the least capital that leaves no Ridgeback gas stranded and keeps every Metro home supplied on the design morning."
-        solved={constructorSolved(system)}
-        status={status}
-        success={`Solved: ${money(N.least)}, or ${money(N.least * CAPITAL_CHARGE)} a year — ${constructorFixText(N.glut)} on ${constructorLineRef(N.glut.id)} for Ridgeback and ${constructorFixText(N.design)} on ${constructorLineRef(N.design.id)} for Metro. On the design morning Metro’s price falls to ${gp(N.bothMetro)}, the value of the industry that still gives way, and Ridgeback’s rises to ${gp(N.bothRidgeback)}. The two tests sit behind different cuts, so the cheapest network is simply the two cheapest fixes together.`}
-      />
-
       <H2>What the network is for</H2>
       <P>
         The cheapest network that passes both tests costs {money(N.least * CAPITAL_CHARGE)} a year, at Lesson 3.1’s {pct(CAPITAL_CHARGE, 1)} capital charge. Whether
@@ -515,7 +534,7 @@ export default function Lesson() {
         That is a trade-off between the capital charge and what happens in the market every day of the year — and the next lesson shows what happens.
       </P>
       <P>
-        Leave the network as you want it for the rest of the chapter; the reset button brings back the network as built. In{' '}
+        Leave the network as you want it for the rest of the chapter; Reset network, which asks first, brings back the network as built. In{' '}
         <a href={lessonHref('gas/7.2')}>the next lesson</a> it runs through eight practice winters, day by day, with the operators planning their storage around it and
         the market pricing every place on it, and we’ll see who your pipes made richer and who poorer.
       </P>

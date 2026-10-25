@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
-import { Caption, Challenge, FigRef, Figure, GRAPHIC, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, niceDomain, niceTicks, usd, useScenario } from '../../../framework';
+import { Caption, Challenge, FigRef, Figure, GRAPHIC, H2, K, Legend, LessonPage, P, Readouts, Segmented, Slider, fmt, lessonHref, niceDomain, niceTicks, pct, usd, useScenario } from '../../../framework';
 import { PRODUCT_DEFAULTS } from '../../../engines/oil/market';
-import { RULE_DEFAULTS, SPREADS, backtest, crackRule, type BacktestResult, type CrackRule } from '../../../engines/oil/trading';
+import { RULE_DEFAULTS, SPREADS, backtest, calendarFit, crackRule, type BacktestResult, type CrackRule } from '../../../engines/oil/trading';
 import { HISTORY_DEFAULTS, oilHistory, type HistoryWeek } from '../../../model/oil/history';
 import { PRODUCT_COLOR } from '../../../model/oil/refinery';
 import { XYChart, type XYBand } from '../shared/charts';
+import { LONG_SWATCH, RISK_TONE, SHORT_SWATCH, YEAR_TICKS, money, pnlTone, positionBands, seasonDisplay, yearTick } from './style';
 
 // ---------------------------------------------------------------------------
 // The strategy: the 3:2:1 crack against WTI, traded on product stocks and refinery outages.
@@ -58,28 +59,8 @@ export function productsCrack(w: HistoryWeek): number {
   return (2 * w.gasolineCrack + w.dieselCrack) / 3;
 }
 
-/**
- * The calendar: a smooth annual curve (the mean plus two harmonics of the year) fitted to whole
- * years of a weekly series. Over whole years the harmonics are orthogonal, so each coefficient is a
- * simple projection. Returns the curve's value in every week.
- */
-export function calendarFit(xs: number[]): number[] {
-  const n = Math.max(WEEKS_PER_YEAR, Math.floor(xs.length / WEEKS_PER_YEAR) * WEEKS_PER_YEAR);
-  const part = xs.slice(0, n);
-  const mean = part.reduce((a, b) => a + b, 0) / part.length;
-  const coef: Array<[number, number, number]> = [];
-  for (let k = 1; k <= 2; k++) {
-    let a = 0;
-    let b = 0;
-    part.forEach((x, t) => {
-      const ph = (2 * Math.PI * k * t) / WEEKS_PER_YEAR;
-      a += (x - mean) * Math.cos(ph);
-      b += (x - mean) * Math.sin(ph);
-    });
-    coef.push([k, (2 * a) / part.length, (2 * b) / part.length]);
-  }
-  return xs.map((_, t) => coef.reduce((s, [k, a, b]) => s + a * Math.cos((2 * Math.PI * k * t) / WEEKS_PER_YEAR) + b * Math.sin((2 * Math.PI * k * t) / WEEKS_PER_YEAR), mean));
-}
+/** The calendar: a smooth annual curve fitted to whole years of a weekly series (now in the trading engine, which Lesson 6.4's hedge also uses). */
+export { calendarFit };
 
 export interface PnlSplit {
   /** P&L from the crack's regular annual swing, from the Brent–WTI spread inside it, and from everything else. */
@@ -118,25 +99,30 @@ export function splitFor(st: Omit<CrackState, 'view'>): PnlSplit {
 }
 
 const positionsTaken = (st: Omit<CrackState, 'view'>) => runCrack(st).positions.filter((p) => p !== 0).length;
-const ruleIsDefault = (st: Pick<CrackState, 'lookback' | 'threshold' | 'outageWeeks'>) =>
-  st.lookback === RULE_DEFAULTS.crack.lookback && st.threshold === RULE_DEFAULTS.crack.threshold && st.outageWeeks === RULE_DEFAULTS.crack.outageWeeks;
+/** The stock signal (lookback and trigger) at its starting settings. */
+const signalIsDefault = (st: Pick<CrackState, 'lookback' | 'threshold'>) => st.lookback === RULE_DEFAULTS.crack.lookback && st.threshold === RULE_DEFAULTS.crack.threshold;
+const ruleIsDefault = (st: Pick<CrackState, 'lookback' | 'threshold' | 'outageWeeks'>) => signalIsDefault(st) && st.outageWeeks === RULE_DEFAULTS.crack.outageWeeks;
 const stepDown = (s: number) => Math.round((s - SEASON_STEP) * 10) / 10;
 
-/** Challenge a: no outages, the rule at its defaults, and the smallest seasonal swing at which the rule still takes a position. */
+/**
+ * Challenge a: no outages, the stock signal at its defaults (the outage setting can't matter without
+ * outages), and the smallest seasonal swing at which the rule still takes a position.
+ */
 export function stillTradesSolved(st: Omit<CrackState, 'view'>): boolean {
-  if (st.outages !== 0 || !ruleIsDefault(st)) return false;
+  if (st.outages !== 0 || !signalIsDefault(st)) return false;
   if (positionsTaken(st) === 0) return false;
   return st.seasonality < SEASON_STEP / 2 || positionsTaken({ ...st, seasonality: stepDown(st.seasonality) }) === 0;
 }
 
-/** Challenge b: default outages and rule, and the smallest seasonal swing at which the calendar earns the rule more than surprises do. */
-export function calendarWinsSolved(st: Omit<CrackState, 'view'>): boolean {
-  if (st.outages !== HISTORY_DEFAULTS.refineryOutages || !ruleIsDefault(st)) return false;
-  const wins = (s: number) => {
-    const x = splitFor({ ...st, seasonality: s });
-    return x.calendar > x.surprise;
-  };
-  return wins(st.seasonality) && (st.seasonality < SEASON_STEP / 2 || !wins(stepDown(st.seasonality)));
+/** Challenge b: the seasonal swing the reader predicts for — half the normal swing. */
+export const HALF_SEASONS = 0.5;
+
+/**
+ * Challenge b: with the outages and the rule at their starting settings, the reader predicts how much
+ * of the calendar's part of the P&L survives halving the seasonal swing, then sets it to check.
+ */
+export function halfSeasonsSolved(st: Omit<CrackState, 'view'>): boolean {
+  return st.outages === HISTORY_DEFAULTS.refineryOutages && ruleIsDefault(st) && Math.abs(st.seasonality - HALF_SEASONS) < 1e-9;
 }
 
 /** The fastest fall and rise of combined gasoline and distillate stocks over the rule's lookback, million bbl. */
@@ -164,6 +150,8 @@ const BASE_SPLIT = splitFor(BASE_STATE);
 const NO_SEASONS = runCrack({ ...BASE_STATE, seasonality: 0 });
 const NO_SEASONS_SPLIT = splitFor({ ...BASE_STATE, seasonality: 0 });
 const NO_OUTAGES = runCrack({ ...BASE_STATE, outages: 0 });
+/** The rule with its outage signal switched off, at the normal seasons and outages. */
+const NO_OUTAGE_SIGNAL = runCrack({ ...BASE_STATE, outageWeeks: 0 });
 const BASIS_LOSS = splitFor({ ...BASE_STATE, seasonality: 0, outages: 3 });
 const longWeeks = (r: BacktestResult) => r.positions.filter((p) => p > 0).length;
 const shortWeeks = (r: BacktestResult) => r.positions.filter((p) => p < 0).length;
@@ -200,13 +188,7 @@ const CAL_321 = calendarRange(BASE_H.map(productsCrack));
 
 // ---------------------------------------------------------------------------
 
-const money = (x: number) => usd(Math.round(x / 1000) * 1000);
 const cents = (x: number) => `${fmt(x * 100)} cents`;
-const tone = (v: number) => (v < 0 ? ('red' as const) : v > 0 ? ('green' as const) : ('ink' as const));
-const YEAR_TICKS = [26, 78, 130, 182, 234];
-const yearLabel = (v: number) => `year ${Math.round((v - 26) / 52) + 1}`;
-const LONG_FILL = 'rgba(109, 156, 55, .22)';
-const SHORT_FILL = 'rgba(231, 91, 85, .2)';
 const OUTAGE_FILL = 'rgba(0, 0, 0, .09)';
 const STOCK_COLOR = GRAPHIC.orange;
 const CRACK_COLOR = GRAPHIC.green;
@@ -242,27 +224,28 @@ export default function Lesson() {
   const r = useMemo(() => backtest(h, 'crack', crackRule(h, { lookback, threshold, outageWeeks }), { units: UNITS }), [h, lookback, threshold, outageWeeks]);
   const split = useMemo(() => splitPnl(h, r), [h, r]);
   const solvedA = useMemo(() => stillTradesSolved({ seasonality, outages, lookback, threshold, outageWeeks }), [seasonality, outages, lookback, threshold, outageWeeks]);
-  const solvedB = useMemo(() => calendarWinsSolved({ seasonality, outages, lookback, threshold, outageWeeks }), [seasonality, outages, lookback, threshold, outageWeeks]);
+  const solvedB = halfSeasonsSolved({ seasonality, outages, lookback, threshold, outageWeeks });
   const moves = useMemo(() => fastestMoves(h, lookback), [h, lookback]);
   const below = useMemo(
     () => (seasonality >= SEASON_STEP / 2 ? fastestMoves(historyFor({ seasonality: stepDown(seasonality), outages }), lookback) : null),
     [seasonality, outages, lookback],
   );
 
-  // Figure 1's series.
-  const stocks = h.map((w, t) => [t, w.gasolineStock + w.distillateStock] as [number, number]);
-  const crack = h.map((w, t) => [t, w.crack321] as [number, number]);
+  // Figure 1's series, in years.
+  const stocks = h.map((w, t) => [t / WEEKS_PER_YEAR, w.gasolineStock + w.distillateStock] as [number, number]);
+  const crack = h.map((w, t) => [t / WEEKS_PER_YEAR, w.crack321] as [number, number]);
   const equity: Array<[number, number]> = [[0, 0]];
   r.pnl.reduce((acc, v, t) => {
     const next = acc + v;
-    equity.push([t + 1, next]);
+    equity.push([(t + 1) / WEEKS_PER_YEAR, next]);
     return next;
   }, 0);
+  const span = h.length / WEEKS_PER_YEAR;
   const stockDomain = niceDomain(Math.min(NORMAL_STOCKS, ...stocks.map((p) => p[1])), Math.max(NORMAL_STOCKS, ...stocks.map((p) => p[1])), 3);
   const crackDomain = niceDomain(Math.min(...crack.map((p) => p[1])), Math.max(...crack.map((p) => p[1])), 3);
   const eqDomain = niceDomain(Math.min(0, ...equity.map((p) => p[1])), Math.max(1000, ...equity.map((p) => p[1])), 3);
-  const positionBands: XYBand[] = runsOf(r.positions).map((run) => ({ from: run.from, to: run.to, color: run.sign > 0 ? LONG_FILL : SHORT_FILL }));
-  const outageBands: XYBand[] = runsOf(h.map((w) => (w.refineryOutage > 0 ? 1 : 0))).map((run) => ({ from: run.from, to: run.to, color: OUTAGE_FILL }));
+  const bands = positionBands(r.positions);
+  const outageBands: XYBand[] = runsOf(h.map((w) => (w.refineryOutage > 0 ? 1 : 0))).map((run) => ({ from: run.from / WEEKS_PER_YEAR, to: run.to / WEEKS_PER_YEAR, color: OUTAGE_FILL }));
   const outageCount = h.filter((w, t) => t > 0 && w.refineryOutage > 0 && h[t - 1].refineryOutage === 0).length + (h[0].refineryOutage > 0 ? 1 : 0);
   const long = longWeeks(r);
   const short = shortWeeks(r);
@@ -283,7 +266,32 @@ export default function Lesson() {
   const calDomain = niceDomain(Math.min(0, ...series), Math.max(...series), 4);
   const monthTicks = Array.from({ length: 12 }, (_, m) => ((m + 0.5) * WEEKS_PER_YEAR) / 12);
 
-  const ruleStatus = !ruleIsDefault(st) ? `Return the rule to a ${RULE_DEFAULTS.crack.lookback}-week lookback, a ${RULE_DEFAULTS.crack.threshold} million barrel change and ${RULE_DEFAULTS.crack.outageWeeks} weeks after an outage.` : null;
+  const outageStatus = outageWeeks !== RULE_DEFAULTS.crack.outageWeeks ? `Set the rule back to ${RULE_DEFAULTS.crack.outageWeeks} weeks long after an outage.` : null;
+
+  const seasonSlider = (
+    <Slider
+      label="Seasonal swing"
+      tone="red"
+      value={seasonality}
+      min={0}
+      max={2}
+      step={SEASON_STEP}
+      onChange={(v) => s.set({ seasonality: Math.round(v * 10) / 10 })}
+      display={seasonDisplay(seasonality)}
+    />
+  );
+  const outageSlider = (
+    <Slider
+      label="Refinery outages"
+      tone="orange"
+      value={outages}
+      min={0}
+      max={6}
+      step={0.5}
+      onChange={(v) => s.set({ outages: v })}
+      display={`${fmt(outages, 1)} a year · ${outageCount} in five years`}
+    />
+  );
 
   return (
     <LessonPage id="oil/6.3">
@@ -310,7 +318,8 @@ export default function Lesson() {
       </P>
       <P>
         In the next demonstration, the rule trades five years of simulated history. The first two sliders are the physical drivers: how strongly product demand
-        swings with the seasons, and how often refineries fail. The other three set the rule. Change any of them and watch the profit and loss:
+        swings with the seasons, and how often refineries fail. The third sets how long the rule stays long after an outage. Change any of them and watch the profit
+        and loss:
       </P>
 
       <Figure name="Refining Spread Trader" scenario={s}>
@@ -319,17 +328,17 @@ export default function Lesson() {
             { label: 'Gasoline + distillate stocks', color: STOCK_COLOR, kind: 'line' },
             { label: 'Refinery outage', color: 'rgba(0, 0, 0, .18)' },
             { label: '3:2:1 crack against WTI', color: CRACK_COLOR, kind: 'line' },
-            { label: 'Long the crack', color: 'rgba(109, 156, 55, .45)' },
-            { label: 'Short the crack', color: 'rgba(231, 91, 85, .4)' },
+            { label: 'Long the crack', color: LONG_SWATCH },
+            { label: 'Short the crack', color: SHORT_SWATCH },
           ]}
         />
         <XYChart
           ariaLabel={`World gasoline and distillate stocks over five simulated years, between ${fmt(Math.min(...stocks.map((p) => p[1])))} and ${fmt(Math.max(...stocks.map((p) => p[1])))} million barrels against a normal ${fmt(NORMAL_STOCKS)}, with ${outageCount} refinery outages shaded.`}
           height={150}
-          x={[0, h.length]}
+          x={[0, span]}
           y={stockDomain}
           xTicks={YEAR_TICKS}
-          xFormat={yearLabel}
+          xFormat={yearTick}
           yTicks={niceTicks(stockDomain[0], stockDomain[1], 3)}
           yFormat={(v) => fmt(v)}
           yLabel="Product stocks, million barrels"
@@ -340,23 +349,23 @@ export default function Lesson() {
         <XYChart
           ariaLabel={`The 3:2:1 crack against WTI, between ${usd(crackDomain[0])} and ${usd(crackDomain[1])} a barrel, with the rule long for ${long} weeks and short for ${short}.`}
           height={150}
-          x={[0, h.length]}
+          x={[0, span]}
           y={crackDomain}
           xTicks={YEAR_TICKS}
-          xFormat={yearLabel}
+          xFormat={yearTick}
           yTicks={niceTicks(crackDomain[0], crackDomain[1], 3)}
           yFormat={(v) => `$${fmt(v)}`}
           yLabel="3:2:1 crack against WTI, $ per barrel (simulated)"
-          bands={positionBands}
+          bands={bands}
           series={[{ points: crack, color: CRACK_COLOR, width: 1.75 }]}
         />
         <XYChart
           ariaLabel={`Cumulative profit of ${UNITS} units over five years: ${money(st0.total)} after ${money(r.costs)} of trading costs; maximum drawdown ${money(st0.maxDrawdown)}.`}
           height={150}
-          x={[0, h.length]}
+          x={[0, span]}
           y={eqDomain}
           xTicks={YEAR_TICKS}
-          xFormat={yearLabel}
+          xFormat={yearTick}
           yTicks={niceTicks(eqDomain[0], eqDomain[1], 3)}
           yFormat={(v) => (v === 0 ? '$0' : `${v < 0 ? '−' : ''}$${fmt(Math.abs(v) / 1000)}k`)}
           yLabel={`Cumulative P&L, ${UNITS} units`}
@@ -364,44 +373,17 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: <K c="price">total P&amp;L</K>, value: money(st0.total), tone: tone(st0.total) },
-            { label: 'Sharpe ratio', value: fmt(st0.sharpe, 2) },
-            { label: <K tone="violet">maximum drawdown</K>, value: money(st0.maxDrawdown), tone: st0.maxDrawdown > 0 ? 'red' : 'ink' },
+            { label: <K c="price">total P&amp;L</K>, value: money(st0.total), tone: pnlTone(st0.total) },
+            { label: <K tone="violet">Sharpe ratio</K>, value: fmt(st0.sharpe, 2), tone: RISK_TONE },
+            { label: <K tone="violet">maximum drawdown</K>, value: money(st0.maxDrawdown), tone: RISK_TONE },
             { label: 'trading costs', value: money(r.costs) },
           ]}
         />
-        <Slider
-          label="Seasons: demand swing"
-          tone="red"
-          value={seasonality}
-          min={0}
-          max={2}
-          step={SEASON_STEP}
-          onChange={(v) => s.set({ seasonality: Math.round(v * 10) / 10 })}
-          display={seasonality === 1 ? '×1.0 (normal)' : `×${fmt(seasonality, 1)}`}
-        />
-        <Slider
-          label="Refinery outages"
-          tone="orange"
-          value={outages}
-          min={0}
-          max={6}
-          step={0.5}
-          onChange={(v) => s.set({ outages: v })}
-          display={`${fmt(outages, 1)} a year · ${outageCount} in five years`}
-        />
-        <Slider label="Rule: lookback" value={lookback} min={1} max={8} onChange={(v) => s.set({ lookback: v })} display={`${lookback} week${lookback === 1 ? '' : 's'}`} />
-        <Slider
-          label="Rule: stock change"
-          tone="orange"
-          value={threshold}
-          min={0}
-          max={40}
-          onChange={(v) => s.set({ threshold: v })}
-          display={`${threshold} million bbl`}
-        />
+        {seasonSlider}
+        {outageSlider}
         <Slider
           label="Rule: after an outage"
+          tone="violet"
           value={outageWeeks}
           min={0}
           max={8}
@@ -415,22 +397,24 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        With the drivers at their defaults, the rule earns {money(BASE.stats.total)} over five years, with a <K tone="violet">Sharpe ratio</K> — average weekly profit over
-        its standard deviation, scaled to a year — of {fmt(BASE.stats.sharpe, 2)} and a maximum drawdown of {money(BASE.stats.maxDrawdown)}. It is long the crack for {longWeeks(BASE)} weeks and short for{' '}
-        {shortWeeks(BASE)}. Look at where the shading falls: the long positions bunch in July and August, when summer driving draws gasoline down, and the short ones
-        between November and January, when stocks rebuild.
+        With the drivers at their defaults, the rule earns {money(BASE.stats.total)} over five years, with a Sharpe ratio of {fmt(BASE.stats.sharpe, 2)} and a
+        maximum drawdown of {money(BASE.stats.maxDrawdown)} (both as in <a href={lessonHref('oil/6.1')}>Lesson 6.1</a>). It is long the crack for{' '}
+        {longWeeks(BASE)} weeks and short for {shortWeeks(BASE)}. Look at where the shading falls: the long positions bunch in July and August, when summer driving
+        draws gasoline down, and the short ones between November and January, when stocks rebuild.
       </P>
       <P>
         Now take the physics away. Set the seasonal swing to zero, and the rule earns {money(NO_SEASONS.stats.total)}, with a Sharpe ratio of{' '}
-        {fmt(NO_SEASONS.stats.sharpe, 2)}; it never goes short. Set refinery outages to zero as well, and it doesn’t trade at all:
-        without seasons or outages, product stocks never move {RULE_DEFAULTS.crack.threshold} million barrels in{' '}
-        {RULE_DEFAULTS.crack.lookback} weeks. The rule doesn’t find opportunities; it reads the ones the physical drivers create.
+        {fmt(NO_SEASONS.stats.sharpe, 2)}; it never goes short. Set refinery outages to zero as well, and it doesn’t trade at all: without seasons or outages,
+        product stocks never move {RULE_DEFAULTS.crack.threshold} million barrels in {RULE_DEFAULTS.crack.lookback} weeks. The rule doesn’t find opportunities; it
+        reads the ones the physical drivers create.
       </P>
       <P>
         The outages matter less than you might expect. Return the seasons to normal and remove the outages, and the rule earns {money(NO_OUTAGES.stats.total)},
         a little more than with them. An outage in our history takes 0.5 to 1.5 million barrels a day of the world’s refinery runs for two to eight weeks. With the
         seasons switched off, the products’ side of the crack rose by an average of {cents(OUTAGE_EFFECT.perWeek)} a week while an outage lasted — but the crack as a
-        whole moves by about {usd(OUTAGE_EFFECT.sd, 2)} from one week to the next (one standard deviation). The signal is real, but small beside the noise.
+        whole moves by about {usd(OUTAGE_EFFECT.sd, 2)} from one week to the next (one standard deviation). The signal is real, but small beside the noise. The
+        rule’s own outage setting agrees: with the outages back, set it to ignore them and the rule earns {money(NO_OUTAGE_SIGNAL.stats.total)}, more than when it
+        buys after each one.
       </P>
 
       <Challenge
@@ -440,10 +424,9 @@ export default function Lesson() {
         status={
           outages !== 0
             ? 'Set refinery outages to zero.'
-            : (ruleStatus ??
-              (long + short === 0
-                ? `At ×${fmt(seasonality, 1)} the rule never trades: stocks fall by at most ${fmt(moves.draw, 1)} and rise by at most ${fmt(moves.build, 1)} million barrels in ${lookback} weeks.`
-                : `At ×${fmt(seasonality, 1)} the rule trades for ${long + short} weeks. Could the seasons be weaker still?`))
+            : long + short === 0
+              ? `At ×${fmt(seasonality, 1)} the rule never trades: stocks fall by at most ${fmt(moves.draw, 1)} and rise by at most ${fmt(moves.build, 1)} million barrels in ${lookback} weeks.`
+              : `At ×${fmt(seasonality, 1)} the rule trades for ${long + short} weeks. Could the seasons be weaker still?`
         }
         success={`Solved: ×${fmt(seasonality, 1)}. Here stocks rise by up to ${fmt(moves.build, 1)} million barrels in ${lookback} weeks and fall by up to ${fmt(moves.draw, 1)}${
           below ? `; one step weaker, the most they move is ${fmt(Math.max(below.draw, below.build), 1)} million, short of the ${threshold} million the rule needs` : ''
@@ -457,7 +440,7 @@ export default function Lesson() {
         Of the products’ part, some follows the <K tone="red">calendar</K> — the same rise and fall every year — and the rest is <K tone="violet">surprise</K>. We
         estimate the calendar by fitting a smooth annual curve to all five years, a stand-in for what a market that has watched many years expects. In the next
         demonstration, each thin line is one year’s crack, drawn by week of the year; the thick line is the calendar; and the readouts split the rule’s P&amp;L from{' '}
-        <FigRef to="Refining Spread Trader">the first demonstration</FigRef> the same way:
+        <FigRef to="Refining Spread Trader">the first demonstration</FigRef> the same way. Its sliders are the same seasons and outages:
       </P>
 
       <Figure name="Refining Spread Trader · the calendar" scenario={s}>
@@ -479,7 +462,7 @@ export default function Lesson() {
         />
         <XYChart
           ariaLabel={`The ${VIEW_LABEL[view]} crack against Brent by week of the year for each of ${years} simulated years, with its calendar running from ${usd(calLo, 2)} in ${monthOfWeek(calYear.indexOf(calLo))} to ${usd(calHi, 2)} in ${monthOfWeek(calYear.indexOf(calHi))}.`}
-          height={230}
+          height={220}
           x={[0, WEEKS_PER_YEAR]}
           y={calDomain}
           xTicks={monthTicks}
@@ -491,22 +474,14 @@ export default function Lesson() {
         />
         <Readouts
           items={[
-            { label: <K tone="red">from the calendar</K>, value: money(split.calendar), tone: tone(split.calendar) },
-            { label: <K tone="violet">from surprises</K>, value: money(split.surprise), tone: tone(split.surprise) },
-            { label: 'from Brent–WTI', value: money(split.basis), tone: tone(split.basis) },
+            { label: <K tone="red">from the calendar</K>, value: money(split.calendar), tone: pnlTone(split.calendar) },
+            { label: <K tone="violet">from surprises</K>, value: money(split.surprise), tone: pnlTone(split.surprise) },
+            { label: 'from Brent–WTI', value: money(split.basis), tone: pnlTone(split.basis) },
             { label: 'trading costs', value: money(-split.costs), tone: split.costs > 0 ? 'red' : 'ink' },
           ]}
         />
-        <Slider
-          label="Seasons: demand swing"
-          tone="red"
-          value={seasonality}
-          min={0}
-          max={2}
-          step={SEASON_STEP}
-          onChange={(v) => s.set({ seasonality: Math.round(v * 10) / 10 })}
-          display={seasonality === 1 ? '×1.0 (normal)' : `×${fmt(seasonality, 1)}`}
-        />
+        {seasonSlider}
+        {outageSlider}
         <Caption>
           The four parts add up to the rule’s {money(split.total)}. The {VIEW_LABEL[view]} calendar swings by {usd(calHi - calLo, 2)} a barrel, from{' '}
           {monthOfWeek(calYear.indexOf(calLo))} to {monthOfWeek(calYear.indexOf(calHi))}.
@@ -533,22 +508,22 @@ export default function Lesson() {
       <Challenge
         id="b"
         figure="Refining Spread Trader · the calendar"
-        question="Keep refinery outages at 1.5 a year and the rule at its starting settings. What’s the smallest seasonal swing at which the calendar earns the rule more than surprises do?"
+        question={`Predict first, then check: at normal seasons the calendar earned the rule ${money(BASE_SPLIT.calendar)}. With refinery outages at ${fmt(HISTORY_DEFAULTS.refineryOutages, 1)} a year and the rule as it started, halve the seasonal swing, to ×${fmt(HALF_SEASONS, 1)}. Will the calendar’s part be about half as much, or far less? Remember that the rule acts only on a ${RULE_DEFAULTS.crack.threshold}-million-barrel change in stocks.`}
         solved={solvedB}
         status={
           outages !== HISTORY_DEFAULTS.refineryOutages
-            ? 'Set refinery outages back to 1.5 a year.'
-            : (ruleStatus ?? `At ×${fmt(seasonality, 1)}, the calendar earns ${money(split.calendar)} and surprises ${money(split.surprise)}.`)
+            ? `Set refinery outages back to ${fmt(HISTORY_DEFAULTS.refineryOutages, 1)} a year.`
+            : (outageStatus ?? `Make your prediction, then set the seasonal swing to ×${fmt(HALF_SEASONS, 1)}.`)
         }
-        success={`Solved: ×${fmt(seasonality, 1)}, where the calendar earns ${money(split.calendar)} against ${money(split.surprise)} from surprises. At every stronger swing the calendar stays ahead, and by more and more, because the rule’s positions line up with the seasons. Even a fairly mild seasonal cycle, once it is large enough to trigger the rule, is most of what the rule is paid for.`}
+        success={`Solved: at ×${fmt(HALF_SEASONS, 1)} the calendar earns the rule ${money(split.calendar)}, ${pct(split.calendar / BASE_SPLIT.calendar)} of what it earned at normal seasons — far less than half. Each seasonal move is half as large, and fewer of them reach the rule’s trigger, so it holds a position for ${long + short} weeks instead of ${longWeeks(BASE) + shortWeeks(BASE)}. Both effects shrink the calendar’s part at once, so it falls much faster than the swing itself.`}
       />
 
       <H2>What’s left</H2>
       <P>
         Leave the calendar out and two parts remain. The {money(BASE_SPLIT.basis)} from the Brent–WTI spread is a passenger: the rule never looked at the inland
-        discount, and its positions simply happened to line up with the spread’s moves. They can as easily line up against them. With the seasons off and three outages a year, the same rule loses{' '}
-        {money(-BASIS_LOSS.basis)} on the spread. A crack priced against WTI is also a bet on WTI’s discount to the coast, which matters to anyone who uses the crack
-        to stand in for a particular refinery’s margin.
+        discount, and its positions simply happened to line up with the spread’s moves. They can as easily line up against them. With the seasons off and three
+        outages a year, the same rule loses {money(-BASIS_LOSS.basis)} on the spread. A crack priced against WTI is also a bet on WTI’s discount to the coast, which
+        matters to anyone who uses the crack to stand in for a particular refinery’s margin.
       </P>
       <P>
         The surprises are the rule’s real edge: stock draws nobody scheduled, caught a week or two after they began. At the default settings they were worth{' '}
@@ -557,10 +532,10 @@ export default function Lesson() {
         before the price has moved — which is why weekly inventory reports and news of refinery outages move these markets so quickly.
       </P>
       <P>
-        A speculator chooses whether to hold the crack. A refinery holds it whether it likes it or not: every barrel the Calder refinery runs earns the gap between its
+        A speculator chooses whether to hold the crack. A refinery holds it whether it likes it or not: every barrel the Corran refinery runs earns the gap between its
         products and its crude, so its margin rises and falls with the same seasons and surprises this rule tried to catch. In{' '}
-        <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> the refinery stops trying to forecast the crack and sells it forward instead, to lock in a margin — and finds
-        that how well that works depends on how closely the crack it sells matches the barrels it makes.
+        <a href={lessonHref('oil/6.4')}>Lesson 6.4</a> the refinery stops trying to forecast the crack and sells it forward instead, at prices that already carry
+        the seasons, to lock in a margin — and finds that how well that works depends on how closely the crack it sells moves with its own margin.
       </P>
     </LessonPage>
   );

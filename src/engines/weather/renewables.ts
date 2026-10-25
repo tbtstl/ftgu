@@ -1,7 +1,7 @@
 // Weather-dependent generation: a wind turbine's power curve against the wind's distribution,
 // air density, height above ground, and forecast uncertainty; and solar output from the sun's
 // height, cloud and panel temperature. Hollin Ridge's wind farm and Valley solar are the
-// electricity course's Ridge wind (350 MW) and Valley solar (400 MW), set in the Calder region.
+// electricity course's Ridge wind (350 MW) and Valley solar (400 MW), set in the Fenwick region.
 
 import { sunAt } from './station';
 

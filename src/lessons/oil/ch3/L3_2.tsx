@@ -9,9 +9,9 @@ import { XYChart } from '../shared/charts';
 // ---------------------------------------------------------------------------
 // The cracker: feed, temperature and prices.
 
-export type Feed = 'ridgeback' | 'northfield' | 'coldwater';
-const FEEDS: Feed[] = ['ridgeback', 'northfield', 'coldwater'];
-const NAME: Record<Feed, string> = { ridgeback: 'Ridgeback', northfield: 'Northfield', coldwater: 'Coldwater' };
+export type Feed = 'pinyon' | 'northfield' | 'coldwater';
+const FEEDS: Feed[] = ['pinyon', 'northfield', 'coldwater'];
+const NAME: Record<Feed, string> = { pinyon: 'Pinyon', northfield: 'Northfield', coldwater: 'Coldwater' };
 
 /** How aromatic each crude's gas oil is (its crude's aromaticity, 0–1): rings resist cracking. */
 export const FEED_AROMATICITY: Record<Feed, number> = Object.fromEntries(FEEDS.map((f) => [f, CRUDE_SPECS.find((s) => s.id === f)!.aromaticity])) as Record<Feed, number>;
@@ -25,6 +25,21 @@ export const DEFAULT_PRICES: FccPrices = { gasoline: PRODUCT_PRICE.gasoline, lpg
 
 export function marginAt(feed: Feed, tempC: number, prices: FccPrices = DEFAULT_PRICES): number {
   return fccMargin(fccConversion(tempC, FEED_AROMATICITY[feed]), prices);
+}
+
+/** The conversion (to 0.001) that earns the cracker the most per barrel of feed at the given prices. */
+export function bestConversion(prices: FccPrices = DEFAULT_PRICES): { X: number; margin: number } {
+  let bx = 0.5;
+  let bm = -Infinity;
+  for (let i = 0; i <= 400; i++) {
+    const x = 0.5 + i * 0.001;
+    const m = fccMargin(x, prices);
+    if (m > bm) {
+      bm = m;
+      bx = x;
+    }
+  }
+  return { X: bx, margin: bm };
 }
 
 /** The riser temperature on the slider's grid that maximizes the cracker's margin. */
@@ -41,10 +56,17 @@ export function bestTemperature(feed: Feed, prices: FccPrices = DEFAULT_PRICES):
   return best;
 }
 
-/** Challenge a: at the reference prices, the riser temperature that earns the most for the chosen feed. */
+/** Challenge a's feed: the most aromatic of the three gas oils. */
+export const CHALLENGE_FEED: Feed = 'coldwater';
+
+/**
+ * Challenge a: at the reference prices, a riser temperature for Coldwater's gas oil that earns the
+ * most to the cent the margin readout shows (two neighboring degrees can tie at that precision).
+ */
 export function bestTempSolved(feed: Feed, tempC: number, gasoline: number, lco: number): boolean {
-  if (gasoline !== DEFAULT_PRICES.gasoline || lco !== DEFAULT_PRICES.lco) return false;
-  return tempC === bestTemperature(feed);
+  if (feed !== CHALLENGE_FEED || gasoline !== DEFAULT_PRICES.gasoline || lco !== DEFAULT_PRICES.lco) return false;
+  const cents = (t: number) => Math.round(marginAt(feed, t) * 100);
+  return cents(tempC) === cents(bestTemperature(feed));
 }
 
 // ---------------------------------------------------------------------------
@@ -54,11 +76,17 @@ export type Route = 'reject' | 'add';
 export type HeavyFeed = 'gasOil' | 'residue';
 /** Specific gravity of the feed for the hydrogen arithmetic. */
 export const HEAVY_SG: Record<HeavyFeed, number> = { gasOil: 0.93, residue: 1.0 };
-/** Challenge b: the hydrogen a hydrocracker can be given, scf per barrel. */
-export const H2_SUPPLY = 1500;
+/** Each feed's typical hydrogen per carbon: choosing a feed sets the slider here. */
+export const HEAVY_HC: Record<HeavyFeed, number> = { gasOil: 1.6, residue: 1.5 };
+/**
+ * Challenge b: the hydrogen a hydrocracker can be given, scf per barrel. Chosen to fall well between
+ * the needs at two neighboring slider steps (1,268 scf at 1.62, 1,222 at 1.63), so the readout,
+ * rounded to 10 scf, never looks like it meets the supply when it doesn't.
+ */
+export const H2_SUPPLY = 1250;
 export const HC_STEP = 0.01;
 
-/** Challenge b: the lowest gas-oil H/C ratio (on the slider's 0.01 steps) a hydrocracker can upgrade with 1,500 scf/bbl. */
+/** Challenge b: the lowest gas-oil H/C ratio (on the slider's 0.01 steps) a hydrocracker can upgrade with H2_SUPPLY scf/bbl. */
 export function hydrogenLimitSolved(route: Route, feed: HeavyFeed, hc: number): boolean {
   if (route !== 'add' || feed !== 'gasOil') return false;
   const h = (r: number) => hydrogenToUpgrade(r, HEAVY_SG.gasOil);
@@ -254,34 +282,24 @@ export default function Lesson() {
   const y = fccYields(X);
   const margin = fccMargin(X, prices);
   const curve = useMemo(() => Array.from({ length: 81 }, (_, i) => 0.5 + i * 0.005).map((x) => [x, fccMargin(x, { ...DEFAULT_PRICES, gasoline, lco })] as [number, number]), [gasoline, lco]);
-  const best = useMemo(() => bestTemperature(feed, { ...DEFAULT_PRICES, gasoline, lco }), [feed, gasoline, lco]);
-  const bestX = fccConversion(best, FEED_AROMATICITY[feed]);
+  // The margin axis: −$10 to $20 at the reference prices, widened in $10 steps when the curve leaves it.
+  const yLo = Math.min(-10, Math.floor(Math.min(...curve.map((p) => p[1])) / 10) * 10);
+  const yHi = Math.max(20, Math.ceil(Math.max(...curve.map((p) => p[1])) / 10) * 10);
+  const yTicksMargin = Array.from({ length: (yHi - yLo) / 10 + 1 }, (_, i) => yLo + i * 10);
   const solvedA = bestTempSolved(feed, temp, gasoline, lco);
   const atDefaults = gasoline === DEFAULT_PRICES.gasoline && lco === DEFAULT_PRICES.lco;
 
   // Numbers for the prose, at the reference prices.
   const y75 = fccYields(0.75);
   const liquids75 = y75.gasoline + y75.lpg + y75.lco + y75.slurry;
-  const refBest = useMemo(() => {
-    let bx = 0.5;
-    let bm = -Infinity;
-    for (let i = 0; i <= 400; i++) {
-      const x = 0.5 + i * 0.001;
-      const m = fccMargin(x, DEFAULT_PRICES);
-      if (m > bm) {
-        bm = m;
-        bx = x;
-      }
-    }
-    return { X: bx, margin: bm };
-  }, []);
+  const refBest = useMemo(() => bestConversion(), []);
   const bestT = useMemo(() => Object.fromEntries(FEEDS.map((f) => [f, bestTemperature(f)])) as Record<Feed, number>, []);
-  const rbHighLco = useMemo(() => bestTemperature('ridgeback', { ...DEFAULT_PRICES, lco: 100 }), []);
-  const rbLowLco = useMemo(() => bestTemperature('ridgeback', { ...DEFAULT_PRICES, lco: 70 }), []);
+  const rbHighLco = useMemo(() => bestTemperature('pinyon', { ...DEFAULT_PRICES, lco: 100 }), []);
+  const rbLowLco = useMemo(() => bestTemperature('pinyon', { ...DEFAULT_PRICES, lco: 70 }), []);
   const nf = crude('northfield');
   const cw = crude('coldwater');
 
-  const s2 = useScenario('hydrogen', { route: 'reject' as Route, heavy: 'gasOil' as HeavyFeed, hc: 1.7 });
+  const s2 = useScenario('hydrogen', { route: 'reject' as Route, heavy: 'gasOil' as HeavyFeed, hc: HEAVY_HC.gasOil });
   const { route, heavy, hc } = s2.state;
   const rejected = carbonRejected(hc);
   const h2 = hydrogenToUpgrade(hc, HEAVY_SG[heavy]);
@@ -308,7 +326,8 @@ export default function Lesson() {
       <P>
         In an FCC, gas oil is sprayed into a stream of hot catalyst: a fine powder, made mostly of a porous mineral called a zeolite, that flows almost like a liquid when
         gas is blown through it. Together they rush up a tall pipe, the <b>riser</b>, at roughly 500–550 °C, and in a few seconds the catalyst breaks the molecules
-        apart. At the top, the cracked vapors leave for a distillation column of their own, while the catalyst, now coated with coke, drops back to the{' '}
+        apart. At the top, the cracked vapors leave for a distillation column of their own, which splits them into gasoline, LPG, a diesel-range oil called{' '}
+        <b>light cycle oil</b> (LCO) and a heavy bottom stream called <b>slurry oil</b>. The catalyst, now coated with coke, drops back to the{' '}
         <b>regenerator</b>, where air burns the coke off. That fire heats the catalyst, and the hot catalyst carries the heat back to the riser: the unit runs on the coke
         it makes. In the next demonstration, choose which crude’s gas oil to crack, and set the <K tone="red">riser temperature</K> and two prices:
       </P>
@@ -318,12 +337,12 @@ export default function Lesson() {
         <CrackerDiagram tempC={temp} X={X} />
         <YieldBars X={X} />
         <XYChart
-          ariaLabel={`The cracker’s margin per barrel of feed against conversion, at gasoline ${usd(gasoline)} and light cycle oil ${usd(lco)}. Now: ${pct(X, 1)} conversion and ${usd(margin, 2)} a barrel; the best riser temperature for this feed, ${best} °C, gives ${pct(bestX, 1)} and ${usd(marginAt(feed, best, prices), 2)}.`}
+          ariaLabel={`The cracker’s margin per barrel of feed against conversion, at gasoline ${usd(gasoline)} and light cycle oil ${usd(lco)}. Now: ${pct(X, 1)} conversion and ${usd(margin, 2)} a barrel.`}
           height={190}
           x={[0.5, 0.9]}
-          y={[-10, 20]}
+          y={[yLo, yHi]}
           xTicks={[0.5, 0.6, 0.7, 0.8, 0.9]}
-          yTicks={[-10, 0, 10, 20]}
+          yTicks={yTicksMargin}
           xFormat={(v) => pct(v)}
           yFormat={(v) => usd(v)}
           xLabel="conversion"
@@ -372,25 +391,28 @@ export default function Lesson() {
         {usd(fccMargin(0.75, DEFAULT_PRICES), 2)} at 75%.
       </P>
       <P>
-        The feed matters too. Aromatic rings are hard to crack, so the gas oils of the sourer, heavier crudes need a hotter riser to reach the same conversion. At the
-        reference prices, the most profitable temperature is {bestT.ridgeback} °C for Ridgeback’s gas oil, {bestT.northfield} °C for Northfield’s and {bestT.coldwater} °C
-        for Coldwater’s.
+        The feed matters too. Aromatic rings are hard to crack, so the gas oils of the sourer, heavier crudes need a hotter riser to reach the same conversion. The
+        margin chart, though, is drawn against conversion, not temperature.
       </P>
 
       <Challenge
         id="a"
-        question={`At the reference prices — gasoline ${usd(DEFAULT_PRICES.gasoline)}, light cycle oil ${usd(DEFAULT_PRICES.lco)} — find the riser temperature, to the nearest degree, that earns the most from ${NAME[feed]} gas oil.`}
+        question={`Coldwater’s gas oil is the most aromatic of the three. Predict first: at the riser temperature that earns the most from it, what conversion will the cracker reach? Then, at the reference prices — gasoline ${usd(DEFAULT_PRICES.gasoline)}, light cycle oil ${usd(DEFAULT_PRICES.lco)} — find that temperature.`}
         solved={solvedA}
         status={
-          !atDefaults
-            ? `Set the prices back to ${usd(DEFAULT_PRICES.gasoline)} for gasoline and ${usd(DEFAULT_PRICES.lco)} for light cycle oil.`
-            : `At ${temp} °C, ${NAME[feed]} gas oil is ${pct(X, 1)} converted and earns ${usd(margin, 2)} a barrel.`
+          feed !== CHALLENGE_FEED
+            ? `Choose ${NAME[CHALLENGE_FEED]} gas oil.`
+            : !atDefaults
+              ? `Set the prices back to ${usd(DEFAULT_PRICES.gasoline)} for gasoline and ${usd(DEFAULT_PRICES.lco)} for light cycle oil.`
+              : `At ${temp} °C, ${NAME[feed]} gas oil is ${pct(X, 1)} converted and earns ${usd(margin, 2)} a barrel.`
         }
-        success={`Solved: ${temp} °C, ${pct(X, 1)} conversion and ${usd(margin, 2)} a barrel. A degree hotter or cooler earns less. Try another feed: the more aromatic the gas oil, the hotter its best riser.`}
+        success={`Solved: ${temp} °C, ${pct(X, 1)} conversion and ${usd(margin, 2)} a barrel — the peak of the margin curve, the conversion that is best for any feed at these prices. Coldwater’s aromatic rings change only the temperature it takes to get there.`}
       />
 
       <P>
-        Now move the prices. When diesel is dear, light cycle oil is worth more, and the best conversion falls: with it at $100, Ridgeback’s gas oil is best cracked at{' '}
+        Every feed’s best riser lands near the same {pct(refBest.X)} conversion, because the margin depends only on conversion and prices; the feed sets the temperature
+        it takes. At the reference prices that is {bestT.pinyon} °C for Pinyon’s gas oil, {bestT.northfield} °C for Northfield’s and {bestT.coldwater} °C for
+        Coldwater’s. Now move the prices. When diesel is dear, light cycle oil is worth more, and the best conversion falls: with it at $100, Pinyon’s gas oil is best cracked at{' '}
         {rbHighLco} °C, and at $70 the best temperature rises to {rbLowLco} °C. Refiners do shift their crackers this way, between running for gasoline and running for
         distillate, as the prices of the two move — one of the ways a refinery’s output answers the market, which we’ll return to in{' '}
         <a href={lessonHref('oil/5.3')}>Lesson 5.3</a>.
@@ -403,8 +425,9 @@ export default function Lesson() {
         are rich in the rings and aromatics of <a href={lessonHref('oil/1.2')}>Lesson 1.2</a>. Break a hydrogen-poor molecule into fuel-sized pieces and its hydrogen won’t
         stretch to cover them all. A refinery has two ways out. It can <b>reject carbon</b>: leave some of it behind as coke, which carries only about {COKE_HC} hydrogen
         per carbon, so the rest can be richer. The cracker does this a little; the coker does it wholesale. Or it can <b>add hydrogen</b>, in a hydrocracker: cracking
-        under high hydrogen pressure, which turns gas oil mostly into diesel and jet fuel. In the next demonstration, choose a route and a feed, and set the feed’s
-        hydrogen content:
+        under high hydrogen pressure, which turns gas oil mostly into diesel and jet fuel. Refiners count hydrogen as a gas, in <b>standard cubic feet</b> (scf): the
+        volume it would fill at 60 °F and atmospheric pressure. A thousand scf of hydrogen weighs about 2.4 kilograms. In the next demonstration, choose a route and a feed;
+        each feed starts at a typical hydrogen content, which you can then change:
       </P>
 
       <Figure name="Cracking Simulator · hydrogen" scenario={s2}>
@@ -420,10 +443,10 @@ export default function Lesson() {
         <Segmented
           label="Feed"
           value={heavy}
-          onChange={(v) => s2.set({ heavy: v })}
+          onChange={(v) => s2.set({ heavy: v, hc: HEAVY_HC[v] })}
           options={[
-            { value: 'gasOil', label: `Gas oil (SG ${HEAVY_SG.gasOil})` },
-            { value: 'residue', label: `Residue (SG ${fmt(HEAVY_SG.residue, 1)})` },
+            { value: 'gasOil', label: `Gas oil (H/C ${fmt(HEAVY_HC.gasOil, 1)}, SG ${HEAVY_SG.gasOil})` },
+            { value: 'residue', label: `Residue (H/C ${fmt(HEAVY_HC.residue, 1)}, SG ${fmt(HEAVY_SG.residue, 1)})` },
           ]}
         />
         <AtomLedger route={route} hc={hc} />
@@ -488,9 +511,9 @@ export default function Lesson() {
       </Figure>
 
       <P>
-        Gas oil with {fmt(1.6, 1)} hydrogens per carbon must give up {pct(carbonRejected(1.6), 1)} of its carbon as coke to bring the rest up to {FUEL_HC}, or take on about{' '}
-        {scf(hydrogenToUpgrade(1.6, HEAVY_SG.gasOil))} of hydrogen. Residue at 1.5 is worse: {pct(carbonRejected(1.5), 1)} of its carbon, or about{' '}
-        {scf(hydrogenToUpgrade(1.5, HEAVY_SG.residue))}. Real hydrocrackers do consume well over a thousand standard cubic feet of hydrogen per barrel, and they’re among
+        Gas oil with {fmt(HEAVY_HC.gasOil, 1)} hydrogens per carbon must give up {pct(carbonRejected(HEAVY_HC.gasOil), 1)} of its carbon as coke to bring the rest up to{' '}
+        {FUEL_HC}, or take on about {scf(hydrogenToUpgrade(HEAVY_HC.gasOil, HEAVY_SG.gasOil))} of hydrogen. Residue at {fmt(HEAVY_HC.residue, 1)} is worse:{' '}
+        {pct(carbonRejected(HEAVY_HC.residue), 1)} of its carbon, or about {scf(hydrogenToUpgrade(HEAVY_HC.residue, HEAVY_SG.residue))}. Real hydrocrackers do consume well over a thousand standard cubic feet of hydrogen per barrel, and they’re among
         the most expensive units a refinery can build. The cracker gets away with rejecting only a few percent of its feed as coke because it doesn’t convert
         everything: it leaves the most hydrogen-poor part behind as light cycle oil and slurry.
       </P>
@@ -515,7 +538,7 @@ export default function Lesson() {
         spent. You can return to <FigRef to="Cracking Simulator">the first demonstration</FigRef> to see how that trade shifts with the prices of gasoline and diesel.
       </P>
       <P>
-        A refinery like Calder, without a hydrocracker, spends most of its hydrogen on a different job: taking sulfur out. The streams that need it most are the ones this
+        A refinery like Corran, without a hydrocracker, spends most of its hydrogen on a different job: taking sulfur out. The streams that need it most are the ones this
         lesson made — light cycle oil and coker gas oil — and the straight-run diesel of sour crudes like Northfield’s. The{' '}
         <a href={lessonHref('oil/3.3')}>next lesson</a> follows the sulfur out, and counts the hydrogen it takes.
       </P>
