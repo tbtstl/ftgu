@@ -1,10 +1,11 @@
 import { useEffect, type ReactNode } from 'react';
-import { markSolved } from '../course/progress';
+import { markSolved, useProgress } from '../course/progress';
 import { useLessonId } from './Page';
 
 /**
  * A goal the reader reaches with a demonstration's controls. `solved` is computed live from
- * that demonstration's state; the first time it becomes true, the lesson's progress records it.
+ * that demonstration's state; the first time it becomes true, the lesson's progress records it,
+ * and from then on the challenge shows as solved (in green) even when the controls move on.
  */
 export function Challenge({
   id,
@@ -29,21 +30,23 @@ export function Challenge({
   success: ReactNode;
 }) {
   const lessonId = useLessonId();
+  const solvedBefore = !!useProgress()[lessonId]?.includes(id);
+  const done = solved || solvedBefore;
   useEffect(() => {
     if (solved && lessonId) markSolved(lessonId, id);
   }, [solved, lessonId, id]);
 
   return (
     <div className="chal" data-fig-focus={figure}>
-      <div className="chal-h">
+      <div className={done ? 'chal-h ok' : 'chal-h'}>
         <span>Challenge</span>
-        <span className={solved ? 'chal-st ok' : 'chal-st'}>
-          {solved && (
+        <span className={done ? 'chal-st ok' : 'chal-st'}>
+          {done && (
             <svg width="12" height="12" viewBox="0 0 18 18" aria-hidden="true">
               <path d="M3 9.5 L7.5 14 L15 4.5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           )}
-          {solved ? 'Solved' : 'Unsolved'}
+          {done ? 'Solved' : 'Unsolved'}
         </span>
       </div>
       <p className="chal-q">{question}</p>

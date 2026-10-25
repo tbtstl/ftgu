@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CHAPTERS, getLesson, hasLesson, LESSONS } from '../course/registry';
 import { lessonHref } from '../course/router';
-import { useLastLesson, useProgress } from '../course/progress';
+import { lessonProgress, useLastLesson, useProgress } from '../course/progress';
 import { Crumbs } from '../framework/Page';
 import { RunnerMark } from '../framework/RunnerMark';
 import { ResumeCard } from './ResumeCard';
@@ -13,7 +13,6 @@ export function Course() {
   const last = useLastLesson();
   const current = (last && getLesson(last)) || undefined;
   const [open, setOpen] = useState<Record<number, boolean>>(() => ({ [current?.chapter ?? 1]: true }));
-  const solved = (id: string) => (progress[id]?.length ?? 0) > 0;
   const resume = current ?? LESSONS[0];
 
   useEffect(() => {
@@ -44,8 +43,9 @@ export function Course() {
         <ol className="rows">
           {CHAPTERS.map((c) => {
             const isOpen = !!open[c.n];
-            const done = c.lessons.filter((l) => solved(l.id)).length;
-            const status = done === c.lessons.length ? 'Done' : done > 0 ? `${done} of ${c.lessons.length}` : `${c.lessons.length} lessons`;
+            const done = c.lessons.filter((l) => lessonProgress(progress, l.id).done).length;
+            const complete = done === c.lessons.length;
+            const status = complete ? 'Done' : done > 0 ? `${done} of ${c.lessons.length}` : `${c.lessons.length} lessons`;
             return (
               <li key={c.n}>
                 <h3 className="row-h">
@@ -58,24 +58,25 @@ export function Course() {
                   >
                     <span className="row-n">{c.n}</span>
                     <span className="row-t">{c.title}</span>
-                    <span className="row-m">{status}</span>
+                    <span className={complete ? 'row-m ok' : 'row-m'}>{status}</span>
                   </button>
                 </h3>
                 <div className={isOpen ? 'fold open' : 'fold'} id={`chapter-${c.n}`} inert={!isOpen}>
                   <div className="fold-in">
                     <ol className="rows rows-in">
                       {c.lessons.map((l) => {
-                        const isDone = solved(l.id);
+                        const lp = lessonProgress(progress, l.id);
                         const isCurrent = l.id === current?.id;
-                        const cls = 'row' + (isDone ? ' done' : '') + (isCurrent ? ' now' : '');
-                        const mark = isCurrent ? 'Up next' : isDone ? 'Done' : '';
+                        const cls = 'row' + (lp.done ? ' done' : '') + (isCurrent ? ' now' : '');
                         return (
                           <li key={l.id}>
                             {hasLesson(l.id) ? (
                               <a className={cls} href={lessonHref(l.id)} aria-current={isCurrent ? 'step' : undefined}>
                                 <span className="row-n">{l.id}</span>
                                 <span className="row-t">{l.title}</span>
-                                <span className="row-m">{mark}</span>
+                                <span className={lp.done ? 'row-m ok' : 'row-m'} aria-label={`${lp.solved} of ${lp.total} challenges solved`}>
+                                  {lp.solved}/{lp.total}
+                                </span>
                               </a>
                             ) : (
                               <div className={cls + ' done'}>

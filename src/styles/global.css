@@ -130,6 +130,7 @@ button.row { cursor: pointer; }
 .row.done { color: var(--muted); }
 .row.now { font-weight: 500; }
 .row.now .row-m { color: var(--text); }
+.row-m.ok, .row.now .row-m.ok { color: #2f6b2a; }
 a.row:hover .row-t, button.row:hover .row-t { text-decoration: underline; text-decoration-color: rgba(17, 17, 17, .25); text-underline-offset: 3px; }
 a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
@@ -357,7 +358,7 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 .chal { margin: 2em 0 1em; padding: 14px 18px 16px; border: 1px solid var(--rule-strong); border-radius: 6px; }
 .chal-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .chal-st { display: inline-flex; align-items: center; gap: 6px; }
-.chal-st.ok { color: #2f6b2a; }
+.chal-st.ok, .chal-h.ok { color: #2f6b2a; }
 .chal-q { margin: 4px 0 0; font-size: 16px; font-weight: 400; line-height: 1.6; }
 .chal-q b, .chal-q strong, .chal-q .k { font-weight: 400; }
 .chal-s { margin-top: 4px; font-size: 14px; line-height: 1.55; color: var(--muted); }
