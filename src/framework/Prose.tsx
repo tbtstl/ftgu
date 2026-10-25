@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { CONCEPT, type Tone } from './tokens';
+import { useFigureActive } from './twoUp';
 
 /** A body paragraph. */
 export function P({ children }: { children: ReactNode }) {
@@ -36,11 +37,76 @@ export function Tn({ tone, children }: { tone: Tone; children: ReactNode }) {
   return <span className={`tone-${tone}`}>{children}</span>;
 }
 
-/** A centered, live equation row. Children are terms; use <Op> for operators. */
+/** Smallest the type may shrink to keep an equation on one line; past this it wraps instead. */
+const EQ_MIN_SCALE = 0.6;
+/** Size of an equation that has to wrap anyway. */
+const EQ_WRAP_SCALE = 0.85;
+
+/**
+ * A live equation on one line. Children are terms; use <Op> for operators. When the row is wider
+ * than its column (a phone, the two-up panel, long numbers), the type shrinks to fit rather than
+ * breaking the equation in two, down to EQ_MIN_SCALE. Only a row too long even then wraps.
+ */
 export function Eq({ children, label }: { children: ReactNode; label?: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const row = useRef<HTMLSpanElement>(null);
+  // Re-render (and so refit) when this equation's figure is brought into the side panel.
+  useFigureActive();
+
+  const fit = () => {
+    const b = box.current;
+    const r = row.current;
+    if (!b || !r) return;
+    // Measure at full size, then scale down to the width available.
+    r.style.fontSize = '';
+    r.classList.remove('wrap');
+    const natural = r.scrollWidth;
+    const room = b.clientWidth;
+    if (!natural || !room || natural <= room) return;
+    // Not everything shrinks exactly with the type (rounding, fraction bars), so correct a few times.
+    let scale = 1;
+    let width = natural;
+    for (let i = 0; i < 4 && width > room && scale > EQ_MIN_SCALE; i++) {
+      scale = Math.max(EQ_MIN_SCALE, scale * (room / width) * 0.99);
+      r.style.fontSize = `${scale.toFixed(3)}em`;
+      width = r.scrollWidth;
+    }
+    // Too long even at the smallest size: break it like typeset maths instead, at a readable size,
+    // with the continuation indented under the first line.
+    if (width > room) {
+      r.classList.add('wrap');
+      scale = EQ_WRAP_SCALE;
+      r.style.fontSize = `${scale}em`;
+      // A single wide term (a long fraction) can't wrap, so shrink until it fits too.
+      width = r.scrollWidth;
+      for (let i = 0; i < 4 && width > room && scale > EQ_MIN_SCALE; i++) {
+        scale = Math.max(EQ_MIN_SCALE, scale * (room / width) * 0.99);
+        r.style.fontSize = `${scale.toFixed(3)}em`;
+        width = r.scrollWidth;
+      }
+    }
+  };
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+
+  // Refit whenever the terms change (live numbers), and when the column or the fonts do. The
+  // second pass runs after every layout effect, once a figure has been moved into the side panel.
+  useLayoutEffect(fit);
+  useEffect(fit);
+  useLayoutEffect(() => {
+    const b = box.current;
+    if (!b || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => fitRef.current());
+    ro.observe(b);
+    document.fonts?.ready.then(() => fitRef.current());
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div className="eq" role="math" aria-label={label}>
-      {children}
+    <div className="eq" role="math" aria-label={label} ref={box}>
+      <span className="eq-row" ref={row}>
+        {children}
+      </span>
     </div>
   );
 }
