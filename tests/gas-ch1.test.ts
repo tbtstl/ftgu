@@ -1,13 +1,16 @@
-// Natural gas, chapter 1: numbers the lessons' prose computes live, checked against what the prose says.
+// Natural gas, chapter 1: numbers the lessons' prose computes live, checked against what the prose says,
+// and the region map that Lesson 1.1 opens with.
 
+import { createElement } from 'react';
+import { cleanup, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { fmt, pct } from '../src/framework/format';
 import { checkSpec, COMPONENT, gasProperties, PIPELINE_SPEC, psia, psig, rankine, SCF_PER_LBMOL, STD_PSIA } from '../src/engines/gas/properties';
 import { piston } from '../src/engines/gas/eos';
 import { frictionFactor, pipeInventory, ROUGHNESS } from '../src/engines/gas/hydraulics';
 import { compress, stationLine } from '../src/engines/gas/compression';
-import { PIPELINE, stationLineOf } from '../src/model/gas/world';
-import { ETHANE_ANSWER, ETHANE_ESTIMATE, ETHANE_STEP, ethaneSolved, MIX_DEFAULTS, mixComposition, PRESETS } from '../src/lessons/gas/ch1/L1_1';
+import { BASINS, GAS_NODE, GAS_NODES, PIPELINE, PIPELINES, STORAGE_FIELDS, stationLineOf } from '../src/model/gas/world';
+import L1_1, { ETHANE_ANSWER, ETHANE_ESTIMATE, ETHANE_STEP, ethaneSolved, MIX_DEFAULTS, mixComposition, PRESETS } from '../src/lessons/gas/ch1/L1_1';
 import { CHARGE_SCF, IDEAL_MAOP_VOLUME, MAOP_PSIG, MAOP_VOLUME, maopSolved, PISTON_DEFAULTS, SCF_CNG_ROUNDED } from '../src/lessons/gas/ch1/L1_2';
 import { FLOW_DEFAULTS, flowAt, transitHours } from '../src/lessons/gas/ch1/L1_3';
 import { capacityWith, expansionSolved, FEWEST_FOR_TARGET, LINE_DEFAULTS, SQRT_LADDER_ERROR, SQRT_STATIONS, TARGET_FLOW } from '../src/lessons/gas/ch1/L1_4';
@@ -225,5 +228,41 @@ describe('gas 1.5: the bill challenge, computed as 100,000 ÷ 101.7', () => {
 
   it('raises every bill of the region’s gas by the same 5.5%, whatever the month’s use', () => {
     expect(pct(thermsPerCcf(BILL_DEFAULTS.hhv) - 1, 1)).toBe('5.5%');
+  });
+});
+
+describe('gas 1.1: the region map, before the first demonstration', () => {
+  const view = () => render(createElement(L1_1));
+
+  it('opens with the map, ahead of the Molecule Lab and its raw Ridgeback and Sandhill gases', () => {
+    const { container } = view();
+    const names = Array.from(container.querySelectorAll('figure.fig')).map((f) => f.getAttribute('aria-label'));
+    expect(names.slice(0, 2)).toEqual(['Molecule Lab · the region', 'Molecule Lab']);
+    cleanup();
+  });
+
+  it('names every place, pipeline and storage field the model defines, with one fact each', () => {
+    const { container } = view();
+    const map = Array.from(container.querySelectorAll('figure.fig')).find((f) => f.getAttribute('aria-label') === 'Molecule Lab · the region')!;
+    const labels = Array.from(map.querySelectorAll('svg text')).map((t) => t.textContent ?? '');
+    const has = (s: string) => expect(labels, s).toContain(s);
+    for (const n of GAS_NODES) has(n.name);
+    for (const p of PIPELINES) {
+      has(p.name);
+      has(`${String(p.capacityBcfd)} Bcf/d`);
+    }
+    for (const s of STORAGE_FIELDS) {
+      has(s.name);
+      expect(labels.some((l) => l.endsWith(`· ${s.workingBcf} Bcf`))).toBe(true);
+    }
+    for (const b of BASINS) expect(labels.some((l) => l.endsWith(`· ${String(b.productionBcfd)} Bcf/d`))).toBe(true);
+    // What each place is, in the model's words.
+    has(GAS_NODE.metro.kind);
+    has(GAS_NODE.bayport.kind);
+    expect(labels.some((l) => l.startsWith(`${GAS_NODE.ridgeback.kind} ·`))).toBe(true);
+    // The same places, in words, for screen readers.
+    const aria = map.querySelector('svg')!.getAttribute('aria-label') ?? '';
+    for (const name of [...GAS_NODES, ...PIPELINES, ...STORAGE_FIELDS].map((x) => x.name)) expect(aria).toContain(name);
+    cleanup();
   });
 });

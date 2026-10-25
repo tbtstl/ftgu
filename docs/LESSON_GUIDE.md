@@ -23,7 +23,9 @@ its own code apart so its lessons can be written alongside the others:
 Everything in this guide applies, with "chapter" meaning the course's module. Like electricity's
 six-node region, each course should build one fictional world early (a gas region with its basins,
 pipelines, storage and hub; a corn-and-wheat region; a refinery and its crudes) and reuse it
-through the capstone. The capstone chapter combines mechanics the reader already learned rather
+through the capstone. Where a lesson first introduces that world, show a map of it, as electricity
+does, before any chart that depends on it: the reader needs an overview of the places they'll
+be changing before the graphs. The capstone chapter combines mechanics the reader already learned rather
 than introducing new concepts. A course may reuse electricity's engines and framework, but
 mustn't edit them. To link within a course, use `lessonHref('gas/3.2')`.
 

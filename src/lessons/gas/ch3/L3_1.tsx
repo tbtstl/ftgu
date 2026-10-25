@@ -310,7 +310,7 @@ export default function Lesson() {
         a city runs short on a cold morning; build too much and the steel sits half empty, paid for by somebody.
       </P>
       <P>
-        In the next demonstration the region is drawn as it stands, with its six pipelines and two corridors where a line could run but none has been built. Each place’s
+        In the next demonstration the region is drawn as it stands, with the six pipelines of <a href={lessonHref('gas/1.1')}>Lesson 1.1</a>’s map and two corridors where a line could run but none has been built. Each place’s
         circle shows its demand that day, in Bcf/d. Each line’s width is its size and its color says how full it is: gray under 80%, orange nearly full, red full; the
         label is its flow over its capacity. Ridgeback produces {fmt(BASINS[0].productionBcfd, 1)} Bcf/d and Sandhill {fmt(BASINS[1].productionBcfd, 1)}, and on cold
         days the two storage fields add their own: Salt Flat at Calder Hub, up to {fmt(SALT_FLAT_BCFD, 1)} Bcf/d, and Hollow Creek beside Metro, up to{' '}

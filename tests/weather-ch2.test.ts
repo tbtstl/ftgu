@@ -1,16 +1,19 @@
 // Chapter 2 of the weather course: the numbers its prose quotes, and its challenges after the second fix pass.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, render } from '@testing-library/react';
 import { fmt } from '../src/framework';
 import { angularMomentumWind, EARTH_RADIUS_M, hadleyEdgeDeg, OMEGA } from '../src/engines/weather/dynamics';
 import { ENSO_DEFAULTS } from '../src/engines/weather/enso';
 import { frontPassage, frontWeather } from '../src/engines/weather/fronts';
 import { latitudeBalance } from '../src/engines/weather/radiation';
 import { AXIAL_TILT_DEG, dailySunlight, dayLengthHours, declination, noonSunHeightDeg } from '../src/engines/weather/seasons';
-import { FENWICK, LAPSE_F_PER_KM, LATITUDE, RIDGE, STATIONS, climateOf } from '../src/model/weather/region';
+import { FENWICK, LAPSE_F_PER_KM, LATITUDE, RIDGE, STATIONS, climateOf, type StationId } from '../src/model/weather/region';
 import { climateSeries, yearBands } from '../src/engines/weather/climatology';
 import { CONTRAST_DEFAULT_K, JET_TARGET, ROTATION_STEP, THETA0_K, TROPOPAUSE_KM, circulationFor, jetSolved, ringWind, tradesSolved } from '../src/lessons/weather/ch2/L2_1';
-import { FRONT_DEFAULTS, LAG_TARGET_H, LOW_DEFAULTS, coldLagHours, lagSolved, leastRainDewC, pressureJump, rainSolved } from '../src/lessons/weather/ch2/L2_2';
+import Lesson22, { FRONT_DEFAULTS, LAG_TARGET_H, LOW_DEFAULTS, coldLagHours, lagSolved, leastRainDewC, pressureJump, rainSolved } from '../src/lessons/weather/ch2/L2_2';
+import { stationNote } from '../src/lessons/weather/shared/FenwickMap';
 import { DEW_STEP, DRIER_DEW_C, INGREDIENT_DEFAULTS, STORM_LIFT_KM, WEAK_LIFT_KM, leastDewSolved, outlookOf } from '../src/lessons/weather/ch2/L2_3';
 import { PACIFIC_DEFAULTS, growthPerMonth, laNinaSolved, teleconnection, thresholdSolved, warmestLaNinaWinter } from '../src/lessons/weather/ch2/L2_4';
 import {
@@ -26,6 +29,29 @@ import {
 } from '../src/lessons/weather/ch2/L2_5';
 
 describe('weather chapter 2', () => {
+  afterEach(cleanup);
+
+  it('2.2: the region map names every station, before the first chart', () => {
+    const view = render(createElement(Lesson22));
+    const figures = Array.from(view.container.querySelectorAll('figure.fig'));
+    const map = figures.find((f) => f.getAttribute('aria-label') === 'Weather Front Lab · the region');
+    expect(map).toBeDefined();
+    // It is the lesson's first figure, ahead of the fronts and the passing low.
+    expect(figures.indexOf(map!)).toBe(0);
+    expect(figures.some((f) => f.getAttribute('aria-label') === 'Weather Front Lab · a passing low')).toBe(true);
+    const text = map!.textContent ?? '';
+    for (const id of Object.keys(STATIONS) as StationId[]) {
+      expect(text).toContain(STATIONS[id].name);
+      expect(text).toContain(stationNote(id));
+    }
+    expect(stationNote('ridge')).toBe('wind farm, 700 m up');
+    expect(text).toContain('ocean');
+    expect(text).toContain('the plains');
+    expect(text).toContain(`about ${LATITUDE}° north`);
+    // Static: no controls.
+    expect(map!.querySelectorAll('input, .seg button').length).toBe(0);
+  });
+
   it('2.1: the Held–Hou reach, its symbols and the numbers the prose quotes', () => {
     const earth = circulationFor(1, CONTRAST_DEFAULT_K);
     // The lesson's tropopause height is the one the engine uses.

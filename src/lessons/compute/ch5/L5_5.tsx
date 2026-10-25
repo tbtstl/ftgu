@@ -531,8 +531,8 @@ export default function Lesson() {
     <LessonPage id="compute/5.5">
       <P>
         The previous lesson priced one kind of GPU in one place. But capacity isn’t in one place, and it isn’t one kind. This
-        course’s GPUs sit at three sites — Marston, in the coastal city beside most of the users; Tech Park, a short hop away; and Fernhill, a cold valley{' '}
-        {SITES.fernhill.rttMs} ms of round trip from them (<a href={lessonHref('compute/4.3')}>Lesson 4.3</a>) — and come in the three classes of{' '}
+        course’s GPUs sit at the three sites mapped in <a href={lessonHref('compute/4.2')}>Lesson 4.2</a> — Marston, in the coastal city beside most of the users;
+        Tech Park, a {SITES.techpark.rttMs} ms round trip from them; and Fernhill, a cold valley {SITES.fernhill.rttMs} ms away — and come in the three classes of{' '}
         <a href={lessonHref('compute/3.5')}>Lesson 3.5</a>. Should an A-class hour cost the same at all three? This lesson builds a small market and lets it answer.
       </P>
       <P>

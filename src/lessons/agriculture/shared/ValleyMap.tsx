@@ -35,7 +35,8 @@ function centroid(poly: Array<[number, number]>): [number, number] {
   return [x / poly.length, y / poly.length];
 }
 
-const PLACE_SHAPE: Record<Place['kind'], string> = {
+/** The marker drawn for each kind of place, centered on the place. */
+export const PLACE_SHAPE: Record<Place['kind'], string> = {
   elevator: 'M-5 5 L-5 -3 L0 -7 L5 -3 L5 5 Z',
   terminal: 'M-6 5 L-6 -4 L6 -4 L6 5 Z',
   ethanol: 'M-4 5 L-4 -6 L4 -6 L4 5 Z',

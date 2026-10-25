@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
 import {
+  Caption,
   Challenge,
   DataTable,
   Eq,
@@ -36,6 +37,7 @@ import {
   type Component,
   type Composition,
 } from '../../../engines/gas/properties';
+import { GasRegionMap } from '../shared/GasRegionMap';
 
 // ---------------------------------------------------------------------------
 // The mixture: every constituent but methane is a slider, in mole percent; methane is the rest.
@@ -312,11 +314,24 @@ export default function Lesson() {
         Natural gas is cheap in one place and dear in another, cheap in July and dear in January. Each of those differences has a physical cause: what the gas is made of,
         how far and how fast it can be pushed through a pipe, and where it can be kept until it’s wanted. This course follows gas through a fictional region — from the rock
         that holds it, through processing plants, pipelines and storage fields, to the hub where it’s priced and the desks that trade it — and traces every price
-        difference back to one of those causes. We’ll start with the smallest piece of the system: the molecule.
+        difference back to one of those causes.
       </P>
       <P>
-        What comes out of a gas well is a mixture. Most of it is methane, the simplest hydrocarbon: one carbon atom holding four hydrogen atoms. Mixed in are heavier
-        hydrocarbons — ethane, propane and butane, with two, three and four carbons — and <b>inert gases</b>, which don’t burn at all, chiefly nitrogen and carbon dioxide. Nobody who buys
+        Here is the region. Its gas comes out of the ground in the west, from the Ridgeback shale and the old Sandhill field. Six pipelines carry it east, most of it
+        through Calder Hub, where it’s bought and sold, to the places that use it: the city of Metro in the northeast, and the port of Bayport on the coast, whose
+        terminal also chills gas into a liquid for ships. Two storage fields keep gas from summer for winter: Salt Flat at the hub and Hollow Creek near Metro. Every
+        place on this map comes back later in the course:
+      </P>
+
+      <Figure name="Molecule Lab · the region">
+        <GasRegionMap />
+        <Caption>Bcf is a billion cubic feet of gas. Fields show what they produce a day, pipelines the most they can carry a day, storage fields the gas they can hold for later.</Caption>
+      </Figure>
+
+      <P>
+        We’ll start with the smallest piece of the system: the molecule. What comes out of a gas well is a mixture. Most of it is methane, the simplest hydrocarbon:
+        one carbon atom holding four hydrogen atoms. Mixed in are heavier hydrocarbons — ethane, propane and butane, with two, three and four carbons — and{' '}
+        <b>inert gases</b>, which don’t burn at all, chiefly nitrogen and carbon dioxide. Nobody who buys
         gas wants the molecules themselves. They want the heat the gas gives off when it burns, so gas is bought and sold by its <K c="energy">energy</K>, and the first
         question is how much energy a cubic foot of it holds.
       </P>
@@ -400,7 +415,7 @@ export default function Lesson() {
         Neither of the region’s fields produces gas like that. Raw gas from the Ridgeback shale is rich in the heavier hydrocarbons, at {fmt(RIDGE.hhv)} Btu per standard cubic foot.
         Raw gas from the old Sandhill field is lean, at {fmt(SAND.hhv)}, and {pct(SAND_RAW.nitrogen + SAND_RAW.co2, 1)} of it is nitrogen and carbon dioxide. The pipelines
         won’t take either. Every pipeline publishes a quality rule for the gas it carries, and the table in{' '}
-        <FigRef to="Molecule Lab">the first demonstration</FigRef> shows ours, which is in the usual North American range.
+        <FigRef to="Molecule Lab">the molecule demonstration</FigRef> shows ours, which is in the usual North American range.
       </P>
       <P>
         Why cap the heating value at all, when richer gas carries more energy? Because of what happens at the far end. A stove, a furnace or a power plant’s turbine feeds
@@ -419,7 +434,7 @@ export default function Lesson() {
           <>
             Raw Ridgeback gas carries {fmt(RIDGE.hhv)} Btu per standard cubic foot, {fmt(PRESETS.ridgeback.ethane)}% of it ethane, and the pipeline’s cap is{' '}
             {fmt(HHV_CAP)}. Suppose the only fix were to take ethane out and let methane fill its place. Using the {fmt(ETHANE_STEP, 1)} Btu/scf each point of ethane
-            adds, estimate first: how much of the ethane could stay? Then check in <FigRef to="Molecule Lab">the first demonstration</FigRef>: choose raw Ridgeback gas
+            adds, estimate first: how much of the ethane could stay? Then check in <FigRef to="Molecule Lab">the molecule demonstration</FigRef>: choose raw Ridgeback gas
             and move only the ethane slider to the most ethane that meets every rule.
           </>
         }
@@ -443,7 +458,7 @@ export default function Lesson() {
         When methane burns, each molecule takes two molecules of oxygen from the air and becomes one molecule of carbon dioxide and two of water. Air is about 21% oxygen, so
         every cubic foot of methane needs about {fmt(METH.airPerVolume, 2)} cubic feet of air. Heavier hydrocarbons need more, and every carbon atom in the fuel leaves as a
         molecule of carbon dioxide. In the next demonstration, choose a fuel — one of the pure hydrocarbons, or the mix you last set in{' '}
-        <FigRef to="Molecule Lab">the first demonstration</FigRef> — to see its reaction, its heat and its carbon dioxide:
+        <FigRef to="Molecule Lab">the molecule demonstration</FigRef> — to see its reaction, its heat and its carbon dioxide:
       </P>
 
       <Figure name="Molecule Lab · combustion" scenario={f}>

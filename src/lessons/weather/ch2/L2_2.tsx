@@ -1,5 +1,6 @@
 import { useId, useMemo } from 'react';
 import {
+  Caption,
   Challenge,
   FigRef,
   Figure,
@@ -25,8 +26,8 @@ import {
 } from '../../../framework';
 import { FRONT_SHAPE, frontPassage, frontWeather, type FrontInput, type FrontKind, type FrontWeather, type StationHour } from '../../../engines/weather/fronts';
 import { density } from '../../../engines/weather/thermo';
-import { STATIONS, type StationId } from '../../../model/weather/region';
-import { FenwickMap } from '../shared/FenwickMap';
+import { LATITUDE, STATIONS, type StationId } from '../../../model/weather/region';
+import { FenwickMap, FenwickOverview } from '../shared/FenwickMap';
 import { WX } from '../shared/tones';
 
 // ---------------------------------------------------------------------------
@@ -482,8 +483,16 @@ export default function Lesson() {
         Chapter 1 visited the course’s fictional region a few times; from here on we’ll follow it closely. The <b>Fenwick region</b> lies at about 41° north on
         the east coast of a continent. Its port city, <b>Fenwick Bay</b>, is where the weather contracts of later chapters will settle. About 350 km inland lies{' '}
         <b>Marlow</b>, the farm town on the corn plains of <a href={lessonHref('weather/1.4')}>Lesson 1.4</a>, and to the city’s north-west the hills of{' '}
-        <b>Hollin Ridge</b> carry the region’s wind farm. Two air masses take turns over it.
-        Continental polar air arrives from the north-west, cold and dry from the interior; maritime tropical air arrives from the south, warm and humid from the
+        <b>Hollin Ridge</b> carry the region’s wind farm. Each of the three has a weather station, and the rest of the course keeps returning to them:
+      </P>
+
+      <Figure name="Weather Front Lab · the region">
+        <FenwickOverview />
+        <Caption>The Fenwick region, at about {LATITUDE}° north, with its three weather stations and each one’s height above sea level.</Caption>
+      </Figure>
+
+      <P>
+        Two air masses take turns over the region. Continental polar air arrives from the north-west, cold and dry from the interior; maritime tropical air arrives from the south, warm and humid from the
         ocean. Where they meet, the colder air is the denser: at the same pressure, air at {fmt(FRONT_DEFAULTS.coldC)} °C is {fmt((rhoCold / rhoWarm - 1) * 100)}%
         denser than air at {fmt(FRONT_DEFAULTS.warmC)} °C (<a href={lessonHref('weather/1.2')}>Lesson 1.2</a>). So the cold air slides under the warm air like a
         wedge, and the warm air is forced up over it — cooling as it rises, until it reaches its dew point and makes cloud (
@@ -594,7 +603,7 @@ export default function Lesson() {
         merge into is called an <b>occluded front</b>.
       </P>
       <P>
-        In the next demonstration, such a low tracks east along the northern edge of the Fenwick region, with its warm front (red half-disks) and cold front (blue
+        In the next demonstration, such a low tracks east along the northern edge of <FigRef to="Weather Front Lab · the region">the Fenwick region</FigRef>, with its warm front (red half-disks) and cold front (blue
         triangles) sweeping across the map. The rain bands are shaded teal and the warm sector red, and each station shows its temperature as the system passes. The
         chart compares the temperatures at Marlow and Fenwick Bay. Change the system’s speed, or drag the hour:
       </P>

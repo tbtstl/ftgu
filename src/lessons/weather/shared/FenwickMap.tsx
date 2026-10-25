@@ -112,7 +112,8 @@ export function FenwickMap({ children, overlay, highlight, onSelect, ariaLabel, 
             >
               {onSelect && <circle cx={s.x} cy={s.y} r={16} fill="transparent" />}
               <circle cx={s.x} cy={s.y} r={on ? 7 : 5} fill={on ? '#333' : '#fff'} stroke="#333" strokeWidth={2} />
-              <text x={labelLeft ? s.x - 12 : s.x + 10} y={s.y + (id === 'ridge' ? -12 : 4)} textAnchor={labelLeft ? 'end' : 'start'} className="lab">
+              {/* The ridge's name sits over its turbines' blade tips, clear of them. */}
+              <text x={labelLeft ? s.x - 12 : s.x + 10} y={s.y + (id === 'ridge' ? -28 : 4)} textAnchor={labelLeft ? 'end' : 'start'} className="lab">
                 {s.name}
               </text>
             </g>
@@ -133,5 +134,49 @@ export function FenwickMap({ children, overlay, highlight, onSelect, ariaLabel, 
         </text>
       </g>
     </svg>
+  );
+}
+
+/** What each station is, for the overview map. */
+const STATION_KIND: Record<StationId, string> = { fenwick: 'port city', marlow: 'farm town', ridge: 'wind farm' };
+
+/** The overview's label positions, relative to each station's marker, clear of the turbines and the river. */
+const OVERVIEW_LABEL: Record<StationId, { dx: number; dy: number; anchor: 'start' | 'end' }> = {
+  fenwick: { dx: -26, dy: 6, anchor: 'end' },
+  marlow: { dx: 12, dy: 4, anchor: 'start' },
+  ridge: { dx: -12, dy: 26, anchor: 'end' },
+};
+
+/** The note under a station's name on the overview map: what it is and how high. */
+export function stationNote(id: StationId): string {
+  return `${STATION_KIND[id]}, ${STATIONS[id].elevation.toLocaleString('en-US')} m up`;
+}
+
+/** A static overview of the region: every station, named, with what it is and its height. */
+export function FenwickOverview() {
+  const ids = Object.keys(STATIONS) as StationId[];
+  const halo = { paintOrder: 'stroke', stroke: LAND, strokeWidth: 4, strokeLinejoin: 'round' } as const;
+  return (
+    <FenwickMap
+      bare
+      ariaLabel={`Map of the Fenwick region, with north up and the ocean to the east. ${ids
+        .map((id) => `${STATIONS[id].name}, ${STATIONS[id].elevation.toLocaleString('en-US')} m above sea level: ${STATIONS[id].role}`)
+        .join(' ')}`}
+      overlay={ids.map((id) => {
+        const s = STATIONS[id];
+        const l = OVERVIEW_LABEL[id];
+        return (
+          <g key={id}>
+            <circle cx={s.x} cy={s.y} r={5} fill="#fff" stroke="#333" strokeWidth={2} />
+            <text x={s.x + l.dx} y={s.y + l.dy} textAnchor={l.anchor} className="lab" style={halo}>
+              {s.name}
+            </text>
+            <text x={s.x + l.dx} y={s.y + l.dy + 15} textAnchor={l.anchor} className="ax" style={halo}>
+              {stationNote(id)}
+            </text>
+          </g>
+        );
+      })}
+    />
   );
 }

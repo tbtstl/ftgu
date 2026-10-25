@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
+  Caption,
   Challenge,
   FigRef,
   Figure,
@@ -21,8 +22,9 @@ import {
 } from '../../../framework';
 import { CO2_TODAY, EXTINCTION, UMOL_PER_J, canopyDay, gramsToBushels, interception, leafAssimilation } from '../../../engines/agriculture/photosynthesis';
 import { CROP } from '../../../engines/agriculture/crop';
-import type { Crop } from '../../../model/agriculture/region';
+import { CEDAR_BEND, DISTRICT, type Crop, type DistrictId } from '../../../model/agriculture/region';
 import { CROP_LINE, CROP_NAME, CROP_TONE } from '../shared/tones';
+import { ValleyOverview } from '../shared/ValleyOverview';
 
 const LIGHT_MAX = 2200;
 const LX = scale(0, LIGHT_MAX, 64, 612);
@@ -49,6 +51,18 @@ export function crossingEstimate(light: number, co2: number, water: number): { r
   const gap = (t: number) => leafAssimilation('corn', light, co2, t, water / 100).net - leafAssimilation('wheat', light, co2, t, water / 100).net;
   const rate = (gap(28) - gap(24)) / 4;
   return { rate, at: 24 - gap(24) / rate };
+}
+
+/** Acres from thousands of acres: "350,000" or "1.3 million". */
+function acres(kAc: number): string {
+  return kAc >= 1000 ? `${fmt(kAc / 1000, kAc % 1000 === 0 ? 0 : 1)} million` : fmt(kAc * 1000);
+}
+
+/** The valley map's caption for a district: what sets it apart, its rain, and what it plants. */
+export function districtFacts(id: DistrictId): string {
+  const d = DISTRICT[id];
+  const corn = `${acres(d.cornKAc)} acres of corn${d.irrigatedKAc > 0 ? `, ${acres(d.irrigatedKAc)} of them irrigated,` : ''}`;
+  return `${d.note} It gets ${fmt(d.rainIn)} inches of rain in a normal year and plants ${corn} and ${acres(d.wheatKAc)} acres of wheat.`;
 }
 
 const SKY = { clear: 1700, hazy: 1150, overcast: 550 } as const;
@@ -148,6 +162,7 @@ function DayCurve({ crop, hourly, light }: { crop: Crop; hourly: number[]; light
 }
 
 export default function Lesson() {
+  const [district, setDistrict] = useState<DistrictId>(CEDAR_BEND.district);
   const s = useScenario('leaf', { light: 1500, co2: CO2_TODAY, temp: 28, water: 100 });
   const { light, co2, temp, water } = s.state;
   const cornNow = leafAssimilation('corn', light, co2, temp, water / 100).net;
@@ -178,8 +193,21 @@ export default function Lesson() {
       </P>
       <P>
         The course follows corn and wheat through one fictional region, the Crane Valley: five districts along the Crane River, from the dry High Plains in the west
-        to the deep, dark soils of the Black Prairie, with country elevators, a river terminal and two export ports. Our first stop is Cedar Bend, a 1,600-acre farm
-        on the Black Prairie that grows corn on most of its fields and winter wheat on the rest.
+        to the deep, dark soils of the Black Prairie, with country elevators, a river terminal and two export ports. Every chapter comes back to these places, so
+        here they are on a map. Select a district to see what sets it apart:
+      </P>
+
+      <Figure name="Photosynthesis Lab · the Crane Valley" onReset={() => setDistrict(CEDAR_BEND.district)}>
+        <ValleyOverview selected={district} onSelect={setDistrict} />
+        <Caption>
+          <b>{DISTRICT[district].name}.</b> {districtFacts(district)}
+        </Caption>
+      </Figure>
+
+      <P>
+        Grain that leaves the valley goes one of two ways: by barge down the Crane from Crane Landing to Port Sable, or by rail west to Westhaven. The rest is used at
+        home, by the ethanol plant, the feedyards and the flour mill. Our first stop, though, is where the grain grows. Cedar Bend, the dark dot on <FigRef to="Photosynthesis Lab · the Crane Valley">the map</FigRef>, is a 1,600-acre farm on the Black Prairie a
+        few miles from the Fairview elevator. It grows corn on most of its fields and winter wheat on the rest.
       </P>
       <P>
         Photosynthesis uses the energy of light to split water and to fix carbon dioxide into sugar. The carbon dioxide enters through <b>stomata</b>, tiny pores in

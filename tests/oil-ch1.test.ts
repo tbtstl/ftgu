@@ -1,17 +1,20 @@
 // Chapter 1 of the oil course: the numbers and challenge checks added or changed in the fix passes.
 // The chapter's original assertions live in tests/oil.test.ts.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, render } from '@testing-library/react';
 import { FAMILY_RANGE, buildMolecule, type Family } from '../src/engines/oil/molecules';
 import { LITERS_PER_BARREL, blend, blendViscosity, crude, massFractions, viscosity } from '../src/engines/oil/assay';
 import { CRUDE_SPECS } from '../src/model/oil/crudes';
 import { makeCrude } from '../src/engines/oil/assay';
 import { COMPONENTS, bubblePoint, dewPoint, flash, relativeVolatility, stages, txy } from '../src/engines/oil/phase';
 import { FUEL_BY_ID, LITERS_PER_GALLON, GALLONS_PER_BARREL, airFuelRatio, gjPerBarrel, usdPerGJ } from '../src/engines/oil/fuels';
-import { REF_PRICES } from '../src/model/oil/world';
+import { MAP_SIZE, PLACES, PLACE_IDS, REF_PRICES } from '../src/model/oil/world';
+import { COLDWATER_LINE, KESSLER_CORRAN, ROUTES } from '../src/model/oil/logistics';
 import { fmt, pct, usd } from '../src/framework';
 import { gasolineSolved, lowestEightSolved } from '../src/lessons/oil/ch1/L1_1';
-import { residueCapSolved } from '../src/lessons/oil/ch1/L1_2';
+import Lesson12, { residueCapSolved } from '../src/lessons/oil/ch1/L1_2';
 import { PIPE_TEMP_C, WTI_API_FLOOR_SHARE, WTI_SULFUR_SHARE_BY_WEIGHT, diluentSolved, heatSolved, wtiSolved } from '../src/lessons/oil/ch1/L1_3';
 import { PRESSURE_DROP_P, PRESSURE_DROP_T, P_MAX, P_MIN, fewestStagesSolved, pairAxis } from '../src/lessons/oil/ch1/L1_4';
 import { airSolved, gasDieselGapPct, parityPrice, paritySolved } from '../src/lessons/oil/ch1/L1_5';
@@ -297,5 +300,53 @@ describe('oil chapter 1 tones', () => {
     expect(src(2)).toMatch(/<K tone="orange">Sulfur<\/K>/);
     expect(src(3)).toMatch(/<K tone="orange">sulfur<\/K>/);
     expect(src(3)).not.toMatch(/tone="orange"[^>]*value=\{share\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The region map: Lesson 1.2 introduces the course's world, so it shows it before any chart.
+
+describe('oil/1.2 region map', () => {
+  afterEach(cleanup);
+  const MAP_NAME = 'Crude Composition Explorer · the region';
+  const mapText = () => {
+    const view = render(createElement(Lesson12));
+    const fig = Array.from(view.container.querySelectorAll('figure.fig')).find((f) => f.getAttribute('aria-label') === MAP_NAME);
+    expect(fig).toBeTruthy();
+    return fig!.querySelector('svg')!.textContent ?? '';
+  };
+
+  it('opens the lesson’s figures with the map, before the first chart', () => {
+    const view = render(createElement(Lesson12));
+    const names = Array.from(view.container.querySelectorAll('figure.fig')).map((f) => f.getAttribute('aria-label'));
+    expect(names.slice(0, 2)).toEqual([MAP_NAME, 'Crude Composition Explorer']);
+  });
+
+  it('labels every place the world model defines, and the crude each field yields', () => {
+    const text = mapText();
+    for (const id of PLACE_IDS) expect(text, id).toContain(PLACES[id].name);
+    for (const sp of CRUDE_SPECS) expect(text, sp.id).toContain(sp.name);
+    // Every field is one of the four crudes' sources.
+    expect(PLACE_IDS.filter((id) => PLACES[id].kind === 'field').map((id) => PLACES[id].crude).sort()).toEqual(CRUDE_SPECS.map((sp) => sp.id).sort());
+  });
+
+  it('labels the pipelines and sea routes with their lengths from the model', () => {
+    const text = mapText();
+    for (const line of [KESSLER_CORRAN, COLDWATER_LINE]) {
+      expect(text).toContain(line.name);
+      expect(text).toContain(`${fmt(line.lengthMiles)} miles`);
+    }
+    expect(text).toContain('rail');
+    for (const r of Object.values(ROUTES)) expect(text, r.id).toContain(`${fmt(r.nm)} nautical miles`);
+  });
+
+  it('keeps every place inside the map’s frame', () => {
+    for (const id of PLACE_IDS) {
+      const [x, y] = PLACES[id].at;
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(MAP_SIZE.width);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(MAP_SIZE.height);
+    }
   });
 });

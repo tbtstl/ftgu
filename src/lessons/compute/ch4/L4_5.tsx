@@ -542,7 +542,7 @@ export default function Lesson() {
         Try the three sites. Marston’s power costs {usd(SITES.marston.powerPrice)} a megawatt-hour and its warm climate needs more cooling, yet a used A-class hour there costs{' '}
         {dollars(MARSTON.perUsedHour)}, against {dollars(NORTH.perUsedHour)} at Fernhill, where power costs {usd(SITES.fernhill.powerPrice)}. Electricity is{' '}
         {pct(MARSTON.powerShare, 1)} of the cost at Marston and {pct(NORTH.powerShare, 1)} at Fernhill. Nor is all of the gap electricity. Construction costs differ by
-        site too: as the table of sites in <a href={lessonHref('compute/4.2')}>Lesson 4.2</a> showed, building at Marston costs {fmt(SITES.marston.buildCostIndex, 1)} times
+        site too: as the map of sites in <a href={lessonHref('compute/4.2')}>Lesson 4.2</a> showed, building at Marston costs {fmt(SITES.marston.buildCostIndex, 1)} times
         what it does at Tech Park, and at Fernhill {fmt(SITES.fernhill.buildCostIndex, 1)} times, which is why the table’s building-and-plant row changes with the site.
         That row comes to {dollars(MARSTON.facilityYear / USED_HOURS)} of a used hour at Marston and {dollars(NORTH.facilityYear / USED_HOURS)} at Fernhill, a gap about
         as wide as electricity’s {dollars(MARSTON.powerYear / USED_HOURS)} against {dollars(NORTH.powerYear / USED_HOURS)}. Double Tech Park’s electricity price and a used hour rises only to{' '}

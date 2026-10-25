@@ -354,14 +354,26 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 @keyframes flow18 { to { stroke-dashoffset: -18; } }
 
 /* Challenge: set apart from the article by a hairline box alone. A label and status, the
-   question in body type, the hint muted. */
+   question in body type, the hint muted. Once solved, the hairline gives way to a faint green
+   fill and the explanation turns green; "Solved" then rereads it after the controls move on. */
 .chal { margin: 2em 0 1em; padding: 14px 18px 16px; border: 1px solid var(--rule-strong); border-radius: 6px; }
+.chal.ok { background: #f1f6ee; border-color: transparent; }
 .chal-h { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; line-height: 1.5; color: var(--muted); }
 .chal-st { display: inline-flex; align-items: center; gap: 6px; }
 .chal-st.ok, .chal-h.ok { color: #2f6b2a; }
+.chal-tg {
+  min-height: 44px; margin: -11px 0; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 14px; cursor: pointer;
+}
+.chal-tg:hover { text-decoration: underline; text-decoration-color: rgba(47, 107, 42, .35); text-underline-offset: 3px; }
+.chal-tg:focus-visible { outline: 2px solid #2f6b2a; outline-offset: 2px; }
+.chal-cv { transition: transform .15s ease; }
+.chal-tg[aria-expanded='true'] .chal-cv { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .chal-cv { transition: none; } }
 .chal-q { margin: 4px 0 0; font-size: 16px; font-weight: 400; line-height: 1.6; }
 .chal-q b, .chal-q strong, .chal-q .k { font-weight: 400; }
 .chal-s { margin-top: 4px; font-size: 14px; line-height: 1.55; color: var(--muted); }
+.chal-s.ok { color: #2f6b2a; }
 
 /* Callout card (used sparingly: framework notes, rule comparisons): a faint fill, no outline. */
 .card { background: #f4f4f1; border-radius: 8px; padding: 14px 18px; }

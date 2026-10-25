@@ -19,6 +19,7 @@ import {
   Sup,
   TEXT,
   fmt,
+  lessonHref,
   linePath,
   scale,
   tint,
@@ -388,7 +389,7 @@ export default function Lesson() {
 
       <P>
         With no transport, every band balances on its own. The equator reaches {fmt(noMove.equatorC)} °C and the pole {fmt(noMove.poleC)} °C, and the latitude of
-        this course’s fictional city, Fenwick Bay, at 41° north, averages a little below freezing. The gold and red curves lie on top of each other, because each band emits
+        this course’s fictional city, Fenwick Bay, at 41° north, averages a little below freezing. (<a href={lessonHref('weather/2.2')}>Lesson 2.2</a> maps the city and the region around it.) The gold and red curves lie on top of each other, because each band emits
         exactly what it absorbs.
       </P>
       <P>

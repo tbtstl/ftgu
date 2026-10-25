@@ -1,13 +1,15 @@
 // Agriculture chapter 1: assertions for the numbers and challenge checks added in the pedagogy fix pass.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { fmt } from '../src/framework';
 import { BASAL, CROP, TRANSPIRATION_EFFICIENCY, et0, simulateSeason, vpd, waterLimitedGrowth } from '../src/engines/agriculture/crop';
 import { EXTINCTION, STOMATA_CLOSE_BELOW, UMOL_PER_J, interception, stomatalFactor } from '../src/engines/agriculture/photosynthesis';
 import { nitrogenSupply, sufficiency } from '../src/engines/agriculture/soil';
 import { REFERENCE_YEAR, applyShift, simulatedYear, spliceWeather } from '../src/model/agriculture/climate';
-import { DISTRICT, dateLabel, dayOf } from '../src/model/agriculture/region';
-import { CORN_NINETY, crossingEstimate, ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
+import { CEDAR_BEND, DISTRICT, DISTRICTS, PLACES, dateLabel, dayOf } from '../src/model/agriculture/region';
+import Lesson11, { CORN_NINETY, crossingEstimate, districtFacts, ninetySolved, wheatAheadSolved } from '../src/lessons/agriculture/ch1/L1_1';
 import { autumnMarks, lateHybridSolved } from '../src/lessons/agriculture/ch1/L1_2';
 import { THIN_OM_N, limitingLabel, ridgeSolved } from '../src/lessons/agriculture/ch1/L1_3';
 import { JULY, triggerSolved } from '../src/lessons/agriculture/ch1/L1_4';
@@ -65,6 +67,56 @@ describe('agriculture 1.1', () => {
     // The one-decimal readout tells the near miss from the answer.
     expect(fmt(interception('corn', 3.8) * 100, 1)).toBe('89.8');
     expect(fmt(interception('corn', 3.9) * 100, 1)).toBe('90.4');
+  });
+});
+
+describe('agriculture 1.1: the valley map', () => {
+  afterEach(() => cleanup());
+  const MAP = 'Photosynthesis Lab · the Crane Valley';
+  const figures = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('figure.fig'));
+
+  it('shows the region before the first demonstration, with every place the model defines', () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+    const { container } = render(createElement(Lesson11));
+    const figs = figures(container);
+    expect(figs[0].getAttribute('aria-label')).toBe(MAP);
+    expect(figs[1].getAttribute('aria-label')).toBe('Photosynthesis Lab');
+    const svg = figs[0].querySelector('svg')!;
+    const names = Array.from(svg.querySelectorAll('text'), (t) => t.textContent);
+    for (const d of DISTRICTS) expect(names).toContain(d.name);
+    for (const p of PLACES) expect(names).toContain(p.name);
+    expect(names).toContain(CEDAR_BEND.name);
+    expect(names).toContain('Crane River');
+    // The prose introduces the map before the leaf, and points back to it.
+    const prose = Array.from(container.querySelectorAll('p'), (el) => el.textContent ?? '');
+    expect(prose.some((t) => t.includes('Crane Valley') && t.endsWith('Select a district to see what sets it apart:'))).toBe(true);
+    expect(container.querySelector(`[data-fig-focus="${MAP}"]`)).not.toBeNull();
+  });
+
+  it('starts on Cedar Bend’s district and describes whichever district is selected', () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
+    const { container } = render(createElement(Lesson11));
+    const map = figures(container)[0];
+    const caption = () => map.querySelector('.cap')?.textContent ?? '';
+    expect(CEDAR_BEND.district).toBe('prairie');
+    expect(caption()).toBe(`${DISTRICT.prairie.name}. ${districtFacts('prairie')}`);
+    const plains = map.querySelector<SVGGElement>('[role="button"][aria-label="High Plains"]')!;
+    act(() => {
+      fireEvent.click(plains);
+    });
+    expect(plains.getAttribute('aria-pressed')).toBe('true');
+    expect(caption()).toBe(`${DISTRICT.plains.name}. ${districtFacts('plains')}`);
+  });
+
+  it('builds each district’s caption from the model', () => {
+    expect(districtFacts('prairie')).toBe(
+      'Deep, dark, rich soils and reliable summer rain: the valley’s best corn ground. It gets 35 inches of rain in a normal year and plants 1.3 million acres of corn and 1 million acres of wheat.',
+    );
+    expect(districtFacts('plains')).toContain('plants 300,000 acres of corn, 260,000 of them irrigated, and 1.5 million acres of wheat.');
+    for (const d of DISTRICTS) {
+      expect(districtFacts(d.id).startsWith(d.note)).toBe(true);
+      expect(districtFacts(d.id)).toContain(`${d.rainIn} inches of rain`);
+    }
   });
 });
 

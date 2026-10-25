@@ -7,7 +7,8 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { TEXT, fmt, loadingColor } from '../../../framework';
 import { CORRIDORS, GAS_NODES, GAS_NODE, PIPELINE, STORAGE_FIELDS, type GasNodeId } from '../../../model/gas/world';
 
-const LAND = '#f2f0e9';
+/** The land's color, also the halo behind labels drawn over it. */
+export const LAND = '#f2f0e9';
 const SEA = '#d6e5f1';
 const SEA_EDGE = '#a9c3d9';
 const CONTOUR = '#e0d9c8';
@@ -43,6 +44,8 @@ export interface GasMapProps {
   onPipeClick?: (id: string) => void;
   /** Flow-dot speed per Bcf/d. */
   flowScale?: number;
+  /** Draw the names of the places, basins, pipelines and storage fields (the default); false leaves them to the caller's `children`. */
+  labels?: boolean;
   height?: number;
   children?: ReactNode;
 }
@@ -82,6 +85,7 @@ export function GasMap({
   onNodeClick,
   onPipeClick,
   flowScale = 40,
+  labels = true,
   height = 400,
   children,
 }: GasMapProps) {
@@ -101,12 +105,16 @@ export function GasMap({
       {[0, 1].map((i) => (
         <ellipse key={'s' + i} cx={110} cy={96} rx={44 + i * 18} ry={26 + i * 10} fill="none" stroke={CONTOUR} strokeWidth={1.2} />
       ))}
-      <text x={96} y={352} textAnchor="middle" style={{ fontSize: 11, fill: '#8a7f66', fontStyle: 'italic' }}>
-        Ridgeback shale
-      </text>
-      <text x={110} y={150} textAnchor="middle" style={{ fontSize: 11, fill: '#8a7f66', fontStyle: 'italic' }}>
-        Sandhill field
-      </text>
+      {labels && (
+        <>
+          <text x={96} y={352} textAnchor="middle" style={{ fontSize: 11, fill: '#8a7f66', fontStyle: 'italic' }}>
+            Ridgeback shale
+          </text>
+          <text x={110} y={150} textAnchor="middle" style={{ fontSize: 11, fill: '#8a7f66', fontStyle: 'italic' }}>
+            Sandhill field
+          </text>
+        </>
+      )}
 
       {corridors.map((c) => {
         const a = GAS_NODE[c.from];
@@ -154,7 +162,7 @@ export function GasMap({
             {isBuilt && speed > 0.5 && (
               <path d={d} className="flow-dots" stroke="#fff" strokeWidth={Math.max(2.5, w * 0.45)} style={{ animationDuration: `${(18 / speed).toFixed(3)}s` }} />
             )}
-            {text && (
+            {labels && text && (
               <text className="lab" x={mx} y={my} textAnchor="middle" style={{ paintOrder: 'stroke', stroke: LAND, strokeWidth: 4 }}>
                 {text}
               </text>
@@ -172,12 +180,16 @@ export function GasMap({
             <g key={s.id}>
               <line x1={n.x} y1={n.y} x2={s.x} y2={s.y} stroke="#b9b4a6" strokeWidth={2} strokeDasharray="2 3" />
               <path d={`M${s.x - 14} ${s.y + 6} Q ${s.x} ${s.y - 14} ${s.x + 14} ${s.y + 6} Z`} fill="#e8d9a8" stroke="#a88c3c" strokeWidth={1.2} />
-              <text x={s.x + (left ? -18 : 18)} y={s.y + 2} textAnchor={left ? 'end' : 'start'} style={{ fontSize: 11.5, fontWeight: 500, fill: '#7a6420' }}>
-                {s.name}
-              </text>
-              <text x={s.x + (left ? -18 : 18)} y={s.y + 16} textAnchor={left ? 'end' : 'start'} style={{ fontSize: 11, fill: '#6b6b6b' }}>
-                {cap ?? (s.kind === 'salt' ? 'salt caverns' : 'old gas reservoir')}
-              </text>
+              {labels && (
+                <>
+                  <text x={s.x + (left ? -18 : 18)} y={s.y + 2} textAnchor={left ? 'end' : 'start'} style={{ fontSize: 11.5, fontWeight: 500, fill: '#7a6420' }}>
+                    {s.name}
+                  </text>
+                  <text x={s.x + (left ? -18 : 18)} y={s.y + 16} textAnchor={left ? 'end' : 'start'} style={{ fontSize: 11, fill: '#6b6b6b' }}>
+                    {cap ?? (s.kind === 'salt' ? 'salt caverns' : 'old gas reservoir')}
+                  </text>
+                </>
+              )}
             </g>
           );
         })}
@@ -213,9 +225,11 @@ export function GasMap({
                 {info.sub}
               </text>
             )}
-            <text x={lx} y={ly} textAnchor={anchor} style={{ fontSize: 13.5, fontWeight: 600, fill: '#111', paintOrder: 'stroke', stroke: LAND, strokeWidth: 4 }}>
-              {n.name}
-            </text>
+            {labels && (
+              <text x={lx} y={ly} textAnchor={anchor} style={{ fontSize: 13.5, fontWeight: 600, fill: '#111', paintOrder: 'stroke', stroke: LAND, strokeWidth: 4 }}>
+                {n.name}
+              </text>
+            )}
           </g>
         );
       })}

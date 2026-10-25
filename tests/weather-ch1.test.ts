@@ -1,6 +1,9 @@
 // Weather chapter 1: the numbers its lessons quote and its challenge checks, after the first and second fix passes.
 
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { cleanup, render } from '@testing-library/react';
+import Lesson11 from '../src/lessons/weather/ch1/L1_1';
 import { EARTH_ALBEDO, SIGMA, SOLAR_CONSTANT, latitudeBalance, planetBalance, tempAtLatitude } from '../src/engines/weather/radiation';
 import { geostrophicSpeed, windTrack } from '../src/engines/weather/dynamics';
 import { SEA_BREEZE, seaBreeze } from '../src/engines/weather/seaBreeze';
@@ -25,6 +28,13 @@ import { COOL_LAPSE, STABLE_LAPSE, breaksThrough, oscillationPeriodMin, periodSo
 import { DEEP_LOW, STORM_DEFAULTS, geostrophicSolved, windAtFenwick } from '../src/lessons/weather/ch1/L1_5';
 
 describe('1.1 Earth’s energy balance', () => {
+  it('points from Fenwick Bay’s first mention to the region map in Lesson 2.2', () => {
+    const view = render(createElement(Lesson11));
+    const link = Array.from(view.container.querySelectorAll('a')).find((a) => a.getAttribute('href') === '#/weather/2.2');
+    expect(link?.textContent).toBe('Lesson 2.2');
+    cleanup();
+  });
+
   it('the poleward transport peaks across 33°', () => {
     const b = latitudeBalance(0.6);
     expect(b.peakTransportPW).toBeCloseTo(5.7, 1);

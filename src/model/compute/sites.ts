@@ -72,6 +72,17 @@ export const SITES: Record<SiteId, Site> = {
 export const SITE_IDS: SiteId[] = ['marston', 'techpark', 'fernhill'];
 
 /**
+ * Where each site sits on the course's map of its sites (Lesson 4.2), in a 640 × 440 frame with north
+ * up. The map is a sketch, not to scale: it keeps the sites' order by round trip (Marston among the
+ * users on the coast, Tech Park a few milliseconds inland, Fernhill far to the north), not distances.
+ */
+export const SITE_MAP: Record<SiteId, { x: number; y: number }> = {
+  marston: { x: 262, y: 338 },
+  techpark: { x: 452, y: 250 },
+  fernhill: { x: 112, y: 92 },
+};
+
+/**
  * Outdoor temperature at a site in a given hour of the year (0–8,759): a seasonal cycle peaking in
  * late July plus a daily cycle peaking mid-afternoon. Smooth and deterministic, for annual sums.
  */

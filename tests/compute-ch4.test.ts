@@ -11,7 +11,8 @@ import { generatorPlan, upsEfficiency } from '../src/engines/compute/facilityPow
 import { fabric } from '../src/engines/compute/dcNetwork';
 import { capitalRecovery } from '../src/engines/compute/facilityCost';
 import { serverPowerW } from '../src/model/compute/hardware';
-import { SITES } from '../src/model/compute/sites';
+import { SITES, SITE_IDS, SITE_MAP, type SiteId } from '../src/model/compute/sites';
+import { markerRadius } from '../src/lessons/compute/shared/SitesMap';
 import Lesson41, { CLUSTER_GPUS, HALL_DEFAULTS, HALL_MIN_FEED, HALL_TARGET, NUMBERS as L41, hallFits, hallSolved, spaceLimit } from '../src/lessons/compute/ch4/L4_1';
 import Lesson42, { CHAIN_DEFAULTS, HOTTEST_C, LESSON_NUMBERS as L42, chainOf, humidityWord, lossSolved, roundTo, siteRun } from '../src/lessons/compute/ch4/L4_2';
 import Lesson43, { AIR_RISE_C, DENSE_RACK_KW, FLOW_KW, RACK_KW, WATER_RISE_C } from '../src/lessons/compute/ch4/L4_3';
@@ -225,6 +226,46 @@ describe('compute 4.2 pass 2: eco mode, predicted', () => {
     expect(chal().textContent).toContain('Make your prediction');
     fireEvent.click(segment(figures(view.container)[0], 'UPS mode', 'Eco mode'));
     expect(chal().textContent).toContain('Solved. Eco mode removes most of the UPS’s loss, 0.81 MW falling to 0.20 MW');
+  });
+});
+
+describe('compute 4.2: the three sites on a map', () => {
+  const MAP = 'Data Center Power Model · the three sites';
+  const names = (root: HTMLElement) => figures(root).map((f) => f.getAttribute('aria-label'));
+
+  it('maps every site before the figure that depends on them', () => {
+    const view = render(createElement(Lesson42));
+    expect(names(view.container)).toEqual(['Data Center Power Model', MAP, 'Data Center Power Model · redundancy and the grid']);
+    const map = figures(view.container)[1];
+    const text = map.textContent ?? '';
+    for (const id of SITE_IDS) {
+      const s = SITES[id];
+      expect(text).toContain(s.name);
+      expect(text).toContain(`${fmt(s.gridMW)} MW`);
+      expect(text).toContain(`${usd(s.powerPrice)}/MWh`);
+      expect(text).toContain(`${fmt(s.meanTempC)} °C average · ${humidityWord(s.humidity)} humidity`);
+      expect(text).toContain(`building cost ${fmt(s.buildCostIndex, 1)}×`);
+      expect(text).toContain(`${fmt(s.rttMs)} ms round trip`);
+      // The description for screen readers carries every fact too.
+      expect(map.querySelector('svg')!.getAttribute('aria-label')).toContain(`${s.name}, ${s.blurb}: ${fmt(s.gridMW)} MW grid connection, ${usd(s.powerPrice)}/MWh`);
+    }
+    expect(text).toContain('METRO');
+    // The table the map replaced is gone.
+    expect(view.container.querySelectorAll('table caption')).toHaveLength(0);
+  });
+
+  it('places every site on the map, with circles whose areas follow the grid connections', () => {
+    for (const id of SITE_IDS) {
+      expect(SITE_MAP[id].x).toBeGreaterThan(0);
+      expect(SITE_MAP[id].x).toBeLessThan(640);
+      expect(SITE_MAP[id].y).toBeGreaterThan(0);
+      expect(SITE_MAP[id].y).toBeLessThan(440);
+    }
+    // North is up: Fernhill, the cold one, lies north of Tech Park, which lies north of coastal Marston.
+    expect(SITE_MAP.fernhill.y).toBeLessThan(SITE_MAP.techpark.y);
+    expect(SITE_MAP.techpark.y).toBeLessThan(SITE_MAP.marston.y);
+    const area = (id: SiteId) => markerRadius(SITES[id].gridMW) ** 2;
+    expect(area('fernhill') / area('marston')).toBeCloseTo(SITES.fernhill.gridMW / SITES.marston.gridMW, 9);
   });
 });
 

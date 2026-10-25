@@ -21,6 +21,7 @@ import {
 import { cumulativeYield, makeCrude, tiltYields, type Crude } from '../../../engines/oil/assay';
 import { CLASSES, CLASS_COLOR, CLASS_LABEL, CRUDE_SPECS, CUTS, type CrudeId } from '../../../model/oil/crudes';
 import { inkOn } from '../shared/charts';
+import { REGION_LEGEND, RegionMap } from '../shared/RegionMap';
 
 const SPEC: Record<CrudeId, (typeof CRUDE_SPECS)[number]> = Object.fromEntries(CRUDE_SPECS.map((s) => [s.id, s])) as Record<CrudeId, (typeof CRUDE_SPECS)[number]>;
 
@@ -249,6 +250,17 @@ export default function Lesson() {
         <b>Seaboard Blend</b> from an offshore field, arriving by tanker. They’re fictional, but their assays are realistic, and the course will produce, refine, ship and
         trade them from here to the last chapter.
       </P>
+      <P>
+        Pipelines carry the basin’s two crudes and Coldwater Heavy to the Kessler hub, a cluster of tank farms inland; from there a pipeline and a railroad run down
+        to Port Corran on the coast, home of the Corran refinery, where tankers bring in Seaboard Blend and carry crude away to markets across the ocean. Chapter 2
+        drills the fields, Chapter 3 runs the refinery, and Chapter 4 moves the oil between them:
+      </P>
+
+      <Figure name="Crude Composition Explorer · the region">
+        <Legend items={REGION_LEGEND} />
+        <RegionMap />
+        <Caption>Each field is marked in the color the course’s charts use for its crude.</Caption>
+      </Figure>
       <P>
         In the next demonstration, each column is one cut, in boiling order from left to right, and its width is the cut’s share of the <b>barrel</b> — the oil
         industry’s unit of volume, 42 US gallons or about 159 liters. Each column is split by the kinds of molecule in it: chains, straight or branched

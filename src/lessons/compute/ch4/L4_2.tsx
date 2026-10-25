@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import {
   Caption,
   Challenge,
-  DataTable,
   Eq,
   Figure,
   Frac,
@@ -31,6 +30,9 @@ import { annualPue } from '../../../engines/compute/cooling';
 import { clusterLayout, rackConfig } from '../../../engines/compute/rack';
 import { ACCELERATORS } from '../../../model/compute/hardware';
 import { SITES, SITE_IDS, outdoorTempC, type SiteId } from '../../../model/compute/sites';
+import { SitesMap, humidityWord } from '../shared/SitesMap';
+
+export { humidityWord };
 
 // ---------------------------------------------------------------------------
 // The model: the power chain of one data hall, from the grid to the chips.
@@ -194,11 +196,6 @@ const MODE_OPTIONS: Array<{ value: UpsMode; label: string }> = [
   { value: 'eco', label: 'Eco mode' },
 ];
 const SITE_OPTIONS: Array<{ value: SiteId; label: string }> = SITE_IDS.map((id) => ({ value: id, label: SITES[id].name }));
-
-/** A word for a site's humidity in the table of sites. */
-export function humidityWord(h: number): string {
-  return h >= 0.7 ? 'high' : h >= 0.4 ? 'moderate' : 'low';
-}
 
 /** Each site's hottest outdoor temperature of the year, °C. */
 export const HOTTEST_C: Record<SiteId, number> = Object.fromEntries(
@@ -538,29 +535,22 @@ export default function Lesson() {
       <P>
         This course’s GPUs live at three sites. <b>Marston</b> is a warm, humid coastal city beside most of
         the region’s users. <b>Tech Park</b> is a campus beside Metro, in the electricity course’s region — the empty site that course’s{' '}
-        <a href={lessonHref('8.1')}>Lesson 8.1</a> connects a data-center campus to — a short hop from the users. <b>Fernhill</b> is a cold, remote valley with cheap
-        hydro power. Their numbers, all simulated, come back throughout the course:
+        <a href={lessonHref('8.1')}>Lesson 8.1</a> connects a data-center campus to — a short hop inland from the users. <b>Fernhill</b> is a cold, remote valley far
+        to the north, with cheap hydro power. Here they are on a map with their numbers, all simulated, which come back throughout the course:
       </P>
-      <DataTable
-        caption="The course’s three data-center sites"
-        rows={SITE_IDS.map((id) => SITES[id])}
-        rowKey={(x) => x.id}
-        columns={[
-          { label: 'Site', cell: (x) => x.name },
-          { label: 'Grid connection', cell: (x) => `${fmt(x.gridMW)} MW`, align: 'right' },
-          { label: 'Power price', cell: (x) => `${usd(x.powerPrice)}/MWh`, align: 'right' },
-          { label: 'Mean temperature', cell: (x) => `${fmt(x.meanTempC)} °C`, align: 'right' },
-          { label: 'Humidity', cell: (x) => humidityWord(x.humidity), align: 'right' },
-          { label: 'Building cost', cell: (x) => `${fmt(x.buildCostIndex, 1)} ×`, align: 'right' },
-          { label: 'Round trip', cell: (x) => `${fmt(x.rttMs)} ms`, align: 'right' },
-        ]}
-      />
+
+      <Figure name="Data Center Power Model · the three sites">
+        <SitesMap />
+        <Caption>A circle’s area is the site’s grid connection. The dashed lines are the fiber to the users, broken where the map squeezes the distance.</Caption>
+      </Figure>
+
       <P>
-        The temperature is the average over the year; at the hottest hour of the year it reaches about {fmt(HOTTEST_C.marston)} °C at Marston,{' '}
+        The grid connection is the most power a new data center there can draw, and the power price is what a megawatt-hour costs there, delivered. The
+        temperature is the average over the year; at the hottest hour of the year it reaches about {fmt(HOTTEST_C.marston)} °C at Marston,{' '}
         {fmt(HOTTEST_C.techpark)} °C at Tech Park and {fmt(HOTTEST_C.fernhill)} °C at Fernhill, and the humidity, as the next lesson shows, matters to cooling
-        too. The building cost is what construction costs there — land, labor,
-        permits — as a multiple of Tech Park’s. The round trip is the time a message takes to reach the users and come back. Marston has the users; Fernhill has cheap
-        power, cold air and room; Tech Park sits between.
+        too. The building cost is what construction costs there — land, labor, permits — as a multiple of Tech Park’s. The round trip is the time a message takes to
+        reach the users and come back: {fmt(SITES.marston.rttMs)} ms from Marston, {fmt(SITES.techpark.rttMs)} ms from Tech Park and {fmt(SITES.fernhill.rttMs)} ms
+        from Fernhill, too far to draw to scale. Marston has the users; Fernhill has cheap power, cold air and room; Tech Park sits between.
       </P>
       <P>
         In the next demonstration, choose a site, the IT load and the redundancy, in double conversion. The bars compare what the hall draws at the hottest hour of the
