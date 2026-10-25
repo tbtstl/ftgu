@@ -184,11 +184,11 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 .tone-ink { color: #333; }
 
 /* Equations */
-.eq {
-  display: flex; justify-content: flex-start; align-items: center; flex-wrap: wrap;
-  gap: 6px 10px; padding: 12px 0 14px;
-  font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums;
-}
+/* One line, shrunk to fit its column by <Eq> when needed; it only wraps past the smallest size. */
+.eq { padding: 12px 0 14px; font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.eq-row { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: .33em .55em; white-space: nowrap; max-width: 100%; }
+.eq-row.wrap { flex-wrap: wrap; row-gap: .25em; padding-left: 1.5em; }
+.eq-row.wrap > :first-child { margin-left: -1.5em; }
 .frac { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.25; }
 .frac-bar { align-self: stretch; height: 1px; margin: 2px 0; background: currentColor; }
 .op { color: var(--muted); font-weight: 400; }
