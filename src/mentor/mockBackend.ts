@@ -94,6 +94,8 @@ export function createMockBackend({ latency = 30, initial, persist = !initial }:
   }
 
   return {
+    signInMethods: ['google', 'apple', 'email', 'passkey'],
+
     async account() {
       return current();
     },

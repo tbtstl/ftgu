@@ -62,6 +62,8 @@ export interface AskResult {
 }
 
 export interface MentorBackend {
+  /** The sign-in methods this backend offers, in the order the dialog shows them. */
+  readonly signInMethods: readonly SignInMethod[];
   account(): Promise<Account | null>;
   signIn(method: Exclude<SignInMethod, 'email'>): Promise<Account>;
   sendCode(email: string): Promise<void>;
@@ -80,7 +82,7 @@ export interface MentorBackend {
 
 export class MentorError extends Error {
   constructor(
-    readonly code: Blocked | 'bad_code' | 'failed',
+    readonly code: Blocked | 'bad_code' | 'refused' | 'failed',
     message: string = code,
   ) {
     super(message);

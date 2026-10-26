@@ -46,10 +46,25 @@ or have it explained. Readers sign in to use it, get a few free messages, then p
 through [Payfer](https://payfer.me) against a monthly limit they choose. The lessons stay free
 without an account.
 
-The panel talks to a backend through one interface (`src/mentor/types.ts`). Until the server
-exists, `npm run dev` runs it against a practice backend in the browser
-(`src/mentor/mockBackend.ts`), and production builds leave the mentor off. Set `VITE_MENTOR=mock`
-or `VITE_MENTOR=off` to choose.
+The panel talks to a backend through one interface (`src/mentor/types.ts`). `npm run dev` runs it
+against a practice backend in the browser (`src/mentor/mockBackend.ts`) that answers with
+placeholders; production builds leave the mentor off. `VITE_MENTOR` (`mock`, `live` or `off`)
+chooses.
+
+The real backend is the mentor server in `server/`: a small Node app (Hono, SQLite) that
+checks the reader's Privy token, keeps each course's conversation, charges each message through
+Payfer (refunding it if no answer comes back) and streams the answer from Claude with the lesson
+as context. To run the two together:
+
+```bash
+cp server/.env.example server/.env   # then fill in the Privy, Payfer and Claude keys
+npm run server                       # http://localhost:8787
+npm run dev:live                     # the site, with /api forwarded to the server
+```
+
+`npm run dev:live` reads `VITE_PRIVY_APP_ID` and `VITE_PAYFER_PUBLISHABLE_KEY` from
+`.env.live.local`. Both env files are ignored by git. `MENTOR_MODEL` in `server/.env` picks the
+Claude model (Claude Opus 5.5 by default).
 
 ## How it's built
 

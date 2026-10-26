@@ -2,3 +2,8 @@ node_modules
 dist
 .DS_Store
 *.log
+
+# Local secrets and the mentor server's database
+*.local
+server/.env
+server/data

@@ -74,6 +74,8 @@ export function SignInDialog() {
 
   if (!m) return null;
   const a = m.account;
+  const offers = (method: 'google' | 'apple' | 'passkey') => m.signInMethods.includes(method);
+  const oauthOffered = offers('google') || offers('apple');
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
@@ -110,20 +112,29 @@ export function SignInDialog() {
         <>
           <h2 id="signin-h">Log in or create an account</h2>
           <p className="mt-sub">An account holds your mentor conversations. The lessons stay free without one.</p>
-          <div className="mt-stack">
-            <button type="button" className="mt-btn2" disabled={busy} onClick={() => void oauth('google')}>
-              Continue with Google
-            </button>
-            <button type="button" className="mt-btn2" disabled={busy} onClick={() => void oauth('apple')}>
-              Continue with Apple
-            </button>
-          </div>
-          <div className="mt-or" aria-hidden="true">
-            <span />
-            or
-            <span />
-          </div>
+          {oauthOffered && (
+            <>
+              <div className="mt-stack">
+                {offers('google') && (
+                  <button type="button" className="mt-btn2" disabled={busy} onClick={() => void oauth('google')}>
+                    Continue with Google
+                  </button>
+                )}
+                {offers('apple') && (
+                  <button type="button" className="mt-btn2" disabled={busy} onClick={() => void oauth('apple')}>
+                    Continue with Apple
+                  </button>
+                )}
+              </div>
+              <div className="mt-or" aria-hidden="true">
+                <span />
+                or
+                <span />
+              </div>
+            </>
+          )}
           <form
+            className={oauthOffered ? undefined : 'mt-gap'}
             onSubmit={(e) => {
               e.preventDefault();
               void run(async () => {
@@ -158,11 +169,13 @@ export function SignInDialog() {
               Continue with email
             </button>
           </form>
-          <div className="mt-center">
-            <button type="button" className="mt-tbtn" disabled={busy} onClick={() => void oauth('passkey')}>
-              Use a passkey
-            </button>
-          </div>
+          {offers('passkey') && (
+            <div className="mt-center">
+              <button type="button" className="mt-tbtn" disabled={busy} onClick={() => void oauth('passkey')}>
+                Use a passkey
+              </button>
+            </div>
+          )}
         </>
       )}
 

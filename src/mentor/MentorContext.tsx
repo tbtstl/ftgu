@@ -8,9 +8,35 @@ import { useProgress } from '../course/progress';
 import { createMockBackend } from './mockBackend';
 import { MentorError, type Account, type Blocked, type Message, type MentorBackend, type SignInMethod } from './types';
 
-// The mentor is switched on per build: VITE_MENTOR=mock runs the practice backend in the
-// browser (the default for `npm run dev`); production builds leave it off until the server exists.
-export const MENTOR_ENABLED = (import.meta.env.VITE_MENTOR ?? (import.meta.env.DEV ? 'mock' : 'off')) === 'mock';
+// The mentor is switched on per build with VITE_MENTOR: `mock` runs the practice backend in the
+// browser (the default for `npm run dev`), `live` talks to the mentor server (`npm run dev:live`),
+// and `off` (the default for production builds) leaves it out.
+const MODE: string = import.meta.env.VITE_MENTOR ?? (import.meta.env.DEV ? 'mock' : 'off');
+export const MENTOR_ENABLED = MODE === 'mock' || MODE === 'live';
+
+/** The live backend, loaded on first use so the practice build doesn't carry Privy and Payfer. */
+function liveBackend(): MentorBackend {
+  const load = import('./liveBackend').then((m) =>
+    m.createLiveBackend({
+      api: import.meta.env.VITE_MENTOR_API ?? '',
+      privyAppId: import.meta.env.VITE_PRIVY_APP_ID ?? '',
+      payferKey: import.meta.env.VITE_PAYFER_PUBLISHABLE_KEY ?? '',
+    }),
+  );
+  return {
+    signInMethods: ['email'],
+    account: async () => (await load).account(),
+    signIn: async (method) => (await load).signIn(method),
+    sendCode: async (email) => (await load).sendCode(email),
+    verifyCode: async (email, code) => (await load).verifyCode(email, code),
+    signOut: async () => (await load).signOut(),
+    history: async (courseId) => (await load).history(courseId),
+    ask: async (req, onDelta) => (await load).ask(req, onDelta),
+    clear: async (courseId) => (await load).clear(courseId),
+    connectPayfer: async (limitCents) => (await load).connectPayfer(limitCents),
+    managePayfer: async () => (await load).managePayfer(),
+  };
+}
 
 /** Width of the panel when it's docked beside the lesson. */
 export const MENTOR_WIDTH = 380;
@@ -38,6 +64,7 @@ export interface Mentor {
   reserve: number;
   /** The account has been looked up (signed in or not). */
   ready: boolean;
+  signInMethods: readonly SignInMethod[];
   account: Account | null;
   messages: Message[];
   quote: Quote | null;
@@ -100,7 +127,7 @@ function lessonText(): string {
 let defaultBackend: MentorBackend | null = null;
 
 export function MentorProvider({ lessonId, backend, children }: { lessonId: string | null; backend?: MentorBackend; children: ReactNode }) {
-  const api = useMemo(() => backend ?? (defaultBackend ??= createMockBackend()), [backend]);
+  const api = useMemo(() => backend ?? (defaultBackend ??= MODE === 'live' ? liveBackend() : createMockBackend()), [backend]);
   const docked = useSyncExternalStore(subscribeDock, dockSnapshot, () => false);
   const progress = useProgress();
   const [open, setOpenState] = useState(readOpen);
@@ -212,6 +239,8 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
         const code = e instanceof MentorError ? e.code : 'failed';
         if (code === 'connect' || code === 'funding' || code === 'limit' || code === 'revoked') {
           setAccount((a) => a && { ...a, blocked: code as Blocked });
+        } else if (code === 'refused') {
+          setError('The mentor can’t help with that one. Try asking another way.');
         } else {
           setError('The mentor couldn’t answer just now. Try again in a moment.');
         }
@@ -282,6 +311,7 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
       docked,
       reserve,
       ready,
+      signInMethods: api.signInMethods,
       account,
       messages,
       quote,

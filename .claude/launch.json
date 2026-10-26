@@ -6,6 +6,18 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "--port", "5173", "--strictPort"],
       "port": 5173
+    },
+    {
+      "name": "mentor-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "server"],
+      "port": 8787
+    },
+    {
+      "name": "course-live",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:live", "--", "--port", "5175", "--strictPort"],
+      "port": 5175
     }
   ]
 }
