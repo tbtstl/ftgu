@@ -28,6 +28,7 @@
     "viem": "^2.57.5"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
