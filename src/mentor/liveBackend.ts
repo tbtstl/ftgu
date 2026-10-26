@@ -2,7 +2,7 @@
 // browser), Payfer's client links their payment account, and the mentor server (server/) does
 // the rest. Loaded only when VITE_MENTOR=live, so the practice build doesn't carry these SDKs.
 
-import Privy, { LocalStorage } from '@privy-io/js-sdk-core';
+import Privy, { LocalStorage, PrivyApiError } from '@privy-io/js-sdk-core';
 import { createClient, type PayferClient } from 'payfer';
 import { MentorError, type Account, type Blocked, type Message, type MentorBackend } from './types';
 
@@ -15,6 +15,15 @@ export interface LiveOptions {
 }
 
 const BLOCKED = new Set<string>(['connect', 'funding', 'limit', 'revoked']);
+
+/** Why Privy turned down a sign-in step, when it's something other than what the reader typed. */
+function privyReason(err: unknown): string | null {
+  console.error(err);
+  if (!(err instanceof PrivyApiError)) return null;
+  if ((err.code as string) === 'invalid_origin') return `Sign-in isn’t allowed from ${window.location.origin} yet. Add it to the Privy app’s allowed domains.`;
+  if (err.status === 429) return 'Too many tries. Wait a minute, then try again.';
+  return null;
+}
 
 /**
  * A window for Payfer's page, opened while the click is still being handled (popup blockers
@@ -119,8 +128,8 @@ export function createLiveBackend({ api, privyAppId, payferKey }: LiveOptions): 
       await ready;
       try {
         await privy.auth.email.sendCode(email.trim());
-      } catch {
-        throw new MentorError('failed', 'We couldn’t send a code to that address. Check it and try again.');
+      } catch (err) {
+        throw new MentorError('failed', privyReason(err) ?? 'We couldn’t send a code to that address. Check it and try again.');
       }
     },
 
@@ -128,8 +137,8 @@ export function createLiveBackend({ api, privyAppId, payferKey }: LiveOptions): 
       await ready;
       try {
         await privy.auth.email.loginWithCode(email.trim(), code);
-      } catch {
-        throw new MentorError('bad_code', 'That code didn’t work. Check it, or send a new one.');
+      } catch (err) {
+        throw new MentorError('bad_code', privyReason(err) ?? 'That code didn’t work. Check it, or send a new one.');
       }
       return (await json<{ account: Account }>('/api/account')).account;
     },
