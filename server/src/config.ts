@@ -12,6 +12,8 @@ function value(name: string): string | null {
 const payferLive = value('PAYFER_MODE') === 'live';
 
 export const config = {
+  /** The feature flag: the API answers only when MENTOR_ENABLED=true; /health always does. */
+  enabled: value('MENTOR_ENABLED') === 'true',
   port: Number(value('PORT') ?? 8787),
   /** Browser origins allowed to call the API, comma-separated. */
   siteOrigins: (value('SITE_ORIGIN') ?? 'http://localhost:5173').split(',').map((s) => s.trim()),

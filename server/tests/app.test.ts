@@ -56,15 +56,19 @@ function fakePayments() {
   return { state, payments };
 }
 
-function setup(answer: (onText: (d: string) => void) => Promise<Answer> = async (onText) => {
-  onText('Hello ');
-  onText('there.');
-  return { text: 'Hello there.', refused: false };
-}) {
+function setup(
+  answer: (onText: (d: string) => void) => Promise<Answer> = async (onText) => {
+    onText('Hello ');
+    onText('there.');
+    return { text: 'Hello there.', refused: false };
+  },
+  enabled = true,
+) {
   const store = openStore(':memory:');
   const pay = fakePayments();
   const asked: Array<{ history: Message[] }> = [];
   const app = createApp({
+    enabled,
     store,
     verify: async (token) => {
       if (token !== 'token-1') throw new HttpError(401, 'unauthenticated');
@@ -94,6 +98,13 @@ function setup(answer: (onText: (d: string) => void) => Promise<Answer> = async 
 }
 
 describe('mentor server', () => {
+  it('answers nothing but the health check while the feature flag is off', async () => {
+    const { app } = setup(undefined, false);
+    expect((await app.request('/health')).status).toBe(200);
+    expect((await app.request('/api/config')).status).toBe(404);
+    expect((await app.request('/api/account', { headers: AUTH })).status).toBe(404);
+  });
+
   it('turns away requests without a Privy token, except for the site config', async () => {
     const { app } = setup();
     expect(await json(app.request('/api/config'))).toEqual({ payferPublishableKey: 'pk_test_example' });

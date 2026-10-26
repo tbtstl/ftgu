@@ -39,6 +39,8 @@ const LESSON_ID = /^(?:[a-z]+\/)?\d+\.\d+$/;
 const LIMITS = { text: 4000, quote: 1000, lessonTitle: 200, lessonText: 20_000 };
 
 export interface Deps {
+  /** The feature flag: when off, every /api route is a 404. */
+  enabled: boolean;
   store: Store;
   verify: VerifyReader;
   payments: Payments | null;
@@ -86,6 +88,11 @@ export function createApp(deps: Deps) {
   });
 
   app.get('/health', (c) => c.text('ok'));
+
+  app.use('/api/*', async (c, next) => {
+    if (!deps.enabled) return c.json({ error: 'not_found' }, 404);
+    await next();
+  });
 
   app.get('/api/config', (c) => c.json({ payferPublishableKey: deps.payferPublishableKey }));
 
