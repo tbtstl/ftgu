@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { RunnerMark } from '../framework/RunnerMark';
-import { COURSE, useMentor, type Modal } from './MentorContext';
+import { lessonNum, useMentor, type Modal } from './MentorContext';
 import { centsLabel, money } from './format';
 import { ArrowIcon, CheckCircleIcon, CloseIcon, Spinner } from './icons';
 import { PRICE_CENTS } from './offer';
@@ -249,8 +249,8 @@ export function SignInDialog() {
           <h2 id="signin-h">You’re in</h2>
           <p className="mt-sub">
             {a.payfer
-              ? `Your mentor for ${COURSE.title} is ready.`
-              : `Your mentor for ${COURSE.title} is ready, and your first ${a.freeLeft} messages are free. After that, you can pay as you go with Payfer.`}
+              ? `Your mentor for ${m.course.title} is ready.`
+              : `Your mentor for ${m.course.title} is ready, and your first ${a.freeLeft} messages are free. After that, you can pay as you go with Payfer.`}
           </p>
           <button
             type="button"
@@ -261,7 +261,7 @@ export function SignInDialog() {
               requestAnimationFrame(() => m.composerRef.current?.focus());
             }}
           >
-            {m.quote ? 'Back to your question' : `Back to lesson ${m.lessonId}`}
+            {m.quote ? 'Back to your question' : `Back to lesson ${m.lessonId && lessonNum(m.lessonId)}`}
           </button>
           <p className="mt-center mt-fine">{a.via === 'email' ? `Signed in as ${a.email}` : `Signed in with ${VIA[a.via]}`}</p>
         </>
@@ -372,7 +372,7 @@ export function PayferDialog() {
               requestAnimationFrame(() => m.composerRef.current?.focus());
             }}
           >
-            Back to lesson {m.lessonId}
+            Back to lesson {m.lessonId && lessonNum(m.lessonId)}
           </button>
           <p className="mt-center mt-fine">Change your limit or disconnect any time in Payfer.</p>
         </>
@@ -390,7 +390,7 @@ export function FreshDialog() {
   const n = m.messages.length;
   return (
     <Dialog open={open} onClose={close} labelledBy="fresh-h">
-      <h2 id="fresh-h">Start fresh in Electricity?</h2>
+      <h2 id="fresh-h">Start fresh in {m.course.short}?</h2>
       <p className="mt-sub">
         This clears {n === 1 ? 'the 1 message' : `all ${n} messages`} with this course’s mentor. Your Payfer limit and your reading progress aren’t affected.
       </p>

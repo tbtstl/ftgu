@@ -2,7 +2,7 @@
 // reader can spend (free messages, or what's left of their Payfer limit) with the account menu.
 
 import { useCallback, useRef, useState } from 'react';
-import { COURSE, useMentor, type Mentor } from './MentorContext';
+import { useMentor, type Mentor } from './MentorContext';
 import { focusPanel, useDismiss } from './MentorPanel';
 import { centsLabel, money, resetLabel } from './format';
 import { ChatIcon, CoinIcon, PersonIcon } from './icons';
@@ -141,7 +141,7 @@ function AccountMenu({ m, account: a, close }: { m: Mentor; account: Account; cl
         <p className="mt-mut">Mentors · one for each course</p>
         <ul className="mt-list">
           <li>
-            <span>{COURSE.title}</span>
+            <span>{m.course.title}</span>
             <span className="mt-mut">{n === 1 ? '1 message' : `${n} messages`}</span>
           </li>
         </ul>

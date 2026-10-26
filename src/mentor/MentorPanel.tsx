@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { getLesson } from '../course/registry';
 import { lessonHref } from '../course/router';
 import { RunnerMark } from '../framework/RunnerMark';
-import { COURSE, useMentor, type Mentor } from './MentorContext';
+import { lessonNum, useMentor, type Mentor } from './MentorContext';
 import { FreshDialog, PayferDialog, SignInDialog } from './dialogs';
 import { centsLabel, dayLabel, money, resetLabel } from './format';
 import { ArrowIcon, ChatIcon, CloseIcon, CoinIcon, EyeIcon, MoreIcon, PenIcon, SendIcon } from './icons';
@@ -72,7 +72,7 @@ function MentorPanel({ m }: { m: Mentor }) {
         <div className="mt-hd-t">
           <h2 id="mentor-h">Mentor</h2>
           <p>
-            {COURSE.title}
+            {m.course.title}
             {m.account && ` · ${count === 1 ? '1 message' : `${count} messages`}`}
           </p>
         </div>
@@ -95,7 +95,7 @@ function MentorPanel({ m }: { m: Mentor }) {
         <>
           <p className="mt-ctx">
             <EyeIcon />
-            <span>Sees lesson {m.lessonId} and your progress in this course</span>
+            <span>Sees lesson {m.lessonId && lessonNum(m.lessonId)} and your progress in this course</span>
           </p>
           <Thread m={m} />
           {m.account.blocked ? <BlockedCard m={m} account={m.account} kind={m.account.blocked} /> : <Composer m={m} account={m.account} />}
@@ -197,7 +197,7 @@ function Divider({ id, at, current }: { id: string; at: string; current: boolean
   const title = getLesson(id)?.title ?? '';
   return (
     <div className="mt-div">
-      <span className="mt-div-n">{id}</span>
+      <span className="mt-div-n">{lessonNum(id)}</span>
       {current ? (
         <span className="mt-div-t">{title}</span>
       ) : (
@@ -217,7 +217,7 @@ function YouMessage({ msg }: { msg: Message }) {
         <span className="sr-only">You: </span>
         {msg.quote && (
           <>
-            <p className="mt-from">From {msg.lessonId}</p>
+            <p className="mt-from">From {lessonNum(msg.lessonId)}</p>
             <blockquote className="mt-q">
               <span>“{msg.quote}”</span>
             </blockquote>
@@ -269,7 +269,7 @@ function Composer({ m, account }: { m: Mentor; account: Account }) {
       {m.quote && (
         <div className="mt-chip">
           <div className="mt-chip-b">
-            <p className="mt-from">From {m.quote.lessonId}</p>
+            <p className="mt-from">From {lessonNum(m.quote.lessonId)}</p>
             <p className="mt-chip-q">
               <span>“{m.quote.text}”</span>
             </p>
@@ -289,7 +289,7 @@ function Composer({ m, account }: { m: Mentor; account: Account }) {
           className="mt-input"
           rows={2}
           value={m.draft}
-          placeholder={m.quote ? 'Ask about this passage…' : `Ask about lesson ${m.lessonId}…`}
+          placeholder={m.quote ? 'Ask about this passage…' : `Ask about lesson ${m.lessonId && lessonNum(m.lessonId)}…`}
           onChange={(e) => m.setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -373,19 +373,19 @@ function Gate({ m }: { m: Mentor }) {
         <p className="mt-gate-h">A mentor for this course</p>
         <p className="mt-gate-p">
           Ask questions without leaving the lesson. Highlight any sentence to bring it into the conversation. One mentor follows you through all of{' '}
-          {COURSE.title} and remembers what you’ve asked.
+          {m.course.title} and remembers what you’ve asked.
         </p>
         {m.quote && (
           <div className="mt-chip mt-gate-chip">
             <div className="mt-chip-b">
-              <p className="mt-from">Waiting for you to sign in · from {m.quote.lessonId}</p>
+              <p className="mt-from">Waiting for you to sign in · from {lessonNum(m.quote.lessonId)}</p>
               <p className="mt-chip-q">
                 <span>“{m.quote.text}”</span>
               </p>
             </div>
           </div>
         )}
-        <p className="mt-gate-ex">For example</p>
+        <p className="mt-gate-ex">For example, in Electricity</p>
         <div className="mt-you">
           <div>
             <p className="mt-from">From 4.4</p>

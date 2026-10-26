@@ -193,11 +193,17 @@ describe('mentor server', () => {
     expect((await json(app.request('/api/courses/electricity/messages', { headers: AUTH }))).messages).toEqual([]);
   });
 
-  it('rejects unknown courses and empty questions', async () => {
-    const { app } = setup();
+  it('rejects unknown courses, lessons from another course and empty questions', async () => {
+    const { app, lines } = setup();
     const post = (path: string, body: unknown) => app.request(path, { method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    expect((await post('/api/courses/gas/ask', { lessonId: '1.1', text: 'Hi' })).status).toBe(404);
+    expect((await post('/api/courses/cheese/ask', { lessonId: '1.1', text: 'Hi' })).status).toBe(404);
     expect((await post('/api/courses/electricity/ask', { lessonId: '1.1', text: '  ' })).status).toBe(400);
+    expect((await post('/api/courses/gas/ask', { lessonId: '1.1', text: 'Hi' })).status).toBe(400);
+    expect((await post('/api/courses/electricity/ask', { lessonId: 'gas/1.1', text: 'Hi' })).status).toBe(400);
+    // Each course keeps its own conversation.
+    expect((await lines(await post('/api/courses/gas/ask', { lessonId: 'gas/1.1', text: 'Hi' }))).at(-1).type).toBe('done');
+    expect((await json(app.request('/api/courses/gas/messages', { headers: AUTH }))).messages).toHaveLength(2);
+    expect((await json(app.request('/api/courses/electricity/messages', { headers: AUTH }))).messages).toHaveLength(0);
   });
 });
 

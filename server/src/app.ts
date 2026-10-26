@@ -14,6 +14,13 @@ import { randomUUID } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import { stream } from 'hono/streaming';
+import { AGRICULTURE } from '../../src/course/outlines/agriculture';
+import { COMPUTE } from '../../src/course/outlines/compute';
+import { ELECTRICITY } from '../../src/course/outlines/electricity';
+import { GAS } from '../../src/course/outlines/gas';
+import { OIL } from '../../src/course/outlines/oil';
+import { SHIPPING } from '../../src/course/outlines/shipping';
+import { WEATHER } from '../../src/course/outlines/weather';
 import { FREE_MESSAGES, PRICE_CENTS } from '../../src/mentor/offer';
 import type { Account, AskRequest, Blocked, Message, PayferLink } from '../../src/mentor/types';
 import { HttpError, type Reader, type VerifyReader } from './auth';
@@ -21,8 +28,13 @@ import type { AskModel } from './model';
 import { blockedBy, toAmount, toCents, type Payments } from './payments';
 import type { ReaderRow, Store } from './store';
 
-/** Courses with a mentor, by id. */
-export const COURSES: Record<string, string> = { electricity: 'Electricity & Energy Markets' };
+/** Every course has a mentor: course slug → title. */
+export const COURSES: Record<string, string> = Object.fromEntries(
+  [ELECTRICITY, GAS, AGRICULTURE, OIL, WEATHER, SHIPPING, COMPUTE].map((c) => [c.slug, c.title]),
+);
+
+/** "4.4" for electricity, "gas/3.4" for the other courses. */
+const LESSON_ID = /^(?:[a-z]+\/)?\d+\.\d+$/;
 
 const LIMITS = { text: 4000, quote: 1000, lessonTitle: 200, lessonText: 20_000 };
 
@@ -46,8 +58,9 @@ function askRequest(body: unknown, courseId: string): AskRequest {
   const b = (body ?? {}) as Record<string, unknown>;
   const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
   const text = str(b.text, LIMITS.text).trim();
-  const lessonId = str(b.lessonId, 8);
-  if (!text || !/^\d+\.\d+$/.test(lessonId)) throw new HttpError(400, 'bad_request', 'A question and a lesson are required.');
+  const lessonId = str(b.lessonId, 32);
+  const inCourse = courseId === 'electricity' ? !lessonId.includes('/') : lessonId.startsWith(`${courseId}/`);
+  if (!text || !LESSON_ID.test(lessonId) || !inCourse) throw new HttpError(400, 'bad_request', 'A question and a lesson in this course are required.');
   const quote = str(b.quote, LIMITS.quote).trim();
   return {
     courseId,
@@ -56,7 +69,7 @@ function askRequest(body: unknown, courseId: string): AskRequest {
     text,
     ...(quote ? { quote } : {}),
     lessonText: str(b.lessonText, LIMITS.lessonText),
-    solved: Array.isArray(b.solved) ? b.solved.filter((s): s is string => typeof s === 'string' && /^\d+\.\d+$/.test(s)).slice(0, 200) : [],
+    solved: Array.isArray(b.solved) ? b.solved.filter((s): s is string => typeof s === 'string' && LESSON_ID.test(s)).slice(0, 200) : [],
   };
 }
 

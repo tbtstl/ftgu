@@ -3,7 +3,7 @@
 // It sits above the router so the conversation carries from lesson to lesson.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
-import { getLesson } from '../course/registry';
+import { getCourse, getLesson } from '../course/registry';
 import { useProgress } from '../course/progress';
 import { createMockBackend } from './mockBackend';
 import { MentorError, type Account, type Blocked, type Message, type MentorBackend, type SignInMethod } from './types';
@@ -43,8 +43,23 @@ export const MENTOR_WIDTH = 380;
 /** Narrower than this, the panel is a sheet over the bottom of the lesson instead. */
 const DOCK_QUERY = '(min-width: 1024px)';
 
-/** Only electricity is written so far; every course gets its own mentor. */
-export const COURSE = { id: 'electricity', title: 'Electricity & Energy Markets' };
+export interface CourseInfo {
+  id: string;
+  title: string;
+  short: string;
+}
+
+/** The course a lesson belongs to. Every course has its own mentor and conversation. */
+export function courseOf(lessonId: string | null): CourseInfo {
+  const slug = (lessonId && getLesson(lessonId)?.course) || 'electricity';
+  const outline = getCourse(slug);
+  return { id: slug, title: outline?.title ?? slug, short: outline?.short ?? slug };
+}
+
+/** "gas/3.4" → "3.4": a lesson's number within its course. */
+export function lessonNum(id: string): string {
+  return getLesson(id)?.num ?? id.split('/').pop() ?? id;
+}
 
 const OPEN_KEY = 'emc.mentor.open.v1';
 
@@ -57,6 +72,8 @@ export interface Quote {
 
 export interface Mentor {
   lessonId: string | null;
+  /** The course of the lesson on show; the conversation is this course's. */
+  course: CourseInfo;
   open: boolean;
   /** Docked beside the lesson (wide windows) rather than a sheet over it. */
   docked: boolean;
@@ -165,18 +182,17 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
   }, [api]);
 
   // The course's conversation, whenever someone is signed in.
+  const course = useMemo(() => courseOf(lessonId), [lessonId]);
   const signedIn = account !== null;
   useEffect(() => {
-    if (!signedIn) {
-      setMessages([]);
-      return;
-    }
+    setMessages([]);
+    if (!signedIn) return;
     let live = true;
-    api.history(COURSE.id).then((m) => live && setMessages(m));
+    api.history(course.id).then((m) => live && setMessages(m));
     return () => {
       live = false;
     };
-  }, [api, signedIn]);
+  }, [api, signedIn, course.id]);
 
   // Leave room for the docked panel beside the lesson.
   const reserve = open && docked && lessonId ? MENTOR_WIDTH : 0;
@@ -220,13 +236,13 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
       try {
         const res = await api.ask(
           {
-            courseId: COURSE.id,
+            courseId: courseOf(lesson).id,
             lessonId: lesson,
             lessonTitle: meta?.title ?? lesson,
             text: body,
             quote: q?.text,
             lessonText: lessonText(),
-            solved: Object.keys(progress).filter((k) => progress[k].length > 0),
+            solved: Object.keys(progress).filter((k) => progress[k].length > 0 && courseOf(k).id === courseOf(lesson).id),
           },
           (delta) => setPending((p) => p && { ...p, answer: p.answer + delta }),
         );
@@ -300,13 +316,14 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
   }, [api]);
 
   const startFresh = useCallback(async () => {
-    await api.clear(COURSE.id);
+    await api.clear(course.id);
     setMessages([]);
-  }, [api]);
+  }, [api, course.id]);
 
   const value = useMemo<Mentor>(
     () => ({
       lessonId,
+      course,
       open,
       docked,
       reserve,
@@ -335,7 +352,7 @@ export function MentorProvider({ lessonId, backend, children }: { lessonId: stri
       managePayfer,
       startFresh,
     }),
-    [lessonId, open, docked, reserve, ready, account, messages, quote, draft, pending, error, modal, setOpen, attach, send, explain, signIn, api, verifyCode, signOut, connectPayfer, managePayfer, startFresh],
+    [lessonId, course, open, docked, reserve, ready, account, messages, quote, draft, pending, error, modal, setOpen, attach, send, explain, signIn, api, verifyCode, signOut, connectPayfer, managePayfer, startFresh],
   );
 
   return <MentorContext.Provider value={value}>{children}</MentorContext.Provider>;
