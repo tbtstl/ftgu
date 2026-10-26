@@ -24,7 +24,8 @@
     "payfer": "^0.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "viem": "^2.57.5"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.0",
