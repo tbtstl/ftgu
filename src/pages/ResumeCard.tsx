@@ -15,7 +15,7 @@ export function ResumeCard({ lesson, started, course }: { lesson: LessonMeta; st
         </svg>
       </span>
       <span className="resume-t">
-        {lesson.id} {lesson.title}
+        {lesson.num} {lesson.title}
       </span>
       {course && <span className="resume-c">{course}</span>}
     </a>

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import { getChapter, getLesson, neighbors, type LessonMeta } from '../course/registry';
+import { getChapter, getCourse, getLesson, neighbors, type LessonMeta } from '../course/registry';
 import { courseHref, lessonHref } from '../course/router';
 import { markVisited } from '../course/progress';
 import { MentorHeaderItems, useMentor } from '../mentor';
@@ -48,13 +48,16 @@ export function Crumbs({ items }: { items: Crumb[] }) {
 
 /** The thin bar above a lesson: the runner (home), where the lesson sits, the contents, and the mentor. */
 export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean }) {
+  const meta = getLesson(id);
+  const course = getCourse(meta?.course ?? (id.includes('/') ? id.split('/')[0] : 'electricity'));
+  const home = courseHref(course?.slug);
   return (
     <header className={wide ? 'sh wide' : 'sh'}>
       <Crumbs
-        items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: 'Electricity', href: courseHref() }, { label: id }]}
+        items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: course?.short ?? 'Course', href: home }, { label: meta?.num ?? id }]}
       />
       <div className="sh-r">
-        <a className="sh-link" href={courseHref()}>
+        <a className="sh-link" href={home}>
           Contents
         </a>
         <MentorHeaderItems />
@@ -72,11 +75,11 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
   const wideViewport = useWideViewport(useMentor()?.reserve ?? 0);
   const wide = twoUp && wideViewport;
   const meta = getLesson(id);
-  const chapter = meta ? getChapter(meta.chapter) : undefined;
+  const chapter = meta ? getChapter(meta.chapter, meta.course) : undefined;
   const { prev, next } = neighbors(id);
 
   useEffect(() => {
-    document.title = meta ? `FTGU | ${meta.id} ${meta.title}` : 'From The Ground Up';
+    document.title = meta ? `FTGU | ${meta.num} ${meta.title}` : 'From The Ground Up';
     if (meta) markVisited(meta.id);
   }, [meta]);
 
@@ -87,18 +90,18 @@ export function LessonPage({ id, children, twoUp = true }: { id: string; childre
         <TwoUpLayout wide={wide}>
           <h1 className="tt">{meta ? meta.title : id}</h1>
           <p className="dek">
-            Lesson {id}
+            Lesson {meta?.num ?? id}
             {chapter && ` · ${chapter.title}`}
           </p>
           {children}
-          <LessonNav prev={prev} next={next} />
+          <LessonNav prev={prev} next={next} home={courseHref(meta?.course)} />
         </TwoUpLayout>
       </main>
     </LessonContext.Provider>
   );
 }
 
-function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
+function LessonNav({ prev, next, home }: { prev?: LessonMeta; next?: LessonMeta; home: string }) {
   return (
     <nav className="lnav" aria-label="Lessons">
       <ul className="rows">
@@ -107,10 +110,10 @@ function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
             <a className="row row-wide" href={lessonHref(prev.id)}>
               <span className="row-n">Previous</span>
               <span className="row-t">{prev.title}</span>
-              <span className="row-m">{prev.id}</span>
+              <span className="row-m">{prev.num}</span>
             </a>
           ) : (
-            <a className="row row-wide" href={courseHref()}>
+            <a className="row row-wide" href={home}>
               <span className="row-n">Previous</span>
               <span className="row-t">Course contents</span>
               <span className="row-m" />
@@ -122,7 +125,7 @@ function LessonNav({ prev, next }: { prev?: LessonMeta; next?: LessonMeta }) {
             <a className="row row-wide" href={lessonHref(next.id)}>
               <span className="row-n">Next</span>
               <span className="row-t">{next.title}</span>
-              <span className="row-m">{next.id}</span>
+              <span className="row-m">{next.num}</span>
             </a>
           ) : (
             <a className="row row-wide" href="#/">

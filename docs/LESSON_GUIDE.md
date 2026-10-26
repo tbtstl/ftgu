@@ -1,9 +1,33 @@
 # Writing a lesson
 
-Every lesson is one React component at `src/lessons/ch<N>/L<N>_<M>.tsx` (lesson 3.4 →
-`src/lessons/ch3/L3_4.tsx`) with a default export whose root is `<LessonPage id="3.4">`. The
-registry (`src/course/registry.ts`) already lists every lesson's title and sandbox name; the
-file just has to exist for the lesson to appear.
+Every lesson is one React component with a default export whose root is `<LessonPage id="…">`.
+Electricity lessons live at `src/lessons/ch<N>/L<N>_<M>.tsx` with plain ids (lesson 3.4 →
+`src/lessons/ch3/L3_4.tsx`, `<LessonPage id="3.4">`). Every other course prefixes its slug:
+natural gas lesson 3.4 is `src/lessons/gas/ch3/L3_4.tsx` with `<LessonPage id="gas/3.4">`,
+at the address `#/gas/3.4`. Each course's outline (`src/course/outlines/<slug>.ts`) already lists
+every lesson's title and sandbox name; the file just has to exist for the lesson to appear.
+
+## Courses other than electricity
+
+The slugs are `gas`, `agriculture`, `oil`, `weather`, `shipping` and `compute`. Each course keeps
+its own code apart so its lessons can be written alongside the others:
+
+| What | Where |
+| --- | --- |
+| Lessons | `src/lessons/<slug>/ch<N>/L<N>_<M>.tsx` |
+| Simulation engines | `src/engines/<slug>/` |
+| The course's shared world | `src/model/<slug>/` |
+| Shared lesson components | `src/lessons/<slug>/shared/` |
+| Engine tests | `tests/<slug>.test.ts` |
+
+Everything in this guide applies, with "chapter" meaning the course's module. Like electricity's
+six-node region, each course should build one fictional world early (a gas region with its basins,
+pipelines, storage and hub; a corn-and-wheat region; a refinery and its crudes) and reuse it
+through the capstone. Where a lesson first introduces that world, show a map of it, as electricity
+does, before any chart that depends on it: the reader needs an overview of the places they'll
+be changing before the graphs. The capstone chapter combines mechanics the reader already learned rather
+than introducing new concepts. A course may reuse electricity's engines and framework, but
+mustn't edit them. To link within a course, use `lessonHref('gas/3.2')`.
 
 Read these first — they're the reference implementations:
 
@@ -142,6 +166,8 @@ Text colors come from `TEXT`/`K`, which meet 4.5:1 contrast.
 ```bash
 npx tsc --noEmit
 npx vitest run tests/lessons.test.tsx -t "lessons 3\."
+npx vitest run tests/lessons.test.tsx -t "gas/3\."   # chapter 3 of another course
+npx vitest run tests/gas.test.ts                     # that course’s engine tests
 ```
 
 The lesson smoke test renders each lesson, checks the title, figures and challenge, and moves

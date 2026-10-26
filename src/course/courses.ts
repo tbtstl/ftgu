@@ -1,27 +1,27 @@
-// The school's courses, in the order the home page lists them. Only electricity is written so
-// far; the others are listed as coming soon.
+// The school's courses, in the order the home page lists them. A course with no lessons
+// written yet is listed as coming soon.
 
 import { courseHref } from './router';
-import { LESSONS } from './registry';
+import { courseLessons, hasLesson, OUTLINES } from './registry';
 
 export interface CourseMeta {
   /** "01" */
   n: string;
   /** Short name for lists: "Natural gas". */
   name: string;
-  /** Full title, once the course exists. */
-  title?: string;
-  /** Where the course lives, once it exists. */
+  /** Full title: "Electricity & Energy Markets". */
+  title: string;
+  /** Where the course lives, once it has lessons. */
   href?: string;
   lessons?: number;
 }
 
-export const COURSES: CourseMeta[] = [
-  { n: '01', name: 'Electricity & energy', title: 'Electricity & Energy Markets', href: courseHref(), lessons: LESSONS.length },
-  { n: '02', name: 'Natural gas' },
-  { n: '03', name: 'Agricultural commodities' },
-  { n: '04', name: 'Oil & petroleum' },
-  { n: '05', name: 'Weather derivatives' },
-  { n: '06', name: 'Shipping & freight' },
-  { n: '07', name: 'Compute capacity' },
-];
+export const COURSES: CourseMeta[] = OUTLINES.map((c, i) => {
+  const written = courseLessons(c.slug).filter((l) => hasLesson(l.id)).length;
+  return {
+    n: String(i + 1).padStart(2, '0'),
+    name: c.short,
+    title: c.title,
+    ...(written > 0 ? { href: courseHref(c.slug), lessons: written } : {}),
+  };
+});

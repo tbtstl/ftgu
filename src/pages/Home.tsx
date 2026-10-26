@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { COURSES } from '../course/courses';
-import { getLesson, LESSONS } from '../course/registry';
+import { getCourse, getLesson, LESSONS } from '../course/registry';
 import { useLastLesson } from '../course/progress';
 import { Logo } from './Logo';
 import { ResumeCard } from './ResumeCard';
@@ -28,7 +28,7 @@ export function Home() {
         Learn how real-world markets work by exploring the physical systems behind them. Experiment with interactive simulations, discover how constraints shape
         prices, and develop trading strategies from the ground up.
       </p>
-      <ResumeCard lesson={lesson} started={!!last} course={COURSES[0].title} />
+      <ResumeCard lesson={lesson} started={!!last} course={getCourse(lesson.course)?.title} />
 
       <section className="sec" aria-labelledby="courses">
         <h2 className="label" id="courses">
