@@ -12,17 +12,18 @@ const app = createApp({
   store: openStore(config.databasePath),
   verify: privyVerifier(),
   payments: payferPayments(),
+  payferPublishableKey: config.payferPublishableKey,
   model: claudeModel(),
   origins: config.siteOrigins,
 });
 
 const missing = [
   !config.privyAppId || !config.privyAppSecret ? 'PRIVY_APP_ID / PRIVY_APP_SECRET (sign-in)' : null,
-  !config.payferSecretKey ? 'PAYFER_SECRET_KEY (paid messages)' : null,
+  !config.payferSecretKey || !config.payferPublishableKey ? `the Payfer ${process.env.PAYFER_MODE === 'live' ? 'live' : 'test'} keys (paid messages)` : null,
   !process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY (answers)' : null,
 ].filter(Boolean);
 
 serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
-  console.log(`Mentor server on http://localhost:${port} using ${config.model}`);
+  console.log(`Mentor server on http://localhost:${port} using ${config.model}, Payfer in ${process.env.PAYFER_MODE === 'live' ? 'live' : 'test'} mode`);
   if (missing.length) console.log(`Not set in server/.env yet: ${missing.join(', ')}`);
 });

@@ -7,6 +7,10 @@ function value(name: string): string | null {
   return v ? v : null;
 }
 
+// Payfer keys come in pairs per mode; PAYFER_MODE picks one (test unless it says live), so the
+// publishable key the browser gets always matches the secret key the server charges with.
+const payferLive = value('PAYFER_MODE') === 'live';
+
 export const config = {
   port: Number(value('PORT') ?? 8787),
   /** Browser origins allowed to call the API, comma-separated. */
@@ -15,5 +19,6 @@ export const config = {
   model: value('MENTOR_MODEL') ?? 'claude-opus-5-5',
   privyAppId: value('PRIVY_APP_ID'),
   privyAppSecret: value('PRIVY_APP_SECRET'),
-  payferSecretKey: value('PAYFER_SECRET_KEY'),
+  payferSecretKey: value(payferLive ? 'PAYFER_LIVE_SK' : 'PAYFER_TEST_SK'),
+  payferPublishableKey: value(payferLive ? 'PAYFER_LIVE_PK' : 'PAYFER_TEST_PK'),
 };

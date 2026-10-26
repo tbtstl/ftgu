@@ -71,6 +71,7 @@ function setup(answer: (onText: (d: string) => void) => Promise<Answer> = async 
       return { id: 'did:privy:1', email: 'reader@example.com', via: 'email' };
     },
     payments: pay.payments,
+    payferPublishableKey: 'pk_test_example',
     model: async ({ history }, onText) => {
       asked.push({ history });
       return answer(onText);
@@ -93,8 +94,9 @@ function setup(answer: (onText: (d: string) => void) => Promise<Answer> = async 
 }
 
 describe('mentor server', () => {
-  it('turns away requests without a Privy token', async () => {
+  it('turns away requests without a Privy token, except for the site config', async () => {
     const { app } = setup();
+    expect(await json(app.request('/api/config'))).toEqual({ payferPublishableKey: 'pk_test_example' });
     expect((await app.request('/api/account')).status).toBe(401);
     expect((await app.request('/api/account', { headers: { authorization: 'Bearer nope' } })).status).toBe(401);
   });

@@ -1,5 +1,6 @@
-// The mentor's HTTP API. Everything but the health check needs a signed-in reader.
+// The mentor's HTTP API. Everything but the health check and the site config needs a signed-in reader.
 //
+//   GET    /api/config                       the Payfer publishable key for the browser
 //   GET    /api/account                      who's signed in and what they can spend
 //   POST   /api/payfer/connect               link the Payfer account a reader just approved
 //   POST   /api/payfer/refresh               re-read the allowance after the reader changed it
@@ -29,6 +30,8 @@ export interface Deps {
   store: Store;
   verify: VerifyReader;
   payments: Payments | null;
+  /** The publishable key matching the Payfer secret key the server uses. */
+  payferPublishableKey: string | null;
   model: AskModel;
   origins: string[];
 }
@@ -71,9 +74,11 @@ export function createApp(deps: Deps) {
 
   app.get('/health', (c) => c.text('ok'));
 
-  // Every API route knows its reader; the first request creates them with their free messages.
+  app.get('/api/config', (c) => c.json({ payferPublishableKey: deps.payferPublishableKey }));
+
+  // Every other API route knows its reader; the first request creates them with their free messages.
   app.use('/api/*', async (c, next) => {
-    if (c.req.method === 'OPTIONS') return next();
+    if (c.req.method === 'OPTIONS' || c.req.path === '/api/config') return next();
     const token = c.req.header('authorization')?.match(/^Bearer (.+)$/i)?.[1];
     if (!token) throw new HttpError(401, 'unauthenticated', 'Sign in first.');
     const reader = await deps.verify(token);

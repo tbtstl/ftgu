@@ -10,6 +10,7 @@ export interface LiveOptions {
   /** The mentor server's address; empty for the same origin (the dev server proxies /api). */
   api: string;
   privyAppId: string;
+  /** Payfer's publishable key; empty to use the one the server pairs with its secret key. */
   payferKey: string;
 }
 
@@ -39,10 +40,26 @@ export function createLiveBackend({ api, privyAppId, payferKey }: LiveOptions): 
   let payfer: PayferClient | null = null;
   let hosted: ReturnType<typeof payferWindow> | null = null;
 
+  let publishable: Promise<string> | null = null;
+  function publishableKey(): Promise<string> {
+    publishable ??= payferKey
+      ? Promise.resolve(payferKey)
+      : fetch(`${api}/api/config`)
+          .then((r) => r.json() as Promise<{ payferPublishableKey: string | null }>)
+          .then((c) => c.payferPublishableKey ?? '')
+          .catch((err) => {
+            publishable = null;
+            throw err;
+          });
+    return publishable;
+  }
+
   // One Payfer client per page: it holds the token that lets manage() reopen Payfer.
-  function payferClient(): PayferClient {
-    if (!payferKey) throw new MentorError('failed', 'Payments aren’t set up on this site yet.');
-    return (payfer ??= createClient({ publishableKey: payferKey, openHostedUrl: (url) => hosted?.show(url) }));
+  async function payferClient(): Promise<PayferClient> {
+    if (payfer) return payfer;
+    const key = await publishableKey();
+    if (!key) throw new MentorError('failed', 'Payments aren’t set up on this site yet.');
+    return (payfer ??= createClient({ publishableKey: key, openHostedUrl: (url) => hosted?.show(url) }));
   }
 
   /** Runs a Payfer flow in a window opened now, closing it if the flow fails before Payfer's page loads. */
@@ -73,7 +90,7 @@ export function createLiveBackend({ api, privyAppId, payferKey }: LiveOptions): 
   const json = async <T,>(path: string, init?: RequestInit) => (await (await request(path, init)).json()) as T;
 
   async function connect(limitCents: number): Promise<Account> {
-    const c = await payferClient().connect({ allowance: { amount: (limitCents / 100).toFixed(2), period: 'month' } });
+    const c = await (await payferClient()).connect({ allowance: { amount: (limitCents / 100).toFixed(2), period: 'month' } });
     const { account } = await json<{ account: Account }>('/api/payfer/connect', {
       method: 'POST',
       body: JSON.stringify({ paymentUserId: c.paymentUserId, connectionProof: c.connectionProof }),

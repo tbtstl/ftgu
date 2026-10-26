@@ -62,9 +62,10 @@ npm run server                       # http://localhost:8787
 npm run dev:live                     # the site, with /api forwarded to the server
 ```
 
-`npm run dev:live` reads `VITE_PRIVY_APP_ID` and `VITE_PAYFER_PUBLISHABLE_KEY` from
-`.env.live.local`. Both env files are ignored by git. `MENTOR_MODEL` in `server/.env` picks the
-Claude model (Claude Opus 5.5 by default).
+`npm run dev:live` reads `VITE_PRIVY_APP_ID` from `.env.live.local`; the Payfer publishable key
+comes from the server, matching the test or live secret key that `PAYFER_MODE` picks. Both env
+files are ignored by git. `MENTOR_MODEL` in `server/.env` picks the Claude model (Claude Opus 5.5
+by default).
 
 ## How it's built
 
