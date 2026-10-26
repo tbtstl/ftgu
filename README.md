@@ -38,6 +38,19 @@ A small target beside the city asks the browser for the reader's actual location
 rounded to about 10 km and kept only for the visit. The forecast comes straight from
 [Open-Meteo](https://open-meteo.com/), so the site works on any static host.
 
+## The mentor
+
+Lessons can show a course mentor: a chat panel beside the lesson (a sheet on phones) that
+keeps one conversation per reader per course. Selecting text in a lesson offers to ask about it
+or have it explained. Readers sign in to use it, get a few free messages, then pay 1¢ a message
+through [Payfer](https://payfer.me) against a monthly limit they choose. The lessons stay free
+without an account.
+
+The panel talks to a backend through one interface (`src/mentor/types.ts`). Until the server
+exists, `npm run dev` runs it against a practice backend in the browser
+(`src/mentor/mockBackend.ts`), and production builds leave the mentor off. Set `VITE_MENTOR=mock`
+or `VITE_MENTOR=off` to choose.
+
 ## How it's built
 
 - **Course framework** (`src/framework`): page layout, prose and equation components, sliders,

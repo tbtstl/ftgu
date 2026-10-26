@@ -4,6 +4,7 @@ import { getLesson, lessonLoader } from './course/registry';
 import { Home } from './pages/Home';
 import { Course } from './pages/Course';
 import { LessonHeader } from './framework/Page';
+import { HighlightBar, MENTOR_ENABLED, MentorDock, MentorProvider } from './mentor';
 
 const cache = new Map<string, ComponentType>();
 
@@ -26,15 +27,32 @@ export function App() {
 
   const Lesson = useMemo(() => (route.kind === 'lesson' ? lessonComponent(route.id) : undefined), [key]);
 
-  if (route.kind === 'home') return <Home />;
-  if (route.kind === 'course') return <Course />;
-  if (!Lesson) return <Missing id={route.id} />;
+  let page: ReactNode;
+  if (route.kind === 'home') page = <Home />;
+  else if (route.kind === 'course') page = <Course />;
+  else if (!Lesson) page = <Missing id={route.id} />;
+  else
+    page = (
+      <LessonBoundary key={key} id={route.id}>
+        <Suspense fallback={<Loading id={route.id} />}>
+          <Lesson />
+        </Suspense>
+      </LessonBoundary>
+    );
+
+  if (!MENTOR_ENABLED) return page;
+  // The mentor sits above the router so one conversation carries through the whole course.
+  const lessonId = route.kind === 'lesson' && Lesson ? route.id : null;
   return (
-    <LessonBoundary key={key} id={route.id}>
-      <Suspense fallback={<Loading id={route.id} />}>
-        <Lesson />
-      </Suspense>
-    </LessonBoundary>
+    <MentorProvider lessonId={lessonId}>
+      {page}
+      {lessonId && (
+        <>
+          <MentorDock />
+          <HighlightBar />
+        </>
+      )}
+    </MentorProvider>
   );
 }
 

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { getChapter, getLesson, neighbors, type LessonMeta } from '../course/registry';
 import { courseHref, lessonHref } from '../course/router';
 import { markVisited } from '../course/progress';
+import { MentorHeaderItems, useMentor } from '../mentor';
 import { RunnerMark } from './RunnerMark';
 import { TwoUpLayout, useWideViewport } from './twoUp';
 
@@ -45,16 +46,19 @@ export function Crumbs({ items }: { items: Crumb[] }) {
   );
 }
 
-/** The thin bar above a lesson: the runner (home), where the lesson sits, and the contents. */
+/** The thin bar above a lesson: the runner (home), where the lesson sits, the contents, and the mentor. */
 export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean }) {
   return (
     <header className={wide ? 'sh wide' : 'sh'}>
       <Crumbs
         items={[{ label: 'From The Ground Up', href: '#/', icon: <RunnerMark size={22} /> }, { label: 'Electricity', href: courseHref() }, { label: id }]}
       />
-      <a className="sh-link" href={courseHref()}>
-        Contents
-      </a>
+      <div className="sh-r">
+        <a className="sh-link" href={courseHref()}>
+          Contents
+        </a>
+        <MentorHeaderItems />
+      </div>
     </header>
   );
 }
@@ -65,7 +69,7 @@ export function LessonHeader({ id, wide = false }: { id: string; wide?: boolean 
  * out two-up: prose on the left, the current demonstration fixed on the right.
  */
 export function LessonPage({ id, children, twoUp = true }: { id: string; children: ReactNode; twoUp?: boolean }) {
-  const wideViewport = useWideViewport();
+  const wideViewport = useWideViewport(useMentor()?.reserve ?? 0);
   const wide = twoUp && wideViewport;
   const meta = getLesson(id);
   const chapter = meta ? getChapter(meta.chapter) : undefined;
