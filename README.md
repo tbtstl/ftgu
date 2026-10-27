@@ -65,7 +65,7 @@ npm run dev:live                     # the site, with /api forwarded to the serv
 `npm run dev:live` reads `VITE_PRIVY_APP_ID` from `.env.live.local`; the Payfer publishable key
 comes from the server, matching the test or live secret key that `PAYFER_MODE` picks. Both env
 files are ignored by git. `MENTOR_MODEL` and `MENTOR_EFFORT` in `server/.env` pick the Claude model
-and how much it thinks (Claude Haiku 5.5 at high effort by default, about 0.1¢ an answer).
+and how much it thinks (Claude Sonnet 5.5 at low effort by default, about 1¢ an answer).
 
 ## How it's built
 

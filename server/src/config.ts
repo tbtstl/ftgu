@@ -21,9 +21,9 @@ export const config = {
   /** Browser origins allowed to call the API, comma-separated. */
   siteOrigins: (value('SITE_ORIGIN') ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
   databasePath: value('DATABASE_PATH') ?? 'server/data/mentor.db',
-  model: value('MENTOR_MODEL') ?? 'claude-haiku-5-5',
-  /** How much the model thinks before answering: high unless MENTOR_EFFORT names another level. */
-  effort: EFFORTS.find((e) => e === effort) ?? 'high',
+  model: value('MENTOR_MODEL') ?? 'claude-sonnet-5-5',
+  /** How much the model thinks before answering: low unless MENTOR_EFFORT names another level. */
+  effort: EFFORTS.find((e) => e === effort) ?? 'low',
   privyAppId: value('PRIVY_APP_ID'),
   privyAppSecret: value('PRIVY_APP_SECRET'),
   payferSecretKey: value(payferLive ? 'PAYFER_LIVE_SK' : 'PAYFER_TEST_SK'),
