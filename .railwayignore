@@ -1,2 +1,7 @@
 # Kept out of `railway up` uploads: local Claude Code worktrees and settings.
 .claude/
+
+# Local secrets and the mentor server's database
+server/.env
+server/data/
+*.local

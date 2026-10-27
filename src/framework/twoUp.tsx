@@ -18,21 +18,26 @@ const READING_LINE = 0.68;
 /** Scrolling this far after picking a figure by hand hands control back to the scroll position. */
 const PIN_RELEASE_PX = 240;
 
-const QUERY = `(min-width: ${TWO_UP_MIN_WIDTH}px)`;
-
-function subscribe(cb: () => void) {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {};
-  const mq = window.matchMedia(QUERY);
-  mq.addEventListener('change', cb);
-  return () => mq.removeEventListener('change', cb);
+function hasMatchMedia() {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function';
 }
 
-function snapshot() {
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(QUERY).matches;
-}
-
-/** True when the window is wide enough for the two-up layout. */
-export function useWideViewport(): boolean {
+/**
+ * True when the window is wide enough for the two-up layout. `reserve` is width taken by
+ * something docked beside the lesson (the mentor panel), which the layout can't use.
+ */
+export function useWideViewport(reserve = 0): boolean {
+  const query = `(min-width: ${TWO_UP_MIN_WIDTH + reserve}px)`;
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      if (!hasMatchMedia()) return () => {};
+      const mq = window.matchMedia(query);
+      mq.addEventListener('change', cb);
+      return () => mq.removeEventListener('change', cb);
+    },
+    [query],
+  );
+  const snapshot = useCallback(() => hasMatchMedia() && window.matchMedia(query).matches, [query]);
   return useSyncExternalStore(subscribe, snapshot, () => false);
 }
 

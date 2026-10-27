@@ -3,10 +3,17 @@ dist
 .DS_Store
 *.log
 
-# Secrets
+# Secrets. .env.live only switches the site to live mode, so it stays tracked.
 .env
 .env.*
 !.env.example
+!.env.live
+*.local
+server/.env
+!server/.env.example
+
+# The mentor server's database
+server/data
 
 # Local Claude Code state (launch.json stays tracked)
 .claude/worktrees/
