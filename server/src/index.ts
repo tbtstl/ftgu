@@ -25,7 +25,7 @@ const missing = [
 ].filter(Boolean);
 
 serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
-  console.log(`Mentor server on http://localhost:${port} using ${config.model}, Payfer in ${process.env.PAYFER_MODE === 'live' ? 'live' : 'test'} mode`);
+  console.log(`Mentor server on http://localhost:${port} using ${config.model} at ${config.effort} effort, Payfer in ${process.env.PAYFER_MODE === 'live' ? 'live' : 'test'} mode`);
   if (!config.enabled) console.log('The mentor is switched off (MENTOR_ENABLED isn’t true): /api answers 404.');
   if (missing.length) console.log(`Not set in server/.env yet: ${missing.join(', ')}`);
 });

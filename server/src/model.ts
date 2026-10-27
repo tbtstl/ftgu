@@ -55,7 +55,7 @@ export function claudeModel(): AskModel {
       {
         model: config.model,
         max_tokens: 8000,
-        output_config: { effort: 'low' },
+        output_config: { effort: config.effort },
         ...(fallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
         cache_control: { type: 'ephemeral' },
         system: [
