@@ -262,20 +262,24 @@ a.row:focus-visible, button.row:focus-visible { outline: 2px solid var(--text); 
 .sl input::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none; width: 12px; height: var(--h); margin-top: calc((32px - var(--h)) / 2);
   border: 0; border-radius: 0;
-  background: linear-gradient(to right, transparent 2px, var(--halo) 2px 5px, var(--c) 5px 7px, var(--halo) 7px 10px, transparent 10px);
+  background: linear-gradient(to right, transparent calc(50% - 4px), var(--halo) calc(50% - 4px) calc(50% - 1px), var(--c) calc(50% - 1px) calc(50% + 1px), var(--halo) calc(50% + 1px) calc(50% + 4px), transparent calc(50% + 4px)) center / 100% var(--h) no-repeat;
 }
 .sl input::-moz-range-track { height: 32px; background: transparent; border: 0; }
 .sl input::-moz-range-thumb {
   width: 12px; height: var(--h); border: 0; border-radius: 0;
-  background: linear-gradient(to right, transparent 2px, var(--halo) 2px 5px, var(--c) 5px 7px, var(--halo) 7px 10px, transparent 10px);
+  background: linear-gradient(to right, transparent calc(50% - 4px), var(--halo) calc(50% - 4px) calc(50% - 1px), var(--c) calc(50% - 1px) calc(50% + 1px), var(--halo) calc(50% + 1px) calc(50% + 4px), transparent calc(50% + 4px)) center / 100% var(--h) no-repeat;
 }
 .sl:has(input:not(:disabled):hover), .sl:has(input:not(:disabled):active) { --h: 23px; }
 .sl:has(input:focus-visible) { --h: 23px; --halo: rgba(17, 17, 17, .1); }
+/* On touch the thumb is a 40px square to grab, still drawing only the rule. The input runs 14px
+   past each end of the track so the thumb's centre travels the same 6px-inset line. */
 @media (pointer: coarse) {
   .sl, .sl input { height: 44px; }
+  .sl input { left: -14px; width: calc(100% + 28px); }
   .sl::before, .sl-fill { top: 21.5px; }
   .sl input::-webkit-slider-runnable-track { height: 44px; }
-  .sl input::-webkit-slider-thumb { margin-top: calc((44px - var(--h)) / 2); }
+  .sl input::-webkit-slider-thumb { width: 40px; height: 40px; margin-top: 2px; }
+  .sl input::-moz-range-thumb { width: 40px; height: 40px; }
   .sl { --h: 23px; }
 }
 .sl.blue { --c: var(--g-blue); }
